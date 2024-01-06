@@ -34,5 +34,7 @@ module.exports  = {
 
     eColourType : defs.eColourType,
     eProfileType: defs.eProfileType,
-    eIntent: defs.eIntent
+    eIntent: defs.eIntent,
+    encoding: defs.encoding,
+    encodingStr: defs.encodingStr,
 };
