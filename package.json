@@ -1,6 +1,6 @@
 {
   "name": "jscolorengine",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "build/jsColorEngine.js",
@@ -14,7 +14,9 @@
     "dev": "webpack --mode=development",
     "watch": "webpack --mode=development  --watch",
     "build": "webpack --mode=production",
-    "publish": "webpack --mode=production",
+    "publish": "npm run browser && npm run build",
+    "browser": "webpack --mode=production --env TARGET_WEB=true",
+    "browser-watch": "webpack --mode=development  --watch --env TARGET_WEB=true",
     "tests": "webpack --mode=development  --watch --config tests/tests.webpack.config.js"
   },
   "browser": {
@@ -31,6 +33,5 @@
     "webpack-merge": "^5.10.0"
   },
   "dependencies": {
-    "eslint": "^7.32.0"
   }
 }

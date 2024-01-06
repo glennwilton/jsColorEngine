@@ -7,3 +7,4 @@ package-lock.json
 @charset
 /.idea/
 *.tgz
+/browser-dev/

@@ -96,6 +96,29 @@
  */
 
 /**
+ * @typedef {object} _cmsDuo
+ * @property {number} type eColourType
+ * @property {number} a 0.0 - 100
+ * @property {number} b 0.0 - 100
+ */
+
+/**
+ * @typedef {object} _cmsDuof
+ * @property {number} type eColourType
+ * @property {number} af 0.0 - 1.0
+ * @property {number} bf 0.0 - 1.0
+ */
+
+
+
+/**
+ * @typedef {object} _cmsGray
+ * @property {number} type eColourType
+ * @property {number} G 0.0 - 1.0
+ */
+
+
+/**
  * @typedef {number[]} _Device Array of n-Channel floats with a range of 0.0 to 1.0
  * @typedef {number[]} _PCS Array of n-Channel 16bit integers data with a range of 0 to 65535
  * @typedef {number[]} _PCSf Array of n-Channel floats of with a range of 0.0 to 1.0
@@ -128,6 +151,7 @@ var defs = {
         Greyf: 11,
         Duo: 12,
         Duof: 13,
+        xyY: 14,
     },
     eProfileType: {
         Lab: 0,

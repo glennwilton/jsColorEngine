@@ -82,6 +82,7 @@ class Profile {
         this.blackPoint = null;
         this.luminance = null;
         this.chromaticAdaptation = null;
+        this.virutalProfileUsesD50AdaptedPrimaries = true;
         this.unsuportedTags = [];
         this.Gray = {
             kTRC: null,
@@ -164,7 +165,7 @@ class Profile {
     load(dataOrUrl, afterLoad) {
         this.loaded = false;
         this.loadError = false;
-        if (Object.prototype.toString.call(dataOrUrl) == '[object Uint8Array]') {
+        if (Object.prototype.toString.call(dataOrUrl) === '[object Uint8Array]') {
             this.loadBinary(dataOrUrl, afterLoad);
         } else if (dataOrUrl.substring(0, 1) === '*') {
             this.loadVirtualProfile(dataOrUrl, afterLoad);
@@ -252,8 +253,48 @@ class Profile {
 
         // Virtual Profiles are this.version = v4 so that by default the Transform will output PCS V4 encoded date
         // http://www.brucelindbloom.com/index.html?WorkingSpaceInfo.html
+        //
+        //                  gamma   white   x           y           Y           x           y           Y           x           y           Y
+        // Adobe RGB (1998)	2.2	    D65     0.6400      0.3300      0.297361    0.2100      0.7100      0.627355    0.1500      0.0600      0.075285
+        // Apple RGB        1.8     D65     0.6250      0.3400      0.244634    0.2800      0.5950      0.672034    0.1550      0.0700      0.083332
+        // Best RGB         2.2     D50     0.7347      0.2653      0.228457    0.2150      0.7750      0.737352    0.1300      0.0350      0.034191
+        // Beta RGB         2.2     D50     0.6888      0.3112      0.303273    0.1986      0.7551      0.663786    0.1265      0.0352      0.032941
+        // Bruce RGB        2.2     D65     0.6400      0.3300      0.240995    0.2800      0.6500      0.683554    0.1500      0.0600      0.075452
+        // CIE RGB          2.2     E       0.7350      0.2650      0.176204    0.2740      0.7170      0.812985    0.1670      0.0090      0.010811
+        // ColorMatch RGB   1.8     D50     0.6300      0.3400      0.274884    0.2950      0.6050      0.658132    0.1500      0.0750      0.066985
+        // Don RGB 4        2.2     D50     0.6960      0.3000      0.278350    0.2150      0.7650      0.687970    0.1300      0.0350      0.033680
+        // ECI RGB v2       L*      D50     0.6700      0.3300      0.320250    0.2100      0.7100      0.602071    0.1400      0.0800      0.077679
+        // Ekta Space PS5   2.2     D50     0.6950      0.3050      0.260629    0.2600      0.7000      0.734946    0.1100      0.0050      0.004425
+        // NTSC RGB         2.2     C       0.6700      0.3300      0.298839    0.2100      0.7100      0.586811    0.1400      0.0800      0.114350
+        // PAL/SECAM RGB    2.2     D65     0.6400      0.3300      0.222021    0.2900      0.6000      0.706645    0.1500      0.0600      0.071334
+        // ProPhoto RGB     1.8     D50     0.7347      0.2653      0.288040    0.1596      0.8404      0.711874    0.0366      0.0001      0.000086
+        // SMPTE-C RGB      2.2     D65     0.6300      0.3400      0.212395    0.3100      0.5950      0.701049    0.1550      0.0700      0.086556
+        // sRGB             ≈2.2    D65     0.6400      0.3300      0.212656    0.3000      0.6000      0.715158    0.1500      0.0600      0.072186
+        // Wide Gamut RGB   2.2     D50     0.7350      0.2650      0.258187    0.1150      0.8260      0.724938    0.1570      0.0180      0.016875
+
+        //Working Space Primaries Adapted to D50
+        //                      x           y           Y           x           y           Y           x           y           Y
+        // Adobe RGB (1998)	    0.648431	0.330856	0.311114	0.230154	0.701572	0.625662	0.155886	0.066044	0.063224
+        // Apple RGB	        0.634756	0.340596	0.255166	0.301775	0.597511	0.672578	0.162897	0.079001	0.072256
+        // Best RGB	            0.734700	0.265300	0.228457	0.215000	0.775000	0.737352	0.130000	0.035000	0.034191
+        // Beta RGB	            0.688800	0.311200	0.303273	0.198600	0.755100	0.663786	0.126500	0.035200	0.032941
+        // Bruce RGB	        0.648431	0.330856	0.252141	0.300115	0.640960	0.684495	0.155886	0.066044	0.063364
+        // CIE RGB	            0.737385	0.264518	0.174658	0.266802	0.718404	0.824754	0.174329	0.000599	0.000588
+        // ColorMatch RGB	    0.630000	0.340000	0.274884	0.295000	0.605000	0.658132	0.150000	0.075000	0.066985
+        // Don RGB 4	        0.696000	0.300000	0.278350	0.215000	0.765000	0.687970	0.130000	0.035000	0.033680
+        // ECI RGB v2	        0.670000	0.330000	0.320250	0.210000	0.710000	0.602071	0.140000	0.080000	0.077679
+        // Ekta Space PS5	    0.695000	0.305000	0.260629	0.260000	0.700000	0.734946	0.110000	0.005000	0.004425
+        // NTSC RGB	            0.671910	0.329340	0.310889	0.222591	0.710647	0.591737	0.142783	0.096145	0.097374
+        // PAL/SECAM RGB	    0.648431	0.330856	0.232289	0.311424	0.599693	0.707805	0.155886	0.066044	0.059906
+        // ProPhoto RGB	        0.734700	0.265300	0.288040	0.159600	0.840400	0.711874	0.036600	0.000100	0.000086
+        // SMPTE-C RGB	        0.638852	0.340194	0.221685	0.331007	0.592082	0.703264	0.162897	0.079001	0.075052
+        // sRGB	                0.648431	0.330856	0.222491	0.321152	0.597871	0.716888	0.155886	0.066044	0.060621
+        // Wide Gamut RGB	    0.735000	0.265000	0.258187	0.115000	0.826000	0.724938	0.157000	0.018000	0.016875
+
         // https://infoscience.epfl.ch/record/34089/files/SusstrunkBS99.pdf?version=3
         // http://www.babelcolor.com/index_htm_files/A%20review%20of%20RGB%20color%20spaces.pdf
+
+        var redxxY, greenxyY, bluexyY, mediaWhitePoint;
 
         // Set for RGB, Will change if we are a Lab profile
         this.outputChannels = 3;
@@ -327,74 +368,165 @@ class Profile {
                 return true;
 
             case 'srgb':
-                this.type = eProfileType.RGBMatrix;
+
+                if(this.virutalProfileUsesD50AdaptedPrimaries){
+                    redxxY = convert.xyY(0.648431, 0.330856,0.222491);
+                    greenxyY = convert.xyY(0.321152, 0.597871,0.716888);
+                    bluexyY = convert.xyY(0.155886, 0.066044,0.060621);
+                    mediaWhitePoint = convert.d50;
+                } else {
+                    redxxY = convert.xyY(0.64, 0.33,0.212656);
+                    greenxyY = convert.xyY(0.30, 0.60,0.715158);
+                    bluexyY = convert.xyY(0.15, 0.06,0.072186);
+                    mediaWhitePoint = convert.d65;
+                }
+
                 this.name = 'sRGB';
                 this.description = "RGB is a standard RGB color space created cooperatively by HP and Microsoft in 1996 for use on monitors, printers and the Internet<br><br>Note that sRGB's small Gamut is not suitable for graphic production.<br><br>Encompasses roughly 35% of the visible colors specified by the Lab color space";
-                this.PCSWhitepoint = convert.d50;
-                this.mediaWhitePoint = convert.d65;
-                this.RGBMatrix = createMatrix(2.2, [0.64, 0.33, 0.30, 0.60, 0.15, 0.06], true);
-                convert.computeMatrix(this);
+                this.mediaWhitePoint = mediaWhitePoint;
+                computeRGBProfile(this,2.2, redxxY, greenxyY, bluexyY, true);
+
                 return true;
 
             case 'adobe1998':
+            case 'adobe':
             case 'adobergb':
             case 'adobe1998rgb':
-                this.type = eProfileType.RGBMatrix;
+                if(this.virutalProfileUsesD50AdaptedPrimaries){
+                    redxxY = convert.xyY(0.648431, 0.330856,0.311114);
+                    greenxyY = convert.xyY(0.230154, 0.701572,0.625662);
+                    bluexyY = convert.xyY(0.155886, 0.066044,0.063224);
+                    mediaWhitePoint = convert.d50;
+                } else {
+                    redxxY = convert.xyY(0.64, 0.33,0.297361);
+                    greenxyY = convert.xyY(0.21, 0.71,0.627355);
+                    bluexyY = convert.xyY(0.15, 0.06,0.075285);
+                    mediaWhitePoint = convert.d65;
+                }
                 this.name = 'Adobe RGB (1998)';
                 this.description = 'Developed by Adobe Systems, Inc. in 1998. It was designed to encompass most of the colors achievable on CMYK color printers, but by using RGB primary colors on a device such as a computer display. The Adobe RGB (1998) improves upon the gamut of the sRGB color space, primarily in cyan-green hues<br>Encompasses roughly 50% of the visible colors specified by the Lab color space';
-                this.PCSWhitepoint = convert.d50;
-                this.mediaWhitePoint = convert.d65;
-                this.RGBMatrix = createMatrix(2.2, [0.64, 0.33, 0.21, 0.71, 0.15, 0.06], false);
-                convert.computeMatrix(this);
+                this.mediaWhitePoint = mediaWhitePoint;
+                computeRGBProfile(this,2.2, redxxY, greenxyY, bluexyY, false);
                 return true;
 
             case 'apple':
             case 'applergb':
-                this.type = eProfileType.RGBMatrix;
+                if(this.virutalProfileUsesD50AdaptedPrimaries){
+                    redxxY = convert.xyY(0.634756, 0.340596,0.255166);
+                    greenxyY = convert.xyY(0.301775, 0.597511,0.672578);
+                    bluexyY = convert.xyY(0.162897, 0.079001,0.072256);
+                    mediaWhitePoint = convert.d50;
+                } else {
+                    redxxY = convert.xyY(0.6250, 0.3400,0.244634);
+                    greenxyY = convert.xyY(0.2800, 0.5950,0.672034);
+                    bluexyY = convert.xyY(0.1550, 0.0700,0.083332);
+                    mediaWhitePoint = convert.d65;
+                }
+
                 this.name = 'Apple RGB';
                 this.description = 'Apple RGB is based on the classic Apple 13" RGB monitor. Because of its popularity and similar Trinitronbased monitors that followed, many key publishing applications, including Adobe Photoshop and Illustrator, used it as the default RGB space in the past.<br>Encompasses roughly 33.5% of the visible colors specified by the Lab color space';
-                this.PCSWhitepoint = convert.d50;
-                this.mediaWhitePoint = convert.d65;
-                this.RGBMatrix = createMatrix(1.8, [0.6250, 0.3400, 0.2800, 0.5950, 0.1550, 0.0700], false);
-                convert.computeMatrix(this);
+                this.mediaWhitePoint = mediaWhitePoint;
+                computeRGBProfile(this,2.2, redxxY, greenxyY,  bluexyY, false);
                 return true;
 
             case 'colormatchrgb':
             case 'colormatch':
-                this.type = eProfileType.RGBMatrix;
+
+                // Colormatch is D50
+                redxxY = convert.xyY(0.6300, 0.3400,0.274884);
+                greenxyY = convert.xyY(0.2950, 0.6050,0.658132);
+                bluexyY = convert.xyY(0.1500, 0.0750,0.066985);
+
                 this.name = 'ColorMatch RGB';
                 this.description = 'An RGB profile with a D50 whitepoint used for prepress<br>Encompasses roughly 35.2% of the visible colors specified by the Lab color space';
-                this.PCSWhitepoint = convert.d50;
                 this.mediaWhitePoint = convert.d50;
-                this.RGBMatrix = createMatrix(1.8, [0.6300, 0.3400, 0.2950, 0.6050, 0.1500, 0.0750], false);
-                convert.computeMatrix(this);
+                computeRGBProfile(this,1.8,  redxxY, greenxyY,  bluexyY, false);
                 return true;
 
             case 'prophoto':
             case 'prophotorgb':
-                this.type = eProfileType.RGBMatrix;
+
+                redxxY = convert.xyY(0.7347, 0.2653,0.288040);
+                greenxyY = convert.xyY(0.1596, 0.8404,0.711874);
+                bluexyY = convert.xyY(0.0366, 0.0001,0.000086);
+
                 this.name = 'ProPhoto RGB';
                 this.description = 'The ProPhoto RGB color space, also known as ROMM RGB (Reference Output Medium Metric), is an output referred RGB color space developed by Kodak. It offers an especially large gamut designed for use with photographic output in mind.<br>Encompasses roughly 91.2% of the visible colors specified by the Lab color space';
-                this.PCSWhitepoint = convert.d50;
                 this.mediaWhitePoint = convert.d50;
-                this.RGBMatrix = createMatrix(1.8, [0.7347, 0.2653, 0.1596, 0.8404, 0.0366, 0.0001], false);
-                convert.computeMatrix(this);
+                computeRGBProfile(this,1.8,  redxxY, greenxyY,  bluexyY, false);
                 return true;
 
+            default:
+                this.lastError = {err: 100, text: 'Unsupported Virtual Profile [' + name + ']'};
+                return false;
         }
-        return false;
 
-        function createMatrix(gamma, primaries, isSRGB) {
-            return {
+        function computeRGBProfile(profile, gamma, redxxY, greenxyY, bluexyY, isSRGB) {
+
+            profile.type = eProfileType.RGBMatrix;
+
+            profile.PCSWhitepoint = convert.d50;
+
+            profile.rgb.rXYZ = convert.xyY2XYZ(redxxY)
+            profile.rgb.gXYZ = convert.xyY2XYZ(greenxyY)
+            profile.rgb.bXYZ = convert.xyY2XYZ(bluexyY);
+
+            profile.RGBMatrix = {
                 gamma: gamma,
                 issRGB: isSRGB === true, // uses special sRGB Gamma formula
-                cRx: primaries[0],
-                cRy: primaries[1],
-                cGx: primaries[2],
-                cGy: primaries[3],
-                cBx: primaries[4],
-                cBy: primaries[5]
+                cRx: redxxY.x,
+                cRy: redxxY.y,
+                cGx: greenxyY.x,
+                cGy: greenxyY.y,
+                cBx: bluexyY.x,
+                cBy: bluexyY.y,
             };
+
+            //
+            // TODO remove this code and just use XYZMatrix
+            //
+            // Note, these compute the XYZ <> RGB Matrix
+            // http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+            //
+
+            var m = {
+                m00: profile.RGBMatrix.cRx / profile.RGBMatrix.cRy,
+                m01: profile.RGBMatrix.cGx / profile.RGBMatrix.cGy,
+                m02: profile.RGBMatrix.cBx / profile.RGBMatrix.cBy,
+
+                m10:1.0,
+                m11:1.0,
+                m12:1.0,
+
+                m20:(1.0 - profile.RGBMatrix.cRx - profile.RGBMatrix.cRy) / profile.RGBMatrix.cRy,
+                m21:(1.0 - profile.RGBMatrix.cGx - profile.RGBMatrix.cGy) / profile.RGBMatrix.cGy,
+                m22:(1.0 - profile.RGBMatrix.cBx - profile.RGBMatrix.cBy) / profile.RGBMatrix.cBy
+            };
+
+            var mi = convert.invertMatrix(m);
+
+            // Y = 1
+            // var sr = whitePoint.X * mi.m00 + whitePoint.Y * mi.m01 + whitePoint.Z * mi.m02;
+            var sR = (profile.mediaWhitePoint.X * mi.m00) + (profile.mediaWhitePoint.Y * mi.m01) + (profile.mediaWhitePoint.Z * mi.m02);
+            var sG = (profile.mediaWhitePoint.X * mi.m10) + (profile.mediaWhitePoint.Y * mi.m11) + (profile.mediaWhitePoint.Z * mi.m12);
+            var sB = (profile.mediaWhitePoint.X * mi.m20) + (profile.mediaWhitePoint.Y * mi.m21) + (profile.mediaWhitePoint.Z * mi.m22);
+
+            // Matrix from primaries - (Needed for Legacy Code)
+            profile.RGBMatrix.matrixV4 = {
+                m00 : sR * m.m00,    m01 : sG * m.m01,   m02 : sB * m.m02,
+                m10 : sR * m.m10,    m11 : sG * m.m11,   m12 : sB * m.m12,
+                m20 : sR * m.m20,    m21 : sG * m.m21,   m22 : sB * m.m22
+            };
+            profile.RGBMatrix.matrixInv = convert.invertMatrix(profile.RGBMatrix.matrixV4);
+
+            // Matrix from XYZ values
+            // Used in Transforms
+            profile.RGBMatrix.XYZMatrix = {
+                m00 : profile.rgb.rXYZ.X,   m01 : profile.rgb.gXYZ.X,  m02 : profile.rgb.bXYZ.X,
+                m10 : profile.rgb.rXYZ.Y,   m11 : profile.rgb.gXYZ.Y,  m12 : profile.rgb.bXYZ.Y,
+                m20 : profile.rgb.rXYZ.Z,   m21 : profile.rgb.gXYZ.Z,  m22 : profile.rgb.bXYZ.Z,
+            };
+            profile.RGBMatrix.XYZMatrixInv = convert.invertMatrix(profile.RGBMatrix.XYZMatrix);
         }
     };
 
@@ -502,14 +634,14 @@ class Profile {
             gamma: this.rgb.rTRC.gamma,
             issRGB: (this.name.substr(0, 4) === 'sRGB'),
 
-            cRx: rxy.x,//.round(4),
-            cRy: rxy.y,//.round(4),
+            cRx: rxy.x,
+            cRy: rxy.y,
 
-            cGx: gxy.x,//.round(4),
-            cGy: gxy.y,//.round(4),
+            cGx: gxy.x,
+            cGy: gxy.y,
 
-            cBx: bxy.x,//.round(4),
-            cBy: bxy.y //.round(4)
+            cBx: bxy.x,
+            cBy: bxy.y
         };
         convert.computeMatrix(this);
     };

@@ -799,7 +799,7 @@
      * @param cmsColor
      * @returns {*}
      */
-    transfrom(cmsColor){
+    transform(cmsColor){
         return this.forward(cmsColor);
     }
 
@@ -816,7 +816,7 @@
      *                        If not spefified, it is set to true if outputHasAlpha and inputHasAlpha true
      * @param pixelCount - Number of pixels to convert, if not specified, it is calculated from inputArray length
      */
-    transfromArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
+    transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
         var lut = this.lut;
         if(!lut){
             throw 'No LUT loaded';
@@ -2309,11 +2309,11 @@
                     true
                 )
             } else {
-                // Use Gamma function
+                // Use Inverse Gamma function to convert RGB to linear
                 this.addStage(
                     encoding.device,
-                    'stage_Gamma',
-                    this.stage_Gamma,
+                    'stage_Gamma_Inverse',
+                    this.stage_Gamma_Inverse,
                     inputProfile.RGBMatrix,
                     encoding.device,
                     '  *[optimised : {name}]|({last}) > ({data})',
@@ -2655,11 +2655,11 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                     true
                 )
             } else {
-                // Use Gamma function
+                // Use Gamma function to adjust to output
                 this.addStage(
                     encoding.device,
-                    'stage_Gamma_Inverse',
-                    this.stage_Gamma_Inverse,
+                    'stage_Gamma',
+                    this.stage_Gamma,
                     outputProfile.RGBMatrix,
                     encoding.device,
                     '  *[optimised : {name}]|({last}) > ({data})',
@@ -3938,7 +3938,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             G = convert.sRGBGamma(d1);
             B = convert.sRGBGamma(d2);
         } else {
-            var gamma= RGBProfile.RGBMatrix.gamma;
+            var gamma= 1 / RGBProfile.RGBMatrix.gamma;
             R = Math.pow(d0, gamma);
             G = Math.pow(d1, gamma);
             B = Math.pow(d2, gamma);
@@ -4020,9 +4020,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             ];
         } else {
             return [
-                Math.pow(R,1 / RGBProfile.RGBMatrix.gamma),
-                Math.pow(G,1 / RGBProfile.RGBMatrix.gamma),
-                Math.pow(B,1 / RGBProfile.RGBMatrix.gamma)
+                Math.pow(R,RGBProfile.RGBMatrix.gamma),
+                Math.pow(G,RGBProfile.RGBMatrix.gamma),
+                Math.pow(B,RGBProfile.RGBMatrix.gamma)
             ];
         }
     };
@@ -4051,7 +4051,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                 Gi = convert.sRGBGammaInv(device[1]);
                 Bi = convert.sRGBGammaInv(device[2]);
             } else {
-                igamma = 1 / data.input.gamma;
+                igamma = data.input.gamma;
                 Ri = Math.pow(device[0], igamma);
                 Gi = Math.pow(device[1], igamma);
                 Bi = Math.pow(device[2], igamma);
@@ -4081,9 +4081,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             ]
         }
         return [
-            Math.pow(Ro, data.output.gamma),
-            Math.pow(Go, data.output.gamma),
-            Math.pow(Bo, data.output.gamma)
+            Math.pow(Ro, 1 / data.output.gamma),
+            Math.pow(Go, 1 / data.output.gamma),
+            Math.pow(Bo, 1 / data.output.gamma)
         ];
     }
 
@@ -4100,9 +4100,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             ]
         }
         return [
-            Math.pow(i0, data.gamma),
-            Math.pow(i1, data.gamma),
-            Math.pow(i2, data.gamma)
+            Math.pow(i0,1 / data.gamma),
+            Math.pow(i1,1 / data.gamma),
+            Math.pow(i2,1 / data.gamma)
         ]
     }
 
@@ -4120,9 +4120,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         }
 
         return [
-            Math.pow(i0, 1 / data.gamma),
-            Math.pow(i1, 1 / data.gamma),
-            Math.pow(i2, 1 / data.gamma)
+            Math.pow(i0, data.gamma),
+            Math.pow(i1, data.gamma),
+            Math.pow(i2, data.gamma)
         ]
     }
     //m[row][column]
@@ -4914,7 +4914,7 @@ trilinearInterp3D_NCh(input, lut){
         }
 
         function lookup(x, y, z, k, CLUT, inputChannels, outputChannels){
-            //if(x==1 && y == 0 && z == 0 && k == 0 ){debugger;}
+
             var base;
             if(inputChannels === 3) {
                 base = ((x * g2) + (y * g1) + z) * outputChannels;
@@ -5191,7 +5191,6 @@ trilinearInterp3D_NCh(input, lut){
         ]
 
         function lookup(x, y, z, k){
-            //if(x==1 && y == 0 && z == 0 && k == 0 ){debugger;}
             var base;
             if(inputChannels === 3){
                 base =            ((x * g2) + (y * g1) + z) * outputChannels;
@@ -8848,16 +8847,16 @@ trilinearInterp3D_NCh(input, lut){
         // Create a round trip. Define a Transform BT for all x in L*a*b*
         // PCS -> PCS round trip transform, always uses relative intent on the device -> pcs
         var labProfile = new Profile('*Lab');
-        var transfromLab2Device = new Transform({precession: 3});
-        var transfromDevice2Lab = new Transform({precession: 3});
+        var transformLab2Device = new Transform({precession: 3});
+        var transformDevice2Lab = new Transform({precession: 3});
 
         // Disable black point compensation Auto Enable in these temp transforms
         // or else we end up in an infinite loop and run out of stack
-        transfromLab2Device._BPCAutoEnable = false;
-        transfromDevice2Lab._BPCAutoEnable = false;
+        transformLab2Device._BPCAutoEnable = false;
+        transformDevice2Lab._BPCAutoEnable = false;
 
-        transfromLab2Device.create(labProfile, profile, intent);
-        transfromDevice2Lab.create(profile, labProfile, eIntent.relative);
+        transformLab2Device.create(labProfile, profile, intent);
+        transformDevice2Lab.create(profile, labProfile, eIntent.relative);
 
         var inRamp = [];
         var outRamp = [];
@@ -8868,8 +8867,8 @@ trilinearInterp3D_NCh(input, lut){
         // Create ramp up the flag pole
         for (var l = 0; l < 256; l++) {
             lab.L = (l * 100.0) / 255.0;
-            var device = transfromLab2Device.forward(lab);
-            var destLab = transfromDevice2Lab.forward(device);
+            var device = transformLab2Device.forward(lab);
+            var destLab = transformDevice2Lab.forward(device);
             inRamp[l]  = lab.L;
             outRamp[l] = destLab.L;
         }
@@ -9080,14 +9079,14 @@ trilinearInterp3D_NCh(input, lut){
         }
 
         var labD50 = new Profile('*Lab');
-        var transfromDevice2Lab = new Transform({precession: 3});
+        var transformDevice2Lab = new Transform({precession: 3});
 
         // Disable auto BPC in these temp transforms
-        transfromDevice2Lab._BPCAutoEnable = false;
+        transformDevice2Lab._BPCAutoEnable = false;
 
-        transfromDevice2Lab.create(profile, labD50, intent);
-        var blackLab = transfromDevice2Lab.forward(deviceBlack);
-        var whiteLab = transfromDevice2Lab.forward(deviceWhite);
+        transformDevice2Lab.create(profile, labD50, intent);
+        var blackLab = transformDevice2Lab.forward(deviceBlack);
+        var whiteLab = transformDevice2Lab.forward(deviceWhite);
 
         if(whiteLab.L < blackLab.L){
             // Just in case of inversion in number??
@@ -9117,19 +9116,19 @@ trilinearInterp3D_NCh(input, lut){
 
         var labD50 = new Profile('*Lab');
 
-        var transfromLab2Device = new Transform({precession: 3});
-        var transfromDevice2Lab = new Transform({precession: 3});
+        var transformLab2Device = new Transform({precession: 3});
+        var transformDevice2Lab = new Transform({precession: 3});
 
         // Disable auto BPC in these temp transforms
-        transfromDevice2Lab._BPCAutoEnable = false;
-        transfromDevice2Lab._BPCAutoEnable = false;
+        transformDevice2Lab._BPCAutoEnable = false;
+        transformDevice2Lab._BPCAutoEnable = false;
 
         //TODO change a multistep transform
-        transfromLab2Device.create(labD50, profile, eIntent.perceptual);
-        transfromDevice2Lab.create(profile, labD50, eIntent.relative);
+        transformLab2Device.create(labD50, profile, eIntent.perceptual);
+        transformDevice2Lab.create(profile, labD50, eIntent.relative);
 
-        var device = transfromLab2Device.forward(this.Lab(0,0,0));
-        var blackLab = transfromDevice2Lab.forward(device);
+        var device = transformLab2Device.forward(this.Lab(0,0,0));
+        var blackLab = transformDevice2Lab.forward(device);
 
         if(blackLab.L > 50){
             blackLab.L = 50;

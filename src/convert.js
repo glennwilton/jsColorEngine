@@ -1251,7 +1251,7 @@ convert.RGBf2Lab = function(RGBf, RGBProfile, destWhitePoint){
  * @returns {number}
  */
 convert.gamma = function(c, Gamma){
-    return Math.pow(c, Gamma);
+    return Math.pow(c,  1 / Gamma);
 };
 
 /**
@@ -1261,7 +1261,7 @@ convert.gamma = function(c, Gamma){
  * @returns {number}
  */
 convert.gammaInv = function(c, Gamma){
-    return Math.pow(c , 1/ Gamma);
+    return Math.pow(c , Gamma);
 };
 
 /**
@@ -1278,7 +1278,7 @@ convert.sRGBGamma = function(c){
  * @returns {number}
  */
 convert.sRGBGammaInv = function(c){
-    return ((c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4));
+    return (c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4);
 };
 
 //m[row][column]
@@ -1309,20 +1309,25 @@ convert.computeMatrix = function(profile){
     var sG = (profile.mediaWhitePoint.X * mi.m10) + (profile.mediaWhitePoint.Y * mi.m11) + (profile.mediaWhitePoint.Z * mi.m12);
     var sB = (profile.mediaWhitePoint.X * mi.m20) + (profile.mediaWhitePoint.Y * mi.m21) + (profile.mediaWhitePoint.Z * mi.m22);
 
+    // Matrix from primaries
     profile.RGBMatrix.matrixV4 = {
         m00 : sR * m.m00,    m01 : sG * m.m01,   m02 : sB * m.m02,
         m10 : sR * m.m10,    m11 : sG * m.m11,   m12 : sB * m.m12,
         m20 : sR * m.m20,    m21 : sG * m.m21,   m22 : sB * m.m22
     };
+    profile.RGBMatrix.matrixInv = this.invertMatrix(profile.RGBMatrix.matrixV4);
 
+    // Matrix from XYZ values
+    // RGB to XYZ
     profile.RGBMatrix.XYZMatrix = {
         m00 : profile.rgb.rXYZ.X,   m01 : profile.rgb.gXYZ.X,  m02 : profile.rgb.bXYZ.X,
         m10 : profile.rgb.rXYZ.Y,   m11 : profile.rgb.gXYZ.Y,  m12 : profile.rgb.bXYZ.Y,
         m20 : profile.rgb.rXYZ.Z,   m21 : profile.rgb.gXYZ.Z,  m22 : profile.rgb.bXYZ.Z,
     };
 
+    //XYZ to RGB
     profile.RGBMatrix.XYZMatrixInv = this.invertMatrix(profile.RGBMatrix.XYZMatrix);
-    profile.RGBMatrix.matrixInv = this.invertMatrix(profile.RGBMatrix.matrixV4);
+
 };
 
 convert.invertMatrix = function(m){
