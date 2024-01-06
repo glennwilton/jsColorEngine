@@ -14,6 +14,7 @@
     "dev": "webpack --mode=development",
     "watch": "webpack --mode=development  --watch",
     "build": "webpack --mode=production",
+    "publish": "webpack --mode=production",
     "tests": "webpack --mode=development  --watch --config tests/tests.webpack.config.js"
   },
   "browser": {
