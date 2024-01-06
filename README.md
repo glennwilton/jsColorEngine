@@ -4,6 +4,51 @@ jsColorEngine is a colour management engine using ICC profiles in 100% Javascrip
 A lot of the core concepts and design ideas are based on LittleCMS but this is not a direct port.
 
 
+## Install
+
+Node `npm i jscolorengine`
+
+```js
+    const {Profile, Transform, eIntent, convert} = require('jscolorengine');
+
+    let labProfile = new Profile();
+    labProfile.load('*lab');
+    
+    let rgbProfile = new Profile();
+    rgbProfile.load('*srgb');
+    
+    let lab2RGB = new Transform();
+    lab2RGB.create(labProfile, rgbProfile, eIntent.perceptual);
+    
+    let RGB = lab2RGB.transform(convert.Lab(70, 30, 30));
+    
+...
+
+```
+
+From a Web Browser use [jsColorEngineWeb.js](./browser/jsColorEngineWeb.js)
+
+```html
+    <script src="jsColorEngineWeb.js"></script>
+    <script>
+        // jsColorEngine is now available as a global object       
+        
+        let labProfile = new jsColorEngine.Profile();
+        labProfile.load('*lab');
+
+        let rgbProfile = new jsColorEngine.Profile();
+        rgbProfile.load('*srgb');
+        
+        let lab2RGB = new jsColorEngine.Transform();
+        lab2RGB.create(labProfile, rgbProfile, jsColorEngine.eIntent.perceptual);
+        
+        let RGB = lab2RGB.transform(jsColorEngine.convert.Lab(70, 30, 30))
+        
+        ... 
+        
+    </script>
+```
+
 ## Engine Features
 
 - Supports most V2 and V4 ICC Profiles

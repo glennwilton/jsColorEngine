@@ -57,7 +57,7 @@ Initializes a new Transform instance, See above for options
 * outputFormat: String indicating the output array type, Standard array created if blank, options are 'int8' = Uint8ClampedArray(), 'int16' = Uint16Array(), 'float32' = Float32Array(), 'float64' = Float64Array(), 'same'  
 * Returns : Array of colors in the output profile
 
-### transfromArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount)
+### transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount)
 A High speed transform using a prebuilt LUT on Uint8ClampedArrays specifically for image data, See above for LUT options
 * inputArray: Array of input colors Uint8ClampedArray
 * inputHasAlpha: Boolean indicating if the input array has an alpha channel, expected to be the last channel
