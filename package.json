@@ -1,0 +1,32 @@
+{
+  "name": "jscolorengine",
+  "version": "1.0.0",
+  "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
+  "main": "colorEngine.js",
+  "private": true,
+  "keywords": [],
+  "scripts": {
+    "dev": "webpack --mode=development",
+    "watch": "webpack --mode=development  --watch",
+    "build": "webpack --mode=production",
+    "tests": "webpack --mode=development  --watch --config tests/tests.webpack.config.js"
+  },
+  "browser": {
+    "child_process": false,
+    "fs": false,
+    "path": false,
+    "util": false
+  },
+  "type": "commonjs",
+  "author": "",
+  "license": "Commercial",
+  "devDependencies": {
+    "webpack": "^5.89.0",
+    "webpack-cli": "^4.10.0",
+    "webpack-dev-server": "^4.15.1",
+    "webpack-merge": "^5.10.0"
+  },
+  "dependencies": {
+    "eslint": "^7.32.0"
+  }
+}
