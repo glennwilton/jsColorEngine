@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
-  "main": "colorEngine.js",
+  "main": "build/jsColorEngine.js",
   "keywords": ["icc profile", "color management", "color analysis", "color engine"],
   "license": "gpl-3.0",
   "repository": {

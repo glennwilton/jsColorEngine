@@ -1,0 +1,9 @@
+/tests/
+/dev/
+node_modules
+test/
+.env
+package-lock.json
+@charset
+/.idea/
+*.tgz
