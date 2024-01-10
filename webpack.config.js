@@ -7,6 +7,7 @@ var config = {
         hashFunction: "sha256",
         filename: 'jsColorEngine.js',
         path: path.resolve(__dirname, './package'),
+        libraryTarget: 'umd'
     },
     externals: {
         fs:    "commonjs fs",
@@ -21,7 +22,7 @@ var config = {
 module.exports = (env, argv) => {
     if (argv.mode === 'development') {
         config.devtool = 'source-map';
-        config.output.path =path.resolve(__dirname, './dev')
+        config.output.path = path.resolve(__dirname, './dev')
         if (env && env.TARGET_WEB) {
             config.output.libraryTarget = 'var';
             config.output.library = 'jsColorEngine';
@@ -31,7 +32,7 @@ module.exports = (env, argv) => {
     }
 
     if (argv.mode === 'production') {
-        config.output.path =path.resolve(__dirname, './build')
+        config.output.path = path.resolve(__dirname, './build')
         if (env && env.TARGET_WEB) {
             config.output.libraryTarget = 'var';
             config.output.library = 'jsColorEngine';

@@ -9,20 +9,23 @@ A lot of the core concepts and design ideas are based on LittleCMS but this is n
 Node `npm i jscolorengine`
 
 ```js
-    const {Profile, Transform, eIntent, convert} = require('jscolorengine');
+     (async () => {
+        const {Profile, Transform, eIntent, convert} = require('jscolorengine');
+      
+        let labProfile = new Profile();
+        labProfile.load('*lab');
+      
+        let rgbProfile = new Profile();
+        await rgbProfile.loadPromise('./profiles/adobe1998.icc');
+      
+        let lab2RGB = new Transform();
+        lab2RGB.create(labProfile, rgbProfile, eIntent.perceptual);
+      
+        let RGB = lab2RGB.transform(convert.Lab(70, 30, 30));
 
-    let labProfile = new Profile();
-    labProfile.load('*lab');
-    
-    let rgbProfile = new Profile();
-    rgbProfile.load('*srgb');
-    
-    let lab2RGB = new Transform();
-    lab2RGB.create(labProfile, rgbProfile, eIntent.perceptual);
-    
-    let RGB = lab2RGB.transform(convert.Lab(70, 30, 30));
-    
-...
+        // Do stuff with RGB
+  
+    })();
 
 ```
 
@@ -31,20 +34,23 @@ From a Web Browser use [jsColorEngineWeb.js](./browser/jsColorEngineWeb.js)
 ```html
     <script src="jsColorEngineWeb.js"></script>
     <script>
-        // jsColorEngine is now available as a global object       
-        
-        let labProfile = new jsColorEngine.Profile();
-        labProfile.load('*lab');
+        // jsColorEngine is now available as a global object 
+        (async () => {
 
-        let rgbProfile = new jsColorEngine.Profile();
-        rgbProfile.load('*srgb');
-        
-        let lab2RGB = new jsColorEngine.Transform();
-        lab2RGB.create(labProfile, rgbProfile, jsColorEngine.eIntent.perceptual);
-        
-        let RGB = lab2RGB.transform(jsColorEngine.convert.Lab(70, 30, 30))
-        
-        ... 
+          let labProfile = new jsColorEngine.Profile();
+          labProfile.load('*lab');
+
+          let rgbProfile = new jsColorEngine.Profile();          
+          await rgbProfile.loadPromise('./profiles/adobe1998.icc');
+
+          let lab2RGB = new jsColorEngine.Transform();
+          lab2RGB.create(labProfile, rgbProfile, jsColorEngine.eIntent.perceptual);
+
+          let RGB = lab2RGB.transform(jsColorEngine.convert.Lab(70, 30, 30));
+          
+          // Do stuff with RGB
+
+        })();
         
     </script>
 ```
@@ -117,7 +123,7 @@ Non ICC Color Conversion between color spaces
 
 As a baseline for accuracy, I have compared the output with LittleCMS. 
 The results are very close, but not identical, the differences are due
-to Javascipt using 64bit floats throughout the pipeline, whereas 
+to JavaScript using 64bit floats throughout the pipeline, whereas 
 LittleCMS switches in and out of double floats and 16bit integers. 
 For the most part, the differences are very small and are not visible 
 to the human eye.
@@ -142,16 +148,14 @@ for each stage, and we return the result.
 
 ## Speed
 
-If speed is important, A 1D, 2D, 3D or 4D LUT can be built, this 
-**look up table** can then be used to convert between the two profiles,
-this is 20-30x faster than the pipeline as there is only one step using 
-an n-dimensional lookup table, but it is less accurate as the LUT has a 
-finite resolution.
+If speed is important, A 1D, 2D, 3D or 4D LUT can be prebuilt when you 
+create the transform, this **LUT (look up table)** can then be used to 
+convert between the two profiles, and is 20-30x faster as there is only 
+one step using an n-dimensional lookup table, but it is less accurate 
+as the LUT has a finite resolution.
 
-The engine is designed to be used in a number of different ways,
-
-- For analysis of colour, use the standard multi-step pipeline as this ensures the highest accuracy.
-- For image conversion build a LUT as this is optimised for speed and can convert millions pixels per second.
+On my Anton 3700X I get 20-40 million pixels per second using a prebuilt
+LUT, which is fast enough for most use cases.
 
 ## Usage
 
@@ -163,33 +167,37 @@ The engine is designed to be used in a number of different ways,
 
 ## Examples
 
-### Converting from LabD50 to a CMYK color
-
-
+### Converting CMYK imageData to RGB
 
 ```js
-
     var {Profile, Transform, eIntent} = require('colorEngine');
 
     // Load a profile
     var CMYKprofile = new Profile();
     await CMYKprofile.loadPromise('./profiles/CMYKProfile.icc');
     
-    // Create a transform
-    var transform = new Transform();
-    transform.create('*lab', CMYKprofile, eIntent.perceptual);
-    
-    var lab = convert.Lab(80.1, -22.3, 35.1);
-    
-    // convert the Lab color to CMYK
-    let cmyk = transform.transform(lab);
-    
-    console.log(`CMYK: ${cmyk.C}, ${cmyk.M}, ${cmyk.Y}, ${cmyk.K}`);
+    // Init Transform
+    var cmyk2rgb = new Transform({
+      buildLUT: true,
+      dataFormat: 'int8',
+      BPC: true
+    });
 
+    // Create transform pipeline, only need to do this ONCE when the app starts
+    cmyk2rgb.create(CMYKprofile, '*srgb', eIntent.relative);
+        
+    function loadCMYKTIFF(url){
+        // Load cmyk image data using whatever method you like
+        let cmykData = loadTIFF('image.tiff');
+
+        // convert from CMYK to RGBA
+        return cmyk2rgb.transformArray(cmykData, true, false);
+    }
 ```
+
 ### Converting an image to CMYK
 
-For speed we create a single Lookup-up-table from the profiles and then
+For speed, we create a single Lookup-up-table from the profiles and then
 use the optimised transformArray function to convert the image data.
 
 ```js
@@ -240,6 +248,28 @@ use the optimised transformArray function to convert the image data.
     }
 ```
 
+### Converting from LabD50 to a CMYK color
+
+```js
+
+    var {Profile, Transform, eIntent} = require('colorEngine');
+
+    // Load a profile
+    var CMYKprofile = new Profile();
+    await CMYKprofile.loadPromise('./profiles/CMYKProfile.icc');
+    
+    // Create a transform
+    var transform = new Transform();
+    transform.create('*lab', CMYKprofile, eIntent.perceptual);
+    
+    var lab = convert.Lab(80.1, -22.3, 35.1);
+    
+    // convert the Lab color to CMYK
+    let cmyk = transform.transform(lab);
+    
+    console.log(`CMYK: ${cmyk.C}, ${cmyk.M}, ${cmyk.Y}, ${cmyk.K}`);
+
+```
 
 ### To soft proof what an RGB image would look like in CMYK
 
@@ -259,7 +289,7 @@ to simulate what it would look like if it was printed on a CMYK printer.
     var proofTransform = new Transform({
       buildLUT: true,
       dataFormat: 'int8',
-      BPC: [true, false] // Enbalck black point compensation on preceptional intent but not relative
+      BPC: [true, false] // Enable blackpoint compensation on preceptional intent but not relative
     });
     proofTransform.createMultiStage(['*srgb', eIntent.perceptual, CMYKprofile, eIntent.relative, '*srgb']);
 
@@ -301,12 +331,13 @@ the color to Gray
         stageData: null,
         stageFn: function(input, data, stage) {
             if(stage.inputEncoding === encoding.PCSXYZ){
-              // Set the X and Z components to Y (rough conversion)
-              input[0] = input[1]
-              input[2] = input[1]
+                // Set the X and Z components to Y (rough, but good enough for this example)
+                input[0] = input[1]
+                input[2] = input[1]
             } else {
-              input[1] = 0.5; // Sets a component to 0 
-              input[2] = 0.5; // Sets a component to 0             
+                // in Lab PCS encoding
+                input[1] = 0.5; // Sets a component to 0 
+                input[2] = 0.5; // Sets a component to 0             
             }
             return input;        
         }        

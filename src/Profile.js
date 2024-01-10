@@ -986,15 +986,37 @@ class Profile {
 
 
 function readBinaryFile(filename) {
-    var file
+    var file;
     if (window.cep && window.cep.fs && window.cep.fs.readFile) {
+
         //
         // In adobe illustrator cep enviroment
         //
         file = window.cep.fs.readFile(filename, cep.encoding.Base64);
-        file.errorString = this.errorString[file.err];
+        // get CEP error strings
+        file.errorString = [
+            'NO_ERROR', //0
+            'ERR_UNKNOWN', //1
+            'ERR_INVALID_PARAMS', //2
+            'ERR_NOT_FOUND', //3
+            'ERR_CANT_READ', // 4
+            'ERR_UNSUPPORTED_ENCODING', // 5
+            'ERR_CANT_WRITE', // 6
+            'ERR_OUT_OF_SPACE', // 7
+            'ERR_NOT_FILE', // 8
+            'ERR_NOT_DIRECTORY', // 9
+            'ERR_FILE_EXISTS', // 10
+            'UNABLE TO PARSE FILE', //11,
+            'ERR_DIRECTORY_NOT_FOUND' //12
+        ][file.err] || 'UNKNOWN ERROR ' + file.err;
         if (file.err === 0) {
-            file.binary = Base64Binary.decode(file.data);
+
+            var fileData = window.atob(file.data);
+            var uint8Array = new Uint8Array(fileData.length);
+            for (var i = 0; i < fileData.length; i++) {
+                uint8Array[i] = fileData.charCodeAt(i);
+            }
+            file.binary = uint8Array;
         }
         return file;
     }
