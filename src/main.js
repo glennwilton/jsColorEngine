@@ -21,7 +21,7 @@
  */
 
 var defs = require('./def');
-var convert = require('./convert.js'),
+var convert = require('./convert.js');
 
 module.exports  = {
     convert: convert, // backwards compatable
