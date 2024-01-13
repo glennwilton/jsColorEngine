@@ -139,6 +139,8 @@
                 break;
             case 'int8':
             case 'int16':
+                convertInputOutput = true;
+                break;
             case 'device':
                 convertInputOutput = false;
                 break;
@@ -148,6 +150,7 @@
 
         this.convertInputOutput = convertInputOutput;
         this.verbose = options.verbose === true;
+        this.verboseTiming = options.verboseTiming === true;
         this.pipelineDebug = options.pipelineDebug === true;
         this.optimise = options.optimise !== false;
         this.optimiseDebug = [];
@@ -353,21 +356,33 @@
      */
     createMultiStage(profileChain, customStages) {
         customStages = customStages || [];
+
+        if(!Array.isArray(profileChain)){
+            throw 'Invalid profileChain, must be an array';
+        }
+
+
         var step, i;
         var chainEnd = profileChain.length - 1;
 
         // Create Virtual profiles
         // This makes it easier to just create a transform from a profile name
         // and not have to worry about loading the profile
+        var profileIndex = 1
+        var intentIndex = 1
         for( i = 0; i < profileChain.length; i++) {
-            step = profileChain[i];
-            if (typeof step === 'string') {
-                if (step.substring(0, 1) === '*') {
-                    // automatically create virtual profile
-                    profileChain[i] = new Profile(step);
-                } else {
-                    throw 'Invalid inputProfile ' + i + ' is a string not a Profile';
+            if(i % 2 === 0){
+                // Profiles are only even numbers 0,2,4,6 etc
+                step = profileChain[i];
+                if (typeof step === 'string') {
+                    if (step.substring(0, 1) === '*') {
+                        // automatically create virtual profile
+                        profileChain[i] = new Profile(step);
+                    } else {
+                        throw 'Profile ' + profileIndex + ' is a string. Virtual profiles must be prefixed with "*"';
+                    }
                 }
+                profileIndex++;
             }
         }
 
@@ -383,25 +398,30 @@
             }
 
             if(profileChain.length < 3){
-                throw 'Invalid profileChain, must have at least items';
+                throw 'Invalid profileChain, must have at least 3 items [profile, intent, profile]';
             }
 
+            profileIndex = 1;
+            intentIndex = 1;
             for(i = 0; i < profileChain.length; i++){
                 step = profileChain[i];
 
                 if(i % 2 === 0){
                     // profile
-                    if(!step instanceof Profile){
-                        throw 'step  ' + i + ' in chain is not a Profile';
+
+                    if(!(step instanceof Profile)){
+                        throw 'Profile ' + profileIndex + ' in chain is not a Profile';
                     }
 
                     if(!step.loaded){
-                        throw 'Profile  ' + i + ' in chain is not loaded';
+                        throw 'Profile ' + profileIndex + ' in chain is not loaded';
                     }
+
+                    profileIndex++;
                 } else {
                     // intent
                     if(typeof step !== 'number'){
-                        throw 'step  ' + i + ' in chain is not an intent';
+                        throw 'Intent ' + intentIndex + ' in chain is not a number';
                     }
 
                     if(!(step === eIntent.absolute ||
@@ -409,21 +429,22 @@
                          step === eIntent.relative ||
                          step === eIntent.saturation
                     )){
-                        throw 'step  ' + i + ' in chain is not a valid intent';
+                        throw 'Intent ' + intentIndex + ' in chain is not a valid intent';
                     }
+                    intentIndex++;
                 }
             }
 
-            if(!profileChain[0] instanceof Profile){
+            if(!(profileChain[0] instanceof Profile)){
                 throw 'First step in chain is not a Profile';
             }
 
-            if(!profileChain[chainEnd] instanceof Profile){
+            if(!(profileChain[chainEnd] instanceof Profile)){
                 throw 'Last step in chain is not a Profile';
             }
 
         } else {
-            if(this.lut.CLUT === undefined || this.lut.CLUT === null){
+            if( !this.lut || this.lut.CLUT === undefined || this.lut.CLUT === null){
                 throw 'Invalid LUT';
             }
         }
@@ -511,7 +532,9 @@
      *
      */
     createLut(){
-        console.time('create Prebuilt Lut');
+        if(this.verboseTiming){
+            console.time('create Prebuilt Lut');
+        }
         var CLUT;
         var gridPoints;
         var inputChannels;
@@ -534,7 +557,7 @@
                 outputChannels = 4;
                 break;
             default:
-                throw 'Create Lut  Invalid output profile type ' + this.outputProfile.type;
+                throw 'Create Lut Invalid output profile type ' + this.outputProfile.type;
         }
 
         switch(this.inputProfile.type){
@@ -561,10 +584,12 @@
                 gridPoints = [this.lutGridPoints4D, this.lutGridPoints4D, this.lutGridPoints4D, this.lutGridPoints4D];
                 break;
             default:
-                throw 'Create Lut  Invalid input profile type ' + this.inputProfile.type;
+                throw 'Create Lut Invalid input profile type ' + this.inputProfile.type;
         }
 
-        console.timeEnd('create Prebuilt Lut');
+        if(this.verboseTiming){
+            console.timeEnd('create Prebuilt Lut');
+        }
 
         // convert chain to simplified object for saving
         var chain = [];
@@ -822,7 +847,9 @@
             throw 'No LUT loaded';
         }
 
-        preserveAlpha = preserveAlpha || outputHasAlpha && inputHasAlpha;
+        if(preserveAlpha === undefined){
+            preserveAlpha = outputHasAlpha && inputHasAlpha;
+        }
         var inputBytesPerPixel = (inputHasAlpha) ? lut.inputChannels + 1 : lut.inputChannels;
         var outputBytesPerPixel = (outputHasAlpha) ? lut.outputChannels + 1 : lut.outputChannels;
         if(pixelCount === undefined){
@@ -904,6 +931,10 @@
 
         if(preserveAlpha && !inputHasAlpha){
             throw 'preserveAlpha is true but inputArray has no alpha channel';
+        }
+
+        if(preserveAlpha === undefined){
+            preserveAlpha = outputHasAlpha && inputHasAlpha;
         }
 
         var pipeline = this.pipeline;
@@ -1237,11 +1268,11 @@
             var lutInputProfile = this.lut.chain[0];
             var lutOutputProfile = this.lut.chain[this.lut.chain.length - 1];
 
-            if(!lutInputProfile instanceof Profile){
+            if(!(lutInputProfile.hasOwnProperty('header') && lutInputProfile.hasOwnProperty('name'))){
                 throw 'LUT Chain does not start with a profile';
             }
 
-            if(!lutOutputProfile instanceof Profile){
+            if(!(lutOutputProfile.hasOwnProperty('header') && lutOutputProfile.hasOwnProperty('name'))){
                 throw 'LUT Chain does not end with a profile';
             }
 
@@ -3178,7 +3209,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
 
     createPipeline_Device_to_Output(pcsInfo, outputProfile){
 
-
+        var intSize;
         var intStageFn;
         var intStageDesc;
         if( this.dataFormat === 'int8' || this.dataFormat === 'int16'){
@@ -3204,7 +3235,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                     intStageFn = this.stage_deviceN_to_int;
                     intStageDesc = '[stage_deviceN_to_int ' +  this.dataFormat  + ' : {name}]| ({last}) > {data}';
             }
-            var intSize = this.dataFormat === 'int8' ? 255 : 65535;
+            intSize = this.dataFormat === 'int8' ? 255 : 65535;
         }
 
         switch(outputProfile.type) {
@@ -3917,6 +3948,23 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             type: eColourType.XYZ
         }
     }
+
+    Lab2PCSv4(labD50){
+        return [
+            labD50.L / 100,
+            (labD50.a + 128)/255,
+            (labD50.b + 128)/255
+        ];
+    };
+
+
+    Lab2PCSv2(labD50){
+        return [
+            labD50.L * 652.80 / 65535.0,
+            (labD50.a + 128) * 256 / 65535.0,
+            (labD50.b + 128) * 256 / 65535.0
+        ];
+    };
 
     RGBDevice_to_PCSv4_or_LabD50(device, RGBProfile, asLab, adaptation){
         // Gamma correction
