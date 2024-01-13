@@ -341,6 +341,15 @@ convert.RGB = function(r, g, b, rangeCheck){
 };
 
 
+convert.RGBf = function(r, g, b){
+    return {
+        type: eColourType.RGBf,
+        Rf: r,
+        Gf: g,
+        Bf: b
+    }
+};
+
 /**
  * Note that normal range is 0.0 to 1.0 but can be outside that range - outside gamut
  * @param {number} rf
@@ -398,6 +407,17 @@ convert.CMYK = function(c, m, y, k, rangeCheck){
         K: (k > 100 ? 100 : k<0 ? 0 : Math.round(k))
     };
 };
+
+convert.CMYKf = function(c, m, y, k){
+    return  {
+        type: eColourType.CMYKf,
+        Cf: c,
+        Mf: m,
+        Yf: y,
+        Kf: k
+    }
+};
+
 /**
  *
  * @param {number} x
@@ -677,7 +697,7 @@ convert.LCH2Lab = function(cmsLCHab)
 /**
  * Converts from RGB to Lab, Is the
  * @param {_cmsRGB} rgb
- * @param {Profile} RGBProfile
+ * @param {RGBProfile} RGBProfile
  * @param {_cmsWhitePoint=} destWhitepoint
  * @returns {_cmsLab}
  */
@@ -702,7 +722,7 @@ convert.RGB2Lab = function(rgb, RGBProfile , destWhitepoint){
 /**
  *
  * @param {_cmsRGB} rgb
- * @param {Profile} RGBprofile
+ * @param {RGBProfile} RGBprofile
  * @param {_cmsWhitePoint} XYZRefWhite
  * @returns {_cmsXYZ}
  */
@@ -720,7 +740,7 @@ convert.RGB2XYZ_bytes = function(rgb, RGBprofile , XYZRefWhite){
  *
  * @param {_cmsXYZ} XYZ
  * @param {_cmsWhitePoint} XYZRefWhite
- * @param {Profile} RGBProfile
+ * @param {RGBProfile} RGBProfile
  * @returns {_cmsRGB}
  */
 convert.XYZ2RGB_bytes = function(XYZ, XYZRefWhite, RGBProfile){
@@ -744,7 +764,7 @@ convert.XYZ2RGB_bytes = function(XYZ, XYZRefWhite, RGBProfile){
 /**
  *
  * @param {_cmsLab} cmsLab
- * @param {Profile} RGBProfile
+ * @param {RGBProfile} RGBProfile
  * @param {boolean=} clip
  * @returns {_cmsRGBf}
  */
