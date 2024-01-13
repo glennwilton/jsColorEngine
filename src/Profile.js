@@ -1007,8 +1007,6 @@ class Profile {
             return false;
         }
 
-        //console.log(this);
-
         return true;
 
     };
