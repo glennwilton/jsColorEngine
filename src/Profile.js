@@ -27,7 +27,6 @@ const colorEngineDef = require('./def');
 const eIntent = colorEngineDef.eIntent;
 const eProfileType = colorEngineDef.eProfileType;
 const decode = require('./decodeICC');
-const fs = require("fs");
 
 /**
  * Loads and Decodes an ICC Profile, it does not perform any color conversions
@@ -192,12 +191,13 @@ class Profile {
             filename = filename.substring(5, filename.length);
         }
 
-        var binaryData = readBinaryFile(filename);
+        var binaryData = this.readBinaryFile(filename);
         if (binaryData !== false) {
             this.loaded = this.readICCProfile(binaryData);
             this.loadError = !this.loaded;
         } else {
             this.loadError = true;
+            this.loaded = false;
         }
 
         if(typeof afterLoad === 'function'){
@@ -220,9 +220,16 @@ class Profile {
 
     loadURL(url, afterLoad) {
         var _this = this;
-        XHRLoadBinary(url, function (result, errorString) {
+
+        if(isInNode()){
+            nodeLoadFileFromURL(url, processData);
+        } else {
+            XHRLoadBinary(url, processData);
+        }
+
+        function processData(result, errorString) {
             _this.lastError = {err: errorString === '' ? 0 : -1, text: errorString};
-            if (result) {
+            if(result) {
                 _this.loaded = _this.readICCProfile(result);
                 _this.loadError = !_this.loaded;
             } else {
@@ -232,7 +239,7 @@ class Profile {
             if(typeof afterLoad === 'function'){
                 afterLoad(_this);
             }
-        });
+        }
     };
 
     loadVirtualProfile(name, afterLoad) {
@@ -245,6 +252,61 @@ class Profile {
             afterLoad(this);
         }
     };
+
+    readBinaryFile(filename) {
+        let b64String;
+        if (isInCep()) {
+            if(window.cep && window.cep.fs && window.cep.fs.readFile){
+                //
+                // In adobe illustrator cep enviroment
+                //
+                let file = window.cep.fs.readFile(filename, cep.encoding.Base64);
+                if (file.err === 0) {
+                    b64String = file.data
+                } else {
+                    this.lastError = {
+                        err: file.err,
+                        text: file.errorString = [
+                            'NO_ERROR', //0
+                            'ERR_UNKNOWN', //1
+                            'ERR_INVALID_PARAMS', //2
+                            'ERR_NOT_FOUND', //3
+                            'ERR_CANT_READ', // 4
+                            'ERR_UNSUPPORTED_ENCODING', // 5
+                            'ERR_CANT_WRITE', // 6
+                            'ERR_OUT_OF_SPACE', // 7
+                            'ERR_NOT_FILE', // 8
+                            'ERR_NOT_DIRECTORY', // 9
+                            'ERR_FILE_EXISTS', // 10
+                            'UNABLE TO PARSE FILE', //11,
+                            'ERR_DIRECTORY_NOT_FOUND' //12
+                        ][file.err] || 'UNKNOWN ERROR ' + file.err
+                    };
+                    return false;
+                }
+            }
+        }
+
+        if(isInNode()){
+            //
+            // In node, we can use the Buffer class
+            //
+            const fs = require("fs");
+            try {
+                b64String = fs.readFileSync(filename, {encoding: 'base64'});
+            } catch (e) {
+                this.lastError = {
+                    err: e,
+                    text: e.message
+                };
+                return false;
+            }
+            return base64ToUint8Array(b64String)
+        }
+
+        // Not supported in browser
+        throw new Error('readBinaryFile not supported in this environment');
+    }
 
     createVirtualProfile(name) {
 
@@ -530,6 +592,13 @@ class Profile {
 
 
     readICCProfile(data, searchForProfile) {
+
+        if(isInNode()){
+            if(data instanceof Buffer){
+                data = new Uint8Array(data);
+            }
+        }
+
         var _this = this;
         var start = 0;
         if (searchForProfile){
@@ -908,13 +977,10 @@ class Profile {
                     break;
 
                 default:
-                    console.log('Unsupported Tag [' + tag.sig + ']');
+                    //console.log('Unsupported Tag [' + tag.sig + ']');
                     this.unsuportedTags.push(tag);
             }
         }
-
-        console.log(this);
-
 
         if (this.B2A[eIntent.perceptual] === null) {
             this.B2A[eIntent.perceptual] = this.B2A[eIntent.relative];
@@ -982,53 +1048,32 @@ class Profile {
 }
 
 
-function readBinaryFile(filename) {
-    var b64String;
-    if (window.cep && window.cep.fs && window.cep.fs.readFile) {
-        //
-        // In adobe illustrator cep enviroment
-        //
-        let file = window.cep.fs.readFile(filename, cep.encoding.Base64);
-        if (file.err === 0) {
-            b64String = file.data
-        } else {
-            this.lastError = {
-                err: file.err,
-                text: file.errorString = [
-                    'NO_ERROR', //0
-                    'ERR_UNKNOWN', //1
-                    'ERR_INVALID_PARAMS', //2
-                    'ERR_NOT_FOUND', //3
-                    'ERR_CANT_READ', // 4
-                    'ERR_UNSUPPORTED_ENCODING', // 5
-                    'ERR_CANT_WRITE', // 6
-                    'ERR_OUT_OF_SPACE', // 7
-                    'ERR_NOT_FILE', // 8
-                    'ERR_NOT_DIRECTORY', // 9
-                    'ERR_FILE_EXISTS', // 10
-                    'UNABLE TO PARSE FILE', //11,
-                    'ERR_DIRECTORY_NOT_FOUND' //12
-                ][file.err] || 'UNKNOWN ERROR ' + file.err
-            };
-            return false;
+
+function nodeLoadFileFromURL(url, callback) {
+    const http = require('http');
+    http.get(url, (response) => {
+        // Check if the request was successful
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            return callback(false, 'Response status was ' + response.statusCode);
         }
-    } else {
-        //
-        // Use NODEJS
-        //
-        let fs= require('fs');
-        try {
-            b64String = fs.readFileSync(filename, {encoding: 'base64'});
-        } catch (e) {
-            this.lastError = {
-                err: e,
-                text: e.message
-            };
-            return false;
-        }
-    }
-    return base64ToUint8Array(b64String)
+
+        const chunks = [];
+
+        // Listen for data events
+        response.on('data', (chunk) => {
+            chunks.push(chunk);
+        });
+
+        // Once all the data has been received
+        response.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            callback(new Uint8Array(buffer), '');
+        });
+    }).on('error', (err) => {
+        callback(false, err.message);
+    });
 }
+
 
 function XHRLoadBinary(url, onComplete) {
     var xhr = new XMLHttpRequest();
@@ -1061,8 +1106,33 @@ function XHRLoadBinary(url, onComplete) {
     xhr.send();
 }
 
+function isInCep(){
+    try {
+        if (window.cep) {
+             return true;
+        }
+    } catch (e) {
+    }
+    return false;
+}
+
+function isInNode(){
+    try {
+        // Check if 'process' is defined
+        if (process && process.versions && process.versions.node) {
+             return true;
+        }
+    } catch (e) {
+    }
+    return false;
+}
 
 function base64ToUint8Array(base64) {
+    if(isInNode()){
+        // In node, we can use the Buffer class
+        const buffer = Buffer.from(base64, 'base64');
+        return new Uint8Array(buffer);
+    }
     // Decode the Base64 string to a binary string
     let binary_string = window.atob(base64);
 
