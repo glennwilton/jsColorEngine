@@ -27,6 +27,7 @@ const colorEngineDef = require('./def');
 const eIntent = colorEngineDef.eIntent;
 const eProfileType = colorEngineDef.eProfileType;
 const decode = require('./decodeICC');
+const fs = require("fs");
 
 /**
  * Loads and Decodes an ICC Profile, it does not perform any color conversions
@@ -59,7 +60,6 @@ const decode = require('./decodeICC');
 class Profile {
 
     constructor(dataOrUrl, afterLoad) {
-        // this.hasFileAPI = (window.File && window.FileReader && window.FileList && window.Blob);
         this.loaded = false;
         this.loadError = false;
         this.type = 0;
@@ -116,8 +116,9 @@ class Profile {
         this.outputChannels = 0;
         this.lastError = {err: 0, text: 'No Error'};
 
-        // These are floating point but more complicated
-        // So not used yet
+        // These are floating point but more
+        // complicated and also additional to
+        // 8/16 bit tables so not implemented yet
         this.B2D = [null, null, null, null];
         this.D2B = [null, null, null, null];
 
@@ -191,16 +192,12 @@ class Profile {
             filename = filename.substring(5, filename.length);
         }
 
-        var file = readBinaryFile(filename);
-        if (file.err === 0) {
-            this.loaded = this.readICCProfile(file.binary);
+        var binaryData = readBinaryFile(filename);
+        if (binaryData !== false) {
+            this.loaded = this.readICCProfile(binaryData);
             this.loadError = !this.loaded;
         } else {
             this.loadError = true;
-            this.lastError = {
-                err: file.err,
-                text: file.errorString || file.err
-            };
         }
 
         if(typeof afterLoad === 'function'){
@@ -986,42 +983,51 @@ class Profile {
 
 
 function readBinaryFile(filename) {
-    var file;
+    var b64String;
     if (window.cep && window.cep.fs && window.cep.fs.readFile) {
-
         //
         // In adobe illustrator cep enviroment
         //
-        file = window.cep.fs.readFile(filename, cep.encoding.Base64);
-        // get CEP error strings
-        file.errorString = [
-            'NO_ERROR', //0
-            'ERR_UNKNOWN', //1
-            'ERR_INVALID_PARAMS', //2
-            'ERR_NOT_FOUND', //3
-            'ERR_CANT_READ', // 4
-            'ERR_UNSUPPORTED_ENCODING', // 5
-            'ERR_CANT_WRITE', // 6
-            'ERR_OUT_OF_SPACE', // 7
-            'ERR_NOT_FILE', // 8
-            'ERR_NOT_DIRECTORY', // 9
-            'ERR_FILE_EXISTS', // 10
-            'UNABLE TO PARSE FILE', //11,
-            'ERR_DIRECTORY_NOT_FOUND' //12
-        ][file.err] || 'UNKNOWN ERROR ' + file.err;
+        let file = window.cep.fs.readFile(filename, cep.encoding.Base64);
         if (file.err === 0) {
-
-            var fileData = window.atob(file.data);
-            var uint8Array = new Uint8Array(fileData.length);
-            for (var i = 0; i < fileData.length; i++) {
-                uint8Array[i] = fileData.charCodeAt(i);
-            }
-            file.binary = uint8Array;
+            b64String = file.data
+        } else {
+            this.lastError = {
+                err: file.err,
+                text: file.errorString = [
+                    'NO_ERROR', //0
+                    'ERR_UNKNOWN', //1
+                    'ERR_INVALID_PARAMS', //2
+                    'ERR_NOT_FOUND', //3
+                    'ERR_CANT_READ', // 4
+                    'ERR_UNSUPPORTED_ENCODING', // 5
+                    'ERR_CANT_WRITE', // 6
+                    'ERR_OUT_OF_SPACE', // 7
+                    'ERR_NOT_FILE', // 8
+                    'ERR_NOT_DIRECTORY', // 9
+                    'ERR_FILE_EXISTS', // 10
+                    'UNABLE TO PARSE FILE', //11,
+                    'ERR_DIRECTORY_NOT_FOUND' //12
+                ][file.err] || 'UNKNOWN ERROR ' + file.err
+            };
+            return false;
         }
-        return file;
+    } else {
+        //
+        // Use NODEJS
+        //
+        let fs= require('fs');
+        try {
+            b64String = fs.readFileSync(filename, {encoding: 'base64'});
+        } catch (e) {
+            this.lastError = {
+                err: e,
+                text: e.message
+            };
+            return false;
+        }
     }
-    var fs = require('fs');
-    return fs.readFileSync(filename, {encoding: 'base64'});
+    return base64ToUint8Array(b64String)
 }
 
 function XHRLoadBinary(url, onComplete) {

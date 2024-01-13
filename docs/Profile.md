@@ -4,25 +4,72 @@ The `Profile` class Loads and decodes ICC Profiles without performing color conv
 * Support for both ICC Profile versions 2 and 4.
 * Compatibility with various profile types, including RGB, Gray, Lab, and CMYK. RGB profiles can be either matrix-based or LUT-based.
 
-Note that the `Profile` class does not perform color conversions. For this purpose, use the `Transform` class.
+> [!NOTE]
+> the `Profile` class does not perform color conversions. For this purpose, use the `Transform` class.
 
-### Loading Profiles
-
-Call the generic methods for loading a profile, either
-
-+ `profile.load(dataOrUrl, afterLoad)`
-+ `profile.loadPromise(dataOrUrl)`
-
-| dataOrUrl        | Description                        |
-|------------------|------------------------------------|
-| Uint8Array       | Load from binary Uint8Array        |
-| 'data:base64...' | Load from base64 encoded string    |
-| 'url'            | Load via XHR HTTP                  |
-| '*name'          | A virtual profile name (see below) |
+<!-- TOC -->
+* [Profile Methods](#profile-methods)
+    * [profile.load(dataOrUrl, afterLoad)](#profileloaddataorurl-afterload)
+    * [profile.loadPromise(dataOrUrl)](#profileloadpromisedataorurl)
+    * [profile.loadBinary(binary, afterLoad, searchForProfile)](#profileloadbinarybinary-afterload-searchforprofile)
+    * [profile.loadFile(filename, afterLoad)](#profileloadfilefilename-afterload)
+    * [profile.loadBase64(base64)](#profileloadbase64base64)
+    * [profile.loadURL(url, afterLoad)](#profileloadurlurl-afterload)
+    * [profile.loadVirtualProfile(name)](#profileloadvirtualprofilename)
+* [Profile Properties](#profile-properties)
+<!-- TOC -->
 
 
-### Virtual profiles
-To load a built-in virtual profile use the name prefixed with a '*'
+Profile Methods
+------
+
+#### `profile.load(dataOrUrl, afterLoad)`
+Loads a profile from various sources like Uint8Array, URL, base64 string, file path, or virtual profile.
+* `dataOrUrl`: 
+  * Uint8Array
+  * Base64: prefix with 'data:'
+  * URL/File Path: prefix with 'file:'
+  * Virtual Profile Name: prefix with '*'
+* `afterLoad`: callback function(profile)
+
+
+#### `profile.loadPromise(dataOrUrl)`
+Returns a Promise that resolves after loading a profile.
+* `dataOrUrl`: 
+  * Uint8Array
+  * Base64: prefix with 'data:'
+  * URL/File Path: prefix with 'file:'
+  * Virtual Profile Name: prefix with '*'
+
+
+#### `profile.loadBinary(binary, afterLoad, searchForProfile)`
+Loads a profile from a binary array, optionally searching for the ICC profile within the array.
+* `binary`: Uint8Array
+* `afterLoad`: callback function(profile)
+* `searchForProfile`: Boolean
+
+
+#### `profile.loadFile(filename, afterLoad)`
+Loads a profile from a local file path. (In nodeJS)
+* `filename`: String
+* `afterLoad`: callback function(profile)
+
+
+#### `profile.loadBase64(base64, afterLoad)`
+Loads a profile from a base64 encoded string.
+* `base64`: String
+* `afterLoad` : callback function(profile) 
+
+
+#### `profile.loadURL(url, afterLoad)`
+Loads a profile from a URL using an XHR request.
+* `url`: String
+* `afterLoad`: callback function(profile)
+
+
+#### `profile.loadVirtualProfile(name)`
+Creates and loads a virtual profile, such as sRGB, Adobe RGB, Lab D50, etc.
+* `name`: String (see table below)
 
 | Name           | Description      |
 |----------------|------------------|
@@ -35,29 +82,17 @@ To load a built-in virtual profile use the name prefixed with a '*'
 | *LabD50        | Lab D50*         |
 | *LabD65        | Lab D65*         |
 
-** Note that Lab profiles are abstract profiles, 
+** Note that Lab profiles are abstract profiles,
 and according to the ICC specification the engine
-will no 
+will not perform chromatic adaptation when converting
 
-
-### Profile Methods
-
-| Function                  | Arguments                                                                                              | Description                                                                                              |
-|---------------------------|--------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| `constructor`           | `dataOrUrl`: Uint8Array/String, `afterLoad`: function(profile)                                         | Initializes a new Profile instance, optionally loading a profile.                                        |
-| `loadPromise`           | `dataOrUrl`: Uint8Array/String                                                                         | Returns a Promise that resolves after loading a profile.                                                 |
-| `load`                  | `dataOrUrl`: Uint8Array/String, `afterLoad`: function(profile)                                         | Loads a profile from various sources like Uint8Array, URL, base64 string, file path, or virtual profile. |
-| `loadBinary`            | `binary`: Uint8Array, `afterLoad`: function(profile), `searchForProfile`: Boolean                      | Loads a profile from a binary array, optionally searching for the ICC profile within the array.          |
-| `loadFile`              | `filename`: String, `afterLoad`: function(profile)                                                     | Loads a profile from a local file path. (In nodeJS)                                                      |
-| `loadBase64`            | `base64`: String, `afterLoad`: function(profile)                                                       | Loads a profile from a base64 encoded string.                                                            |
-| `loadURL`               | `url`: String, `afterLoad`: function(profile)                                                          | Loads a profile from a URL using an XHR request.                                                         |
-| `loadVirtualProfile`    | `name`: String, `afterLoad`: function(profile)                                                         | Creates and loads a virtual profile, such as sRGB, Adobe RGB, Lab D50, etc.                              |
 
 This table provides an overview of the functions available in the `Profile` class, excluding internal private methods. Each function's purpose and its parameters are clearly outlined.
 
-### Profile Properties
+Profile Properties
+-----
 
-List of userful properties of the `Profile` class.
+List of useful properties of the `Profile` class.
 
 | Property               | Type     | Description                                            |
 |------------------------|----------|--------------------------------------------------------|
