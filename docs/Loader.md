@@ -46,7 +46,7 @@ Returns the profile with the given url or false if not found.
       var transform = new Transform();
       transform.create('*lab', CMYKProfile, eIntent.perceptual);
       
-      var lab = convert.Lab(80.1, -22.3, 35.1);
+      var lab = color.Lab(80.1, -22.3, 35.1);
       
       // convert the Lab color to CMYK
       let cmyk = transform.transform(lab);

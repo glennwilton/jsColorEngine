@@ -20,7 +20,7 @@ Node `npm i jscolorengine`
         let lab2RGB = new Transform();
         lab2RGB.create(labProfile, rgbProfile, eIntent.perceptual);
       
-        let RGB = lab2RGB.transform(convert.Lab(70, 30, 30));
+        let RGB = lab2RGB.transform(color.Lab(70, 30, 30));
 
         // Do stuff with RGB
   
@@ -45,7 +45,7 @@ From a Web Browser use [jsColorEngineWeb.js](./browser/jsColorEngineWeb.js)
           let lab2RGB = new jsColorEngine.Transform();
           lab2RGB.create(labProfile, rgbProfile, jsColorEngine.eIntent.perceptual);
 
-          let RGB = lab2RGB.transform(jsColorEngine.convert.Lab(70, 30, 30));
+          let RGB = lab2RGB.transform(jsColorEngine.color.Lab(70, 30, 30));
           
           // Do stuff with RGB
 
@@ -260,7 +260,7 @@ use the optimised transformArray function to convert the image data.
     var transform = new Transform();
     transform.create('*lab', CMYKprofile, eIntent.perceptual);
     
-    var lab = convert.Lab(80.1, -22.3, 35.1);
+    var lab = color.Lab(80.1, -22.3, 35.1);
     
     // convert the Lab color to CMYK
     let cmyk = transform.transform(lab);

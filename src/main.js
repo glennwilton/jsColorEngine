@@ -21,9 +21,11 @@
  */
 
 var defs = require('./def');
+var convert = require('./convert.js'),
 
 module.exports  = {
-    convert: require('./convert.js'),
+    convert: convert, // backwards compatable
+    color: convert, // Semantically better
 
     Spectral: require('./Spectral.js'),
 
