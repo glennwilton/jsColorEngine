@@ -908,6 +908,7 @@
 
         return outputArray;
     }
+
     /**
      * Converts colours using the pipeline in an array
      * TODO add a pixelFormat RGBA, RGB, CMYK, CMYKA, BGRA
@@ -916,13 +917,17 @@
      * @param outputHasAlpha
      * @param preserveAlpha
      * @param pixelCount
-     * @param outputFormat
+     * @param outputFormat (ignored if dataFormat is 'int8' and LUT is used)
      * @returns {any[]}
      */
     transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat){
 
         if(!this.pipelineCreated){
             throw 'No Pipeline';
+        }
+
+        if(this.dataFormat === 'int8' && this.lut !== false){
+            return this.transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount);
         }
 
         if(this.dataFormat === 'object' || this.dataFormat === 'objectFloat'){
