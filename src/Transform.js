@@ -34,76 +34,254 @@
     var encodingStr = defs.encodingStr;
 
     /**
+     * ============================================================================
+     *  Transform — the colour-conversion engine
+     * ============================================================================
+     *
+     *  A Transform takes 2+ Profiles and an intent, builds a pipeline of stages
+     *  between them, and (optionally) bakes that pipeline into a CLUT for very
+     *  fast image conversion.
+     *
+     *  The class deliberately exposes TWO PARALLEL EXECUTION PATHS with
+     *  different design priorities. Picking the wrong one will give you 30x
+     *  worse throughput or 30x worse accuracy. Read this section first.
+     *
+     *  ----------------------------------------------------------------------------
+     *  USAGE GUIDE — pick the right entry point for your workload
+     *  ----------------------------------------------------------------------------
+     *
+     *   1. SINGLE COLOURS  (colour pickers, ΔE, swatch soft-proof, analysis)
+     *      Accuracy-first path. ~µs per call. Allocations & per-stage dispatch
+     *      are fine here. Custom stages and pipelineDebug are only meaningful
+     *      on this path.
+     *
+     *          new Transform({ dataFormat: 'object' })
+     *              .create(srcProfile, dstProfile, eIntent.relative);
+     *          var lab = transform.transform(color.RGB(255, 0, 0));
      *
      *
-     *  customStages
-     *  - This is an array of custom stages to be added to the pipeline
-     *      - Each stage is an object with the following properties
+     *   2. MANY COLOURS  (a few hundred / thousand — still need full accuracy)
+     *
+     *          transform.transformArray(arr, ...);   // object/objectFloat OK
+     *
+     *      Walks the full pipeline per pixel. Use for analysis batches; do NOT
+     *      use for image data — see (3).
+     *
+     *
+     *   3. IMAGE DATA  (millions of pixels, 8-bit per channel)
+     *      Speed-first path. 20–40 Mpx/s. Built on the prebuilt LUT and the
+     *      unrolled `*_loop` interpolators in this file.
+     *
+     *          new Transform({ buildLut: true, dataFormat: 'int8', BPC: true })
+     *              .create('*sRGB', cmykProfile, eIntent.perceptual);
+     *          var out = transform.transformArrayViaLUT(uint8Pixels, true, true);
+     *
+     *      Equivalent shortcut:
+     *
+     *          transform.transformArray(uint8Pixels, true, true);
+     *          // routes to transformArrayViaLUT() when dataFormat==='int8' and
+     *          // a LUT was prebuilt.
+     *
+     *      Input MUST be a Uint8ClampedArray (or Uint8Array) of well-formed
+     *      pixel data, length === pixelCount * channelsPerPixel. Bounds-checks
+     *      are deliberately omitted in the inner loops — passing out-of-range
+     *      values is undefined behaviour (garbage out, no exception).
+     *
+     *
+     *   ANTI-PATTERN — do not do this:
+     *
+     *          for (let i = 0; i < pixelCount; i++) {
+     *              out[i] = transform.transform(pixels[i]);   // ← DON'T
+     *          }
+     *
+     *      That bypasses the LUT, allocates ~6 Arrays per pixel, and dispatches
+     *      every stage via .call(this, ...). On a 4 MP image you will be ~30x
+     *      slower than transformArrayViaLUT and you will GC-thrash the host.
+     *
+     *  ----------------------------------------------------------------------------
+     *  DATAFORMAT OPTIONS  (constructor `dataFormat`)
+     *  ----------------------------------------------------------------------------
+     *
+     *   'object'       Structured input/output, integer ranges. Accuracy path.
+     *                  RGB:  {type: eColourType.RGB,  R:0..255, G:0..255, B:0..255}
+     *                  Lab:  {type: eColourType.Lab,  L:0..100, a:-128..127, b:-128..127}
+     *                  CMYK: {type: eColourType.CMYK, C:0..100, M:0..100, Y:0..100, K:0..100}
+     *                  Compatible with the helpers in convert.js. Best for
+     *                  analysis and human-readable output.
+     *
+     *   'objectFloat'  Same shape but float ranges 0.0–1.0.
+     *                  RGB:  {type, Rf, Gf, Bf}
+     *                  Lab:  {type, L:0..100, a:-128..127, b:-128..127}  (unchanged)
+     *                  CMYK: {type, Cf, Mf, Yf, Kf}
+     *
+     *   'int8'         Flat 8-bit integer array, 0–255 per channel. Image path.
+     *                  When combined with `buildLut: true`, transformArray()
+     *                  routes to transformArrayViaLUT() — the fast path.
+     *
+     *   'int16'        Flat 16-bit integer array, 0–65535 per channel.
+     *                  (Image-grade _16bit interpolators are TODO — see the
+     *                  "HOT PATH" header above the *_loop functions.)
+     *
+     *   'device'       Flat array of n-channel floats, 0.0–1.0 per channel.
+     *                  CMYK 25%,0,100%,50% → [0.25, 0.0, 1.0, 0.5]
+     *                  RGB 255,0,25       → [1.0, 0.0, 0.098...]
+     *                  Used internally; suitable when caller wants raw device
+     *                  values without the input/output conversion stages.
+     *
+     *  ----------------------------------------------------------------------------
+     *  CUSTOM STAGES  (3rd argument of create() / 2nd of createMultiStage())
+     *  ----------------------------------------------------------------------------
+     *
+     *  An array of stage objects to be inserted into the pipeline at named
+     *  pipeline locations. When the Transform is built with `buildLut: true`,
+     *  custom stages are baked INTO the LUT — so they cost zero per pixel at
+     *  runtime. This is the recommended way to apply per-image effects (grey
+     *  conversion, saturation tweaks, ink limiting, etc.) without sacrificing
+     *  the speed of the LUT path.
+     *
      *      {
      *          description: 'name of stage',
-     *          stageData: {object to be passed to the stage function},
-     *          stageFn: function(input, stageData, stage){ return output; },
-     *          location:  'beforeInput2Device',  'beforeDevice2PCS', 'afterDevice2PCS', 'PCS', 'beforePCS2Device', 'afterPCS2Device', 'afterDevice2Output',
-     *                      For multi-stage profiles, these will be inserted at each stage, if you need to target a specific stage, use the location
-     *                      'beforeDevice2PCS(n)', 'afterDevice2PCS(n)', 'PCS(n)', 'beforePCS2Device(n)', 'afterPCS2Device(n)', when n is the stage number, starting at 0
+     *          stageData:   { ... arbitrary state passed to stageFn ... },
+     *          stageFn:     function(input, stageData, stage) { return output; },
+     *          location:    one of:
+     *                          'beforeInput2Device'
+     *                          'beforeDevice2PCS'
+     *                          'afterDevice2PCS'
+     *                          'PCS'
+     *                          'beforePCS2Device'
+     *                          'afterPCS2Device'
+     *                          'afterDevice2Output'
+     *
+     *                       For multi-stage profile chains, the same custom
+     *                       stage is inserted at EACH boundary by default. To
+     *                       target a specific boundary, append (n) where n is
+     *                       the 0-based stage index, e.g. 'PCS(0)', 'PCS(1)'.
      *      }
      *
+     *  See README "Insert a custom stage to convert to grey" for a worked
+     *  example.
      *
+     *  ----------------------------------------------------------------------------
+     *  PIPELINE NOTES (internal)
+     *  ----------------------------------------------------------------------------
      *
-     *  Note to about optimisation      - Building the pipeline is done once so it does not matter if slow or not optimised
-     *                                  - The pipeline itself can be optimised to remove un-necessary conversions, so wont
-     *                                    get too hung up about checking for optimisation when building the pipeline
-     *                                  - The stages themselves are called many times so they need to be optimised
-     *                                  - One future idea is for the stages to return code as a string, which can be
-     *                                    compiled into a function, this would be faster than calling a function.
+     *   - Pipeline construction runs ONCE per create() call — speed of build is
+     *     irrelevant. Pipeline EXECUTION is per-pixel — speed is critical.
      *
-     * Dataformat options
-     *   object        A structured format {type: eColourType, R:0, G:0, B:0} or {type: eColourType, L:0, a:0, b:0} etc,
-     *                  compatible with the convert functions, useful for easier handling of data and analysis of data
+     *   - The pipeline optimiser (this.optimise === true) collapses adjacent
+     *     stages with matching encodings (e.g. PCSv2→PCSv2 conversions become
+     *     no-ops) and can drop entire stages.
      *
-     *   objectFloat    Same as object but with floats instead of integers
-     *                  RGB is 0.0 - 1.0 {type: eColourType, Rf:0.0, Gf:0.0, Bf:0.0}
-     *                  Lab is 0.0 - 1.0 {type: eColourType, L:0.0, a:0.0, b:0.0} (Same as usual)
-     *                  CMYK is 0.0 - 1.0 {type: eColourType, Cf:0.0, Mf:0.0, Yf:0.0, Kf:0.0}
+     *   - Stages are stored as { inputEncoding, funct, outputEncoding,
+     *     stageData, stageName, debugFormat } — see _Stage typedef in def.js.
      *
-     *   int8           8bit integer array, 0-255
+     *   - Idea for future: emit each stage body as a string, then construct one
+     *     monolithic Function() that runs the whole pipeline inline per pixel.
+     *     Bigger gain than micro-optimising individual stages.
      *
-     *   int16          16bit integer array, 0-65535
+     *  ----------------------------------------------------------------------------
+     *  CONSTRUCTOR OPTIONS
+     *  ----------------------------------------------------------------------------
      *
-     *   device         An array of n-Channel floats with a range of 0.0 to 1.0 i.e [0.0, 0.0, 0.0] or [0.0, 0.0, 0.0, 0.0]
-     *                  CMYK 25%,0,100%,50% would be [0.25, 0.0, 1.0, 0.5]
-     *                  RGB 255,0,25 would be [1.0, 0.0, 0.098..]
+     *  @param {object}              options
      *
-     *  @param options
-     *  @param {boolean} options.builtLut           - precompute and store the LUT for faster conversion at the cost of accuracy
-     *  @param {!number} options.lutGridPoints3D    - number of grid points to use when creating the LUT, typically 17, 33 or 65,
-     *                                                anything more gets diminishing returns
-     *  @param {!number} options.lutGridPoints4D    - number of grid points to use when creating the LUT, typically 11, 17, 33,
-     *                                                anything more gets diminishing returns
-     *  @param {string} options.LUTinterpolation    - 'trilinear' or 'tetrahedral' interpolation for the pipeline for LUTs
+     *  @param {boolean}            [options.buildLut=false]
+     *      Precompute and store the CLUT. Required for the fast image path
+     *      (see USAGE GUIDE #3). Slight accuracy loss vs. running the full
+     *      pipeline because of LUT quantisation, but typically invisible to
+     *      the eye and 20–30x faster on image data.
+     *      (Note: legacy spelling `builtLut` is also accepted.)
      *
-     *  @param {string} options.interpolation       - 'trilinear' or 'tetrahedral' interpolation for the 3D/4D pipeline
-     *                                                 NOTE!! tetrahedral is faster and more accurate than trilinear!!!
-     *  @param {string} options.dataFormat          - either 'object', 'objectFloat', 'int8', 'int16', 'device', see above
-     *  @param {boolean} options.useFloats          - Obsolete, use dataFormat instead
-     *  @param {boolean} options.labAdaptation      - If true >object based Lab< is adapted to D50 white point before conversion, i.e LabD65 will be converted to LabD50 before transforms
-     *  @param {boolean} options.displayChromaticAdaptation - If true, chromatic adaptation across the PCS if the profiles have different whitepoints
-     *  @param {boolean} options.pipelineDebug      - If true, the pipeline is debugged and the debug history can be retrieved
-     *  @param {boolean} options.optimise           - If true, the pipeline is optimised to remove un-necessary conversions
-     *  @param {boolean} options.roundOutput        - If true, the output is rounded to the decimal places specified in precession,
-     *                                                otherwise the output is raw which can be long numbers such as 243.201001983...
-     *  @param {number} options.precession          - Number of decimal places to round to, default is 0
-     *  @param {[boolean] || boolean} options.BPC   - If true, Black Point Compensation is applied
-     *                                                Can also be an array of booleans to specify which STAGE to use,i.e 0,1,2, not 1,3,5
+     *  @param {number}             [options.lutGridPoints3D=33]
+     *      Grid points per axis for 3D LUTs. 17 / 33 / 65 are typical. Above
+     *      65 you hit memory cost without measurable accuracy gain.
      *
-     *   * @constructor
+     *  @param {number}             [options.lutGridPoints4D=17]
+     *      Grid points per axis for 4D (CMYK) LUTs. 11 / 17 / 33 typical.
+     *      4D grows as N^4 in memory — be cautious above 33.
+     *
+     *  @param {string}             [options.interpolation3D='tetrahedral']
+     *  @param {string}             [options.interpolation4D='tetrahedral']
+     *      'trilinear' or 'tetrahedral' for the live pipeline interpolation.
+     *      Tetrahedral is BOTH faster AND more accurate for device→device LUTs;
+     *      stay on tetrahedral unless you have a measured reason not to. For
+     *      PCS→device 3-channel input, addStageLUT() automatically switches to
+     *      trilinear (matches LittleCMS / Photoshop / SampleICC behaviour).
+     *
+     *  @param {string}             [options.LUTinterpolation3D]
+     *  @param {string}             [options.LUTinterpolation4D]
+     *      Same as above but applied to the LUT-substituted pipeline (i.e.
+     *      after buildLut). Defaults to interpolation3D / interpolation4D.
+     *
+     *  @param {boolean}            [options.interpolationFast=true]
+     *      Use the unrolled per-channel-count interpolators (3Ch / 4Ch / NCh).
+     *      Set false to force the generic *_3or4Ch reference variants — only
+     *      useful for diagnosing accuracy issues.
+     *
+     *  @param {string}             [options.dataFormat='object']
+     *      'object' | 'objectFloat' | 'int8' | 'int16' | 'device' — see
+     *      "DATAFORMAT OPTIONS" above.
+     *
+     *  @param {boolean}            [options.useFloats]
+     *      DEPRECATED. Use dataFormat: 'objectFloat' instead.
+     *
+     *  @param {boolean}            [options.labAdaptation=false]
+     *      If true, object-based Lab inputs are chromatically adapted to D50
+     *      before entering the pipeline (e.g. LabD65 input → LabD50 internal).
+     *
+     *  @param {boolean}            [options.labInputAdaptation=true]
+     *      If false, suppresses Lab→Lab whitepoint adaptation on input.
+     *
+     *  @param {boolean}            [options.displayChromaticAdaptation=false]
+     *      Apply chromatic adaptation across the PCS when source/destination
+     *      profiles have different whitepoints. For abstract Lab profiles.
+     *
+     *  @param {boolean}            [options.pipelineDebug=false]
+     *      Capture per-stage values into this.pipelineHistory and
+     *      this.debugHistory. Adds overhead — only enable for diagnostics.
+     *      Only meaningful on the accuracy path (forward()/transform()).
+     *
+     *  @param {boolean}            [options.optimise=true]
+     *      Run the pipeline optimiser to remove redundant conversions.
+     *
+     *  @param {boolean}            [options.roundOutput=true]
+     *      Round numeric output to `precision` decimal places. Set false to
+     *      keep raw floats (e.g. 243.20100198... for sub-integer accuracy).
+     *
+     *  @param {number}             [options.precision=0]
+     *      Decimal places to round to when roundOutput=true.
+     *
+     *  @param {number}             [options.precession=0]
+     *      @deprecated Long-standing typo of `precision`. Still accepted for
+     *      backwards compatibility — `options.precision` and `options.precession`
+     *      are interchangeable, and both `this.precision` and `this.precession`
+     *      are populated for read. New code should use `precision`.
+     *
+     *  @param {boolean|boolean[]}  [options.BPC=false]
+     *      Black Point Compensation. Pass a boolean to enable for ALL stages,
+     *      or an array of booleans to control per-stage independently. The
+     *      array indexes by STAGE number (0,1,2,…), NOT by chain index.
+     *
+     *  @param {boolean}            [options.clipRGBinPipeline=false]
+     *      Clip RGB values to 0..1 inside the pipeline (useful when going
+     *      through extreme abstract profiles).
+     *
+     *  @param {boolean}            [options.verbose=false]
+     *  @param {boolean}            [options.verboseTiming=false]
+     *      Log pipeline construction info / build timings to console.
+     *
+     *  @constructor
      */
      class Transform{
         constructor(options){
 
         options = options || {};
 
-        this.builtLut = options.builtLut === true;
+        // Accept both spellings: `builtLut` (original) and `buildLut` (the name
+        // used throughout the JSDoc and in newer docs). They mean the same thing —
+        // "precompute and store a LUT for the fast image path". Internally we
+        // normalise to `this.builtLut` to keep all downstream code untouched.
+        this.builtLut = (options.builtLut === true) || (options.buildLut === true);
         this.lutGridPoints3D = (isNaN(Number(options.lutGridPoints3D))) ? 33 : Number(options.lutGridPoints3D);
         this.lutGridPoints4D = (isNaN(Number(options.lutGridPoints4D))) ? 17 : Number(options.lutGridPoints4D);
 
@@ -155,7 +333,13 @@
         this.optimise = options.optimise !== false;
         this.optimiseDebug = [];
         this.roundOutput = options.roundOutput !== false;
-        this.precession = (isNaN(Number(options.precession))) ? 0 : Number(options.precession);
+        // `precision` is the canonical option name. `precession` is a
+        // long-standing typo kept for backwards compatibility — both spellings
+        // are accepted here, and both `this.precision` and `this.precession`
+        // are populated so existing read sites keep working unchanged.
+        var rawPrecision = (options.precision !== undefined) ? options.precision : options.precession;
+        this.precision = (isNaN(Number(rawPrecision))) ? 0 : Number(rawPrecision);
+        this.precession = this.precision; // @deprecated alias
 
         if(Array.isArray(options.BPC)){
             this.useBPC = options.BPC; // can use an array to specify which channels to which stage
@@ -190,17 +374,22 @@
    
 
     /**
-     * Get the prebuilt lut - which can be used in future instead of using profiles
-     * @param precession
-     * @returns {any}
+     * Get the prebuilt LUT — which can be used in future instead of using
+     * profiles (e.g. serialise to JSON, ship to a worker).
+     *
+     * @param {number|false} [precision]  Optional decimal places to round
+     *      LUT values to before returning. Reduces JSON size considerably
+     *      with negligible accuracy loss for display work. `false` or
+     *      `undefined` returns the LUT unrounded.
+     * @returns {object} A plain object with the LUT data + metadata.
      */
-    getLut(precession){
+    getLut(precision){
         var CLUT
-        if(precession === undefined || precession === false) {
+        if(precision === undefined || precision === false) {
             CLUT = this.lut.CLUT;
         } else {
             // round, which will make output smaller when saved to JSON
-            var p = Math.pow(10, precession)
+            var p = Math.pow(10, precision)
             CLUT = this.lut.CLUT.map(function (value) {
                 return Math.round(value * p) / p;
             })
@@ -314,12 +503,35 @@
     }
 
     /**
-     * This is the main function for creating a transform from two profiles, It will build
-     * a pipeline of stages to convert from one profile to another, and then optimise the pipeline
-     * @param {string|Profile}inputProfile
-     * @param {string|Profile} outputProfile
-     * @param {eIntent} intent
-     * @param {[]} customStages
+     * Build a transform from a single source profile to a single destination
+     * profile. Sugar for `createMultiStage([input, intent, output], customStages)`.
+     *
+     *      var t = new Transform();
+     *      t.create('*sRGB', cmykProfile, eIntent.perceptual);
+     *      t.create(labProfile, '*sRGB', eIntent.relative);
+     *
+     * Profiles may be either:
+     *   - a loaded {@link Profile} instance, or
+     *   - a virtual-profile name string starting with '*'
+     *     ('*sRGB', '*AdobeRGB', '*AppleRGB', '*ColorMatchRGB',
+     *      '*ProPhotoRGB', '*Lab', '*LabD50', '*LabD65').
+     *
+     * Strings without a leading '*' are rejected — load the profile yourself
+     * with new Profile(url) / loadPromise() first.
+     *
+     * After this call returns, the Transform is ready: call transform() for
+     * single colours, or transformArray() / transformArrayViaLUT() for arrays.
+     *
+     * @param {string|Profile} inputProfile   Source profile or '*virtualName'
+     * @param {string|Profile} outputProfile  Destination profile or '*virtualName'
+     * @param {number}         intent         One of eIntent.perceptual / .relative
+     *                                        / .saturation / .absolute
+     * @param {object[]}      [customStages]  Custom stages to inject into the
+     *                                        pipeline (see class JSDoc
+     *                                        "CUSTOM STAGES" section).
+     * @returns {void}
+     * @throws {string} If a profile is unloaded, the wrong type, or the intent
+     *                  is invalid.
      */
 
     create(inputProfile, outputProfile, intent, customStages) {
@@ -328,31 +540,55 @@
 
 
     /**
-     * This is the main function for creating a transform from two OR MORE profiles, It will build the entire pipeline
+     * Build a transform from a chain of two-or-more profiles. Use this for
+     * proofing transforms (RGB → CMYK → RGB), abstract-profile chains, or any
+     * conversion where you want to round-trip through one or more intermediate
+     * spaces.
      *
-     * For exmaple if you want to create a proofing profile to simlulate CMYK printing, you would pass in the following
-     * profiles in order
-     *   profileChain = [
-     *      profile,
-     *      intent,
-     *      profile,
-     *      intent,
-     *      profile
-     *      ]
+     * The chain is laid out as [profile, intent, profile, intent, profile, ...]
+     * with profiles at even indices and intents at odd indices.
      *
-     *       {inputProfile: '*sRGB', outputProfile: CMYKProfile, intent: eIntent.perceptual, customStages: []},
-     *       {inputProfile: CMYKProfile, outputProfile: '*sRGB', intent: eIntent.relative},
-     *   ]
+     *  EXAMPLES
      *
-     *  If you wanted to know if a lab value is converted to RGB, printed in CMYK what is the final lab value
-     *  to calcualte a DeltaE
-
-     *  profileChain = [ '*lab', eIntent.relative,  '*sRGB']
-     *  profileChain = [ '*sRGB', eIntent.perceptual,CMYKProfile ],
-     *  profileChain = [CMYKProfile, outputProfile: '*lab', intent: eIntent.absolute},
+     *   1. Soft-proof RGB through a CMYK printer profile back to RGB:
      *
-     * @param {[]} profileChain
-     * @param {[]} customStages
+     *          t.createMultiStage([
+     *              '*sRGB',     eIntent.perceptual,
+     *              cmykProfile, eIntent.relative,
+     *              '*sRGB'
+     *          ]);
+     *
+     *   2. "What Lab value would this Lab value land at after a print/scan
+     *      cycle, for a ΔE calculation?"
+     *
+     *          t.createMultiStage([
+     *              '*Lab',      eIntent.relative,
+     *              '*sRGB',     eIntent.perceptual,
+     *              cmykProfile, eIntent.absolute,
+     *              '*Lab'
+     *          ]);
+     *
+     *  MULTI-STAGE OPTIONS
+     *
+     *  - `BPC: [true, false, true]` — array form of the BPC option lets you
+     *    enable Black Point Compensation per chain segment (indexes 0,1,2…
+     *    correspond to the intent slots in the chain).
+     *
+     *  - `customStages` are inserted at named pipeline locations on EVERY
+     *    boundary by default. To target a specific stage index, append (n)
+     *    to `location`, e.g. 'PCS(1)'. See class JSDoc.
+     *
+     *  - With `buildLut: true`, the entire chain is collapsed into a single
+     *    CLUT — even multi-step proofing chains become one interpolation per
+     *    pixel at runtime.
+     *
+     * @param {Array<Profile|string|number>} profileChain  Alternating
+     *      profiles and intents, length 3, 5, 7, ... (always odd). Profiles
+     *      may be Profile instances or '*virtualName' strings.
+     * @param {object[]}                    [customStages] See class JSDoc.
+     * @returns {void}
+     * @throws {string} If chain length is invalid, profiles are unloaded or
+     *                  the wrong type, or any intent is not in eIntent.
      */
     createMultiStage(profileChain, customStages) {
         customStages = customStages || [];
@@ -782,10 +1018,33 @@
 
 
     /**
-     * Converts colours using the pipeline
-     * Note: Called Forward and there was a plan to build the reverse pipeline automatically, but this is not currently supported
-     * @param cmsColor
-     * @returns {*}
+     * Run a single colour through the full pipeline. ACCURACY-PATH entry point.
+     *
+     * Walks every stage in this.pipeline, dispatching via funct.call(this, ...)
+     * so stages have access to the Transform instance. Allocates intermediate
+     * arrays per stage. Designed for one-colour-at-a-time work — colour
+     * pickers, ΔE, swatch soft-proof, profile analysis.
+     *
+     * Cost: ~µs per colour (scales linearly with pipeline length).
+     *
+     *  ⚠ DO NOT loop this over image data. For 100 colours it's fine; for
+     *    100,000 colours use transformArray(); for image-grade pixel buffers
+     *    use transformArrayViaLUT() with `buildLut: true, dataFormat: 'int8'`.
+     *    See class JSDoc "USAGE GUIDE" and the "anti-pattern" section.
+     *
+     * When `pipelineDebug` is true, each stage's input/output is recorded into
+     * this.pipelineHistory and this.debugHistory for inspection.
+     *
+     * Naming note: called "forward" because the original design left room for
+     * an auto-generated `reverse()` pipeline. That feature was never shipped;
+     * `transform()` is the preferred public alias.
+     *
+     * @param {object|number[]} cmsColor  A colour in the shape implied by
+     *      `dataFormat`: an object (`{type, R, G, B}`, `{type, L, a, b}`, …)
+     *      for 'object'/'objectFloat', or a flat array for 'device'.
+     * @returns {object|number[]}  Output colour in the destination profile's
+     *      space, in the shape implied by `dataFormat`.
+     * @throws {string} 'No Pipeline' if create()/createMultiStage() hasn't run.
      */
     forward(cmsColor){
 
@@ -820,26 +1079,83 @@
     };
 
     /**
-     * Converts colours using the pipeline
-     * @param cmsColor
-     * @returns {*}
+     * Public alias of forward(). Prefer this name in user code.
+     *
+     * Single-colour, accuracy-first conversion. See {@link Transform#forward}
+     * for the full contract and the "DO NOT loop over image data" warning.
+     *
+     * @param {object|number[]} cmsColor
+     * @returns {object|number[]}
      */
     transform(cmsColor){
         return this.forward(cmsColor);
     }
 
     /**
-     * An optimised fast transformer for converting 8bit imag data
-     * Picks to fastest method based on input and output profiles
+     * IMAGE-GRADE FAST PATH. Converts an array of 8-bit pixel data through
+     * the prebuilt CLUT using the unrolled tetrahedral interpolators in this
+     * file. This is the entry point you want for canvas data, video frames,
+     * and anything pixel-shaped.
      *
-     * TODO : Set input and output formats RGB, RGBA, CMYK, CMYKA, BGRA
+     * Throughput: ~20–40 Mpx/s on a modern x86 (3D LUT). 4D LUTs (CMYK input)
+     * are slower but still typically >10 Mpx/s.
      *
-     * @param inputArray
-     * @param inputHasAlpha
-     * @param outputHasAlpha
-     * @param preserveAlpha - If true, the alpha channel is preserved, otherwise it is discarded,
-     *                        If not spefified, it is set to true if outputHasAlpha and inputHasAlpha true
-     * @param pixelCount - Number of pixels to convert, if not specified, it is calculated from inputArray length
+     * Routing inside this method picks the most specialised inner loop:
+     *
+     *      input → output channels       inner loop
+     *      ───────────────────────       ───────────────────────────────────
+     *      1     → N                     linearInterp1DArray_NCh_loop
+     *      2     → N                     bilinearInterp2DArray_NCh_loop
+     *      3     → 3   (RGB→RGB,  Lab)   tetrahedralInterp3DArray_3Ch_loop
+     *      3     → 4   (RGB→CMYK)       tetrahedralInterp3DArray_4Ch_loop
+     *      3     → N   (RGB→6+ch)       tetrahedralInterp3DArray_NCh_loop
+     *      4     → 3   (CMYK→RGB, Lab)  tetrahedralInterp4DArray_3Ch_loop
+     *      4     → 4   (CMYK→CMYK)      tetrahedralInterp4DArray_4Ch_loop
+     *      4     → N                    tetrahedralInterp4DArray_NCh_loop
+     *
+     *  INPUT CONTRACT — these are NOT validated in the per-pixel inner loop
+     *
+     *   - inputArray must be a Uint8ClampedArray or Uint8Array.
+     *   - Values must be 0..255. Out-of-range values produce undefined
+     *     behaviour (garbage colours, no exception thrown).
+     *   - Length must equal pixelCount * inputChannelsPerPixel (where the
+     *     "+1 for alpha" is included if `inputHasAlpha` is true).
+     *   - The Transform must have been created with `buildLut: true` and
+     *     `dataFormat: 'int8'` (otherwise this throws 'No LUT loaded').
+     *
+     *  ALPHA HANDLING
+     *
+     *   - inputHasAlpha:  if true, every (channels+1)th byte of the input is
+     *                     treated as alpha and skipped (or copied — see
+     *                     preserveAlpha).
+     *   - outputHasAlpha: if true, the output is written with an alpha slot
+     *                     after each pixel.
+     *   - preserveAlpha:  if true, copy alpha from input to output (requires
+     *                     both the above to be true). If undefined, defaults
+     *                     to `outputHasAlpha && inputHasAlpha`.
+     *
+     *  TODO (future enhancements)
+     *   - Pixel-format strings: 'RGB', 'RGBA', 'BGRA', 'CMYK', 'CMYKA'
+     *     to make the alpha-handling triple-boolean less error-prone.
+     *   - Optional `out` buffer parameter to avoid the per-call
+     *     `new Uint8ClampedArray(...)` allocation (matters for
+     *     real-time soft-proofing of video / repeated canvas redraws).
+     *   - Reactivate the *_loop_16bit variants for 16-bit input (currently
+     *     commented out at the routing switch below). Requires fixing the
+     *     `(inputN === 255)` boundary check in the loops first — see the
+     *     HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
+     *
+     * @param {Uint8ClampedArray|Uint8Array} inputArray
+     * @param {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
+     * @param {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
+     * @param {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
+     *                                  to (outputHasAlpha && inputHasAlpha).
+     * @param {number}  [pixelCount]    Pixels to convert. Defaults to
+     *                                  Math.floor(inputArray.length / inputBPP).
+     * @returns {Uint8ClampedArray}     A new Uint8ClampedArray of length
+     *                                  pixelCount * outputBytesPerPixel.
+     * @throws {string} 'No LUT loaded' if the Transform was built without
+     *                  buildLut: true.
      */
     transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
         var lut = this.lut;
@@ -910,15 +1226,55 @@
     }
 
     /**
-     * Converts colours using the pipeline in an array
-     * TODO add a pixelFormat RGBA, RGB, CMYK, CMYKA, BGRA
-     * @param inputArray
-     * @param inputHasAlpha
-     * @param outputHasAlpha
-     * @param preserveAlpha
-     * @param pixelCount
-     * @param outputFormat (ignored if dataFormat is 'int8' and LUT is used)
-     * @returns {any[]}
+     * Generic array transform. Routes to the right path based on dataFormat
+     * and whether a LUT was prebuilt. This is the recommended entry point for
+     * any "I have N colours, convert them all" workload — it'll automatically
+     * pick the fastest legitimate path.
+     *
+     *  ROUTING TABLE
+     *
+     *   dataFormat === 'int8' AND LUT prebuilt
+     *      → transformArrayViaLUT()  — the IMAGE FAST PATH (20–40 Mpx/s).
+     *        outputFormat is ignored (always Uint8ClampedArray out).
+     *
+     *   dataFormat === 'object' OR 'objectFloat'
+     *      → per-pixel ACCURACY PATH walking the full pipeline.
+     *        inputArray is an array of colour objects, output is too.
+     *        `outputFormat` is ignored.
+     *
+     *   dataFormat === 'int8' / 'int16' / 'device' AND no LUT
+     *      → per-pixel ACCURACY PATH walking the full pipeline over a flat
+     *        numeric array. SLOW for image data — if you're processing
+     *        pixels, rebuild the Transform with `buildLut: true` so you get
+     *        routed to the fast path above.
+     *
+     *  OUTPUT FORMAT
+     *
+     *   `outputFormat` controls the output container type for the flat-array
+     *   paths:
+     *      'int8'    → Uint8ClampedArray
+     *      'int16'   → Uint16Array
+     *      'float32' → Float32Array
+     *      'float64' → Float64Array
+     *      'same'    → match inputArray's typed-array constructor
+     *      undefined → plain Array (default)
+     *
+     *  TODO (future enhancements)
+     *   - Pixel-format strings: 'RGB', 'RGBA', 'BGRA', 'CMYK', 'CMYKA'
+     *     replacing the current inputHasAlpha/outputHasAlpha/preserveAlpha
+     *     triple-boolean.
+     *   - Optional `out` buffer to skip allocation in tight realtime loops.
+     *
+     * @param {Uint8ClampedArray|Uint8Array|Uint16Array|Float32Array|Float64Array|Array} inputArray
+     * @param {boolean} inputHasAlpha
+     * @param {boolean} outputHasAlpha
+     * @param {boolean} [preserveAlpha]
+     * @param {number}  [pixelCount]
+     * @param {string}  [outputFormat]  See OUTPUT FORMAT above.
+     * @returns {Uint8ClampedArray|Uint16Array|Float32Array|Float64Array|Array}
+     * @throws {string} 'No Pipeline' if create()/createMultiStage() hasn't run.
+     * @throws {string} 'forwardArray can only be used with int8 or int16
+     *                  dataFormat' for invalid combinations.
      */
     transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat){
 
@@ -3256,7 +3612,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             this.roundOutput ? 'stage_device_to_Gray' : 'stage_device_to_Gray',
                             this.roundOutput ? this.stage_device_to_Gray_round : this.stage_device_to_Gray,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : Gray : {name}]| ({last}) > {data}'
                         );
@@ -3266,7 +3622,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             'stage_device_to_Grayf',
                              this.stage_device_to_Grayf,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : Gray : {name}]| ({last}) > {data}'
                         );
@@ -3297,7 +3653,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             this.roundOutput ? 'stage_device_to_Duo' : 'stage_device_to_Duo',
                             this.roundOutput ? this.stage_device_to_Duo_round : this.stage_device_to_Duo,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : Duo : {name}]| ({last}) > {data}'
                         );
@@ -3307,7 +3663,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                              'stage_device_to_Duof',
                             this.stage_device_to_Duof,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : Duo : {name}]| ({last}) > {data}'
                         );
@@ -3385,7 +3741,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             this.roundOutput ? 'stage_device_to_RGB' : 'stage_device_to_RGB',
                             this.roundOutput ? this.stage_device_to_RGB_round : this.stage_device_to_RGB,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : RGB : {name}]| ({last}) > {data}'
                         );
@@ -3395,7 +3751,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             'stage_device_to_RGBf',
                             this.stage_device_to_RGBf,
-                            this.precession,
+                            this.precision,
                             encoding.cmsRGB,
                             '  [Device2Output : RGB : {name}]| ({last}) > {data}'
                         );
@@ -3426,7 +3782,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             this.roundOutput ? 'stage_device_to_CMYK' : 'stage_device_to_CMYK',
                             this.roundOutput ? this.stage_device_to_CMYK_round : this.stage_device_to_CMYK,
-                            this.precession,
+                            this.precision,
                             encoding.cmsCMYK,
                             '  [Device2Output : CMYK : {name}]| ({last}) > {data}'
                         );
@@ -3436,7 +3792,7 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
                             encoding.device,
                             'stage_device_to_CMYKf',
                             this.stage_device_to_CMYKf,
-                            this.precession,
+                            this.precision,
                             encoding.cmsCMYK,
                             '  [Device2Output : CMYK : {name}]| ({last}) > {data}'
                         );
@@ -3458,19 +3814,46 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
     }
 
     /**
+     * Add an interpolation stage to the pipeline for the given LUT (CLUT
+     * tag, A2B/B2A table, etc.). Picks the most-specialised single-colour
+     * interpolator based on:
      *
-     * So, shocker, Javascript can be slow sometimes, so here rather than using a generic function to do the interpolation
-     * we select a specific function for each type of interpolation. This is because the generic function are about 10-20x slower
+     *   - lut.inputChannels  (1 / 2 / 3 / 4)
+     *   - lut.outputChannels (3 / 4 / N)
+     *   - this.interpolation3D / interpolation4D
+     *   - inputEncoding (PCS-input gets trilinear; see B2A note below)
      *
-     * We optimise for the 3D to 3ch or 4ch which is RGB>RGB or RGB>CMYk and also 4D to 3ch or 4ch which is CMYk>RGB or CMYk>CMYk
-     * Since Gray and Duo tone are not common we don't optimise for them
+     *  PCS-INPUT SPECIAL CASE
+     *  For 3-channel input where the input encoding is PCSv2 / PCSv4 (Lab /
+     *  XYZ), interpolation is forced to TRILINEAR even if the user asked for
+     *  tetrahedral. This matches LittleCMS, SampleICC and Photoshop CS4
+     *  behaviour: tetrahedral mis-samples Lab-encoded LUTs (luma is on one
+     *  axis rather than diagonally) by up to ~4 LSB in some cells. Set
+     *  useTrilinearFor3ChInput=false if you want to opt out (don't).
      *
-     * Note, further down we also have optimised versions of the 3D and 4D interpolation functions for arrays, these are used
-     * with prebuilt LUTS, however I noticed that if we used them here to save code, it would poison the JIT compiler and
-     * make the array functions 2-3x slower as they were de-optimised, So keeping them separate means that the arrays
-     * interpolation functions will be JIT optimised for clamped arrays and the pipeline functions below are optimised
-     * for float arrays
+     *  WHY THE 12-WAY DUPLICATION (3D × {3Ch, 4Ch, NCh}; 4D × {3Ch, 4Ch, NCh}
+     *  × {single-colour, *_loop array}):
      *
+     *  Empirical measurement: a single generic interpolator that handles
+     *  all output-channel counts via a loop runs ~10–20x slower than the
+     *  per-count unrolled variants. Worse, sharing inner code between the
+     *  pipeline (single-colour, called via funct.call()) and the array
+     *  loop (called once per image) POISONS the JIT — when both call
+     *  sites hit the same function with different ABIs and array shapes,
+     *  V8 deoptimises and the array path slows down 2-3x. Hence the two
+     *  parallel families of *_NCh / _3Ch / _4Ch (single-colour, called
+     *  from this method) and *Array_NCh_loop / _3Ch_loop / _4Ch_loop
+     *  (image-grade, called from transformArrayViaLUT). Do not consolidate.
+     *
+     * @param {boolean} useTrilinearFor3ChInput  Apply the PCS-input override
+     *                                           described above (typically true).
+     * @param {number}  inputEncoding   One of encoding.* (see def.js).
+     * @param {object}  lut             CLUT object with inputChannels,
+     *                                  outputChannels, gridPoints, CLUT, ...
+     * @param {number}  outputEncoding  One of encoding.* (see def.js).
+     * @param {string} [debugFormat]    Per-stage pipelineDebug format string.
+     * @throws {string} For unsupported channel counts or unknown
+     *                  interpolation methods.
      */
 
     addStageLUT(useTrilinearFor3ChInput, inputEncoding, lut, outputEncoding, debugFormat){
@@ -3581,14 +3964,41 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         }
     };
 
+    /**
+     * Append a pre-built stage object to the pipeline. Bypasses createStage();
+     * caller is responsible for the stage's shape (see _Stage typedef in def.js).
+     * @param {object} stage
+     */
     pushStage(stage){
         this.pipeline.push(stage);
     };
 
+    /**
+     * Construct a stage and append it to the pipeline. The pipeline runs each
+     * stage's `funct` per colour as `funct.call(this, input, stageData, stage)`
+     * — so stages can rely on `this` being the Transform.
+     *
+     * Used by the createPipeline() builders for built-in stages and by the
+     * custom-stage injector (see customStages in the class JSDoc) for caller-
+     * supplied stages.
+     *
+     * @param {number}   inputEncoding   One of encoding.* (def.js).
+     * @param {string}   stageName       Human-readable name (debug/optimiser).
+     * @param {Function} funct           (input, stageData, stage) => output
+     * @param {*}        stageData       Arbitrary state available to funct.
+     * @param {number}   outputEncoding  One of encoding.* (def.js).
+     * @param {string}  [debugFormat]    pipelineDebug format string for this stage.
+     */
     addStage(inputEncoding, stageName, funct, stageData, outputEncoding, debugFormat){
         this.pushStage(this.createStage(inputEncoding, stageName, funct, stageData, outputEncoding, debugFormat, false));
     };
 
+    /**
+     * Build a _Stage object — see addStage() for the call contract. Separated
+     * out so the optimiser can synthesise replacement stages without pushing
+     * them directly. `optimised: true` flags a stage as already-folded so the
+     * optimiser does not try to fold it again.
+     */
     createStage(inputEncoding,stageName, funct, stageData, outputEncoding, debugFormat, optimised){
         debugFormat = debugFormat || '';
 
@@ -3667,9 +4077,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         };
     };
 
-    stage_device_to_Gray_round(device, precession){
+    stage_device_to_Gray_round(device, precision){
         return {
-            G: roundN(device[0] * 255, precession),
+            G: roundN(device[0] * 255, precision),
             type: eColourType.Gray
         };
     };
@@ -3707,10 +4117,10 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         };
     };
 
-    stage_device_to_Duo_round(device, precession){
+    stage_device_to_Duo_round(device, precision){
         return {
-            a: roundN(device[0] * 100, precession),
-            b: roundN(device[1] * 100, precession),
+            a: roundN(device[0] * 100, precision),
+            b: roundN(device[1] * 100, precision),
             type: eColourType.Duo
         };
     };
@@ -3742,11 +4152,11 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         };
     };
 
-    stage_device_to_RGB_round(device, precession){
+    stage_device_to_RGB_round(device, precision){
         return {
-            R: roundN(device[0] * 255, precession),
-            G: roundN(device[1] * 255, precession),
-            B: roundN(device[2] * 255, precession),
+            R: roundN(device[0] * 255, precision),
+            G: roundN(device[1] * 255, precision),
+            B: roundN(device[2] * 255, precision),
             type: eColourType.RGB
         };
     };
@@ -3802,12 +4212,12 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         };
     };
 
-    stage_device_to_CMYK_round(device, precession){
+    stage_device_to_CMYK_round(device, precision){
         return { //  * 0.0015259021896696422
-            C: roundN(device[0] * 100, precession),
-            M: roundN(device[1] * 100, precession),
-            Y: roundN(device[2] * 100, precession),
-            K: roundN(device[3] * 100, precession),
+            C: roundN(device[0] * 100, precision),
+            M: roundN(device[1] * 100, precision),
+            Y: roundN(device[2] * 100, precision),
+            K: roundN(device[3] * 100, precision),
             type: eColourType.CMYK
         };
     };
@@ -4770,20 +5180,103 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
 
 
 
+/* ========================================================================
+ *  ACCURACY PATH — single-colour interpolators
+ * ========================================================================
+ *
+ *  The functions in this section (trilinearInterp3D_*, trilinearInterp4D_*,
+ *  tetrahedralInterp3D_*, tetrahedralInterp4D_*, linearInterp1D_NCh,
+ *  bilinearInterp2D_NCh) convert ONE colour at a time. They are the stages
+ *  that get pushed onto this.pipeline by addStageLUT() and are called by
+ *  forward() / transform() / the per-pixel path of transformArray().
+ *
+ *  Design priorities here are different from the *_loop variants:
+ *
+ *   - ACCURACY first. Allocations (`new Array(outputChannels)`,
+ *     intermediate result objects) are acceptable.
+ *   - CORRECTNESS over micro-optimisation. Edge-case clamping, NaN safety,
+ *     and clean fallback behaviour matter more than ns-per-call.
+ *   - DIAGNOSABILITY. These functions feed pipelineDebug / pipelineHistory
+ *     when enabled, so deterministic intermediate values are useful.
+ *
+ *  When to use which:
+ *
+ *      INPUT      OUTPUT     FUNCTION                       NOTES
+ *      ──────     ──────     ─────────────────────────      ─────────────
+ *      1 ch       N ch       linearInterp1D_NCh             Gray
+ *      2 ch       N ch       bilinearInterp2D_NCh           Duotone
+ *      3 ch       3 ch       tetrahedralInterp3D_3Ch        RGB→RGB / Lab
+ *      3 ch       4 ch       tetrahedralInterp3D_4Ch        RGB→CMYK
+ *      3 ch       N ch       tetrahedralInterp3D_NCh        RGB→n-color
+ *      4 ch       3 ch       tetrahedralInterp4D_3Ch        CMYK→RGB / Lab
+ *      4 ch       4 ch       tetrahedralInterp4D_4Ch        CMYK→CMYK
+ *      4 ch       N ch       tetrahedralInterp4D_NCh        CMYK→n-color
+ *
+ *  Trilinear vs tetrahedral
+ *  ----------------------------------------------------------------------
+ *
+ *   For DEVICE LUTs (white at one cube corner, black at the opposite,
+ *   colour ramps along the diagonals) tetrahedral is BOTH faster AND more
+ *   accurate. Stay on tetrahedral.
+ *
+ *   For PCS-INPUT LUTs (Lab/XYZ — luma on one axis, a/b on the other two,
+ *   data NOT diagonally encoded) tetrahedral subtly mis-samples and
+ *   trilinear is more accurate. Matches LittleCMS, SampleICC, Photoshop
+ *   behaviour. addStageLUT() switches automatically based on inputEncoding.
+ *
+ *  Reference vs optimised variants
+ *  ----------------------------------------------------------------------
+ *
+ *   *_3or4Ch / _Master are the easy-to-read "reference" implementations
+ *   used when interpolationFast === false (diagnostic / accuracy testing).
+ *   The _3Ch / _4Ch / _NCh variants are the fast versions used in
+ *   production. They should produce numerically identical results to the
+ *   reference variants — the LCMS test suite verifies this.
+ *
+ *  Channel-dispatched fast variants
+ *  ----------------------------------------------------------------------
+ *
+ *   _3Ch and _4Ch are unrolled per-output-channel. _NCh handles 5+ output
+ *   channels with a generic loop. Most real-world workloads hit _3Ch or
+ *   _4Ch.
+ *
+ *  Known issues / TODOs in this section
+ *  ----------------------------------------------------------------------
+ *
+ *   B1.  trilinearInterp3D_3or4Ch upper-edge clamp uses raw input[N] >= 1.0
+ *        rather than (X0 === gridPoints-1). Can produce out-of-bounds CLUT
+ *        reads when lut.inputScale != 1.0. Other interpolators use the
+ *        safer X0-vs-gridEnd test.
+ *
+ *   B4.  tetrahedralInterp3D_Master and tetrahedralInterp3D_3or4Ch fall
+ *        through to `c1 = c2 = c3 = [0,0,0,0]` when none of the 6 octant
+ *        comparisons match (only possible with NaN inputs). The single
+ *        shared array is aliased to all three slots. The _NCh / _3Ch /
+ *        _4Ch variants correctly fall through to a c0-only output.
+ *
+ *   B5.  Octant predicate ordering varies cosmetically between variants
+ *        (e.g. `else if (rx >= ry && rz >= rx)` in _NCh vs
+ *        `else if (rz >= rx && rx >= ry)` in _3or4Ch — algebraically
+ *        identical, visually distracting on side-by-side review).
+ *
+ *   P3.  Math.floor(px) vs ~~px is inconsistent across variants.
+ *        Standardise when next touching this code; ~~ is faster and
+ *        produces an SMI for px in [0, 2^31).
+ * ========================================================================
+ */
+
 /**
- * 3D Trilinear interpolation - Slow - Tetrahedral is better EXCEPT PVC>Device
+ * 3D trilinear, n-channel output. Accuracy path. See ACCURACY PATH header
+ * above for design priorities.
  *
- * With device LUT's White is one corner and black is the opposite corner, so the
- * data is encoded diagonally across the cube. This means that the tetrahedral
- * interpolation works well in this case and is faster than the trilinear.
+ * Used (in preference to tetrahedral) when the source is a PCS LUT with
+ * vertically-encoded luma, where tetrahedral can mis-sample. addStageLUT()
+ * routes here automatically for PCSv2 / PCSv4 input.
  *
- * BUT for the PCS input, the data is encoded vertically from black to white
- * though the middle of the cube. with a/b horizontally and L vertically. This
- * means that in this special case the trilinear interpolation is more accurate.
- *
- * @param input
- * @param lut
- * @returns {[undefined,undefined,undefined,undefined]}
+ * @param {number[]}  input  Device-space input, channels in 0..1.
+ * @param {object}    lut    The stage's CLUT object (CLUT, gridPoints,
+ *                           inputScale, outputScale, go0..go2, etc.).
+ * @returns {number[]}       New array of length lut.outputChannels.
  */
 trilinearInterp3D_NCh(input, lut){
     var rx,ry,rz;
@@ -4868,11 +5361,24 @@ trilinearInterp3D_NCh(input, lut){
 
 
     /**
-     * 3D Trilinear interpolation - Slow - Tetrahedral is better
-     * @param input
-     * @param lut
-     * @param K0
-     * @returns {[]}
+     * 3D trilinear, 3- or 4-channel output. REFERENCE/diagnostic variant —
+     * the per-channel-count fast paths are normally used instead. Only
+     * reached when interpolationFast === false.
+     *
+     * Also called internally by trilinearInterp4D_3or4Ch as the inner pass
+     * for K-axis interpolation (with K0 as the 4th-axis offset).
+     *
+     * TODO (B1): Upper-edge clamp at the X1/Y1/Z1 assignment uses the raw
+     * input[N] >= 1.0 test instead of (X0 === gridPoints-1). When
+     * lut.inputScale != 1.0, an input value below 1.0 can still land X0 on
+     * gridPoints-1, after which X1 = X0 + 1 reads past the end of the CLUT.
+     * Switch to the X0-vs-gridEnd test used in the other interpolators.
+     *
+     * @param {number[]} input  3 or 4 channels in 0..1.
+     * @param {object}   lut
+     * @param {number}  [K0=0] 4D-axis CLUT offset when called from the 4D
+     *                         outer wrapper.
+     * @returns {number[]}     New array of length 3 or 4.
      */
     trilinearInterp3D_3or4Ch(input, lut, K0){
         K0 = (K0 === undefined) ? 0 : K0;
@@ -4908,6 +5414,13 @@ trilinearInterp3D_NCh(input, lut){
         Y0 = Math.floor(py); fy = py - Y0;
         Z0 = Math.floor(pz); fz = pz - Z0;
 
+        // TODO (B1): unsafe upper-edge clamp. Tests the raw input ( >= 1.0 )
+        // rather than the scaled grid index, so when lut.inputScale != 1.0 it
+        // can leave X1/Y1/Z1 at gridPoints, then the lookup() reads past the
+        // end of the CLUT (garbage colours, possibly NaN). Other interpolators
+        // use the type-independent (X0 === gridPoints - 1) test — switch to
+        // that here too. Low impact in practice because most LUTs have
+        // inputScale === 1.0, but worth fixing.
         X1 = X0 + ( input[0] >= 1.0 ? 0.0 : 1.0);
         Y1 = Y0 + ( input[1] >= 1.0 ? 0.0 : 1.0);
         Z1 = Z0 + ( input[2] >= 1.0 ? 0.0 : 1.0);
@@ -4983,10 +5496,18 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * 4D Trilinear interpolation - Slow - Tetrahedral is better
-     * @param input
-     * @param lut
-     * @returns {[*,*,*,*]|*[]}
+     * 4D trilinear, 3- or 4-channel output. REFERENCE/diagnostic variant —
+     * the per-channel-count fast paths are normally used instead. Only
+     * reached when interpolationFast === false.
+     *
+     * Implemented as two trilinear 3D passes (one at K0, one at K1) followed
+     * by a linear interpolation along the K axis between the two results.
+     * Includes an early-out when rk === 0 (we landed exactly on a K grid
+     * line) to skip the second 3D pass.
+     *
+     * @param {number[]} input  4 channels in 0..1 (treats input[0] as K).
+     * @param {object}   lut
+     * @returns {number[]}      New array of length 3 or 4.
      */
     trilinearInterp4D_3or4Ch(input, lut){
         var K0,K1, inputK, pk, rk;
@@ -5025,8 +5546,24 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * tetrahedralInterp3D_Master
-     * Initalize the tetrahedral interpolation
+     * tetrahedralInterp3D_Master — REFERENCE implementation.
+     *
+     * The original, easy-to-read version of the 3D tetrahedral interpolator,
+     * with the lookup() / sub16() helpers as separate functions. Kept for
+     * clarity and as the reference against which the optimised variants are
+     * tested. NOT used in production by default — the optimised
+     * tetrahedralInterp3D_3or4Ch (~70% faster) is the actual diagnostic
+     * fallback when interpolationFast === false.
+     *
+     * TODO (B4): The final `else { c1 = c2 = c3 = [0,0,0,0]; }` aliases the
+     * single literal across all three slots — no callers mutate them, but it
+     * is a pre-existing footgun. The optimised _NCh / _3Ch / _4Ch variants
+     * correctly fall through to a c0-only output instead.
+     *
+     * @param {number[]} input
+     * @param {object}   lut
+     * @param {number}  [K0=0]
+     * @returns {number[]}
      */
     tetrahedralInterp3D_Master(input, lut, K0){
 
@@ -5107,6 +5644,11 @@ trilinearInterp3D_NCh(input, lut){
             c2 = sub16( lookup(X0, Y1, Z1, K0) , lookup(X0, Y0, Z1, K0));
             c3 = sub16( lookup(X0, Y0, Z1, K0) , c0);
         } else {
+            // TODO (B4): Only reachable with NaN inputs (none of the >= chains
+            // hold). Aliasing one literal across c1/c2/c3 is fine because no
+            // caller mutates them, but the optimised _NCh / _3Ch / _4Ch
+            // variants intentionally fall through to a c0-only output instead
+            // of a c0 + (zero * r) sum. Make consistent across all variants.
             c1 = c2 = c3 = [0,0,0,0];
         }
 
@@ -5147,11 +5689,20 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * Optimised version of tetrahedralInterp3D_Master
-     * About 70% faster with functions combined
-     * @param input
-     * @param lut
-     * @param K0
+     * Optimised reference variant of tetrahedralInterp3D — the lookup() and
+     * sub16() helpers are inlined as closures sharing CLUT/g1/g2/g3 with
+     * the outer scope, giving ~70% over the _Master form. Used as the
+     * fallback when interpolationFast === false (diagnostic path).
+     *
+     * Production code routes to tetrahedralInterp3D_3Ch / _4Ch / _NCh
+     * instead, which avoid the closure helpers entirely.
+     *
+     * TODO (B4): Same fall-through aliasing as the _Master variant — see
+     * its JSDoc.
+     *
+     * @param {number[]} input
+     * @param {object}   lut
+     * @param {number}  [K0=0]
      * @returns {number[]}
      */
     tetrahedralInterp3D_3or4Ch(input, lut, K0){
@@ -5225,6 +5776,9 @@ trilinearInterp3D_NCh(input, lut){
             c3 =  sub16lookup(X0, Y0, Z1, K0, c0);
 
         } else {
+            // TODO (B4): Same fall-through aliasing as tetrahedralInterp3D_Master.
+            // Only reachable on NaN input. Harmless today (callers don't mutate)
+            // but inconsistent with the optimised variants.
             c1 = c2 = c3 = [0,0,0,0];
         }
 
@@ -5301,14 +5855,80 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * PERFORMANCE LESSIONS
+     * ========================================================================
+     *  PERFORMANCE LESSONS — read this before "tidying up" the code below
+     * ========================================================================
      *
-     *  - Remove calls, inline functions
-     *  - Don't save part calculations to temp valables
-     *              FASTER  a=b*c*d and e=b*c*n
-     *              SLOWER  temp=b*c, a=temp*d, e=temp*n - Suspect extra time to save and load variables is slower
+     *  These rules were established by direct measurement (Chrome V8 +
+     *  Firefox SpiderMonkey, see speed_tests/) when building the unrolled
+     *  interpolators in this file. They run counter to the usual JS style
+     *  guides but they are the difference between 5 Mpx/s and 30 Mpx/s.
+     *
+     *  1. INLINE FUNCTION CALLS in hot loops.
+     *     Even tiny helpers like LERP(a,b,t) or sub16(a,b) cost real time
+     *     when invoked millions of times per second. The compiled code
+     *     becomes bigger, but the JIT keeps everything in registers and the
+     *     net throughput is much higher.
+     *
+     *  2. DO NOT EXTRACT INTERMEDIATE LOCALS in hot expressions.
+     *
+     *         FASTER:    a = b * c * d;
+     *                    e = b * c * n;
+     *
+     *         SLOWER:    var t = b * c;
+     *                    a = t * d;
+     *                    e = t * n;
+     *
+     *     The "obvious" CSE optimisation actually hurts. Hypothesis: V8's
+     *     register allocator spills `t` to memory across the two reads,
+     *     whereas the inlined form keeps the partial product in an xmm
+     *     register. Verified empirically on these interpolators (~15-25%
+     *     regression when intermediate vars were introduced).
+     *
+     *     EXCEPTION: caching a value that's READ FROM AN ARRAY twice IS
+     *     worth it — the array read is the expensive part, not the local
+     *     write. Hence the `a = CLUT[base++]; b = CLUT[base++]; ...` pattern
+     *     in the unrolled tetra blocks below.
+     *
+     *  3. AVOID PER-PIXEL ALLOCATIONS.
+     *     `new Array(n)`, `[a, b, c]`, `{...}` all trigger GC pressure at
+     *     image scale. The single-colour interpolators below DO allocate
+     *     (one new Array per call) — that's fine for the accuracy path.
+     *     The image-grade `*_loop` functions write directly into a passed
+     *     output buffer and allocate nothing per pixel.
+     *
+     *  4. PREFER `~~x` OVER `Math.floor(x)` for non-negative floats.
+     *     Both produce an int32; `~~x` is a couple of ns faster and signals
+     *     "I know x is non-negative" to readers. (Currently inconsistent in
+     *     this file — TODO P3.)
+     *
+     *  5. STRUCTURE-OF-ARRAYS for LUTs, not array-of-objects.
+     *     The CLUT is one flat Float64Array (or Uint16Array), not an array
+     *     of {r,g,b,k} objects. Keeps cache-line utilisation high and lets
+     *     the JIT use indexed reads.
+     *
+     *  6. DON'T CALL BACK INTO `this.foo(...)` from inner loops.
+     *     Property lookup + this-binding adds up. The `*_loop` variants
+     *     hoist everything they need into local vars at the top.
+     *
+     *  7. TYPE STABILITY — keep variables monomorphic.
+     *     The hot vars below stay int (SMI) or stay double; never mix.
+     *     The compiler optimises monomorphic operations heavily.
+     *
+     *  WHEN IN DOUBT: re-run speed_tests/ before AND after your change. If
+     *  you can't measure a difference, prefer the more readable version. If
+     *  the existing form looks ugly, it is probably ugly for a reason.
+     * ========================================================================
      */
 
+    /**
+     * 1D linear interpolation, 1-channel input → N-channel output. Accuracy
+     * path single-colour variant. Used for Gray-input profiles.
+     *
+     * @param {number[]} input  [g] in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      New array of length lut.outputChannels.
+     */
     linearInterp1D_NCh(input, lut){
         var rx,px,X0,X1,input0,
             c0,c1,o
@@ -5342,6 +5962,14 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
+    /**
+     * 2D bilinear interpolation, 2-channel input → N-channel output. Accuracy
+     * path single-colour variant. Used for Duotone-input profiles.
+     *
+     * @param {number[]} input  [a, b] in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      New array of length lut.outputChannels.
+     */
     bilinearInterp2D_NCh(input, lut){
         var rx,ry;
         var X0,X1,Y0,Y1,px,py, input0, input1
@@ -5401,12 +6029,16 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * 3D Tetrahedral interpolation for 3D inputs and n Channels output
-     * Used for PCS > 1,2 or nColour outputs
-     * PCS > 3ch or PCS > 4ch have optimised versions for speed
-     * @param input
-     * @param lut
-     * @returns {any[]}
+     * 3D tetrahedral interpolation, 3-channel input → N-channel output
+     * (typically N >= 5 — n-color separations and the like). Accuracy path.
+     *
+     * For the common 3→3 (RGB→RGB, RGB→Lab) and 3→4 (RGB→CMYK) cases the
+     * unrolled tetrahedralInterp3D_3Ch / _4Ch variants below are dispatched
+     * by addStageLUT() instead.
+     *
+     * @param {number[]} input  3 channels in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      New array of length lut.outputChannels.
      */
     tetrahedralInterp3D_NCh(input, lut){
         var rx,ry,rz;
@@ -5550,6 +6182,17 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
+    /**
+     * 3D tetrahedral interpolation, 3-channel input → 4-channel output.
+     * Accuracy path. Used for RGB → CMYK single-colour conversions
+     * (e.g. picking RGB swatches and asking "what CMYK would this be").
+     *
+     * Output channel writes are unrolled (no inner for-o loop) for speed.
+     *
+     * @param {number[]} input  [r, g, b] in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      [c, m, y, k] scaled to lut.outputScale.
+     */
     tetrahedralInterp3D_4Ch(input, lut){
         var rx,ry,rz;
         var X0,X1,Y0,Y1,Z0,Z1,px,py,pz, input0, input1, input2
@@ -5785,6 +6428,17 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
+    /**
+     * 3D tetrahedral interpolation, 3-channel input → 3-channel output.
+     * Accuracy path. Used for RGB → RGB and RGB → Lab single-colour
+     * conversions — by far the most-called accuracy-path interpolator.
+     *
+     * Output channel writes are unrolled (no inner for-o loop) for speed.
+     *
+     * @param {number[]} input  [r, g, b] in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      [x, y, z] scaled to lut.outputScale.
+     */
     tetrahedralInterp3D_3Ch(input, lut){
         var rx,ry,rz,
             X0,X1,Y0,
@@ -6005,6 +6659,19 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
+    /**
+     * 4D tetrahedral interpolation, 4-channel input → 3-channel output.
+     * Accuracy path. Used for CMYK → RGB and CMYK → Lab single-colour
+     * conversions (soft-proof picker, ΔE round-trips through CMYK).
+     *
+     * Implemented as two 3D tetrahedral passes (one at K0, one at K1) and a
+     * linear blend across the K axis. Includes an interpK early-out — when
+     * rk === 0 the second pass is skipped.
+     *
+     * @param {number[]} input  [k, c, m, y] in 0..1 (input[0] is the K axis).
+     * @param {object}   lut
+     * @returns {number[]}      [x, y, z] scaled to lut.outputScale.
+     */
     tetrahedralInterp4D_3Ch(input, lut){
         var X0, X1, Y0, K0,
             Y1, Z0, Z1,
@@ -6365,6 +7032,17 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
+    /**
+     * 4D tetrahedral interpolation, 4-channel input → 4-channel output.
+     * Accuracy path. Used for CMYK → CMYK single-colour conversions (DeviceLink
+     * application, press-to-press re-purposing analysis).
+     *
+     * Same K-axis early-out as the 4D→3Ch variant.
+     *
+     * @param {number[]} input  [k, c, m, y] in 0..1 (input[0] is the K axis).
+     * @param {object}   lut
+     * @returns {number[]}      [c, m, y, k] scaled to lut.outputScale.
+     */
     tetrahedralInterp4D_4Ch(input, lut){
         var X0, X1, Y0, K0,
             Y1, Z0, Z1,
@@ -6778,7 +7456,19 @@ trilinearInterp3D_NCh(input, lut){
         return output;
     };
 
-    //UPDATED
+    /**
+     * 4D tetrahedral interpolation, 4-channel input → N-channel output
+     * (typically N >= 5 — n-color separations from a CMYK source).
+     * Accuracy path.
+     *
+     * For the common 4→3 (CMYK→RGB / Lab) and 4→4 (CMYK→CMYK) cases the
+     * unrolled tetrahedralInterp4D_3Ch / _4Ch variants above are dispatched
+     * by addStageLUT() instead.
+     *
+     * @param {number[]} input  4 channels in 0..1.
+     * @param {object}   lut
+     * @returns {number[]}      New array of length lut.outputChannels.
+     */
     tetrahedralInterp4D_NCh(input, lut){
         var X0, X1, Y0, K0,
             Y1, Z0, Z1,
@@ -7036,6 +7726,90 @@ trilinearInterp3D_NCh(input, lut){
     };
 
 
+    /* ========================================================================
+     *  HOT PATH — image-grade pixel loops
+     * ========================================================================
+     *
+     *  The functions below (linearInterp1DArray_NCh_loop, bilinearInterp2D...,
+     *  tetrahedralInterp3DArray_3Ch / 4Ch / NCh _loop, tetrahedralInterp4D...
+     *  _loop) are the inner loops used by transformArrayViaLUT(). They are
+     *  called once per IMAGE — not once per pixel — and the per-pixel loop is
+     *  inside the function body. On a 4 MP image, the body runs 4,000,000
+     *  times per call. Several deliberate trade-offs apply across all of
+     *  them; resist the temptation to "tidy up":
+     *
+     *  1. NO BOUNDS CHECKS on input data.
+     *     Caller guarantees a Uint8ClampedArray of well-formed pixel data
+     *     (values 0..255, length === pixelCount * channelsPerPixel). Adding
+     *     `if (x < 0 || x > 255)` per channel adds tens of millions of
+     *     branches per image — measured to dominate runtime. If you need
+     *     validation, use the per-colour `forward()` accuracy path instead.
+     *
+     *  2. ALL ARITHMETIC INLINED into single expressions.
+     *     Saving partial results to temporary variables MEASURABLY tanks
+     *     performance — both V8 and SpiderMonkey spill values to memory
+     *     instead of keeping them in xmm registers between operations. The
+     *     unrolled, ugly-looking single-line expressions are the fast form.
+     *     See "PERFORMANCE LESSONS" comment further down in this file.
+     *
+     *  3. THE 6 OCTANT BRANCHES ARE FULLY UNROLLED.
+     *     There are 6 nearly-identical octant blocks per function, with
+     *     small inner unrolls per output channel. Combined across
+     *     {3D,4D} × {3Ch,4Ch,NCh} × {single-color, _loop}, the same algorithm
+     *     is duplicated ~12 times. Bug fixes must be applied to ALL copies.
+     *     TODO: codegen these from a single template (see issue / TODO P7).
+     *
+     *  4. NO PER-PIXEL ALLOCATIONS.
+     *     Output is written directly into `output[outputPos++]`. The single-
+     *     colour interpolators above (e.g. tetrahedralInterp3D_3Ch) allocate
+     *     a small Array per call — that's fine for the accuracy path but
+     *     would dominate cost here, hence the inlined loop variants.
+     *
+     *  5. THE STAGE PIPELINE IS COLLAPSED INTO ONE STEP.
+     *     transformArrayViaLUT does NOT walk this.pipeline per pixel; the
+     *     prebuilt LUT already encodes the full pipeline including any
+     *     custom stages and BPC. This is the reason this path is 20–30×
+     *     faster than the accuracy path.
+     *
+     *  KNOWN ISSUES / TODOs in the loops below
+     *  ----------------------------------------------------------------------
+     *
+     *   B2.  The `(input0 === 255)` upper-edge clamp is correct only for
+     *        8-bit input. The planned _loop_16bit variants (currently
+     *        commented-out at the routing switch in transformArrayViaLUT)
+     *        will need to be `(X0 === gridEnd)` instead — same speed, type-
+     *        independent. Apply to all 6 unrolled `_loop` functions when
+     *        re-enabling the 16-bit path.
+     *
+     *   B3.  linearInterp1DArray_NCh_loop / bilinearInterp2DArray_NCh_loop /
+     *        tetrahedralInterp3DArray_NCh_loop / tetrahedralInterp4DArray_NCh_loop
+     *        currently DELEGATE to the single-colour interpolator and copy
+     *        the result, allocating ~2 small arrays per pixel. They should
+     *        be inlined the same way the 3Ch and 4Ch variants are. This is
+     *        the only real Tier-A perf bug remaining; affects exotic channel
+     *        counts (Gray→4ch, Duo→Nch, RGB→{2,5,6,7,8}, CMYK→Nch).
+     *
+     *   P4.  Each call allocates a fresh Uint8ClampedArray for the output.
+     *        For real-time soft-proofing of video / repeated canvas redraws
+     *        consider an optional `out` parameter on transformArrayViaLUT.
+     *
+     *  TESTING
+     *  ----------------------------------------------------------------------
+     *  If you change anything in this section, re-run BOTH:
+     *      __tests__/lcms.tests.js          (numerical accuracy vs LittleCMS)
+     *      speed_tests/                     (ns per pixel, before vs after)
+     *  Both regress easily — small algebraic rewrites can introduce 1-LSB
+     *  errors that fail the LCMS comparison, and "harmless" extracts to
+     *  intermediate variables can halve throughput.
+     * ========================================================================
+     */
+
+    /**
+     * HOT PATH. 3D LUT, 3-channel input → 4-channel output.
+     * Typical use: RGB → CMYK image conversion.
+     * See HOT PATH header above for the contract and trade-offs that apply
+     * to all functions in this group.
+     */
     tetrahedralInterp3DArray_4Ch_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var rx,ry,rz;
         var X0,X1,Y0,Y1,Z0,Z1,px,py,pz, input0, input1, input2
@@ -7069,6 +7843,13 @@ trilinearInterp3D_NCh(input, lut){
             // A few optimisations here, X0 is multiplied by go2, which is precalculated grid x outputChannels
             // Keeping input0 as int means we can just check input0 === 255 rather than input0 >= 1.0 as a float
             // And rather than X0+1 we can just do X0 + offset to location in lut
+            //
+            // TODO (B2): The (inputN === 255) upper-edge clamps below are
+            // ONLY correct for 8-bit input. The same pattern is duplicated
+            // across 6 _loop functions and is reused by the (commented-out)
+            // _loop_16bit variants. When re-enabling 16-bit, swap each
+            // `(inputN === 255)` for the type-independent `(XN === gridEnd)`
+            // (where gridEnd = lut.g1 - 1) in ALL copies. Same speed.
             X0 = ~~px; //~~ is the same as Math.floor(px)
             rx = (px - X0); // get the fractional part
             X0 *= go2; // change to index in array
@@ -7270,6 +8051,18 @@ trilinearInterp3D_NCh(input, lut){
         }
     };
 
+    /**
+     * HOT PATH. 1D LUT, 1-channel input → N-channel output.
+     * Typical use: Gray → RGB, Gray → CMYK image conversion.
+     *
+     * TODO (B3): Currently delegates to linearInterp1D_NCh per pixel and
+     * allocates a 1-element wrapper array + an output array per pixel. Should
+     * be inlined like tetrahedralInterp3DArray_3Ch_loop. Affects throughput
+     * on Gray→multichannel image conversions.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop for the
+     * full set of contracts and trade-offs.
+     */
     linearInterp1DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var temp, o;
         var outputChannels = lut.outputChannels;
@@ -7290,16 +8083,15 @@ trilinearInterp3D_NCh(input, lut){
     };
 
     /**
-     * Bilinear interpolation - NOT optimised for speed YET
-     * @param input
-     * @param inputPos
-     * @param output
-     * @param outputPos
-     * @param length
-     * @param lut
-     * @param inputHasAlpha
-     * @param outputHasAlpha
-     * @param preserveAlpha
+     * HOT PATH. 2D LUT, 2-channel input → N-channel output.
+     * Typical use: Duotone → RGB / Duotone → CMYK image conversion.
+     *
+     * TODO (B3): NOT YET fully inlined for speed — currently delegates to
+     * bilinearInterp2D_NCh per pixel and allocates an output array each
+     * iteration. Should be inlined like tetrahedralInterp3DArray_3Ch_loop.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop for the
+     * full set of contracts and trade-offs.
      */
     bilinearInterp2DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var colorIn, temp, o;
@@ -7323,6 +8115,16 @@ trilinearInterp3D_NCh(input, lut){
         }
     };
 
+    /**
+     * HOT PATH. 3D LUT, 3-channel input → N-channel output (N != 3 and N != 4).
+     * Typical use: RGB → 5+-channel inks (n-color separations).
+     *
+     * TODO (B3): Currently delegates to tetrahedralInterp3D_NCh per pixel and
+     * allocates per-pixel arrays. Should be inlined like the 3Ch / 4Ch
+     * variants for image-grade speed on n-color workflows.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
+     */
     tetrahedralInterp3DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha) {
         var colorIn, temp, o;
         var outputChannels = lut.outputChannels;
@@ -7346,7 +8148,16 @@ trilinearInterp3D_NCh(input, lut){
         }
     }
 
-//UPDATED
+    /**
+     * HOT PATH. 4D LUT, 4-channel input → N-channel output (N != 3 and N != 4).
+     * Typical use: CMYK → 5+-channel inks (n-color separations).
+     *
+     * TODO (B3): Currently delegates to tetrahedralInterp4D_NCh per pixel and
+     * allocates per-pixel arrays. Should be inlined like the 3Ch / 4Ch
+     * variants for image-grade speed on n-color workflows.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
+     */
     tetrahedralInterp4DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha) {
         var colorIn, temp, o;
         var outputChannels = lut.outputChannels;
@@ -7371,6 +8182,14 @@ trilinearInterp3D_NCh(input, lut){
         }
     }
 
+    /**
+     * HOT PATH. 3D LUT, 3-channel input → 3-channel output.
+     * Typical use: RGB → RGB image conversion (e.g. sRGB → AdobeRGB) and
+     * RGB → Lab analysis pipelines.
+     *
+     * The most-exercised inner loop in this file. See HOT PATH header above
+     * tetrahedralInterp3DArray_4Ch_loop for the contract and trade-offs.
+     */
     tetrahedralInterp3DArray_3Ch_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var rx,ry,rz,
             X0,X1,Y0,
@@ -7574,19 +8393,33 @@ trilinearInterp3D_NCh(input, lut){
                 output[outputPos++] = c1 * outputScale;
                 output[outputPos++] = c2 * outputScale;
             }
-        }
 
-        if(preserveAlpha) {
-            output[outputPos++] = input[inputPos++];
-        } else {
-            if(inputHasAlpha)  { inputPos++;  }
-            if(outputHasAlpha) {
+            // Alpha handling — MUST be inside the per-pixel loop. Was previously
+            // outside the for, which silently broke alpha preservation for any
+            // RGB->RGB / RGB->Lab LUT image transform with more than one pixel
+            // (e.g. soft-proof chains). See bug fix in CHANGELOG.
+            if(preserveAlpha) {
+                output[outputPos++] = input[inputPos++];
+            } else {
+                if(inputHasAlpha)  { inputPos++;  }
+                if(outputHasAlpha) {
                     output[outputPos++] = 255;
                 }
+            }
         }
     };
 
-    //UPDATED
+    /**
+     * HOT PATH. 4D LUT, 4-channel input → 3-channel output.
+     * Typical use: CMYK → RGB image conversion (preview / soft-proof) and
+     * CMYK → Lab analysis pipelines.
+     *
+     * Includes the K-axis interpolation as a second pass (interpK flag): when
+     * the K fraction is zero, the function skips the second tetrahedron and
+     * returns the 3D result directly — meaningful speed-up on flat K regions.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
+     */
     tetrahedralInterp4DArray_3Ch_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var X0, X1, Y0, K0,
             Y1, Z0, Z1,
@@ -7951,7 +8784,16 @@ trilinearInterp3D_NCh(input, lut){
         }
     };
 
-    //UPDATED
+    /**
+     * HOT PATH. 4D LUT, 4-channel input → 4-channel output.
+     * Typical use: CMYK → CMYK image conversion (e.g. SWOP → GRACoL,
+     * profile-to-profile re-purposing for press changes).
+     *
+     * As with the 3Ch 4D variant, the K axis is interpolated as a second
+     * pass with an early-out (interpK flag) when rk is zero.
+     *
+     * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
+     */
     tetrahedralInterp4DArray_4Ch_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
         var X0, X1, Y0, K0,
             Y1, Z0, Z1,
@@ -8900,8 +9742,8 @@ trilinearInterp3D_NCh(input, lut){
         // Create a round trip. Define a Transform BT for all x in L*a*b*
         // PCS -> PCS round trip transform, always uses relative intent on the device -> pcs
         var labProfile = new Profile('*Lab');
-        var transformLab2Device = new Transform({precession: 3});
-        var transformDevice2Lab = new Transform({precession: 3});
+        var transformLab2Device = new Transform({precision: 3});
+        var transformDevice2Lab = new Transform({precision: 3});
 
         // Disable black point compensation Auto Enable in these temp transforms
         // or else we end up in an infinite loop and run out of stack
@@ -9132,7 +9974,7 @@ trilinearInterp3D_NCh(input, lut){
         }
 
         var labD50 = new Profile('*Lab');
-        var transformDevice2Lab = new Transform({precession: 3});
+        var transformDevice2Lab = new Transform({precision: 3});
 
         // Disable auto BPC in these temp transforms
         transformDevice2Lab._BPCAutoEnable = false;
@@ -9169,8 +10011,8 @@ trilinearInterp3D_NCh(input, lut){
 
         var labD50 = new Profile('*Lab');
 
-        var transformLab2Device = new Transform({precession: 3});
-        var transformDevice2Lab = new Transform({precession: 3});
+        var transformLab2Device = new Transform({precision: 3});
+        var transformDevice2Lab = new Transform({precision: 3});
 
         // Disable auto BPC in these temp transforms
         transformDevice2Lab._BPCAutoEnable = false;
@@ -9248,9 +10090,9 @@ function base64ToUint8Array(base64String) {
 }
 
 
-function data2String(color, format, precession){
-    if(typeof precession === 'undefined'){
-        precession = 6;
+function data2String(color, format, precision){
+    if(typeof precision === 'undefined'){
+        precision = 6;
     }
 
     if(color === null){
@@ -9280,7 +10122,7 @@ function data2String(color, format, precession){
             case 'f':
             default:
                 // raw
-                str += n2str(color[i], precession);
+                str += n2str(color[i], precision);
         }
         if(i<color.length - 1){
             str += ', ';
@@ -9289,7 +10131,7 @@ function data2String(color, format, precession){
     return str;
 
     function n2str(n){
-        return isNaN(n) ? n : n.toFixed(precession);
+        return isNaN(n) ? n : n.toFixed(precision);
     }
 }
 

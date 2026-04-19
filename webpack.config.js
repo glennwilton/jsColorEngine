@@ -7,7 +7,12 @@ var config = {
         hashFunction: "sha256",
         filename: 'jsColorEngine.js',
         path: path.resolve(__dirname, './package'),
-        libraryTarget: 'umd'
+        libraryTarget: 'umd',
+        // Make the UMD wrapper safe in Node, web workers, and the main browser
+        // window. Webpack 5's default of 'self' breaks `require()` in Node
+        // because the very first thing the wrapper does is read `self`, which
+        // is undefined outside browser contexts. See GitHub issue #2.
+        globalObject: "typeof self !== 'undefined' ? self : this"
     },
     externals: {
         fs:    "commonjs fs",

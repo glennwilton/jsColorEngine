@@ -21,7 +21,23 @@ test('Lab to srgb (int)', () => {
     expect(output.type).toBe(eColourType.RGB);
 });
 
-test('Lab to srgb (3 decimals)', () => {
+test('Lab to srgb (3 decimals via precision option)', () => {
+    let lab2srgb = new Transform({
+        precision: 3
+    });
+    lab2srgb.create('*lab', '*srgb', eIntent.absolute);
+    let input = color.Lab(30,50,-20);
+    let output = lab2srgb.transform(input);
+    expect(output.R).toBe(129.012 );
+    expect(output.G).toBe(20.658);
+    expect(output.B).toBe(103.199 );
+    expect(output.type).toBe(eColourType.RGB);
+});
+
+test('Lab to srgb (3 decimals via legacy precession option)', () => {
+    // Back-compat regression: `precession` is the original (typo'd) option
+    // name. New code should use `precision`, but `precession` must keep
+    // working — both should produce identical output.
     let lab2srgb = new Transform({
         precession: 3
     });
@@ -31,7 +47,17 @@ test('Lab to srgb (3 decimals)', () => {
     expect(output.R).toBe(129.012 );
     expect(output.G).toBe(20.658);
     expect(output.B).toBe(103.199 );
-    expect(output.type).toBe(eColourType.RGB);
+
+    // Both property aliases should reflect the same value.
+    expect(lab2srgb.precision).toBe(3);
+    expect(lab2srgb.precession).toBe(3);
+});
+
+test('precision wins when both option spellings are passed', () => {
+    let t = new Transform({ precision: 4, precession: 1 });
+    t.create('*lab', '*srgb', eIntent.absolute);
+    expect(t.precision).toBe(4);
+    expect(t.precession).toBe(4);
 });
 
 test('srgb to Lab (no rounding)', () => {

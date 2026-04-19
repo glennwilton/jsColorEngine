@@ -22,16 +22,165 @@
 
 'use strict';
 
+/**
+ * ============================================================================
+ *  convert.js — colour-math helper layer
+ * ============================================================================
+ *
+ *  This module is the maths floor of jsColorEngine. It is a flat collection of
+ *  pure (and a few side-effecting) functions that:
+ *
+ *    - Construct typed colour objects (`RGB()`, `Lab()`, `XYZ()`, `CMYK()`...)
+ *    - Convert between colour spaces using closed-form maths (XYZ ↔ Lab ↔ LCH,
+ *      RGB matrix profiles ↔ XYZ ↔ Lab, xyY ↔ XYZ).
+ *    - Perform Bradford chromatic adaptation between whitepoints.
+ *    - Compute, invert, transpose and multiply 3x3 RGB-profile matrices.
+ *    - Apply / invert per-channel gamma (sRGB curve and pure-gamma).
+ *    - Compute ΔE colour-difference (1976, 1994, 2000, CMC).
+ *    - A handful of display/format helpers (RGB→hex, intent→string, etc.).
+ *
+ *  ----------------------------------------------------------------------------
+ *  WHEN TO USE THIS FILE vs Transform.js
+ *  ----------------------------------------------------------------------------
+ *
+ *   - convert.js  → ACCURACY PATH. Single colour, full precision, allocates
+ *                   small objects. Ideal for swatches, ΔE, analysis, and as
+ *                   the building blocks Transform.js calls when it isn't
+ *                   walking a CLUT. NEVER call these in a per-pixel loop over
+ *                   image data — use Transform's prebuilt-LUT image path.
+ *
+ *   - Transform.js → speed-and-correctness path: ICC pipeline, LUT baking,
+ *                   per-pixel inner loops.
+ *
+ *  ----------------------------------------------------------------------------
+ *  TYPED COLOUR OBJECT CONVENTION
+ *  ----------------------------------------------------------------------------
+ *
+ *  Every colour value is a plain object tagged with `type` (an `eColourType`
+ *  enum value) and uppercase channel keys:
+ *
+ *      RGB    { type, R, G, B }                   // 0–255 byte
+ *      RGBf   { type, Rf, Gf, Bf }                // 0.0–1.0 float
+ *      CMYK   { type, C, M, Y, K }                // 0–100 percent
+ *      CMYKf  { type, Cf, Mf, Yf, Kf }            // 0.0–1.0 float
+ *      Gray   { type, G }                         // 0–255 byte (see TODO D1)
+ *      Duo    { type, a, b }                      // 0–100 percent
+ *      Lab    { type, L, a, b, whitePoint }       // L 0–100, a/b ≈ ±128
+ *      LabD50 { L, a, b }                         // un-tagged D50 helper
+ *      LCH    { type, L, C, H, whitePoint }       // H 0–360
+ *      XYZ    { type, X, Y, Z, whitePoint? }      // Y normalised to 1.0
+ *      xyY    { type, x, y, Y }                   // chromaticity + luminance
+ *
+ *  Lab/LCH carry their reference whitepoint with them so a downstream
+ *  conversion can adapt automatically. XYZ optionally carries one but the
+ *  adaptation API takes whitepoints as explicit args.
+ *
+ *  ----------------------------------------------------------------------------
+ *  WHITEPOINT CONVENTION  ⚠ enforced invariant
+ *  ----------------------------------------------------------------------------
+ *
+ *  All whitepoints in this engine are XYZ values NORMALISED SO `Y === 1.0`.
+ *  They are attached to `convert` as `convert.d50`, `convert.d65`,
+ *  `convert.a`, etc. Look up by name with `getWhitePoint('d65')`
+ *  (defaults to D50).
+ *
+ *  This invariant is leaned on as a perf optimisation throughout the file:
+ *  a number of functions deliberately drop `wp.Y` multiplies/divides
+ *  because the result is identical when Y === 1.0. Each such site has an
+ *  inline `INTENTIONAL: Y === 1.0` comment — do NOT "fix" them by adding
+ *  the `* wp.Y` term back. Sites:
+ *
+ *      - XYZ2Lab            yr = XYZ.Y         (instead of / wp.Y)
+ *      - Lab2XYZ            Y: yr              (instead of yr * wp.Y)
+ *      - Lab2RGBDevice      Y: yr              (same as Lab2XYZ)
+ *      - RGBDevice2LabD50   yr = XYZ.Y         (same as XYZ2Lab)
+ *      - RGBf2Lab           yr = XYZ.Y         (same as XYZ2Lab)
+ *      - adaptation         drops `* sourceWhite.Y` and `* destWhite.Y`
+ *                           in the cone-space projections (the input XYZ.Y
+ *                           multiplies are KEPT — colour Y is not 1.0).
+ *
+ *  If you ever need to support un-normalised whitepoints, every site
+ *  listed above has to be updated together — and the perf tradeoff
+ *  reconsidered.
+ *
+ *  ----------------------------------------------------------------------------
+ *  CIE Lab MATH CONSTANTS (used throughout)
+ *  ----------------------------------------------------------------------------
+ *
+ *      kE  = 216 / 24389  ≈ 0.008856   (CIE epsilon, the "linear-segment knee")
+ *      kK  = 24389 / 27   ≈ 903.296    (CIE kappa)
+ *      kKE = 8                          (kE * kK, used as L threshold)
+ *
+ *  These are the modern (TC1-48 corrected) values. `Lab2sRGB` below uses the
+ *  older `0.008856 / 7.787` constants for historical reasons — same maths to
+ *  ~6 d.p., kept as an alternate D65 fast-path.
+ *
+ *  ----------------------------------------------------------------------------
+ *  RGB MATRIX PROFILES
+ *  ----------------------------------------------------------------------------
+ *
+ *  An RGB matrix profile (sRGB, AdobeRGB, etc.) is just a set of:
+ *      - primary chromaticities (cRx,cRy / cGx,cGy / cBx,cBy)
+ *      - a media whitepoint
+ *      - a gamma curve (or the sRGB piecewise curve)
+ *
+ *  `computeMatrix(profile)` derives the RGB→XYZ and XYZ→RGB 3x3 matrices from
+ *  the primaries + whitepoint and stuffs them onto `profile.RGBMatrix.matrixV4`
+ *  / `.matrixInv`. After that, the per-pixel maths is:
+ *
+ *      linear  = gammaInv(rgb)         // display → linear
+ *      XYZ     = matrixV4 · linear     // 3x3 multiply
+ *      [adapt] = bradford(XYZ, src→dst whitepoint, if needed)
+ *      Lab     = XYZ2Lab(adapted, dst whitepoint)
+ *
+ *  ----------------------------------------------------------------------------
+ *  HISTORY / RESOLVED ISSUES
+ *  ----------------------------------------------------------------------------
+ *
+ *      C1  Lab2RGB           — FIXED: copy-paste typo (RGBDevice[0] for all
+ *                              channels) replaced with [0]/[1]/[2].
+ *      C2  RGB2Lab           — FIXED: was double-adapting across whitepoints
+ *                              because RGBf2XYZ already adapts internally.
+ *      C3  Lab2RGBDevice     — RECLASSIFIED as intentional Y === 1.0 perf
+ *      C4  RGBf2Lab            optimisation. See WHITEPOINT CONVENTION above.
+ *      D2  Lab2sRGB          — RECLASSIFIED as by-design: it is a display-
+ *                              only "show this Lab roughly on screen" helper,
+ *                              not a colorimetric path. No adaptation, no
+ *                              profile, hardcoded sRGB/D65. Doc updated.
+ *
+ *  REMAINING DOC NOTES (not bugs, just things to be aware of):
+ *
+ *      D1  Gray ctor         — JSDoc-vs-clamp range conflict; clamp wins
+ *                              (0–255). Doc updated.
+ *      D3  gamma/gammaInv    — naming reads back-to-front; mnemonic in JSDoc.
+ *      D4  computeMatrix     — side-effecting initialiser; documented.
+ *      D5  transpose         — mutates input in place; documented.
+ *
+ *  ----------------------------------------------------------------------------
+ *  REFERENCES
+ *  ----------------------------------------------------------------------------
+ *
+ *      Bruce Lindbloom — http://www.brucelindbloom.com/
+ *      ICC.1:2010 (Profile spec)
+ *      CIE 15:2004 (Colorimetry, 3rd ed.)
+ *      CIE 142:2001 (CIEDE2000)
+ *      Wyszecki & Stiles, Color Science (2nd ed.)
+ */
+
 var defs = require('./def');
 var eIntent = defs.eIntent;
 var eColourType = defs.eColourType;
 
+// ============================================================================
+//  TYPEDEFS — shapes of the colour objects passed around the engine
+// ============================================================================
+
 /**
  * @typedef {object} _cmsWhitePoint
- * @property {string} desc
- * @property {number} X
- * @property {number} Y
- * @property {number} Z
+ * @property {string} desc  Short label, e.g. 'd50', 'd65', 'a'.
+ * @property {number} X     Normalised X (Y is always 1.0 in the bundled WPs).
+ * @property {number} Y     Normalised Y (always 1.0 for bundled WPs).
+ * @property {number} Z     Normalised Z.
  */
 
 
@@ -59,11 +208,18 @@ var eColourType = defs.eColourType;
  */
 
 /**
+ * XYZ tristimulus, normalised so reference white Y == 1.0.
+ *
+ * `whitePoint` is optional and informational — most XYZ-consuming functions
+ * take a separate explicit whitepoint argument. When set, downstream Lab
+ * conversions can pick it up automatically.
+ *
  * @typedef {object} _cmsXYZ
- * @property {number} type eColourType
+ * @property {number} type eColourType.XYZ
  * @property {number} X
  * @property {number} Y
  * @property {number} Z
+ * @property {_cmsWhitePoint} [whitePoint]
  */
 
 /**
@@ -107,6 +263,18 @@ var eColourType = defs.eColourType;
  * @property {number} Bf
  */
 
+// ============================================================================
+//  INTERNAL UTILS
+// ============================================================================
+
+/**
+ * Round `n` to `places` decimal places. Used by the display/format helpers and
+ * by `Lab2RGB`. Not for hot paths.
+ *
+ * @param {number} n
+ * @param {number} places
+ * @returns {number}
+ */
 function roundN(n , places) {
     var p = Math.pow(10, places)
     return Math.round(n * p) / p;
@@ -114,6 +282,16 @@ function roundN(n , places) {
 
 var convert = {};
 
+// ============================================================================
+//  DISPLAY / FORMAT HELPERS
+// ============================================================================
+
+/**
+ * Map an `eIntent` enum value to its short ICC name.
+ *
+ * @param {number} intent
+ * @returns {string}  'Perceptual' | 'Relative' | 'Saturation' | 'Absolute' | 'Unknown'
+ */
 convert.intent2String = function(intent){
     switch(intent){
         case eIntent.perceptual: return 'Perceptual';
@@ -124,11 +302,38 @@ convert.intent2String = function(intent){
     return 'Unknown'
 };
 
-/**
- * ChromaticAdaption
- */
+// ============================================================================
+//  CHROMATIC ADAPTATION — Bradford matrices
+// ============================================================================
+//
+//  Forward and inverse Bradford cone-response matrices used by
+//  `convert.adaptation()`.
+//
+//  PUBLIC API:
+//
+//      convert.getBradfordMtxAdapt()      // recommended — returns frozen ref
+//      convert.getBradfordMtxAdaptInv()
+//
+//      convert.BradfordMtxAdapt           // legacy direct-property access
+//      convert.BradfordMtxAdaptInv        //   (also frozen)
+//
+//  Both are protected with `Object.freeze` so external code cannot mutate
+//  them. The getter functions are preferred for new code (cleaner intent,
+//  avoids accidental rebinds) and are written as plain functions — NOT
+//  defineProperty getters — so the API stays compatible with old JS engines
+//  that don't support ES5 accessors.
+//
+//      Reference: Lindbloom — http://www.brucelindbloom.com/Eqn_ChromAdapt.html
+//
+// ============================================================================
 
-convert.BradfordMtxAdapt={
+/**
+ * Bradford cone-response matrix (XYZ → LMS). Frozen singleton — do not
+ * attempt to mutate (assignment is silently ignored in non-strict mode and
+ * throws in strict mode).
+ * @type {{m00:number,m01:number,m02:number,m10:number,m11:number,m12:number,m20:number,m21:number,m22:number}}
+ */
+convert.BradfordMtxAdapt = Object.freeze({
     m00 :  0.8951,
     m01 : -0.7502,
     m02 :  0.0389,
@@ -138,9 +343,14 @@ convert.BradfordMtxAdapt={
     m20 : -0.1614,
     m21 :  0.0367,
     m22 :  1.0296
-};
+});
 
-convert.BradfordMtxAdaptInv={
+/**
+ * Inverse Bradford matrix (LMS → XYZ). Frozen singleton — see notes on
+ * `BradfordMtxAdapt`.
+ * @type {{m00:number,m01:number,m02:number,m10:number,m11:number,m12:number,m20:number,m21:number,m22:number}}
+ */
+convert.BradfordMtxAdaptInv = Object.freeze({
     m00 :  0.9869929,
     m01 :  0.4323053,
     m02 : -0.0085287,
@@ -150,13 +360,50 @@ convert.BradfordMtxAdaptInv={
     m20 :  0.1599627,
     m21 :  0.0492912,
     m22 :  0.9684867
+});
+
+/**
+ * Get the Bradford cone-response matrix (XYZ → LMS). Returns the frozen
+ * singleton — safe to read, mutation is rejected.
+ *
+ * If you need a mutable copy (e.g. for matrix-composition experiments), do:
+ *
+ *      var m = Object.assign({}, convert.getBradfordMtxAdapt());
+ *
+ * @returns {{m00:number,m01:number,m02:number,m10:number,m11:number,m12:number,m20:number,m21:number,m22:number}}
+ */
+convert.getBradfordMtxAdapt = function(){
+    return convert.BradfordMtxAdapt;
+};
+
+/**
+ * Get the inverse Bradford matrix (LMS → XYZ). Returns the frozen
+ * singleton — safe to read, mutation is rejected. See `getBradfordMtxAdapt`
+ * for how to obtain a mutable copy.
+ *
+ * @returns {{m00:number,m01:number,m02:number,m10:number,m11:number,m12:number,m20:number,m21:number,m22:number}}
+ */
+convert.getBradfordMtxAdaptInv = function(){
+    return convert.BradfordMtxAdaptInv;
 };
 
 
-convert.cmsColor2String = function(color, precession){
+/**
+ * Format a typed colour object as a human-readable string for logs / UI.
+ *
+ *      cmsColor2String(convert.RGB(255,0,0))
+ *      // -> 'RGB: 255, 0, 0'
+ *      cmsColor2String(convert.Lab(50,20,-30), 2)
+ *      // -> 'Lab: 50, 20, -30 (d50)'
+ *
+ * @param {object} color           Any typed colour object (must have `.type`).
+ * @param {number} [precision=4]   Decimal places to round each channel to.
+ * @returns {string}
+ */
+convert.cmsColor2String = function(color, precision){
 
-    if(typeof precession === 'undefined'){
-        precession = 4;
+    if(typeof precision === 'undefined'){
+        precision = 4;
     }
 
     switch (color.type){
@@ -179,9 +426,9 @@ convert.cmsColor2String = function(color, precession){
         var cols = [];
         for(var i=0; i<props.length; i++){
             if(includeProp){
-                cols.push(props[i] + ': ' + roundN(obj[props[i]], precession));
+                cols.push(props[i] + ': ' + roundN(obj[props[i]], precision));
             } else {
-                cols.push( roundN(obj[props[i]], precession));
+                cols.push( roundN(obj[props[i]], precision));
             }
         }
         return title + ': ' + cols.join(', ');
@@ -190,7 +437,7 @@ convert.cmsColor2String = function(color, precession){
 
 
 /**
- *
+ * Format a whitepoint as `'(White d50 X0.9642 Y1.0000 Z0.8252)'`.
  * @param  {_cmsWhitePoint} whitePoint
  * @returns {string}
  */
@@ -199,12 +446,26 @@ convert.whitepoint2String = function(whitePoint){
 };
 
 
+// ============================================================================
+//  TYPED COLOUR CONSTRUCTORS
+// ============================================================================
+//
+//  Most constructors accept an optional `rangeCheck` flag. When it is the
+//  literal `false` the inputs are stored as-is (useful when feeding values
+//  that are already known good, or when out-of-gamut/negative values are
+//  intentional). Otherwise the constructor clamps and rounds.
+//
+//  Whitepoint defaulting: Lab/LCH default to D50 (the ICC PCS whitepoint).
+//
+// ============================================================================
+
 /**
- * XYZ 0.0 - 1.0
+ * Build an XYZ colour. Components are normally in 0.0–1.0 (Y normalised so
+ * the reference white is 1.0).
  * @param {number} X
  * @param {number} Y
  * @param {number} Z
- * @param {_cmsWhitePoint=} whitePoint
+ * @param {_cmsWhitePoint=} whitePoint  Defaults to D50.
  * @returns {_cmsXYZ}
  */
 convert.XYZ = function(X, Y, Z, whitePoint){
@@ -218,11 +479,16 @@ convert.XYZ = function(X, Y, Z, whitePoint){
 };
 
 /**
- * @param {number} L  0.0 - 100.0
- * @param {number} a range not specified
- * @param {number} b range not specified
- * @param {_cmsWhitePoint=} whitePoint Defaults to D50
- * @param {boolean=} rangeCheck
+ * Build a Lab colour at the given whitepoint. By default L is clamped to
+ * 0–100 and a/b are clamped to ±127 (Lab16 ICC convention). Pass
+ * `rangeCheck === false` to skip clamping (e.g. for delta-E maths where
+ * negative or >100 L can occur intermediately).
+ *
+ * @param {number} L  0.0 - 100.0 (clamped unless rangeCheck === false)
+ * @param {number} a  ±127 (clamped unless rangeCheck === false)
+ * @param {number} b  ±127 (clamped unless rangeCheck === false)
+ * @param {_cmsWhitePoint=} whitePoint Defaults to D50.
+ * @param {boolean=} rangeCheck  Pass `false` to disable clamping.
  * @returns {_cmsLab}
  */
 convert.Lab = function(L, a, b, whitePoint, rangeCheck){
@@ -246,11 +512,15 @@ convert.Lab = function(L, a, b, whitePoint, rangeCheck){
     };
 };
 /**
+ * Build an LCH (cylindrical Lab) colour. L 0–100, C clamped ≥ 0, H wrapped
+ * into 0–360. Note: the negative-H wrap uses `(h + 3600) % 360` so very
+ * large negative inputs (h < -3600) won't wrap correctly — fine for normal
+ * use, but worth knowing.
  *
- * @param {number} L
- * @param {number} c
- * @param {number} h
- * @param {_cmsWhitePoint=} whitePoint Defaults to D50
+ * @param {number} L  0.0 - 100.0
+ * @param {number} c  Chroma, clamped to ≥ 0.
+ * @param {number} h  Hue in degrees, wrapped into 0–360.
+ * @param {_cmsWhitePoint=} whitePoint Defaults to D50.
  * @returns {_cmsLCH}
  */
 convert.Lch = function(L, c, h, whitePoint){
@@ -266,8 +536,14 @@ convert.Lch = function(L, c, h, whitePoint){
 convert.LCH = convert.Lch;
 
 /**
- * @param {number} g 0-100
- * @param {boolean=} rangeCheck
+ * Build a Gray colour. Stored as 0–255 byte (despite the legacy JSDoc range).
+ *
+ * TODO (doc bug D1): JSDoc historically said 0–100 but the clamp is 0–255.
+ * The 0–255 clamp matches the rest of the engine's grey handling, so the
+ * range tag here is what's wrong. Fix when next touching the file.
+ *
+ * @param {number} g 0–255
+ * @param {boolean=} rangeCheck Pass `false` to disable clamping/rounding.
  * @returns {_cmsGrey}
  */
 convert.Gray = function(g, rangeCheck){
@@ -285,9 +561,10 @@ convert.Gray = function(g, rangeCheck){
 
 
 /**
- * @param {number} a 0-100
- * @param {number} b 0-100
- * @param {boolean=} rangeCheck
+ * Build a Duotone (2-channel) colour. Each channel is an ink percent 0–100.
+ * @param {number} a 0–100
+ * @param {number} b 0–100
+ * @param {boolean=} rangeCheck Pass `false` to disable clamping/rounding.
  * @returns {_cmsDuo}
  */
 convert.Duo = function(a, b, rangeCheck){
@@ -308,19 +585,27 @@ convert.Duo = function(a, b, rangeCheck){
 
 
 /**
- * @param rgb
- * @returns {string}
+ * Convert an `_cmsRGB` byte triple to a `#rrggbb` string.
+ *
+ * Implementation note: the `(1 << 24) + ... | 0` trick is the well-known
+ * leading-zero pad hack — the leading `1` becomes a 7th hex digit which is
+ * stripped by `slice(1)`, guaranteeing exactly 6 chars.
+ *
+ * @param {_cmsRGB} rgb
+ * @returns {string}  e.g. '#ff0000'
  */
 convert.RGB2Hex = function(rgb) {
     return "#" + ((1 << 24) + (rgb.R << 16) + (rgb.G << 8) + rgb.B | 0).toString(16).slice(1);
 };
 
 /**
+ * Build an RGB byte colour. Components clamped to 0–255 and rounded unless
+ * `rangeCheck === false`.
  *
- * @param {number} r 0-255
- * @param {number} g 0-255
- * @param {number} b 0-255
- * @param {boolean=} rangeCheck
+ * @param {number} r 0–255
+ * @param {number} g 0–255
+ * @param {number} b 0–255
+ * @param {boolean=} rangeCheck Pass `false` to disable clamping/rounding.
  * @returns {_cmsRGB}
  */
 convert.RGB = function(r, g, b, rangeCheck){
@@ -341,6 +626,13 @@ convert.RGB = function(r, g, b, rangeCheck){
 };
 
 
+/**
+ * Build an RGB float colour (no clamping). Alias of `RGBFloat`.
+ * @param {number} r 0.0 - 1.0 (typically; out-of-gamut is allowed)
+ * @param {number} g 0.0 - 1.0
+ * @param {number} b 0.0 - 1.0
+ * @returns {_cmsRGBf}
+ */
 convert.RGBf = function(r, g, b){
     return {
         type: eColourType.RGBf,
@@ -351,7 +643,9 @@ convert.RGBf = function(r, g, b){
 };
 
 /**
- * Note that normal range is 0.0 to 1.0 but can be outside that range - outside gamut
+ * Build an RGB float colour. Normal range is 0.0–1.0 but values may fall
+ * outside that range to represent out-of-gamut colours (handled by clipping
+ * downstream when needed).
  * @param {number} rf
  * @param {number} gf
  * @param {number} bf
@@ -408,6 +702,14 @@ convert.CMYK = function(c, m, y, k, rangeCheck){
     };
 };
 
+/**
+ * Build a CMYK float colour (0.0–1.0 per channel). No clamping.
+ * @param {number} c
+ * @param {number} m
+ * @param {number} y
+ * @param {number} k
+ * @returns {_cmsCMYK}
+ */
 convert.CMYKf = function(c, m, y, k){
     return  {
         type: eColourType.CMYKf,
@@ -419,10 +721,10 @@ convert.CMYKf = function(c, m, y, k){
 };
 
 /**
- *
- * @param {number} x
- * @param {number} y
- * @param {number} Y
+ * Build an xyY chromaticity+luminance colour.
+ * @param {number} x  Chromaticity x (0–1).
+ * @param {number} y  Chromaticity y (0–1).
+ * @param {number} Y  Luminance (matches the XYZ Y normalisation).
  * @returns {{type: number, x: number, y: number, Y: number}}
  */
 convert.xyY = function(x, y, Y){
@@ -434,9 +736,28 @@ convert.xyY = function(x, y, Y){
     };
 };
 
+// ============================================================================
+//  WHITEPOINTS — bundled CIE standard illuminants
+// ============================================================================
+//
+//  All values are XYZ tristimuli normalised so Y = 1.0 (ASTM E308-01, except
+//  where noted). They are stored on `convert` itself as `convert.d50`,
+//  `convert.d65`, etc. Look them up by name with `getWhitePoint('d65')`.
+//
+//  D50 is the ICC PCS reference and is the default for Lab/LCH constructors.
+//
+// ============================================================================
+
 /**
- * WhitePoints
+ * Look up a bundled whitepoint by short name (case-insensitive).
+ * Falls through to D65 if the name is not recognised.
+ *
+ *      getWhitePoint('d65')   // -> convert.d65
+ *      getWhitePoint('D50')   // -> convert.d50
+ *      getWhitePoint('foo')   // -> convert.d65 (fallback)
+ *
  * @param {string} whitepointDescription
+ *        One of: 'a','b','c','d50','d55','d65','d75','e','f2','f7','f11'.
  * @returns {_cmsWhitePoint}
  */
 convert.getWhitePoint = function(whitepointDescription){
@@ -480,6 +801,14 @@ convert.f7 =  {desc: 'f7',  Y: 1.0, X: 0.95041, Z: 1.08747};
 convert.f11 = {desc: 'f11', Y: 1.0, X: 1.00962, Z: 0.64350};
 
 
+/**
+ * Reverse lookup: given an XYZ illuminant (typically the output of a
+ * spectral integration) return the matching named whitepoint, or a
+ * synthesised one if no bundled illuminant matches within ±0.001.
+ *
+ * @param {{X:number, Y:number, Z:number}} illuminant
+ * @returns {_cmsWhitePoint}
+ */
 convert.getWhitePointFromIlluminant = function(illuminant){
     if(t(illuminant.X, 1.0985)){  //A (ASTM E308-01)
         return this.a;
@@ -520,10 +849,17 @@ convert.getWhitePointFromIlluminant = function(illuminant){
     }
 };
 
+// ============================================================================
+//  COLOUR-SPACE CONVERSIONS
+//      XYZ ↔ xyY ↔ Lab ↔ LCH (closed-form, no profile data needed)
+// ============================================================================
+
 /**
+ * XYZ → xyY chromaticity. If the XYZ sum is zero (pure black) the
+ * chromaticity is taken from `whitePoint` so the output isn't NaN.
  *
  * @param {_cmsXYZ} cmsXYZ
- * @param  {_cmsWhitePoint} whitePoint
+ * @param {_cmsWhitePoint} whitePoint  Used only for the black-fallback chromaticity.
  * @returns {{x: number, y: number, Y: number}}
  */
 convert.XYZ2xyY = function(cmsXYZ, whitePoint)
@@ -546,6 +882,7 @@ convert.XYZ2xyY = function(cmsXYZ, whitePoint)
 };
 
 /**
+ * xyY → XYZ. Returns black if y is effectively zero (avoids divide-by-zero).
  *
  * @param {{x: number, y: number, Y: number}} cmsxyY
  * @returns {_cmsXYZ}
@@ -568,10 +905,16 @@ convert.xyY2XYZ = function(cmsxyY)
 };
 
 /**
+ * XYZ → CIE Lab at the given whitepoint (CIE 15:2004).
+ *
+ * Uses the modern (TC1-48 corrected) constants: kE = 216/24389,
+ * kK = 24389/27. The whitepoint argument is REQUIRED — no D50 fallback —
+ * and the same whitepoint is attached to the result so any subsequent Lab→
+ * conversion can pick it up.
  *
  * @param {_cmsXYZ} XYZ
- * @param {_cmsWhitePoint} whitePoint
- * @returns {*}
+ * @param {_cmsWhitePoint} whitePoint  Reference white. NOT optional.
+ * @returns {_cmsLab}
  */
 convert.XYZ2Lab = function(XYZ, whitePoint)
 {
@@ -580,7 +923,9 @@ convert.XYZ2Lab = function(XYZ, whitePoint)
     //var kKE = 8.0;
 
     var xr = XYZ.X / whitePoint.X;
-    var yr = XYZ.Y / whitePoint.Y;
+    // yr: by convention, every whitepoint in this engine has Y === 1.0,
+    // so `XYZ.Y / whitePoint.Y` reduces to `XYZ.Y`. Don't "fix" this back.
+    var yr = XYZ.Y;
     var zr = XYZ.Z / whitePoint.Z;
 
     var fx = (xr > kE) ? Math.pow(xr, 1.0 / 3.0) : ((kK * xr + 16.0) / 116.0);
@@ -597,7 +942,9 @@ convert.XYZ2Lab = function(XYZ, whitePoint)
 };
 
 /**
- * XYZ has no whitePoint, so this convert from Lab @ whitePoint to XYZ
+ * CIE Lab → XYZ. Uses `cmsLab.whitePoint` as the reference white (defaults
+ * to D50 if missing). Inverse of `XYZ2Lab`.
+ *
  * @param {_cmsLab | _cmsLabD50} cmsLab
  * @returns {_cmsXYZ}
  */
@@ -622,13 +969,20 @@ convert.Lab2XYZ = function(cmsLab)
 
     return {
         X: xr * whitePoint.X,
-        Y: yr * whitePoint.Y,
+        // Y: every whitepoint in this engine has Y === 1.0 by convention,
+        // so `yr * whitePoint.Y` reduces to `yr`. Don't "fix" this back.
+        Y: yr,
         Z: zr * whitePoint.Z,
         type: eColourType.XYZ
     };
 };
 
 /**
+ * Adapt a Lab value into D50 Lab (the ICC PCS reference). Returns a stripped
+ * `{L,a,b}` (no whitepoint, no type) since the result is by definition D50.
+ *
+ * If the source is already at D50 (within tolerance) this is a near-no-op
+ * field copy — no XYZ round-trip.
  *
  * @param {_cmsLab} sourceLab
  * @returns {_cmsLabD50}
@@ -650,6 +1004,9 @@ convert.Lab2LabD50 = function(sourceLab){
 
 
 /**
+ * Adapt a Lab value to a different reference whitepoint. Round-trips
+ * through XYZ + Bradford adaptation. Returns the same object if the
+ * whitepoints already match.
  *
  * @param {_cmsLab} sourceLab
  * @param {_cmsWhitePoint} destWhitepoint
@@ -667,6 +1024,9 @@ convert.Lab2Lab = function(sourceLab, destWhitepoint){
 
 
 /**
+ * Lab → cylindrical LCH. C = sqrt(a² + b²), H = atan2(b, a) in 0–360°.
+ * Whitepoint is NOT carried into the LCH (could be — known limitation,
+ * not in scope here).
  *
  * @param {_cmsLab} cmsLab
  * @returns {_cmsLCH}
@@ -683,7 +1043,7 @@ convert.Lab2LCH = function(cmsLab)
 };
 
 /**
- *
+ * Cylindrical LCH → Lab. Inverse of `Lab2LCH`.
  * @param {_cmsLCH} cmsLCHab
  * @returns {_cmsLab}
  */
@@ -694,36 +1054,51 @@ convert.LCH2Lab = function(cmsLCHab)
     return this.Lab(cmsLCHab.L,a,b);
 };
 
+// ============================================================================
+//  RGB MATRIX-PROFILE CONVERSIONS
+//      RGB ↔ XYZ ↔ Lab via per-profile gamma + 3x3 matrix + Bradford adapt.
+// ============================================================================
+//
+//  These functions need an `RGBProfile` whose `RGBMatrix` field has been
+//  populated by `computeMatrix()`. They are the bridge between the typeless
+//  matrix-profile world and the Lab/XYZ analytical world.
+//
+//  Use them for single-colour work. For image data, build a Transform with
+//  `buildLut: true` and use `transformArrayViaLUT()`.
+//
+// ============================================================================
+
 /**
- * Converts from RGB to Lab, Is the
+ * RGB byte triple → Lab at a destination whitepoint.
+ *
+ * If `destWhitepoint` is omitted, the RGB profile's media whitepoint is
+ * used (no adaptation needed). When supplied, chromatic adaptation from
+ * the profile's mediaWhitePoint to `destWhitepoint` is performed inside
+ * `RGBf2XYZ` — do NOT re-adapt here.
+ *
  * @param {_cmsRGB} rgb
  * @param {RGBProfile} RGBProfile
- * @param {_cmsWhitePoint=} destWhitepoint
+ * @param {_cmsWhitePoint=} destWhitepoint  Defaults to profile's mediaWhitePoint.
  * @returns {_cmsLab}
  */
 convert.RGB2Lab = function(rgb, RGBProfile , destWhitepoint){
-    var cmsXYZ;
-    // do adapatation here if RGBProfile !== Lab Profile
-    if(destWhitepoint){
-        cmsXYZ = this.RGBf2XYZ({Rf:rgb.R/255, Gf:rgb.G/255, Bf:rgb.B/255}, RGBProfile , destWhitepoint);
-        if(!this.compareWhitePoints(destWhitepoint, RGBProfile.mediaWhitePoint)){
-            cmsXYZ = this.adaptation(cmsXYZ, RGBProfile.mediaWhitePoint, destWhitepoint)
-        }
-    } else {
+    if(!destWhitepoint){
         // assume whitePoint of the profile
         destWhitepoint = RGBProfile.mediaWhitePoint;
-        cmsXYZ = this.RGBf2XYZ({Rf:rgb.R/255, Gf:rgb.G/255, Bf:rgb.B/255}, RGBProfile , destWhitepoint);
     }
-
+    // RGBf2XYZ adapts the XYZ from RGBProfile.mediaWhitePoint → destWhitepoint
+    // internally if the two differ; no second adaptation pass needed here.
+    var cmsXYZ = this.RGBf2XYZ({Rf:rgb.R/255, Gf:rgb.G/255, Bf:rgb.B/255}, RGBProfile , destWhitepoint);
     return this.XYZ2Lab(cmsXYZ, destWhitepoint);
 };
 
-// Takes RGB in 0-255 range and converts to XYZ
 /**
+ * RGB byte triple (0–255) → XYZ at the given reference white. Thin wrapper
+ * over `RGBf2XYZ` that just normalises bytes to floats first.
  *
  * @param {_cmsRGB} rgb
  * @param {RGBProfile} RGBprofile
- * @param {_cmsWhitePoint} XYZRefWhite
+ * @param {_cmsWhitePoint} XYZRefWhite  Reference white the result should sit at.
  * @returns {_cmsXYZ}
  */
 convert.RGB2XYZ_bytes = function(rgb, RGBprofile , XYZRefWhite){
@@ -735,11 +1110,12 @@ convert.RGB2XYZ_bytes = function(rgb, RGBprofile , XYZRefWhite){
     }, RGBprofile , XYZRefWhite);
 };
 
-// converts XYZ to RGB in 0-255 range
 /**
+ * XYZ → RGB byte triple (0–255). Thin wrapper that calls `XYZ2RGBf` then
+ * scales/clamps to bytes. Always clips to 0..1 before scaling.
  *
  * @param {_cmsXYZ} XYZ
- * @param {_cmsWhitePoint} XYZRefWhite
+ * @param {_cmsWhitePoint} XYZRefWhite  Reference white the input XYZ is at.
  * @param {RGBProfile} RGBProfile
  * @returns {_cmsRGB}
  */
@@ -762,10 +1138,12 @@ convert.XYZ2RGB_bytes = function(XYZ, XYZRefWhite, RGBProfile){
 // };
 
 /**
+ * Lab → RGB float via XYZ. The Lab's whitepoint is used as the XYZ reference
+ * white for adaptation into the RGB profile's media whitepoint.
  *
  * @param {_cmsLab} cmsLab
  * @param {RGBProfile} RGBProfile
- * @param {boolean=} clip
+ * @param {boolean=} clip  Pass `false` to keep out-of-gamut values; default clips to 0..1.
  * @returns {_cmsRGBf}
  */
 convert.Lab2RGBf = function(cmsLab, RGBProfile, clip){
@@ -774,6 +1152,8 @@ convert.Lab2RGBf = function(cmsLab, RGBProfile, clip){
 };
 
 /**
+ * RGB float (0..1) → RGB byte triple (0..255). Goes through `convert.RGB()`
+ * so values are clamped and rounded.
  *
  * @param  {_cmsRGBf} rgbf
  * @returns {_cmsRGB}
@@ -783,9 +1163,12 @@ convert.RGB2byte = function(rgbf){
 };
 
 /**
+ * Alternative RGB→hex string formatter. Returns lowercase `#rrggbb`.
+ * Functionally equivalent to `RGB2Hex` but uses a per-channel padding
+ * approach instead of the bitwise hack.
  *
  * @param {_cmsRGB} rgb
- * @returns {string}
+ * @returns {string}  e.g. '#0a1b2c'
  */
 convert.cmsRGB2Hex = function(rgb){
     var R =(rgb.R<=15 ? '0' + rgb.R.toString(16) : rgb.R.toString(16));
@@ -795,11 +1178,25 @@ convert.cmsRGB2Hex = function(rgb){
 };
 
 /**
+ * Bradford chromatic adaptation between two whitepoints.
  *
- * @param {_cmsXYZ | object}  XYZ
- * @param {_cmsWhitePoint} sourceWhite
- * @param {_cmsWhitePoint} destWhite
- * @returns {_cmsXYZ}
+ * Transforms the input XYZ from `sourceWhite` to `destWhite` using the
+ * Bradford cone-response matrix. Algorithm (Lindbloom):
+ *
+ *   1. Take both whitepoints into Bradford LMS cone space.
+ *   2. Take the input XYZ into the same cone space.
+ *   3. Scale each cone channel by destWhitePointLMS / sourceWhitePointLMS.
+ *   4. Take the result back to XYZ via the inverse Bradford matrix.
+ *
+ * Cheap (just a couple of 3x3 multiplies) but called once per pixel in
+ * matrix-profile transforms, so worth keeping inline.
+ *
+ *  Reference: http://www.brucelindbloom.com/index.html?Eqn_ChromAdapt.html
+ *
+ * @param {_cmsXYZ | object}  XYZ        XYZ tristimulus to adapt (read-only).
+ * @param {_cmsWhitePoint} sourceWhite   Whitepoint the input XYZ is at.
+ * @param {_cmsWhitePoint} destWhite     Whitepoint the output should be at.
+ * @returns {_cmsXYZ}                    New object; input is not mutated.
  */
 convert.adaptation = function(XYZ, sourceWhite, destWhite){
     var MtxAdaptMa = this.BradfordMtxAdapt;
@@ -807,17 +1204,22 @@ convert.adaptation = function(XYZ, sourceWhite, destWhite){
 
     //http://www.brucelindbloom.com/index.html?Eqn_ChromAdapt.html
 
-    // Transform RefWhite (SOURCE)
-    var As = (sourceWhite.X * MtxAdaptMa.m00) + (sourceWhite.Y * MtxAdaptMa.m10) + (sourceWhite.Z * MtxAdaptMa.m20);
-    var Bs = (sourceWhite.X * MtxAdaptMa.m01) + (sourceWhite.Y * MtxAdaptMa.m11) + (sourceWhite.Z * MtxAdaptMa.m21);
-    var Cs = (sourceWhite.X * MtxAdaptMa.m02) + (sourceWhite.Y * MtxAdaptMa.m12) + (sourceWhite.Z * MtxAdaptMa.m22);
+    // Transform RefWhite (SOURCE) into Bradford LMS cone space.
+    // Note: every whitepoint in this engine has Y === 1.0 by convention, so
+    // the `(sourceWhite.Y * MtxAdaptMa.m1?)` terms collapse to bare matrix
+    // elements. The XYZ multiplies further down keep their `.Y` term — that
+    // is a colour value, not a whitepoint, and is generally NOT 1.0.
+    var As = (sourceWhite.X * MtxAdaptMa.m00) + MtxAdaptMa.m10 + (sourceWhite.Z * MtxAdaptMa.m20);
+    var Bs = (sourceWhite.X * MtxAdaptMa.m01) + MtxAdaptMa.m11 + (sourceWhite.Z * MtxAdaptMa.m21);
+    var Cs = (sourceWhite.X * MtxAdaptMa.m02) + MtxAdaptMa.m12 + (sourceWhite.Z * MtxAdaptMa.m22);
 
-    // Transform Space _cmsWhitePoint (DEST)
-    var Ad = (destWhite.X * MtxAdaptMa.m00) + (destWhite.Y * MtxAdaptMa.m10) + (destWhite.Z * MtxAdaptMa.m20);
-    var Bd = (destWhite.X * MtxAdaptMa.m01) + (destWhite.Y * MtxAdaptMa.m11) + (destWhite.Z * MtxAdaptMa.m21);
-    var Cd = (destWhite.X * MtxAdaptMa.m02) + (destWhite.Y * MtxAdaptMa.m12) + (destWhite.Z * MtxAdaptMa.m22);
+    // Transform Space _cmsWhitePoint (DEST). Same Y === 1.0 simplification.
+    var Ad = (destWhite.X * MtxAdaptMa.m00) + MtxAdaptMa.m10 + (destWhite.Z * MtxAdaptMa.m20);
+    var Bd = (destWhite.X * MtxAdaptMa.m01) + MtxAdaptMa.m11 + (destWhite.Z * MtxAdaptMa.m21);
+    var Cd = (destWhite.X * MtxAdaptMa.m02) + MtxAdaptMa.m12 + (destWhite.Z * MtxAdaptMa.m22);
 
-    // Transform from XYZ into a cone response domain, (ρ, γ, β) using the Matrix
+    // Transform from XYZ into a cone response domain, (ρ, γ, β) using the Matrix.
+    // KEEP the `XYZ.Y * ...` terms — XYZ.Y is a colour Y, not a whitepoint Y.
     var X1 = (XYZ.X * MtxAdaptMa.m00) + (XYZ.Y * MtxAdaptMa.m10) + (XYZ.Z * MtxAdaptMa.m20);
     var Y1 = (XYZ.X * MtxAdaptMa.m01) + (XYZ.Y * MtxAdaptMa.m11) + (XYZ.Z * MtxAdaptMa.m21);
     var Z1 = (XYZ.X * MtxAdaptMa.m02) + (XYZ.Y * MtxAdaptMa.m12) + (XYZ.Z * MtxAdaptMa.m22);
@@ -837,12 +1239,22 @@ convert.adaptation = function(XYZ, sourceWhite, destWhite){
 };
 
 /**
+ * XYZ → linear-then-gamma-encoded RGB device values, returned as a raw
+ * `[R, G, B]` float array (no `_cmsRGBf` wrapping).
+ *
+ *   1. Adapt XYZ to the profile's media whitepoint if needed.
+ *   2. Multiply by `RGBMatrix.matrixInv` (XYZ → linear RGB).
+ *   3. Optionally clip to 0..1.
+ *   4. Apply per-channel gamma encoding (sRGB curve or pure-gamma).
+ *
+ * "Device" here means values in the profile's RGB colour space, gamma
+ * encoded, ready to drop into a pixel buffer (after × 255 if you want bytes).
  *
  * @param {_cmsXYZ}  XYZ
- * @param {_cmsWhitePoint} XYZRefwhite
+ * @param {_cmsWhitePoint} XYZRefwhite  Whitepoint the input XYZ is at.
  * @param {Profile} RGBProfile
- * @param {boolean} clip
- * @returns {number[]}
+ * @param {boolean} clip   Pass `false` to keep out-of-gamut values; default clips.
+ * @returns {number[]}     Plain `[R,G,B]` floats, gamma-encoded.
  */
 convert.XYZ2RGBDevice = function(XYZ, XYZRefwhite, RGBProfile, clip){
 
@@ -883,11 +1295,13 @@ convert.XYZ2RGBDevice = function(XYZ, XYZRefwhite, RGBProfile, clip){
 };
 
 /**
+ * XYZ → `_cmsRGBf` (typed RGB float). Same maths as `XYZ2RGBDevice` but
+ * wraps the result in a typed colour object.
  *
  * @param {_cmsXYZ}  XYZ
- * @param {_cmsWhitePoint} XYZRefwhite
+ * @param {_cmsWhitePoint} XYZRefwhite  Whitepoint the input XYZ is at.
  * @param {Profile} RGBProfile
- * @param {boolean=} clip
+ * @param {boolean=} clip   Pass `false` to keep out-of-gamut values.
  * @returns {_cmsRGBf}
  */
 convert.XYZ2RGBf = function(XYZ, XYZRefwhite, RGBProfile, clip){
@@ -935,10 +1349,15 @@ convert.XYZ2RGBf = function(XYZ, XYZRefwhite, RGBProfile, clip){
 };
 
 /**
- * Converts from RGBf (0-1) to XYZ, if the XYZWhite
- * @param {number[]} device
+ * Raw `[R,G,B]` device array (gamma-encoded, 0..1) → XYZ at `XYZRefWhite`.
+ *
+ *   1. Linearise via inverse gamma (sRGB curve or pure-gamma).
+ *   2. Multiply by `RGBMatrix.matrixV4` (linear RGB → XYZ at media WP).
+ *   3. Adapt to `XYZRefWhite` if it differs from the media whitepoint.
+ *
+ * @param {number[]} device  Plain `[R,G,B]` floats in 0..1, gamma-encoded.
  * @param {Profile} RGBProfile
- * @param {_cmsWhitePoint}  XYZRefWhite
+ * @param {_cmsWhitePoint}  XYZRefWhite  Reference white the result should sit at.
  * @returns {_cmsXYZ}
  */
 convert.RGBDevice2XYZ = function(device, RGBProfile, XYZRefWhite){
@@ -971,10 +1390,13 @@ convert.RGBDevice2XYZ = function(device, RGBProfile, XYZRefWhite){
 };
 
 /**
+ * `_cmsRGBf` (typed RGB float, 0..1, gamma-encoded) → XYZ at `XYZRefWhite`.
+ * Same maths as `RGBDevice2XYZ`; takes a typed colour object instead of a
+ * plain array.
  *
  * @param {_cmsRGBf} rgbf
  * @param {Profile} RGBProfile
- * @param {_cmsWhitePoint} XYZRefWhite
+ * @param {_cmsWhitePoint} XYZRefWhite  Reference white the result should sit at.
  * @returns {_cmsXYZ}
  */
 convert.RGBf2XYZ = function(rgbf, RGBProfile, XYZRefWhite){
@@ -1011,10 +1433,13 @@ convert.RGBf2XYZ = function(rgbf, RGBProfile, XYZRefWhite){
 
 
 /**
+ * Lab → RGB byte triple (0..255). Convenience wrapper over `Lab2RGBDevice`
+ * that scales 0..1 → 0..255 and rounds to `decimals` places (default 0,
+ * i.e. integers).
  *
  * @param {_cmsLab} cmsLab
  * @param {Profile} RGBProfile
- * @param {number=} decimals
+ * @param {number=} decimals  Decimal places to round each channel to (default 0).
  * @returns {_cmsRGB}
  */
 convert.Lab2RGB = function(cmsLab, RGBProfile, decimals){
@@ -1022,16 +1447,43 @@ convert.Lab2RGB = function(cmsLab, RGBProfile, decimals){
     var RGBDevice = this.Lab2RGBDevice(cmsLab, RGBProfile);
     return {
         R : roundN(RGBDevice[0]*255, decimals),
-        G : roundN(RGBDevice[0]*255, decimals),
-        B : roundN(RGBDevice[0]*255, decimals),
+        G : roundN(RGBDevice[1]*255, decimals),
+        B : roundN(RGBDevice[2]*255, decimals),
         type: eColourType.RGB
     };
 };
 
 /**
+ * Lab → sRGB byte fast-path. INTENDED FOR DISPLAY ONLY (showing a close
+ * approximation of a Lab colour in a browser swatch / canvas / DOM colour
+ * style) — NOT for colorimetric work.
  *
- * @param {_cmsLab} cmsLab
- * @returns {{R: number, G: number, B: number}}
+ * What this function deliberately does NOT do:
+ *
+ *   - It does NOT chromatically adapt. The input Lab is taken as-is and
+ *     fed straight through D65-referenced maths (D65 is sRGB's whitepoint).
+ *     `cmsLab.whitePoint` is ignored.
+ *   - It does NOT consult an ICC profile. The matrix and gamma are the
+ *     hardcoded standard sRGB constants.
+ *   - It does NOT preserve out-of-gamut information — values are clipped
+ *     to 0..255 and rounded.
+ *
+ * If you actually need a colorimetric Lab → RGB conversion (round-trippable,
+ * whitepoint-aware, profile-aware), use `Lab2RGB(lab, sRGBProfile)` with a
+ * loaded sRGB profile, or build a Transform.
+ *
+ * The "good enough for a swatch" sweet spot:
+ *
+ *      // got Lab from anywhere, want to show it in the DOM
+ *      var rgb = convert.Lab2sRGB(lab);
+ *      element.style.background = 'rgb(' + rgb.R + ',' + rgb.G + ',' + rgb.B + ')';
+ *
+ * Uses the historical `0.008856 / 7.787` Lab constants instead of the
+ * modern `kE / kK` — equivalent to ~6 d.p. Kept as a zero-dependency
+ * convenience.
+ *
+ * @param {_cmsLab} cmsLab  Treated as D65 regardless of cmsLab.whitePoint.
+ * @returns {{R: number, G: number, B: number}}  sRGB bytes 0..255, clipped.
  */
 convert.Lab2sRGB = function(cmsLab) {
     // CIE-L*ab -> XYZ
@@ -1081,10 +1533,15 @@ convert.Lab2sRGB = function(cmsLab) {
 };
 
 /**
+ * Lab → linear-then-gamma-encoded RGB device values, returned as a raw
+ * `[R, G, B]` float array. Inlines the Lab→XYZ maths to avoid an extra
+ * object allocation, then runs the same pipeline as `XYZ2RGBDevice`.
+ *
+ * Always clips to 0..1 (no opt-out — used as the leaf for `Lab2RGB`).
  *
  * @param {_cmsLab | _cmsLabD50} cmsLab
  * @param {Profile} RGBProfile
- * @returns {_Device}
+ * @returns {number[]}  Plain `[R, G, B]` floats in 0..1, gamma-encoded.
  */
 convert.Lab2RGBDevice = function(cmsLab, RGBProfile){
 
@@ -1106,6 +1563,9 @@ convert.Lab2RGBDevice = function(cmsLab, RGBProfile){
 
     var whitePoint = cmsLab.whitePoint || convert.d50;
 
+    // INTENTIONAL: every whitepoint in this engine has Y === 1.0 by
+    // convention, so `yr * whitePoint.Y` reduces to `yr`. Don't "fix" by
+    // adding the multiply back. (See file-top WHITEPOINT CONVENTION.)
     var XYZ = {X: xr * whitePoint.X, Y: yr, Z: zr * whitePoint.Z, type: eColourType.XYZ};
 
     // whitespace adaptaton
@@ -1145,6 +1605,15 @@ convert.Lab2RGBDevice = function(cmsLab, RGBProfile){
     return [R, G, B];
 };
 
+/**
+ * Compare two whitepoints component-wise within a tolerance. Used to decide
+ * whether chromatic adaptation can be skipped on the fast path.
+ *
+ * @param {_cmsWhitePoint} white1
+ * @param {_cmsWhitePoint} white2
+ * @param {number} [tolerance=0.001]
+ * @returns {boolean}  True if all three components match within tolerance.
+ */
 convert.compareWhitePoints = function(white1, white2, tolerance){
     tolerance = tolerance || 0.001;
     if( Math.abs(white1.X - white2.X) > tolerance) {return false;}
@@ -1152,6 +1621,15 @@ convert.compareWhitePoints = function(white1, white2, tolerance){
     return Math.abs(white1.Z - white2.Z) <= tolerance;
 };
 
+/**
+ * Raw `[R,G,B]` device array (gamma-encoded, 0..1) → D50 Lab. Inlines the
+ * full RGB → linear → XYZ → adapt → Lab pipeline to avoid intermediate
+ * object allocations.
+ *
+ * @param {number[]} device  Plain `[R,G,B]` floats in 0..1, gamma-encoded.
+ * @param {Profile} RGBProfile
+ * @returns {_cmsLab}  Lab tagged with whitePoint = D50.
+ */
 convert.RGBDevice2LabD50 = function(device, RGBProfile){
 
     // Gamma correction
@@ -1185,7 +1663,9 @@ convert.RGBDevice2LabD50 = function(device, RGBProfile){
     //var kKE = 8.0;
 
     var xr = XYZ.X / destWhitePoint.X;
-    var yr = XYZ.Y / destWhitePoint.Y;
+    // yr: every whitepoint in this engine has Y === 1.0 by convention,
+    // so `XYZ.Y / destWhitePoint.Y` reduces to `XYZ.Y`. Don't "fix" this back.
+    var yr = XYZ.Y;
     var zr = XYZ.Z / destWhitePoint.Z;
 
     var fx = (xr > kE) ? Math.pow(xr, 1.0 / 3.0) : ((kK * xr + 16.0) / 116.0);
@@ -1202,13 +1682,17 @@ convert.RGBDevice2LabD50 = function(device, RGBProfile){
 };
 
 /**
- * Covnerts RGB to Lab
+ * `_cmsRGBf` (typed RGB float, 0..1, gamma-encoded) → Lab at the given
+ * whitepoint. Inlines the full RGB → linear → XYZ → adapt → Lab pipeline.
+ *
+ * If `destWhitePoint` is omitted, the RGB profile's media whitepoint is
+ * used (no adaptation needed).
+ *
  * @param {_cmsRGBf} RGBf
  * @param {Profile} RGBProfile
- * @param {_cmsWhitePoint=} destWhitePoint
+ * @param {_cmsWhitePoint=} destWhitePoint  Defaults to profile's mediaWhitePoint.
  * @returns {_cmsLab}
  */
-
 convert.RGBf2Lab = function(RGBf, RGBProfile, destWhitePoint){
 
     // Gamma correction
@@ -1247,7 +1731,10 @@ convert.RGBf2Lab = function(RGBf, RGBProfile, destWhitePoint){
     //var kKE = 8.0;
 
     var xr = XYZ.X / destWhitePoint.X;
-    var yr = XYZ.Y ;
+    // INTENTIONAL: every whitepoint in this engine has Y === 1.0 by
+    // convention, so `XYZ.Y / destWhitePoint.Y` reduces to `XYZ.Y`. Don't
+    // "fix" by adding the divide back. (See file-top WHITEPOINT CONVENTION.)
+    var yr = XYZ.Y;
     var zr = XYZ.Z / destWhitePoint.Z;
 
     var fx = (xr > kE) ? Math.pow(xr, 1.0 / 3.0) : ((kK * xr + 16.0) / 116.0);
@@ -1264,47 +1751,108 @@ convert.RGBf2Lab = function(RGBf, RGBProfile, destWhitePoint){
 };
 
 
+// ============================================================================
+//  GAMMA — encoding and inverse for matrix-profile RGB
+// ============================================================================
+//
+//  The naming here is a long-standing source of confusion (TODO D3): the
+//  function called `gamma()` actually APPLIES the encoding gamma (linear →
+//  display, the `c^(1/γ)` direction), and `gammaInv()` LINEARISES (display →
+//  linear, the `c^γ` direction).
+//
+//  Mnemonic: `gamma()` is what you call on the way OUT to the screen,
+//  `gammaInv()` is what you call on the way IN from the screen.
+//
+// ============================================================================
+
 /**
+ * Apply gamma ENCODING (linear → display). Returns `c^(1/Gamma)`.
  *
- * @param {number} c - Colour Value
- * @param {number} Gamma
- * @returns {number}
+ * Despite the name, this is the "going to the display" direction.
+ * Use this when you have linear RGB and want display-encoded RGB.
+ *
+ * @param {number} c      Linear-light value, normally 0..1.
+ * @param {number} Gamma  Display gamma, e.g. 2.2.
+ * @returns {number}      Display-encoded value, normally 0..1.
  */
 convert.gamma = function(c, Gamma){
     return Math.pow(c,  1 / Gamma);
 };
 
 /**
+ * Apply gamma DECODING / linearisation (display → linear). Returns `c^Gamma`.
  *
- * @param {number} c - Colour Value
- * @param {number} Gamma
- * @returns {number}
+ * Despite the name, this is the "coming from the display" direction.
+ * Use this when you have display-encoded RGB and want linear RGB before
+ * a matrix multiply to XYZ.
+ *
+ * @param {number} c      Display-encoded value, normally 0..1.
+ * @param {number} Gamma  Display gamma, e.g. 2.2.
+ * @returns {number}      Linear-light value.
  */
 convert.gammaInv = function(c, Gamma){
     return Math.pow(c , Gamma);
 };
 
 /**
- *
- * @param {number} c - Colour Value
- * @returns {number}
+ * sRGB encoding curve (linear → sRGB display). Piecewise: linear segment
+ * below 0.0031308, then `1.055·c^(1/2.4) - 0.055`. IEC 61966-2-1.
+ * @param {number} c  Linear-light value 0..1.
+ * @returns {number}  sRGB-encoded value 0..1.
  */
 convert.sRGBGamma = function(c){
      return (c <= 0.0031308) ? (c * 12.92) : (1.055 * Math.pow(c, 1.0 / 2.4) - 0.055);
 };
+
 /**
- *
- * @param {number} c - Colour Value
- * @returns {number}
+ * sRGB decoding curve (sRGB display → linear). Inverse of `sRGBGamma`.
+ * Piecewise: linear segment below 0.04045, then `((c + 0.055) / 1.055)^2.4`.
+ * @param {number} c  sRGB-encoded value 0..1.
+ * @returns {number}  Linear-light value 0..1.
  */
 convert.sRGBGammaInv = function(c){
     return (c <= 0.04045) ? (c / 12.92) : Math.pow((c + 0.055) / 1.055, 2.4);
 };
 
-//m[row][column]
-//  00   01    02
-//  10   11    12
-//  20   21    22
+// ============================================================================
+//  3x3 MATRIX HELPERS
+// ============================================================================
+//
+//  Matrices are stored as flat objects with row-major keys:
+//
+//      m[row][column]
+//        00   01    02
+//        10   11    12
+//        20   21    22
+//
+//  The flat-object layout (rather than `[[..],[..]]` arrays) is deliberate:
+//  V8 keeps a stable hidden class for these and the per-element multiplies
+//  inline cleanly. Conversion helpers `matrix2Object` / `objectToMatrix`
+//  exist for the few places that need nested-array form (e.g. for
+//  `multiplyMatricesArray`).
+//
+// ============================================================================
+
+/**
+ * Compute and CACHE the RGB↔XYZ matrices for a matrix-style RGB profile.
+ *
+ * SIDE EFFECTS (TODO D4): mutates `profile.RGBMatrix` in place, populating:
+ *      - `matrixV4`     RGB → XYZ (linear)
+ *      - `matrixInv`    XYZ → RGB (linear)
+ *      - `XYZMatrix`    RGB → XYZ derived directly from rXYZ/gXYZ/bXYZ tags
+ *      - `XYZMatrixInv` inverse of `XYZMatrix`
+ *
+ * The two RGB→XYZ matrices (`matrixV4` from primaries+whitepoint, vs
+ * `XYZMatrix` from per-primary XYZ tags) should agree for a well-formed
+ * profile but are computed from independent sources.
+ *
+ * Reference: Lindbloom — http://www.brucelindbloom.com/Eqn_RGB_XYZ_Matrix.html
+ *
+ * @param {Profile} profile  Must have populated `.RGBMatrix.cRx/cRy/cGx/cGy/
+ *                           cBx/cBy`, `.mediaWhitePoint`, and (for XYZMatrix)
+ *                           `.rgb.rXYZ/.gXYZ/.bXYZ`.
+ * @returns {void}
+ */
 convert.computeMatrix = function(profile){
 
     var m = {
@@ -1350,6 +1898,14 @@ convert.computeMatrix = function(profile){
 
 };
 
+/**
+ * Invert a 3x3 flat-object matrix using cofactor expansion.
+ * Throws nothing on a singular matrix — returns Infinity-laden garbage if
+ * the determinant is zero. Caller's responsibility to avoid that.
+ *
+ * @param {object} m  Flat-key 3x3 matrix.
+ * @returns {object}  New flat-key 3x3 matrix.
+ */
 convert.invertMatrix = function(m){
 
     var determinant =
@@ -1375,6 +1931,13 @@ convert.invertMatrix = function(m){
 
 };
 
+    /**
+     * Scalar-multiply every element of a flat-key 3x3 matrix. Returns a new
+     * matrix; input is not mutated.
+     * @param {object} matrix
+     * @param {number} scale
+     * @returns {object}
+     */
     convert.matrixScaleValues = function(matrix, scale){
         return {
                 m00: matrix.m00 * scale,
@@ -1391,6 +1954,11 @@ convert.invertMatrix = function(m){
             };
     }
 
+    /**
+     * Nested-array `[[..],[..],[..]]` → flat-key matrix object.
+     * @param {number[][]} matrixArray
+     * @returns {object}
+     */
     convert.matrix2Object = function(matrixArray) {
         return {
             m00: matrixArray[0][0], m01: matrixArray[0][1], m02: matrixArray[0][2],
@@ -1398,6 +1966,12 @@ convert.invertMatrix = function(m){
             m20: matrixArray[2][0], m21: matrixArray[2][1], m22: matrixArray[2][2]
         };
     }
+    /**
+     * Flat-key matrix object → nested-array `[[..],[..],[..]]`.
+     * (Naming inconsistency with `matrix2Object` is preserved for back-compat.)
+     * @param {object} matrixObject
+     * @returns {number[][]}
+     */
     convert.objectToMatrix = function(matrixObject) {
         return [
             [matrixObject.m00, matrixObject.m01, matrixObject.m02],
@@ -1406,10 +1980,25 @@ convert.invertMatrix = function(m){
         ];
     }
 
+    /**
+     * Multiply two flat-key 3x3 matrices: `A · B`. Returns a new matrix.
+     * Round-trips through nested-array form; if you need to do this in a
+     * tight loop, inline the 9 multiply-adds instead.
+     * @param {object} matrixA
+     * @param {object} matrixB
+     * @returns {object}
+     */
     convert.multiplyMatrices = function(matrixA, matrixB) {
         return this.matrix2Object(this.multiplyMatricesArray(this.objectToMatrix(matrixA), this.objectToMatrix(matrixB)));
     }
 
+    /**
+     * Multiply two nested-array matrices `A · B`. Generic over rectangular
+     * shapes (uses `matrixA.length`, `matrixB[0].length`).
+     * @param {number[][]} matrixA
+     * @param {number[][]} matrixB
+     * @returns {number[][]}
+     */
     convert.multiplyMatricesArray = function(matrixA, matrixB) {
         let result = [];
 
@@ -1426,6 +2015,15 @@ convert.invertMatrix = function(m){
         return result;
     }
 
+    /**
+     * Transpose a flat-key 3x3 matrix IN PLACE.
+     *
+     * TODO (D5): mutates its argument. Calls swap m01↔m10, m02↔m20,
+     * m12↔m21. If the caller needs to keep the original, copy first.
+     *
+     * @param {object} m  Flat-key 3x3 matrix; mutated.
+     * @returns {void}
+     */
     convert.transpose = function(m){
         var v = m.m01;
         m.m01 = m.m10;
@@ -1462,13 +2060,35 @@ convert.invertMatrix = function(m){
 
 
 
+// ============================================================================
+//  ΔE — colour-difference metrics
+// ============================================================================
+//
+//  Pick a metric to suit the use case:
+//
+//      ΔE76     Simple Euclidean Lab. Fastest, perceptually nonuniform.
+//               Good for very rough thresholds and unit-test comparisons.
+//      ΔE94    Refines ΔE76 in chroma/hue with separate weighting.
+//               Tuned originally on automotive-paint data.
+//      ΔE2000  Modern CIE recommendation. Best perceptual uniformity but
+//               most expensive. Use for soft-proof tolerance and any
+//               serious "do these match?" question.
+//      ΔECMC   Textile-industry tolerance metric (CMC l:c). Allows lightness
+//               vs chroma weighting; default 2:1 for acceptability.
+//
+//  All metrics assume both Lab values share the same reference whitepoint
+//  (typically D50). If they don't, adapt one with `Lab2Lab` first.
+//
+// ============================================================================
+
 /**
+ * ΔE 1976 (Euclidean Lab distance). `sqrt(ΔL² + Δa² + Δb²)`.
+ * Both Lab values must be at the same whitepoint.
  *
  * @param {_cmsLab} Lab1
  * @param {_cmsLab} Lab2
  * @returns {number}
  */
-
 convert.deltaE1976 = function(Lab1, Lab2)
 {
     var dL = Lab1.L - Lab2.L;
@@ -1479,17 +2099,24 @@ convert.deltaE1976 = function(Lab1, Lab2)
 
 
 /**
- * A technical committee of the CIE (TC 1-29) published an equation in 1995 called CIE94.
- * The equation is similar to CMC but the weighting functions are largely based on RIT/DuPont
- * tolerance data derived from automotive paint experiments where sample surfaces are smooth.
- * i t also has ratios, labeled kL (lightness) and Kc (chroma) and the commercial factor (cf)
- * but these tend to be preset in software and are not often exposed for the user.
+ * ΔE 1994 (CIE94). Refines ΔE76 with separate lightness, chroma and hue
+ * weightings.
+ *
+ * A technical committee of the CIE (TC 1-29) published an equation in 1995
+ * called CIE94. The equation is similar to CMC but the weighting functions
+ * are largely based on RIT/DuPont tolerance data derived from automotive
+ * paint experiments where sample surfaces are smooth. It also has ratios
+ * labelled kL (lightness) and kC (chroma) and the commercial factor (cf)
+ * but these tend to be preset in software and are not often exposed.
+ *
+ * Asymmetric: Lab1 is the reference, Lab2 is the sample.
+ *
  * @param {_cmsLab}  Lab1 Reference
  * @param {_cmsLab}  Lab2 Sample
- * @param {{boolean}} IsTextiles
+ * @param {boolean} [IsTextiles]  If true, uses the textiles weighting (kL=2,
+ *                                k1=0.048, k2=0.014). Otherwise graphics-arts.
  * @returns {number}
  */
-
 convert.deltaE1994= function(Lab1, Lab2, IsTextiles)
 {
     var k1 = (IsTextiles === true) ? 0.048 : 0.045;
@@ -1520,10 +2147,17 @@ convert.deltaE1994= function(Lab1, Lab2, IsTextiles)
 };
 
 /**
- * Delta-E 2000 is the first major revision of the dE94 equation.
- * Unlike dE94, which assumes that L* correctly reflects the perceived differences in lightness,
- * dE2000 varies the weighting of L* depending on where in the lightness range the color falls.
- * dE2000 is still under consideration and does not seem to be widely supported in graphics arts applications.
+ * ΔE 2000 (CIEDE2000). The current CIE-recommended colour difference.
+ *
+ * Unlike ΔE94, which assumes that L* correctly reflects perceived
+ * lightness differences, ΔE2000 varies the weighting of L* depending on
+ * where in the lightness range the colour falls. It also adds chroma /
+ * hue interaction terms and a near-blue rotation correction. The most
+ * perceptually accurate of the four metrics in this file, and the most
+ * expensive (heavy use of `pow`, `sqrt`, `cos`, `sin`, `atan2`).
+ *
+ * Reference: CIE 142:2001 / Lindbloom CIEDE2000.
+ *
  * @param {_cmsLab}  Lab1 Reference
  * @param {_cmsLab}  Lab2 Sample
  * @returns {number}
@@ -1584,23 +2218,28 @@ convert.deltaE2000 = function(Lab1, Lab2)
 };
 
 /**
- * In 1984 the CMC (Color Measurement Committee of the Society of Dyes and Colourists of Great Britain)
- * developed and adopted an equation based on LCH numbers. Intended for the textiles industry,
- * CMC l:c allows the setting of lightness (l) and chroma (c) factors.
- * As the eye is more sensitive to chroma, the default ratio for l:c is 2:1 allowing for 2x the difference
- * in lightness than chroma (numbers). There is also a 'commercial factor' (cf) which allows an overall
- * varying of the size of the tolerance region according to accuracy requirements.
- * A cf=1.0 means that a delta-E CMC value <1.0 is acceptable.
+ * ΔE CMC (l:c). Textile-industry tolerance metric based on LCH.
+ *
+ * In 1984 the CMC (Color Measurement Committee of the Society of Dyes and
+ * Colourists of Great Britain) developed an equation based on LCH numbers.
+ * CMC l:c allows the setting of lightness (l) and chroma (c) factors. As
+ * the eye is more sensitive to chroma, the default ratio for l:c is 2:1,
+ * allowing 2x the lightness difference for the same tolerance. There is
+ * also a 'commercial factor' (cf) which scales the overall tolerance
+ * region; cf = 1.0 means a ΔECMC < 1.0 is acceptable.
+ *
+ *   - acceptability tolerances → CMC(2:1)
+ *   - perceptibility tolerances → CMC(1:1)
+ *
+ * Note: the function defaults to `lightnessFactor=2, chromaFactor=1`, i.e.
+ * CMC(2:1).
+ *
  * @param {_cmsLab}  Lab1 Reference
  * @param {_cmsLab}  Lab2 Sample
  * @param {number} [lightnessFactor=2]
- * @param {number} [chromaFactor=2]
- *
- * acceptability are CMC(2:1)
- and for perceptibility are CMC(1:1).
- *
+ * @param {number} [chromaFactor=1]
+ * @returns {number}
  */
-
 convert.deltaECMC= function(Lab1, Lab2, lightnessFactor, chromaFactor)
 {
     if(lightnessFactor === undefined){lightnessFactor = 2;}
@@ -1633,7 +2272,23 @@ convert.deltaECMC= function(Lab1, Lab2, lightnessFactor, chromaFactor)
     return Math.sqrt(v1 * v1 + v2 * v2 + (dH2 / (v3 * v3)));
 };
 
-//http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
+// ============================================================================
+//  WAVELENGTH HELPER
+// ============================================================================
+
+/**
+ * Approximate sRGB byte triple for a given visible wavelength (380–780 nm).
+ *
+ * This is NOT a colorimetrically correct rendering — it's a perceptual
+ * approximation suitable for plotting spectrum charts and UI rainbows.
+ * Values outside 380–780 nm return black. Includes a near-edge intensity
+ * roll-off and a fixed display gamma of 0.80.
+ *
+ * Source: http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
+ *
+ * @param {number} wavelength  Wavelength in nm.
+ * @returns {_cmsRGB}  Approximate RGB byte triple for the wavelength.
+ */
 convert.wavelength2RGB = function (wavelength) {
     var red, green, blue, factor;
     if((wavelength >= 380) && (wavelength < 440)){

@@ -21,7 +21,147 @@
  */
 'use strict';
 
+/* ============================================================================
+ *  Spectral.js — spectral data and reflectance → XYZ/Lab integration
+ * ============================================================================
+ *
+ *  This module is for working with COLOUR AS PHYSICS rather than colour as
+ *  device numbers. If you are converting RGB → CMYK or applying an ICC
+ *  profile, you don't need this file — use Profile / Transform instead.
+ *
+ *  You DO need this file when you have:
+ *
+ *    - A reflectance or transmittance spectrum from a spectrophotometer
+ *      (i1Pro, X-Rite eXact, Konica Minolta CM-26d, Barbieri Spectro, ...).
+ *      Most spectros report 36 or 31 reflectance values from 380-730 nm in
+ *      10 nm steps, or 81 values in 5 nm steps.
+ *
+ *    - A spectral library (Pantone Live, ink/paint formulator output, NCS,
+ *      Munsell book of color, the digitised IT8.7/4 / ECI2002 / TC1617 /
+ *      GATCS targets used to build ICC profiles).
+ *
+ *    - A simulated illuminant and you want to know what a sample would look
+ *      like under different lights ("metamerism check" — does this print
+ *      match under D50 daylight AND under F11 store fluorescent?).
+ *
+ *
+ *  WHAT'S IN THIS FILE
+ *  ----------------------------------------------------------------------------
+ *
+ *   1. Illuminants[] — the relative spectral power distribution (SPD) of
+ *      a few CIE standard light sources:
+ *        A    Tungsten-filament,            ~2856 K
+ *        C    Old "average daylight",       ~6774 K  (deprecated, kept for legacy targets)
+ *        D50  ISO graphic-arts viewing,      5000 K  (the default for ICC)
+ *        D55  Mid-morning/afternoon,         5500 K
+ *        D65  Noon daylight,                 6504 K  (the default for sRGB)
+ *
+ *      Each is a curve S(λ) sampled at fixed nm steps, normalised so that
+ *      the value at 560 nm ≈ 100. Add F-series (fluorescent) or LED SPDs
+ *      here if you need them — same shape.
+ *
+ *   2. Observers[] — the CIE colour-matching functions x̄(λ), ȳ(λ), z̄(λ):
+ *        2°   CIE 1931 standard observer  (most colour work)
+ *        10°  CIE 1964 standard observer  (large-field work, paint, textiles)
+ *
+ *      These describe how the human eye's three cone types respond to each
+ *      wavelength. They turn an SPD into a tristimulus (X, Y, Z) value.
+ *
+ *   3. The Spectral class with helpers and the integration `calculateXYZ()`
+ *      which turns reflectance + illuminant + observer into XYZ. The
+ *      returned XYZ already carries the illuminant's whitePoint so passing
+ *      it to convert.XYZ2Lab() (or piping it through a Transform) gives
+ *      Lab measured under that illuminant.
+ *
+ *
+ *  THE MATH (calculateXYZ)
+ *  ----------------------------------------------------------------------------
+ *
+ *      X = k · Σ S(λ) · R(λ) · x̄(λ)
+ *      Y = k · Σ S(λ) · R(λ) · ȳ(λ)
+ *      Z = k · Σ S(λ) · R(λ) · z̄(λ)
+ *
+ *      k = 100 / Σ S(λ) · ȳ(λ)
+ *
+ *      where  S(λ) = illuminant SPD                  (Illuminants[].data)
+ *             R(λ) = sample reflectance              (your spectrum.data)
+ *             x̄ ȳ z̄ = observer matching functions   (Observers[].X/Y/Z)
+ *
+ *  The Δλ that should appear inside each sum cancels in the ratio because
+ *  the same step is used in numerator and denominator, so it is omitted from
+ *  the loop. Wavelengths where the spectrum's grid doesn't line up with the
+ *  illuminant's or observer's grid are linearly interpolated.
+ *
+ *
+ *  TYPICAL USAGE
+ *  ----------------------------------------------------------------------------
+ *
+ *      var Spectral = require('jscolorengine').Spectral;
+ *      var s = new Spectral();
+ *
+ *      // 36 reflectance values from a spectro, 380-730 nm @ 10 nm
+ *      var swatch = s.toSpectral(380, 730, [0.05, 0.04, 0.04, ...], 10);
+ *
+ *      var d50 = s.getIlluminant('D50');
+ *      var obs2 = s.getObserver('2');
+ *
+ *      var xyz   = s.calculateXYZ(swatch, d50, obs2);  // {type, X, Y, Z, whitePoint}
+ *      var lab   = convert.XYZ2Lab(xyz);                // Lab under D50/2°
+ *
+ *      // Same swatch under D65/10° — for a metamerism check
+ *      var labD65 = convert.XYZ2Lab(
+ *          s.calculateXYZ(swatch, s.getIlluminant('D65'), s.getObserver('10'))
+ *      );
+ *      var dE = convert.deltaE76(lab, labD65);   // how different they look
+ *
+ *
+ *  PERFORMANCE NOTE
+ *  ----------------------------------------------------------------------------
+ *
+ *  This is an ACCURACY-PATH module (see Transform.js USAGE GUIDE for the
+ *  same distinction). calculateXYZ is typically called once per spectro
+ *  reading — tens to thousands of times in a profile build, NOT millions of
+ *  times per image. The loop is straightforward and not micro-optimised;
+ *  if you find yourself calling it per pixel, you are doing the wrong thing
+ *  — pre-build a LUT instead.
+ *
+ *
+ *  REFERENCES
+ *  ----------------------------------------------------------------------------
+ *
+ *   CIE 015:2018  Colorimetry, 4th edition  (the canonical reference)
+ *   ASTM E308     Standard practice for computing colors of objects
+ *   Wikipedia: "CIE 1931 color space", "Standard illuminant", "Tristimulus values"
+ *   Bruce Lindbloom: http://www.brucelindbloom.com/  (excellent practical tables)
+ *   The Munsell Color Science Lab spectral data archives
+ *
+ * ============================================================================
+ */
+
 var convert = require('./convert');
+
+/* ----------------------------------------------------------------------------
+ *  Illuminants — CIE Standard Illuminant relative spectral power distributions
+ *
+ *  Schema for each entry:
+ *    name        Short name used as a key in getIlluminant('D50') etc.
+ *    description Human-readable note.
+ *    isDefault   (D50 only) flag for "use this if the caller didn't pick one".
+ *    startnm     First wavelength in `data`, in nanometres.
+ *    endnm       Last wavelength in `data`, in nanometres.
+ *    step        Nm spacing between consecutive `data` values.
+ *    range       Legacy scale denominator (~max(data)); not used by calculateXYZ.
+ *    temp        Correlated colour temperature in Kelvin.
+ *    whitePoint  Reference XYZ whitepoint object from convert.js. The XYZ
+ *                returned by calculateXYZ() inherits this so downstream
+ *                Lab conversion uses the matching whitepoint.
+ *    data        Relative SPD samples, normalised so data[wavelength=560nm] ≈ 100.
+ *
+ *  Coverage and step size matter: an integration over 380-730 nm @ 5 nm is
+ *  the de-facto industry standard (matches typical spectro output). Wider
+ *  range / smaller step costs nothing per call here and improves accuracy at
+ *  the edges of the visible band.
+ * ---------------------------------------------------------------------------- */
 
 var Illuminants =  [
    {
@@ -92,6 +232,38 @@ var Illuminants =  [
    }
 ];
 
+/* ----------------------------------------------------------------------------
+ *  Observers — CIE Standard Observer colour-matching functions x̄(λ), ȳ(λ), z̄(λ)
+ *
+ *  The colour-matching functions describe how the eye's three cone responses
+ *  combine to produce tristimulus (X, Y, Z) sensations for monochromatic
+ *  light at wavelength λ. Multiplying an SPD by these and summing gives XYZ.
+ *
+ *  Two standard observers are provided:
+ *    '2'   CIE 1931  2°  — small visual field. The historical default and
+ *                          the right choice for most ICC / graphic-arts work,
+ *                          colour pickers, soft proofing, etc.
+ *    '10'  CIE 1964  10° — large visual field. Used in paint, textiles, and
+ *                          industrial colour matching where samples subtend
+ *                          a larger angle. CRF / ΔE numbers can differ
+ *                          noticeably from 2° on saturated reds and blues.
+ *
+ *  Schema for each entry:
+ *    name        '2' or '10' (used as a key in getObserver('2') etc.)
+ *    description Human-readable note.
+ *    isDefault   ('2' only) flag for "use this if the caller didn't pick one".
+ *    startnm     First wavelength in X/Y/Z, in nanometres.
+ *    endnm       Last  wavelength in X/Y/Z, in nanometres.
+ *    step        Nm spacing between consecutive samples (1 nm here).
+ *    range       Legacy scale denominator (~max value); not used by calculateXYZ.
+ *    X, Y, Z     The three colour-matching curves x̄(λ), ȳ(λ), z̄(λ),
+ *                each as an array of length (endnm - startnm) / step + 1.
+ *
+ *  Note: Y(λ) (=ȳ) is by definition the photopic luminous efficiency
+ *  function V(λ), so a sum of S(λ)·Y(λ) is proportional to luminance — that
+ *  is why the k normaliser in calculateXYZ uses only Y.
+ * ---------------------------------------------------------------------------- */
+
 var Observers = [
     {
         name: '2',
@@ -131,6 +303,32 @@ var Observers = [
 ];
 
 
+/**
+ * @typedef {object} _SpectralData
+ * @property {number}   startnm  First wavelength in `data`, in nm.
+ * @property {number}   endnm    Last  wavelength in `data`, in nm.
+ * @property {number}   step     Spacing between consecutive `data` values, in nm.
+ * @property {number[]} data     Reflectance / transmittance / SPD samples.
+ *                               For reflectance/transmittance these are typically
+ *                               0.0 - 1.0 (or 0 - 100 if you stay consistent —
+ *                               the k normaliser cancels the unit out).
+ */
+
+/**
+ * Spectral data wrangler and reflectance → XYZ integrator.
+ *
+ * See the file-top primer for what spectral data is, what the bundled
+ * illuminants/observers represent, and the math that calculateXYZ() runs.
+ *
+ * Stateless — instances are cheap, you can keep one around for the lifetime
+ * of the app or new one per call. The Illuminants and Observers tables are
+ * module-level and shared.
+ *
+ * @example
+ *   var s = new Spectral();
+ *   var spectrum = s.toSpectral(380, 730, reflArr, 10);
+ *   var xyz = s.calculateXYZ(spectrum, s.getIlluminant('D50'), s.getObserver('2'));
+ */
 class Spectral {
 
     constructor() {
@@ -139,10 +337,24 @@ class Spectral {
         this.description = 'Spectral data and calculations';
     }
 
+    /**
+     * @returns {object[]} The full Illuminants[] table — useful for building
+     *                     a UI dropdown of available light sources. Treat as
+     *                     read-only (callers share the same array reference).
+     */
     getIlluminants = function () {
         return Illuminants;
     };
 
+    /**
+     * Look up an illuminant by short name.
+     * @param {string} name  'A' | 'C' | 'D50' | 'D55' | 'D65'.
+     *                       Case-sensitive — names are uppercase.
+     * @returns {object|false} The illuminant entry, or false if not found.
+     *                         To add F-series / LED illuminants, extend the
+     *                         module-level Illuminants[] array using the
+     *                         schema documented above the array.
+     */
     getIlluminant = function (name) {
         for (var i = 0; i < Illuminants.length; i++) {
             if (name === Illuminants[i].name) {
@@ -152,10 +364,20 @@ class Spectral {
         return false;
     };
 
+    /**
+     * @returns {object[]} The full Observers[] table — useful for building
+     *                     a UI dropdown of "2°" vs "10°". Treat as read-only.
+     */
     getObservers = function () {
         return Observers;
     };
 
+    /**
+     * Look up an observer by short name.
+     * @param {string} name  '2'  (CIE 1931, 2°) or
+     *                       '10' (CIE 1964, 10°).
+     * @returns {object|false} The observer entry, or false if not found.
+     */
     getObserver = function (name) {
         for (var i = 0; i < Observers.length; i++) {
             if (name === Observers[i].name) {
@@ -165,6 +387,34 @@ class Spectral {
         return false;
     };
 
+    /**
+     * Wrap a raw reflectance / transmittance / SPD array in the shape that
+     * calculateXYZ() expects.
+     *
+     * If `nmStep` is omitted it is computed from the start/end and array
+     * length — but see the TODO below; pass it explicitly to be safe.
+     *
+     * Use this for spectrophotometer output. Common spectro grids:
+     *   380 - 730 nm @ 10 nm  (36 values)  — i1 Pro classic / many older instruments
+     *   380 - 780 nm @ 10 nm  (41 values)  — i1 Pro 2 / 3
+     *   380 - 730 nm @  5 nm  (71 values)  — high-resolution mode
+     *   400 - 700 nm @ 10 nm  (31 values)  — ASTM E308 truncated range
+     *
+     * The `data` units don't matter (reflectance can be 0-1 or 0-100) — the
+     * k normaliser inside calculateXYZ scales the result so that a perfect
+     * diffuser (R(λ) = 1 everywhere) returns Y = 100 under any illuminant.
+     *
+     * TODO (bug): nmStep auto-derivation has a sign error — the formula
+     * should be `(endnm - startnm) / (data.length - 1)`, not the reverse.
+     * As written it returns a negative step. Workaround: always pass
+     * `nmStep` explicitly. Fix when next touching the file.
+     *
+     * @param {number}   startnm  First wavelength sample, in nm.
+     * @param {number}   endnm    Last  wavelength sample, in nm.
+     * @param {number[]} data     Sample values at startnm, startnm+step, ...
+     * @param {number}  [nmStep]  Spacing in nm. Recommended.
+     * @returns {_SpectralData}
+     */
     toSpectral = function (startnm, endnm, data, nmStep) {
         if (!nmStep) {
             nmStep = (startnm - endnm) / (data.length - 1);
@@ -177,6 +427,52 @@ class Spectral {
         }
     };
 
+    /**
+     * Integrate a spectrum against an illuminant SPD and an observer's
+     * colour-matching functions to produce CIE XYZ tristimulus values.
+     *
+     * This is the heart of the module. It implements the standard CIE
+     * tristimulus integration:
+     *
+     *      X = k · Σ S(λ) · R(λ) · x̄(λ)
+     *      Y = k · Σ S(λ) · R(λ) · ȳ(λ)
+     *      Z = k · Σ S(λ) · R(λ) · z̄(λ)
+     *      k = 100 / Σ S(λ) · ȳ(λ)
+     *
+     * The integration is driven by `spectrum`'s wavelength grid. For each
+     * sample wavelength, the illuminant and observer are linearly
+     * interpolated when they don't land exactly on their own grids — so it
+     * is fine to mix a 10-nm spectrum with a 1-nm observer or a 5-nm
+     * illuminant. Out-of-range wavelengths are clamped to whichever input
+     * has the narrower coverage (so e.g. integrating against Illuminant C,
+     * which only covers 380-780 nm, won't reach into 300 nm UV even if your
+     * spectrum does).
+     *
+     * The returned XYZ object inherits the illuminant's whitePoint, so:
+     *
+     *      var xyz = spectral.calculateXYZ(spectrum, D50, obs2);
+     *      var lab = convert.XYZ2Lab(xyz);   // Lab values measured under D50
+     *
+     *      var xyzD65 = spectral.calculateXYZ(spectrum, D65, obs2);
+     *      var labD65 = convert.XYZ2Lab(xyzD65);
+     *
+     * Calling with two different illuminants and comparing the resulting Lab
+     * pairs is the basis of metamerism / illuminant-mismatch checks.
+     *
+     * Performance: this is the accuracy path — designed to be called once
+     * per measurement, not per pixel. A profile build with a TC1617 chart
+     * runs ~1617 calculateXYZ() per illuminant per intent, which is plenty
+     * fast. If you need per-pixel spectral rendering, build a LUT.
+     *
+     * @param {_SpectralData} spectrum   Reflectance / transmittance spectrum
+     *                                   from a spectro or library.
+     * @param {object}        illuminant Entry from getIlluminant() / Illuminants[].
+     * @param {object}        observer   Entry from getObserver()   / Observers[].
+     * @returns {_cmsXYZ} XYZ object {type, X, Y, Z, whitePoint} where Y is
+     *                   normalised so a perfect diffuser yields Y = 100.
+     *                   The whitePoint matches `illuminant.whitePoint` so
+     *                   downstream Lab conversion is illuminant-correct.
+     */
     calculateXYZ = function (spectrum, illuminant, observer) {
 
         // calculate based on spectrum

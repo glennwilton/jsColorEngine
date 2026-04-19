@@ -1,110 +1,238 @@
-The `Profile` class Loads and decodes ICC Profiles without performing color conversions.
+# Profile
 
-* Capability to handle profiles from various sources, such as binary arrays, URLs, base64 encoded strings, or creating virtual profiles like sRGB or Adobe RGB.
-* Support for both ICC Profile versions 2 and 4.
-* Compatibility with various profile types, including RGB, Gray, Lab, and CMYK. RGB profiles can be either matrix-based or LUT-based.
+The `Profile` class loads and decodes ICC profiles (and synthesises
+"virtual" profiles like sRGB / Adobe RGB from hard-coded primaries +
+gammas) into an in-memory representation that the [`Transform`](./Transform.md)
+class then uses to actually convert colours.
 
 > [!NOTE]
-> the `Profile` class does not perform color conversions. For this purpose, use the `Transform` class.
+> `Profile` does **not** perform colour conversions. It just owns the
+> profile data. To convert colours, hand a `Profile` to a `Transform`.
 
-<!-- TOC -->
-* [Profile Methods](#profile-methods)
-    * [profile.load(dataOrUrl, afterLoad)](#profileloaddataorurl-afterload)
-    * [profile.loadPromise(dataOrUrl)](#profileloadpromisedataorurl)
-    * [profile.loadBinary(binary, afterLoad, searchForProfile)](#profileloadbinarybinary-afterload-searchforprofile)
-    * [profile.loadFile(filename, afterLoad)](#profileloadfilefilename-afterload)
-    * [profile.loadBase64(base64)](#profileloadbase64base64)
-    * [profile.loadURL(url, afterLoad)](#profileloadurlurl-afterload)
-    * [profile.loadVirtualProfile(name)](#profileloadvirtualprofilename)
-* [Profile Properties](#profile-properties)
-<!-- TOC -->
+> [!TIP]
+> The most authoritative reference for `Profile` is the in-source JSDoc
+> in [`src/Profile.js`](../src/Profile.js) — every public method has full
+> parameter docs, return types, and notes on edge cases. This page is
+> the high-level overview.
 
+## Contents
 
-Profile Methods
-------
+* [Virtual vs ICC profiles](#virtual-vs-icc-profiles)
+* [Quick start](#quick-start)
+* [Methods](#methods)
+* [Built-in virtual profile names](#built-in-virtual-profile-names)
+* [Properties](#properties)
+* [Deprecated property names](#deprecated-property-names)
+* [Environments](#environments)
 
-#### `profile.load(dataOrUrl, afterLoad)`
-Loads a profile from various sources like Uint8Array, URL, base64 string, file path, or virtual profile.
-* `dataOrUrl`: 
-  * Uint8Array
-  * Base64: prefix with 'data:'
-  * URL/File Path: prefix with 'file:'
-  * Virtual Profile Name: prefix with '*'
-* `afterLoad`: callback function(profile)
+---
 
+## Virtual vs ICC profiles
 
-#### `profile.loadPromise(dataOrUrl)`
-Returns a Promise that resolves after loading a profile.
-* `dataOrUrl`: 
-  * Uint8Array
-  * Base64: prefix with 'data:'
-  * URL/File Path: prefix with 'file:'
-  * Virtual Profile Name: prefix with '*'
+`Profile` can be constructed two ways:
 
+1. **Virtual** — `'*sRGB'`, `'*AdobeRGB'`, `'*ProPhotoRGB'`, `'*Lab'`, etc.
+   Built in memory from primaries + gamma. No file I/O, no decode.
+2. **From an ICC file** — load a real `.icc` / `.icm` profile from disk,
+   URL, base64, or an in-memory `Uint8Array`.
 
-#### `profile.loadBinary(binary, afterLoad, searchForProfile)`
-Loads a profile from a binary array, optionally searching for the ICC profile within the array.
-* `binary`: Uint8Array
-* `afterLoad`: callback function(profile)
-* `searchForProfile`: Boolean
+For the common RGB working spaces (sRGB, Adobe RGB, Apple RGB,
+ColorMatch RGB, ProPhoto RGB) **virtual profiles are the right default**.
+Most RGB ICC profiles in the wild are matrix + TRC (no LUT) — the maths
+is exactly the same as what the virtual constructor builds. Once loaded,
+`Transform` can't tell the two apart at runtime, they hit the identical
+inlined matrix-and-gamma kernel. The only real difference is startup
+cost: virtual = essentially free, ICC = a fetch + a decode.
 
+Use a real ICC profile when you actually need one:
 
-#### `profile.loadFile(filename, afterLoad)`
-Loads a profile from a local file path. (In nodeJS)
-* `filename`: String
-* `afterLoad`: callback function(profile)
+* It's a CMYK or 3CLR/4CLR device profile (LUT-based — there's no virtual
+  equivalent).
+* It's a printer / scanner / press profile with measurement-derived
+  AtoB/BtoA LUTs (the gamut mapping is real measured data, not a
+  formula).
+* It's a custom monitor profile from a calibrator.
+* You need to faithfully reproduce another CMM's interpretation of a
+  specific embedded profile (e.g. matching Photoshop output exactly).
 
+Internal optimisation: when `Profile` decodes an RGB ICC that has no
+AtoB / BtoA LUT, it auto-promotes to the same fast matrix-and-gamma path
+that virtual profiles use. So even for a real ICC like `sRGB.icc`, you
+only pay the startup cost — runtime is identical.
 
-#### `profile.loadBase64(base64, afterLoad)`
-Loads a profile from a base64 encoded string.
-* `base64`: String
-* `afterLoad` : callback function(profile) 
+---
 
+## Quick start
 
-#### `profile.loadURL(url, afterLoad)`
-Loads a profile from a URL using an XHR request.
-* `url`: String
-* `afterLoad`: callback function(profile)
+```js
+const { Profile, Transform, eIntent, color } = require('jscolorengine');
 
+(async () => {
+    // 1. Virtual profile — synchronous, no I/O.
+    const sRGB = new Profile('*sRGB');
 
-#### `profile.loadVirtualProfile(name)`
-Creates and loads a virtual profile, such as sRGB, Adobe RGB, Lab D50, etc.
-* `name`: String (see table below)
+    // 2. ICC profile — async load.
+    const cmyk = new Profile();
+    await cmyk.loadPromise('file:./profiles/GRACoL2006_Coated1v2.icc');
 
-| Name           | Description      |
-|----------------|------------------|
-| *sRGB          | sRGB             |
-| *AdobeRGB      | Adobe RGB (1998) |
-| *AppleRGB      | Apple RGB        |
-| *ColorMatchRGB | ColorMatch RGB   |
-| *ProPhotoRGB   | ProPhoto RGB     |
-| *Lab           | Lab D50*         |
-| *LabD50        | Lab D50*         |
-| *LabD65        | Lab D65*         |
+    if (!cmyk.loaded) {
+        console.error('Failed to load CMYK profile:', cmyk.lastError);
+        return;
+    }
 
-** Note that Lab profiles are abstract profiles,
-and according to the ICC specification the engine
-will not perform chromatic adaptation when converting
+    console.log(cmyk.description);   // 'GRACoL2006_Coated1v2.icc'
+    console.log(cmyk.outputChannels); // 4
 
+    // Hand them to a Transform to actually convert.
+    const lab2cmyk = new Transform();
+    lab2cmyk.create('*lab', cmyk, eIntent.perceptual);
 
-This table provides an overview of the functions available in the `Profile` class, excluding internal private methods. Each function's purpose and its parameters are clearly outlined.
+    console.log(lab2cmyk.transform(color.Lab(50, 20, -30)));
+})();
+```
 
-Profile Properties
------
+---
 
-List of useful properties of the `Profile` class.
+## Methods
 
-| Property               | Type     | Description                                            |
-|------------------------|----------|--------------------------------------------------------|
-| `loaded`               | Boolean  | Indicates if the profile has been successfully loaded. |
-| `lastError`            | Object   | Contains the last error information.                   |
-| `type`                 | Integer  | Type of the profile (e.g., RGB, CMYK, Gray).           |
-| `name`                 | String   | Name of the profile.                                   |
-| `header`               | Object   | Contains header information of the ICC profile.        |
-| `intent`               | Integer  | Default Rendering intent for the profile.              |
-| `description`          | String   | Description of the profile.                            |
-| `copyright`            | String   | Copyright information of the profile.                  |
-| `technology`           | String   | Information about the technology of the profile.       |
-| `mediaWhitePoint`      | Object   | Media white point data.                                |
-| `outputChannels`       | Integer  | Number of output channels.                             |
+### `new Profile(dataOrUrl?)`
 
+If `dataOrUrl` is provided, the constructor calls `load()` for you. If
+omitted, you can call `load()` (or any of the more specific loaders)
+later. The constructor itself never does I/O — async loaders return
+without waiting.
+
+### `profile.load(dataOrUrl, afterLoad?)`
+
+Load a profile from any supported source. The source type is detected
+from the prefix of the string:
+
+| Input | Treated as |
+|---|---|
+| `Uint8Array` | Raw ICC binary, decoded immediately |
+| `'data:...'` | base64-encoded ICC |
+| `'file:...'` | Local file path (Node + Adobe CEP only) |
+| `'http://...' / 'https://...'` | URL — fetched via XHR (browser) or `http.get` (Node) |
+| `'*sRGB'` etc. | Virtual profile name (case-insensitive) |
+
+`afterLoad` is an optional callback `(profile) => {}` invoked when
+loading finishes. For URL / file loads it fires asynchronously. Inspect
+`profile.loaded` and `profile.lastError` to tell success from failure.
+
+### `profile.loadPromise(dataOrUrl)`
+
+Promise-returning equivalent of `load()`. Resolves to the `Profile`
+itself when loading completes (whether successful or not — check
+`profile.loaded`).
+
+```js
+const p = await new Profile().loadPromise('file:./srgb.icc');
+if (!p.loaded) throw p.lastError;
+```
+
+### `profile.loadBinary(binary, afterLoad?, searchForProfile?)`
+
+Decode an already-in-memory `Uint8Array` containing ICC binary.
+
+* `searchForProfile = true` — scan the buffer for an embedded profile
+  signature (`acsp`) instead of treating offset 0 as the profile start.
+  Useful for extracting the embedded profile out of a JPEG / TIFF.
+
+### `profile.loadFile(filename, afterLoad?)`
+
+Read an ICC file from local disk. Available in Node and Adobe CEP only;
+not in the browser.
+
+### `profile.loadBase64(base64String, afterLoad?)`
+
+Decode a base64 string (with or without the `data:` prefix).
+
+### `profile.loadURL(url, afterLoad?)`
+
+Fetch from a URL. Uses XHR in browsers, `http.get` in Node. Has a
+built-in timeout — both timeout and network errors will set
+`lastError` and call `afterLoad`.
+
+### `profile.loadVirtualProfile(name)`
+
+Synchronously build a virtual profile by name. See the
+[Built-in virtual profile names](#built-in-virtual-profile-names) table.
+The leading `*` and case are normalised — `'*srgb'`, `'*sRGB'`, `'sRGB'`
+all resolve to the same profile.
+
+---
+
+## Built-in virtual profile names
+
+| Name | Description |
+|---|---|
+| `*sRGB` | sRGB IEC 61966-2.1 |
+| `*AdobeRGB` | Adobe RGB (1998) |
+| `*AppleRGB` | Apple RGB |
+| `*ColorMatchRGB` | ColorMatch RGB |
+| `*ProPhotoRGB` | ProPhoto RGB |
+| `*Lab` / `*LabD50` | Lab D50 (the ICC PCS whitepoint) |
+| `*LabD65` | Lab D65 |
+
+Lab profiles are **abstract** — per the ICC specification, the engine
+will not perform chromatic adaptation when a Lab profile is the source
+or destination. If you need to convert a Lab D65 measurement to Lab D50
+with adaptation, use `convert.Lab2Lab(...)` from
+[`src/convert.js`](../src/convert.js).
+
+---
+
+## Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `loaded` | Boolean | True if the profile loaded successfully. Always check this after an async load. |
+| `lastError` | Object | Set when loading fails. Contains a code + human-readable message. |
+| `type` | Integer | Profile type — see `eProfileType` (Lab, RGBMatrix, RGBLut, CMYK, Gray, Duo, XYZ). |
+| `name` | String | Profile name (set from your input or extracted from the profile description). |
+| `header` | Object | Decoded ICC header (version, device class, colour space, PCS, render intent, primary platform, etc.). |
+| `intent` | Integer | Default rendering intent declared by the profile. |
+| `description` | String | Human-readable profile description (`desc` v2 / `mluc` v4). |
+| `copyright` | String | Copyright text from the profile. |
+| `technology` | String | Technology signature (e.g. CRT display, LCD display, ink jet printer) — see `Profile.techSignatureString()`. |
+| `mediaWhitePoint` | Object | XYZ media whitepoint (`{X, Y, Z}` with `Y = 1`). |
+| `outputChannels` | Integer | Number of output channels (1 for Gray, 3 for RGB / Lab / XYZ, 4 for CMYK, more for n-channel inks). |
+| `unsupportedTags` | Array | List of tag signatures the decoder skipped. Populated only for ICC loads (empty for virtual). Useful for diagnosing weird profiles. |
+| `virtualProfileUsesD50AdaptedPrimaries` | Boolean | When `true`, virtual profile primaries are pre-adapted to D50 (matches LittleCMS behaviour). When `false`, primaries are used as published. Default `true`. |
+
+---
+
+## Deprecated property names
+
+A couple of properties exist under both their original (typo'd)
+spelling and their corrected spelling. Both refer to the same underlying
+data — you can read or write either name. The typo'd names are kept for
+backwards compatibility and are marked `@deprecated` in the JSDoc.
+Prefer the corrected names in new code:
+
+| Deprecated (still works) | Use instead |
+|---|---|
+| `unsuportedTags` | `unsupportedTags` |
+| `virutalProfileUsesD50AdaptedPrimaries` | `virtualProfileUsesD50AdaptedPrimaries` |
+
+For the array (`unsupportedTags`), both names point to the **same**
+underlying array — pushing to one is visible on the other. For the
+boolean, writes via either name are mirrored to the other before the
+profile is built.
+
+---
+
+## Environments
+
+`Profile` auto-detects the runtime and uses the appropriate I/O backend:
+
+| Environment | File reads | URL fetches |
+|---|---|---|
+| Node.js | `fs.readFileSync` | `http.get` / `https.get` |
+| Browser | — (use `loadBinary` or `loadBase64`) | `XMLHttpRequest` |
+| Adobe CEP (PS / Ai panels) | `window.cep.fs.readFile` | `XMLHttpRequest` |
+
+`loadFile()` will throw "not supported in this environment" if you call
+it from a plain browser context. For browser apps, fetch the file
+yourself and pass the resulting `Uint8Array` to `loadBinary()`, or use
+`loadURL()` if it's hosted somewhere CORS-accessible.

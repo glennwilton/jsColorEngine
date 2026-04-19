@@ -2,7 +2,7 @@ const {Transform, eIntent, color, eColourType} = require('../src/main');
 const path = require("path");
 const Profile = require("../src/Profile");
 
-let cmykFilename = path.join(__dirname, './GRACoL2006_Coated1v2.icc');
+const cmykFilename = path.join(__dirname, './GRACoL2006_Coated1v2.icc');
 
 
 test('sRGB to CMYK via arrays ', async () => {

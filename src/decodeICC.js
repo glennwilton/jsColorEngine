@@ -20,13 +20,143 @@
  *
  */
 
+/**
+ * ============================================================================
+ *  decodeICC.js — low-level ICC binary decoders
+ * ============================================================================
+ *
+ *  CLOSED-BOX MODULE. Almost nobody outside `Profile.js` should need to
+ *  touch this file. If you're trying to load a `.icc` / `.icm` profile,
+ *  use:
+ *
+ *      var p = new Profile();
+ *      p.load(buffer, callback);          // or p.loadBinary(uint8Array, ...)
+ *
+ *  This module is the byte-level layer that `Profile.js` calls into to
+ *  decode raw ICC tag bytes into structured JS objects (XYZ tristimuli,
+ *  TRC curves, LUTs, viewing conditions, etc.).
+ *
+ *  ----------------------------------------------------------------------------
+ *  CONVENTIONS
+ *  ----------------------------------------------------------------------------
+ *
+ *  - All multi-byte integers in ICC are BIG-ENDIAN. The primitive readers
+ *    here (`uint16`, `uint32`, `XYZNumber`, ...) assume big-endian and do
+ *    the byte-swap explicitly.
+ *
+ *  - Every reader takes `(binary, offset, ...)` where `binary` is a
+ *    `Uint8Array` containing the entire profile and `offset` is a byte
+ *    index into it. Readers are stateless — no streaming, no cursor.
+ *    Callers compute offsets from the tag table.
+ *
+ *  - `binary.byteOffset` is assumed to be 0 (i.e. `binary` is NOT a
+ *    sub-view created by `.subarray()`). Profile.js always constructs a
+ *    fresh `new Uint8Array(arrayBuffer)`, which satisfies this. If you
+ *    ever pass a sub-view, the typed-array readers (`uInt8Array`,
+ *    `uInt16Array`) will read from the wrong place.
+ *
+ *  - Returned objects use the field names from the ICC.1:2010 spec where
+ *    practical (`sig`, `inputChannels`, `gridPoints`, ...).
+ *
+ *  ----------------------------------------------------------------------------
+ *  ICC v2 / v4 COVERAGE
+ *  ----------------------------------------------------------------------------
+ *
+ *    V4 SUPPORT IN PRACTICE: the vast majority of V4 ICC profiles in the
+ *    wild use only the subset of tag types that already overlap with V2
+ *    (XYZ, mluc, sf32, curv/para, mAB/mBA), all of which are fully
+ *    decoded here. Everyday display, working-space and printer V4
+ *    profiles therefore round-trip the same as their V2 equivalents.
+ *
+ *    The main thing missing is multiProcessElement (`mpet`), which the
+ *    spec uses for film, scientific and high-end colour workflows. As
+ *    the ICC MPE white paper notes, MPE support is OPTIONAL for any CMM
+ *    and the standard `AtoB`/`BtoA` tags MUST always be present and
+ *    valid in any conforming profile — so for an MPE-bearing profile
+ *    we simply use the mandatory standard tags instead.
+ *
+ *    SUPPORTED tag-data types:
+ *      XYZ      ('XYZ ')     XYZType
+ *      desc     ('desc')     textDescriptionType (ASCII portion only — see P5)
+ *      text     ('text')     textType
+ *      mluc     ('mluc')     multiLocalizedUnicodeType
+ *      sf32     ('sf32')     s15Fixed16ArrayType (via `s15Array`)
+ *      curv     ('curv')     curveType (sampled TRC)
+ *      para     ('para')     parametricCurveType, function types 0-4
+ *      mft1     ('mft1')     lut8Type   (input curves + 3D/4D CLUT + output)
+ *      mft2     ('mft2')     lut16Type
+ *      mAB      ('mAB ')     lutAToBType (V4)  A → CLUT → M → matrix → B
+ *      mBA      ('mBA ')     lutBToAType (V4)  B → matrix → M → CLUT → A
+ *      view     ('view')     viewingConditionsType (partial — see notes)
+ *      meas     ('meas')     measurementType
+ *
+ *    NOT SUPPORTED (`console.warn` is emitted when encountered):
+ *      mpet                   multiProcessElementsType (stub returns
+ *                             element signatures only; no maths runs)
+ *      Unknown text types     (returns `<Unknown Text Type>` placeholder)
+ *      Unknown LUT types      (returns a partially-populated lut object)
+ *      Parametric type ≥ 5    (currently throws)
+ *
+ *    NOT IMPLEMENTED (silently absent — Profile.js handles fallback):
+ *      sig, data, dtim, ui16, ui32, ui64, uf32,
+ *      pseq, psid, ncl2, chrm, clrt, crdi, devs, ncol,
+ *      pmtb, rcs2, screen, ucmt
+ *
+ *  ----------------------------------------------------------------------------
+ *  KNOWN LIMITATIONS vs SPEC
+ *  ----------------------------------------------------------------------------
+ *
+ *    - `desc` (V2): only the ASCII section is decoded. The Unicode and
+ *      ScriptCode sections that follow it in the spec are ignored. For V4
+ *      profiles, use `mluc` instead — it supersedes `desc`.
+ *
+ *    - MultiProcessElements (`mpet`) are stubbed: the element signatures
+ *      are returned but `cvst` (curves), `matf` (matrix) and `clut` are
+ *      not actually decoded. As the ICC MPE white-paper notes, CMM
+ *      support for MPE is OPTIONAL and the standard `AtoB`/`BtoA` tags
+ *      must always be present, so we lean on those.
+ *
+ *    - `inverseCurve` is a numerical inversion of a sampled curve — it
+ *      assumes overall monotonicity and degrades gracefully on locally
+ *      non-monotonic curves. Not a high-precision general-purpose inverse.
+ *
+ *  ----------------------------------------------------------------------------
+ *  REFERENCES
+ *  ----------------------------------------------------------------------------
+ *
+ *    ICC.1:2010 (V4.3) — base spec used here
+ *    ICC.1:2022 (V4.4) — newer; `para` function-type table is unchanged
+ *    ICC MPE white paper:
+ *      https://www.color.org/whitepapers/ICC_White_Paper28-MultiProcessingElements.pdf
+ *
+ * ============================================================================
+ */
+
 module.exports = {
+
+    // ========================================================================
+    //  ICC NUMBER FORMATS
+    // ========================================================================
+
+    /**
+     * Read an XYZNumber (3 × s15Fixed16, big-endian). 12 bytes.
+     * @returns {{X:number, Y:number, Z:number}}
+     */
     XYZNumber: function (binary, offset) {
         var x = this.s15Fixed16Number(this.uint32(binary, offset));
         var y = this.s15Fixed16Number(this.uint32(binary, offset + 4));
         var z = this.s15Fixed16Number(this.uint32(binary, offset + 8));
         return {X: x, Y: y, Z: z};
     },
+    // ========================================================================
+    //  PRIMITIVE READERS — strings and small arrays
+    // ========================================================================
+
+    /**
+     * Read `length` ASCII bytes starting at `offset`. Each byte is taken
+     * verbatim as a Latin-1 codepoint.
+     * @returns {string}
+     */
     chars: function (binary, offset, length) {
         var str = '';
         for (var i = 0; i < length; i++) {
@@ -35,6 +165,11 @@ module.exports = {
         }
         return str;
     },
+    /**
+     * Read `length` UTF-16BE code units starting at `offset` (i.e. `length * 2`
+     * bytes). Used by `mluc` text records.
+     * @returns {string}
+     */
     unicodeChars: function (binary, offset, length) {
         var str = '';
         for (var i = 0; i < length; i++) {
@@ -43,6 +178,11 @@ module.exports = {
         }
         return str;
     },
+    /**
+     * Read `length` bytes as a plain JS array. Prefer `uInt8Array` when you
+     * want a typed-array view (faster, lower memory).
+     * @returns {number[]}
+     */
     array: function (binary, offset, length) {
         var arr = [];
         for (var i = 0; i < length; i++) {
@@ -51,9 +191,31 @@ module.exports = {
         }
         return arr
     },
+
+    // ========================================================================
+    //  TYPED ARRAY READERS — 8-bit and 16-bit slices
+    // ========================================================================
+
+    /**
+     * Slice `length` bytes into a fresh `Uint8Array`. The underlying buffer
+     * is copied via `ArrayBuffer.prototype.slice`, so the result is
+     * independent of `binary`.
+     *
+     * Caller contract: `binary.byteOffset === 0` (see file header).
+     * @returns {Uint8Array}
+     */
     uInt8Array: function (binary, offset, length) {
         return new Uint8Array(binary.buffer.slice(offset, offset + length));
     },
+    /**
+     * Slice `length` 16-bit big-endian samples into a fresh `Uint16Array`.
+     * Bytes are swapped in place into a temp buffer and then re-viewed,
+     * which is faster than building each sample with `DataView.getUint16`.
+     *
+     * Caller contract: `binary.byteOffset === 0` (see file header) AND
+     * `offset` lands on an even byte (16-bit alignment).
+     * @returns {Uint16Array}
+     */
     uInt16Array: function (binary, offset, length) {
         // Double the length to get the number of bytes
         var bytes = length * 2;
@@ -68,27 +230,76 @@ module.exports = {
         }
         return new Uint16Array(u8TempArray.buffer);
     },
+    /**
+     * Read a big-endian uint32. 4 bytes.
+     *
+     * NOTE (P3, latent): `<< 24` produces a SIGNED int32 when the top byte
+     * is ≥ 0x80, so values > 0x7FFFFFFF come back negative. This works
+     * correctly in this codebase because:
+     *   (a) ICC offsets/lengths in real-world profiles fit in 31 bits, and
+     *   (b) `s15Fixed16Number` happens to handle the signed result correctly
+     *       (the `> 0x80000000` test is false for negatives, and the
+     *       direct `n / 0x10000` for a signed-negative gives the right
+     *       fixed-point value).
+     * If you ever need a true unsigned uint32, append `>>> 0`.
+     * @returns {number}
+     */
     uint32: function (binary, offset) {
         return binary[offset + 3] + (binary[offset + 2] << 8) + (binary[offset + 1] << 16) + (binary[offset] << 24)
     },
+    /**
+     * Read a big-endian uint16. 2 bytes.
+     * @returns {number}
+     */
     uint16: function (binary, offset) {
         return (binary[offset + 1]) + (binary[offset] << 8)
     },
+    /**
+     * Read a u8Fixed8Number (8.8 unsigned fixed point). 2 bytes.
+     * Used for legacy gamma values in `curv` curves with count == 1.
+     * @returns {number}
+     */
     u8Fixed8Number: function (binary, pos) {
         return binary[pos] + (binary[pos + 1] / 256);
     },
+    /**
+     * Convert a 32-bit value to s15Fixed16Number (signed 15.16 fixed point).
+     * Range: ≈ −32768.0 … +32767.999985.
+     *
+     * Accepts either a raw unsigned 32-bit value OR the signed value that
+     * `uint32` returns for top-bit-set inputs (see P3 in `uint32`) — both
+     * produce the correct decoded number.
+     * @returns {number}
+     */
     s15Fixed16Number: function (n) {
         if (n > 0x80000000) {
             return (0x100000000 - n) / -0x10000;
         }
         return n / 0x10000;
     },
+    /**
+     * Read an IEEE-754 float32 at `offset`. Big-endian (`DataView` default).
+     * @returns {number}
+     */
     float32: function (binary, offset) {
         return new DataView(binary.buffer).getFloat32(offset);
     },
+    /**
+     * Read an IEEE-754 float64 at `offset`. Big-endian.
+     * @returns {number}
+     */
     float64: function (binary, offset) {
         return new DataView(binary.buffer).getFloat64(offset);
     },
+    /**
+     * Decode an `sf32` (s15Fixed16ArrayType) tag body. The number of values
+     * is derived from the tag length (4 bytes per entry, after the 8-byte
+     * type signature + reserved header).
+     * @param {Uint8Array} binary
+     * @param {number} offset      Tag body start.
+     * @param {number} tagLength   Total tag length in bytes.
+     * @returns {{sig:string, values:number[]}}
+     */
     s15Array: function (binary, offset, tagLength) {
         // This type represents an array of generic 4-byte (32-bit) fixed point quantity
         // The number of values is determined from the size of the tag.
@@ -101,10 +312,28 @@ module.exports = {
             values: values
         };
     },
+    // ========================================================================
+    //  TAG TYPE READERS — XYZ, text, viewing conditions, measurement
+    // ========================================================================
+
+    /**
+     * Read an `XYZ ` tag (4 bytes signature + 4 bytes reserved + XYZNumber).
+     * @returns {{X:number, Y:number, Z:number}}
+     */
     XYZType: function (binary, offset) {
         //var sig = this.chars(binary, offset, 4);
         return this.XYZNumber(binary, offset + 8);
     },
+    /**
+     * Dispatch to the appropriate text-tag decoder based on the 4-byte
+     * type signature at `offset`. Handles `desc` (V2 ASCII), `text`
+     * (raw ASCII), and `mluc` (V4 multi-localized Unicode).
+     *
+     * Unknown types log a warning and return a `<Unknown Text Type>`
+     * placeholder rather than throwing — this matches the rest of the
+     * decoder's "best-effort, never crash" stance.
+     * @returns {{sig:string, text:string, [length]:number, [languages]:object[]}}
+     */
     text: function (binary, offset) {
         var textType = this.chars(binary, offset, 4);
         switch (textType) {
@@ -115,13 +344,20 @@ module.exports = {
             case 'mluc':
                 return this._multiLocalizedUnicodeText(binary, offset);
             default:
-                console.log('Unknown Text Type ' + textType);
+                console.warn('decodeICC: unknown text tag type "' + textType + '" at offset ' + offset);
                 return {
                     sig: textType,
                     text: '<Unknown Text Type>'
                 };
         }
     },
+    /**
+     * Decode a `mluc` (multiLocalizedUnicodeType) tag. Iterates the record
+     * table, collects every (lang, country, text) triple, and picks the
+     * first English entry as the canonical `text` (or the first record if
+     * none is English). All records are kept on `.languages`.
+     * @returns {{sig:string, text:string, languages:Array<{languageCode:string, countryCode:string, text:string}>}}
+     */
     _multiLocalizedUnicodeText: function (binary, offset) {
         var recordCount = this.uint32(binary, offset + 8);
         var recordSize = this.uint32(binary, offset + 12);
@@ -160,12 +396,26 @@ module.exports = {
         }
 
     },
+    /**
+     * Decode a `text` tag (raw NUL-terminated ASCII after 8-byte header).
+     * @returns {{sig:string, text:string}}
+     */
     _textType: function (binary, offset) {
         return {
             sig: this.chars(binary, offset, 4),
             text: this.nts(binary, offset + 8)
         };
     },
+    /**
+     * Decode a `desc` (textDescriptionType, V2) tag. ASCII portion only.
+     *
+     * TODO (P5): the V2 `desc` tag also carries a Unicode string and a
+     * Macintosh ScriptCode string after the ASCII section. Both are
+     * ignored here. Acceptable for V4 profiles (which use `mluc`
+     * instead) and for the vast majority of V2 profiles in the wild
+     * which fill in all three with the same string.
+     * @returns {{sig:string, text:string, length:number}}
+     */
     _textDescriptionType: function (binary, offset) {
         var AsciiLength = this.uint32(binary, offset + 8);
         return {
@@ -174,6 +424,12 @@ module.exports = {
             length: AsciiLength
         };
     },
+    /**
+     * Read a NUL-terminated ASCII string starting at `offset`, capped at
+     * `maxLen` bytes (defaults to 1024). Stops at the first 0 byte
+     * (exclusive).
+     * @returns {string}
+     */
     nts: function (binary, offset, maxLen) {
         maxLen = maxLen || 1024;
         var str = '';
@@ -186,6 +442,11 @@ module.exports = {
         }
         return str;
     },
+    /**
+     * Read a 3x3 V2 matrix as a flat array of 9 s15Fixed16Numbers
+     * (row-major). 36 bytes.
+     * @returns {number[]}
+     */
     matrixV2: function (binary, offset) {
         var matrix = [];
         for (var i = 0; i < 9; i++) {
@@ -194,6 +455,12 @@ module.exports = {
         }
         return matrix;
     },
+    /**
+     * Read a 3x4 V4 matrix as a flat array of 12 s15Fixed16Numbers (the 3x3
+     * linear part followed by the 3-element translation vector). 48 bytes.
+     * Used by `mAB`/`mBA` LUTs.
+     * @returns {number[]}
+     */
     matrixV4: function (binary, offset) {
         var matrix = [];
         for (var i = 0; i < 12; i++) {
@@ -202,6 +469,14 @@ module.exports = {
         }
         return matrix;
     },
+    /**
+     * Decode a `view` (viewingConditionsType) tag.
+     *
+     * Note: only the standard-illuminant code is decoded as `measurement`
+     * here. The full V4 `view` tag also carries the surround illuminant
+     * geometry and observer index, which Profile.js doesn't currently use.
+     * @returns {{sig:string, illuminant:object, surround:object, measurement:string}}
+     */
     viewingConditions: function (binary, offset) {
         return {
             sig: this.chars(binary, offset, 4),
@@ -210,6 +485,12 @@ module.exports = {
             measurement: this.illuminant2Text(this.uint32(binary, offset + 32))
         }
     },
+    /**
+     * Decode a `meas` (measurementType) tag. Returns the standard observer,
+     * tristimulus value, geometry, flare and standard illuminant in
+     * human-readable form.
+     * @returns {{sig:string, observer:string, tristimulus:object, geometry:string, flare:string, illuminant:string}}
+     */
     measurement: function (binary, offset) {
         return {
             sig: this.chars(binary, offset, 4),
@@ -220,6 +501,14 @@ module.exports = {
             illuminant: this.illuminant2Text(this.uint32(binary, offset + 32))
         };
     },
+    // ========================================================================
+    //  ENUM DECODERS — small lookup tables for human-readable output
+    // ========================================================================
+
+    /**
+     * Map a standard-observer code (0–2) to its human-readable name.
+     * @returns {string}
+     */
     observer2Text: function (obs) {
         switch (obs) {
             case 1:
@@ -230,6 +519,10 @@ module.exports = {
                 return 'Unknown'
         }
     },
+    /**
+     * Map a measurement-geometry code (0–2) to its description.
+     * @returns {string}
+     */
     geometry2Text: function (geo) {
         switch (geo) {
             case 1:
@@ -240,13 +533,35 @@ module.exports = {
                 return 'Unknown'
         }
     },
+    /**
+     * Map a measurement-flare code (0 or 1) to its description.
+     * @returns {string}
+     */
     flare2Text: function (flare) {
         return (flare === 0) ? '0 (0 %)' : '1,0 (or 100 %)';
     },
+    /**
+     * Map a standard-illuminant code (0–8) to its short name.
+     * @returns {string}
+     */
     illuminant2Text: function (ill) {
         var illText = ['Unknown', 'D50', 'D65', 'D93', 'F2', 'D55', 'A', 'Equi-Power (E)', 'F8'];
         return illText[ill];
     },
+
+    // ========================================================================
+    //  CURVE READERS — `curv` (sampled TRC) and `para` (parametric)
+    // ========================================================================
+
+    /**
+     * Read `count` consecutive curves (each `curv` or `para`) starting at
+     * `offset`. Each curve is read with `curve()` and the cursor is
+     * advanced by its `byteLength` (rounded up to the next 4-byte
+     * alignment). If a curve reports an unknown length, iteration stops.
+     *
+     * Used by the `mAB`/`mBA` LUT readers for a/b/m curve banks.
+     * @returns {object[]}
+     */
     curves: function (binary, offset, count, useInverseFn) {
         var curves = [];
         var curveOffset = offset;
@@ -270,6 +585,23 @@ module.exports = {
         }
         return curves;
     },
+    /**
+     * Numerically invert a sampled tone curve by piecewise-linear
+     * interpolation. Given `curve[i] = f(i / (N-1))`, returns a length-
+     * `numPoints` array `inv[j]` such that `f(inv[j]) ≈ j / (numPoints-1)`.
+     *
+     * Limitations (acceptable for ICC TRCs in practice):
+     *   - Assumes overall monotonic curve. Locally non-monotonic regions
+     *     are searched for both increasing and decreasing intervals so
+     *     mild wobble is tolerated, but a U-shape or similar will produce
+     *     unreliable results.
+     *   - `numPoints` must be ≥ 2. With `numPoints === 1` the step
+     *     becomes Infinity. Caller's responsibility.
+     *
+     * @param {number[]|Float64Array} curve   Source samples in 0..1.
+     * @param {number} numPoints              Output sample count.
+     * @returns {number[]}                    Inverted samples in 0..1.
+     */
     inverseCurve: function (curve, numPoints) {
         var step = 1 / (numPoints - 1);
         var inverseCurve = [];
@@ -349,6 +681,33 @@ module.exports = {
 
     },
 
+    /**
+     * Decode a single curve tag (`curv` or `para`).
+     *
+     * Returns an object describing the curve in several forms — pick the
+     * one that suits the consumer:
+     *
+     *    .passThrough  true if the curve is the identity (skip it)
+     *    .gamma        scalar gamma (set for `curv` count==1, `para`
+     *                  type 0, and as a midpoint estimate for sampled
+     *                  curves with count > 3)
+     *    .data         Uint16Array of raw 16-bit samples (sampled curves)
+     *    .dataf        Float64Array of normalized 0..1 samples
+     *    .curveFn      function(params, x) for parametric curves
+     *    .params       parameter array for parametric curves
+     *    .byteLength   total bytes consumed (or `false` if unknown)
+     *    .inverted     true if the curve has been pre-inverted
+     *
+     * @param {Uint8Array} binary
+     * @param {number} offset
+     * @param {boolean} [useInverse]
+     *   For `curv`: numerically invert the sampled table once at decode
+     *   time (so downstream reads are forward lookups). For `para`:
+     *   install the closed-form inverse function instead of the forward
+     *   one. Used for matrix-shaper inverse-TRC builds.
+     * @param {number} [inverseCurveSteps=4096]
+     *   Sample count for the numerical `curv` inverse.
+     */
     curve: function (binary, offset, useInverse, inverseCurveSteps) {
         var type = this.chars(binary, offset, 4);
         var curveHeaderBytes = 12;
@@ -406,9 +765,14 @@ module.exports = {
                             // }
                         }
 
-                        // get midpoint
+                        // Midpoint gamma estimate: solve 0.5^g = y(0.5)/65535
+                        // Used downstream as a hint only (e.g. for picking a
+                        // gamma-style fast path). Not a fit — sampled
+                        // curves keep their .data/.dataf for actual eval.
+                        // FIX (P2): index must be an integer; `count / 2`
+                        // produced `undefined` for odd counts → NaN gamma.
                         if (curve.count > 3) {
-                            var y = curve.data[curve.count / 2];
+                            var y = curve.data[Math.floor(curve.count / 2)];
                             curve.gamma = 0.0 - Math.log(y / 65535.0) / 0.69315;
                         }
 
@@ -434,7 +798,7 @@ module.exports = {
                 var functionType2PramCount = [1, 3, 4, 5, 7]
                 var pramCount = functionType2PramCount[functionType];
                 if (pramCount === undefined) {
-                    console.log('Unknown parametricCurveType function type ' + functionType);
+                    console.warn('decodeICC: unknown parametricCurveType function type ' + functionType + ' at offset ' + offset);
                     break;
                 }
 
@@ -535,34 +899,44 @@ module.exports = {
                         }
                         break;
                     case 3: //IEC 61966‐2.1 (sRGB)
+                        // FIX (P1): per ICC.1:2010 Table 65, parametric type 3
+                        // has 5 parameters (g, a, b, c, d) and the formula:
+                        //     Y = (aX + b)^g     | X >= d
+                        //     Y = cX             | X < d
+                        // The previous implementation referenced params[5]
+                        // and params[6] (i.e. the e/f offsets that only
+                        // exist in type 4), which are `undefined` here and
+                        // caused both forward and inverse to silently
+                        // return NaN for every sample. Now matches the
+                        // spec; type 4 below is the same shape with
+                        // explicit e/f.
                         if (useInverse) {
-                            // X=((Y-e)1/g-b)/a   | Y >=(ad+b)^g+e), cd+f
-                            // X=(Y-f)/c          | else
+                            // X = ((Y^(1/g)) - b) / a   | Y >= c*d
+                            // X = Y / c                 | Y <  c*d
                             curve.curveFn = function (params, y) {
                                 //y = Math.max(0.0, Math.min(1.0, y));
-                                var disc = params[3] * params[4] + params[6];
+                                var disc = params[3] * params[4];
                                 if (y >= disc) {
-                                    var e = y - params[5];
-                                    if (e < 0) {
+                                    if (y < 0) {
                                         return 0;
                                     }
-                                    return (Math.pow(e, 1.0 / params[0]) - params[2]) / params[1];
+                                    return (Math.pow(y, 1.0 / params[0]) - params[2]) / params[1];
                                 }
-                                return (y - params[6]) / params[3];
+                                return y / params[3];
                             }
                         } else {
-                            // Y = (aX + b)^Gamma + e | X >= d
-                            // Y = cX + f             | X < d
+                            // Y = (aX + b)^g | X >= d
+                            // Y = cX         | X <  d
                             curve.curveFn = function (params, x) {
                                 //x = Math.max(0.0, Math.min(1.0, x));
                                 if (x >= params[4]) {
                                     var e = params[1] * x + params[2];
                                     if (e > 0) {
-                                        return Math.pow(e, params[0]) + params[5];
+                                        return Math.pow(e, params[0]);
                                     }
-                                    return params[5];
+                                    return 0;
                                 }
-                                return params[3] * x + params[6];
+                                return params[3] * x;
                             }
                         }
                         break;
@@ -615,6 +989,35 @@ module.exports = {
         }
         return curve;
     },
+    // ========================================================================
+    //  LUT READERS — mft1 (lut8), mft2 (lut16), mAB / mBA (V4 A2B/B2A)
+    // ========================================================================
+
+    /**
+     * Decode an `AtoB`/`BtoA` lookup-table tag. Dispatches on the
+     * 4-byte type signature:
+     *
+     *   mft1   lut8Type  — fixed 256-entry 8-bit input/output curves +
+     *                       N-D 8-bit CLUT + optional 3x3 input matrix.
+     *   mft2   lut16Type — variable-entry 16-bit input/output curves +
+     *                       N-D 16-bit CLUT + optional 3x3 input matrix.
+     *   mAB    lutAToB   — V4: A-curves → CLUT → M-curves → 3x4 matrix → B-curves.
+     *   mBA    lutBToA   — V4: B-curves → 3x4 matrix → M-curves → CLUT → A-curves.
+     *
+     * Any subset of the V4 stages may be absent (offset == 0). The
+     * decoded `lut` object exposes the stages directly for the runtime
+     * pipeline to consume.
+     *
+     * Trailing fields `g1..g4` and `go0..go3` are precomputed CLUT stride
+     * multipliers used by the interpolation hot path in `Transform.js`.
+     *
+     * On an unsupported `type`, returns a sentinel 2×2×2 zero-filled
+     * 3-in/3-out LUT with `lut.invalid = true` and `lut.errorReason`
+     * set, so callers can detect failure without the engine crashing
+     * on undefined fields.
+     *
+     * @returns {object} lut descriptor
+     */
     lut: function (binary, offset) {
         var type = this.chars(binary, offset, 4);
         var lut = {type: type};
@@ -785,9 +1188,43 @@ module.exports = {
 
                 break;
             default:
-                console.log('Unsupported LUT Tag ' + type);
+                // FIX (P4): formerly fell through to the stride-precompute
+                // block below with `gridPoints = []` and `outputChannels`
+                // undefined, leaving every derived field as NaN/undefined
+                // and silently producing an unusable LUT.
+                //
+                // We now populate a tiny, structurally-valid sentinel:
+                // a 2×2×2 zero-filled 3-in / 3-out LUT marked with
+                //   `lut.invalid = true`
+                //   `lut.errorReason = 'unsupported LUT type "xxx"'`
+                //
+                // - New callers can opt in by checking `lut.invalid` and
+                //   refusing the profile / picking a fallback transform.
+                // - Legacy callers that don't check keep working: they
+                //   get a black-clamped passthrough rather than a crash
+                //   from `undefined` arithmetic in the interpolator.
+                console.warn('decodeICC: unsupported LUT tag type "' + type + '" at offset ' + offset);
+                lut.invalid = true;
+                lut.errorReason = 'unsupported LUT type "' + type + '"';
+                lut.inputChannels = 3;
+                lut.outputChannels = 3;
+                lut.precision = 8;
+                lut.inputScale = 1;
+                lut.outputScale = 1 / 255;
+                lut.gridPoints = [2, 2, 2];
+                lut.CLUT = new Uint8Array(2 * 2 * 2 * 3); // 24 zero bytes
+                lut.inputCurve = false;
+                lut.outputCurve = false;
+                lut.matrix = false;
+                lut.bCurves = false;
+                lut.mCurves = false;
+                lut.aCurves = false;
+                break;
         }
 
+        // Stride pre-compute for the interpolation hot path.
+        // For 3D LUTs `gridPoints[3]` is undefined → g4 is NaN; that's
+        // intentional (consumers only read up to g_inputChannels).
         lut.g1 = lut.gridPoints[0];
         lut.g2 = lut.g1 * lut.gridPoints[1];
         lut.g3 = lut.g2 * lut.gridPoints[2];
@@ -800,6 +1237,15 @@ module.exports = {
         return lut;
 
     },
+    /**
+     * Decode the multi-dimensional CLUT block of a V4 `mAB`/`mBA` tag and
+     * attach `CLUT`, `gridPoints`, `precision`, `inputScale`,
+     * `outputScale` to the supplied `lut` object.
+     *
+     * Bytes 0..15 are the gridPoint-per-dimension array (16 dims max,
+     * unused dims = 0), byte 16 is the precision (1 = 8-bit, 2 = 16-bit),
+     * and byte 20 onwards is the CLUT itself.
+     */
     CLUT4: function (lut, binary, offset, inputChannels, outputChannels) {
         var gridPoints = [];
         var precision = binary[offset + 16];
@@ -830,21 +1276,33 @@ module.exports = {
         lut.gridPoints = gridPoints;
     },
 
+    // ========================================================================
+    //  MULTI-PROCESS ELEMENTS — `mpet` (stub)
+    // ========================================================================
+
     /**
-     * MultiProcess Elements are mainly for Film use and not supported at this time
+     * Decode a `mpet` (multiProcessElementsType) tag — STUB IMPLEMENTATION.
      *
-     * https://www.color.org/whitepapers/ICC_White_Paper28-MultiProcessingElements.pdf
+     * MPE was added in ICC v4 mainly for film and high-end workflows. Per
+     * the ICC MPE white paper:
      *
-     * From the whitepaper "CMM Support for Multi Processing Element Tag type is optional.
-     * This means that MPE based tag support is NOT guaranteed to be provided an implemented
-     * by CMMs in general! Additionally, all required tags must be present and valid."
+     *   "CMM Support for Multi Processing Element Tag type is optional.
+     *    This means that MPE based tag support is NOT guaranteed to be
+     *    provided and implemented by CMMs in general! Additionally, all
+     *    required tags must be present and valid."
      *
-     * In Otherwords don't need to use them as standard TAGs for AtoB and BtoA are
-     * provided and can be used instead.
+     *   https://www.color.org/whitepapers/ICC_White_Paper28-MultiProcessingElements.pdf
      *
-     * @param binary
-     * @param offset
-     * @returns {{elements: *[], inputChannels: *, outputChannels: *}}
+     * Because the standard `AtoB`/`BtoA` tags MUST always be present and
+     * valid in any conforming profile, the engine just leans on those.
+     * This decoder returns the element signatures (`cvst`, `matf`,
+     * `clut`, `bACS`, `eACS`) so callers can tell what was there, but
+     * does not actually decode their bodies — `transform` does not
+     * traverse MPE pipelines at runtime.
+     *
+     * @param {Uint8Array} binary
+     * @param {number} offset
+     * @returns {{inputChannels:number, outputChannels:number, elements:Array<{sig:string}>}}
      */
     multiProcessElement: function (binary, offset) {
         var elements = [];
@@ -887,7 +1345,7 @@ module.exports = {
                 case 'eACS':
                     break;
                 default:
-                    console.log('Unknown MultiProcess Element ' + sig);
+                    console.warn('decodeICC: unknown MultiProcess element "' + sig + '" at offset ' + elementOffset);
             }
         }
         return {
