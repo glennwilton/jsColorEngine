@@ -1,0 +1,14 @@
+{
+  "name": "lcms-comparison",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Side-by-side MPx/s comparison: jsColorEngine vs lcms-wasm",
+  "main": "bench.js",
+  "scripts": {
+    "bench": "node bench.js"
+  },
+  "dependencies": {
+    "lcms-wasm": "^1.0.5"
+  }
+}

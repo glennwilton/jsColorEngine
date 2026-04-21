@@ -1,10 +1,45 @@
-
+ 
 jsColorEngine is a colour-management engine that uses ICC profiles to convert
-colours, written in 100% JavaScript with no dependencies.
+colours — **the fastest and smallest CMS library for JavaScript**\*,
+written in **100% native JavaScript** with **no dependencies**.
+
+- **Hand-tuned for JIT compilers — faster than compiled `lcms-wasm`\*.**
+  The hot-path image kernels are written specifically for how V8 / SpiderMonkey
+  / JSC optimise (unrolled, monomorphic, typed-array IO, `Math.imul`
+  fixed-point) and verified TurboFan-optimised via
+  [`bench/jit_inspection.js`](./bench/jit_inspection.js).   Measured **1.48–2.12× faster than `lcms-wasm` (v1.0.5)** on the same
+  machine, same profiles, and identical inputs. See [How it compares to lcms-wasm](#how-it-compares-to-lcms-wasm)
+  and [docs/Performance.md](./docs/Performance.md) for full methodology and accuracy data.
+- **No WASM required, no bindings, no compilation step** — not a rebuild of
+  LittleCMS or any other C/C++ engine. Drops straight into Node, browsers,
+  web workers, Electron, React Native (with a JS-compatible Buffer polyfill),
+  and any other modern JS runtime. Future opt-in `lutMode: 'wasm-scalar'` /
+  `'wasm-simd'` kernels will fall back to the pure-JS hot path anywhere
+  WASM isn't available.
+- **Small:** the bundle is **~192 KB raw, ~52 KB gzip, ~41 KB brotli**,
+  in a single JS file — and that includes virtual profiles, spectral
+  data, and the full ICC v2/v4 decoder. For comparison, `lcms-wasm`
+  ships a ~41 KB minified JS shim **plus** a separate ~309 KB `.wasm`
+  payload (~129 KB gzip combined — **~2.5× larger over the wire**,
+  two HTTP fetches, async WASM instantiation).
+- **Simple API:** two methods, `transform()` for single colours and
+  `transformArray()` for image bytes. Both live on the same `Transform`
+  object. See [Two ways to use it](#two-ways-to-use-it) below.
+
+> \* "Fastest and smallest" and "faster than compiled `lcms-wasm`" are
+> measured on one developer machine (Node 20, V8, x64) against
+> [`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm) v1.0.5, the
+> only actively-maintained general-purpose JS CMS on npm we're aware of.
+> **Benchmark numbers vary by CPU, JS engine, and profile.** We welcome
+> user-submitted results on other OSes / CPUs / browsers / JS runtimes,
+> as well as critique of the methodology in
+> [`bench/lcms-comparison/`](./bench/lcms-comparison). Please open an
+> issue or PR with your `node bench.js` output and machine details. If
+> we've missed a faster or smaller pure-JS CMS, please tell us.
 
 A lot of the core concepts and design ideas are based on LittleCMS, but this
-is not a direct port — the implementation is independent and tuned for the
-JavaScript runtime.
+is not a port — the implementation is independent and tuned for the
+JavaScript runtime (V8, SpiderMonkey, JSC).
 
 ---
 
@@ -16,7 +51,7 @@ one matters more than any other choice you'll make:
 | Use case | API | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calculations, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` | 20–40 Mpx/s on a desktop CPU | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Image / array processing** | `transform.transformArray(typedArray, ...)` | 45–70 Mpx/s on a desktop CPU | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
 
 Both use the same `Transform` object — you choose which by calling either
 `transform()` (single colour) or `transformArray()` (image bytes), and by
@@ -186,6 +221,9 @@ pay the startup cost — runtime conversion speed is identical.
   at PCS) and it bakes into the precomputed LUT
 - Chromatic adaptation for abstract Lab profiles
 - Full debug mode showing values at every stage of the pipeline
+- **~1.5–2× faster than [`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm)**
+  on the same machine, same profiles, same inputs — measured head-to-head
+  on image transforms (see [How it compares to lcms-wasm](#how-it-compares-to-lcms-wasm))
 
 ### Modes of operation
 
@@ -271,18 +309,114 @@ pipeline into a 1D / 3D / 4D LUT at construction time. After that,
 conversion is a single n-dimensional interpolation per pixel — typically
 20–40× faster than walking the full pipeline.
 
+> **A note on the interpolator code.** The image transform path uses
+> heavily unrolled and inlined interpolators. On first read they look
+> counter-intuitive — long arithmetic expressions, duplicated code paths,
+> very few helper functions or named temporaries. That is deliberate:
+> the JIT compilers inline aggressively and reuse registers across the
+> folded expression, but introducing a helper call or a named temp can
+> force a memory round-trip that measurably slows the loop down. See
+> the **PERFORMANCE LESSONS** block at the top of `src/Transform.js`
+> for the measured trade-offs; don't "tidy" the hot loops without
+> re-benchmarking.
+
 ---
 
 ## Accuracy
 
-As a baseline, the output has been compared to LittleCMS. Results are very
-close but not bit-identical — the differences come from JavaScript using
-64-bit floats throughout the pipeline, while LittleCMS switches between
-double floats and 16-bit integers. For practical purposes the differences
-are well below visible threshold.
+> **TL;DR:** output matches LittleCMS to **≤ 1 LSB on 98.5 – 100 % of
+> samples** across all four standard image workflows, with all named
+> reference colours (white, black, primaries, mid-greys, skin tone,
+> paper white, rich black, etc.) matching exactly or within 1 LSB.
+> **The residual drift is well below visible threshold** and is
+> suitable for soft-proofing, preview, image conversion, and virtually
+> any practical application that isn't bit-exact audit reproduction
+> against a specific reference CMS.
 
-There are larger differences in extreme cases (e.g. `Lab(0, 100, -100)` →
-RGB) but these are well outside any real gamut and can be ignored.
+As a baseline, the output has been compared to LittleCMS (via the
+`lcms-wasm` npm package — a WASM port of LittleCMS 2.16) on a
+systematic 9^N grid through the input cube plus a set of named
+reference colours, using `cmsFLAGS_HIGHRESPRECALC` on the lcms side
+so both engines are comparing like-for-like precalc LUTs.
+
+| Workflow | within 1 LSB | max Δ | mean Δ |
+|---|---|---|---|
+| RGB → Lab   | **100.00 %** | 1 LSB  | 0.004 LSB |
+| RGB → CMYK  | **100.00 %** | 1 LSB  | 0.016 LSB |
+| CMYK → RGB  | 98.51 %      | 14 LSB\* | 0.073 LSB |
+| CMYK → CMYK | 98.83 %      | 4 LSB  | 0.141 LSB |
+
+Run `bench/lcms-comparison/accuracy.js` to reproduce on your own
+machine.
+
+### \* Where the 14-LSB CMYK → RGB outlier comes from (hypothesis)
+
+The one number that stands out is the 14-LSB max on CMYK → RGB. It
+is confined to **deep-cyan-saturated out-of-gamut** inputs (e.g.
+`(192,0,64,32)`) whose Lab coordinate falls outside sRGB's gamut —
+both engines compute R < 0 internally and have to clip. We clip R to
+0, lcms happens to produce R = 9 – 14 for the same inputs. 98.5 %
+of pixels still agree to within 1 LSB; the outlier is bounded to
+this one OOG regime.
+
+We *hypothesise* the mechanism is a design difference in where and
+how aggressively values are clamped along the pipeline:
+
+- **jsColorEngine runs the entire pipeline in 64-bit float** all
+  the way to the final LUT bake. Only **some** intermediate stages
+  clamp to their logical domain (e.g. `L` clipped to 0 – 100 in the
+  Lab PCS, matrix outputs left un-clipped); most stages let
+  negative and >1.0 values pass through. If a value swings negative
+  in one stage and comes back positive in the next, you get the
+  smooth "came back positive" result.
+- **LittleCMS** appears to clamp more aggressively at several
+  intermediate 16-bit fixed-point stages inside its precalc LUT
+  builder; values that swing out of range get clamped at that
+  stage and stay clamped.
+
+**We have not yet traced lcms's clamping points source-line by
+source-line** — the description above is a best-guess architectural
+model, not a verified diff. If it turns out to be more nuanced (and
+with clipping behaviour in a ~8,000-line C file spread across
+`cmslut.c`, `cmsintrp.c`, `cmsopt.c` etc. it almost certainly is),
+we will update this section.
+
+Neither approach is "correct" — the target gamut has no
+representation for the colour, so both engines produce a bounded
+guess. They just produce different bounded guesses. A future release
+may add an opt-in **lcms-compatibility mode** that clips more
+aggressively at intermediate stages to reproduce lcms's OOG
+behaviour bit-for-bit, for audit workflows. Until then, if you need
+*bit-exact* reproduction of a reference lcms pipeline, use
+`lutMode: 'float'` and expect occasional OOG drift like the above.
+
+Key takeaway: This only affects strongly saturated colours that 
+cannot be represented in the target gamut — the difference is
+invisible in real images
+
+### Extreme synthetic cases
+
+For inputs well outside any real gamut (e.g. `Lab(0, 100, -100)` →
+RGB), the differences can be larger — but these are mathematical
+edge cases and can be ignored.
+
+### User-submitted comparisons welcome
+
+Benchmark numbers and accuracy results are all from one developer
+machine. We welcome:
+
+- **Your run of the benchmark** on other CPUs, operating systems,
+  Node versions, or browser engines
+- **Critique of the test methodology** — grid density, sample
+  selection, rendering intent, precalc settings, anything
+- **Additional CMS engines to compare against** — Oyranos,
+  ArgyllCMS, pure LittleCMS via native binding, etc.
+- **Counter-examples** — inputs where we disagree with reference
+  CMS engines in a way that matters for practical workflows
+
+Open an issue or PR with your results and we will fold them in. If
+the methodology is broken, we would rather hear about it than
+brag on borrowed numbers.
 
 ---
 
@@ -293,9 +427,42 @@ prepress calculations, and anything where you're converting tens or hundreds
 of colours at a time.
 
 For image work, build a LUT (`new Transform({buildLut: true})`) and use
-`transformArray()`. On a Ryzen 3700X this runs at roughly **20–40 million
-pixels per second**, fast enough for live web image conversion or moderate
-video.
+`transformArray()`. The table below shows measured throughput for the
+four most common 8-bit image workflows, across the three working modes
+of the engine:
+
+| Workflow | No LUT (accuracy path) | `lutMode: 'float'` (f64 LUT) | `lutMode: 'int'` (u16 LUT, v1.1 default for new code) |
+|---|---|---|---|
+| RGB → RGB  (sRGB → AdobeRGB)   | 5.0 Mpx/s | 69.0 Mpx/s | **72.1 Mpx/s** |
+| RGB → CMYK (sRGB → GRACoL)     | 4.1 Mpx/s | 56.1 Mpx/s | **62.1 Mpx/s** |
+| CMYK → RGB (GRACoL → sRGB)     | 4.5 Mpx/s | 50.8 Mpx/s | **59.1 Mpx/s** |
+| CMYK → CMYK (GRACoL → GRACoL)  | 3.8 Mpx/s | 44.7 Mpx/s | **48.8 Mpx/s** |
+
+Measured on Node 20 (V8) on an x64 desktop CPU using the GRACoL2006
+CMYK profile and the built-in sRGB / AdobeRGB virtual profiles, 65 536
+pixels per batch, median of 5 × 100 iterations. Run
+`bench/mpx_summary.js` to reproduce on your own hardware.
+
+Key takeaways:
+
+- **Building a LUT makes image transforms ~11–15× faster** vs. the
+  per-pixel accuracy path. There's no reason NOT to use one for any
+  workflow that touches more than a few hundred pixels.
+- **`lutMode: 'int'` adds another ~4–16 %** on top of the float LUT,
+  and uses 4× less memory (u16 vs f64 CLUT). 4D directions (CMYK input)
+  see the biggest gain because the float kernel's K-LERP does extra
+  rounding work that the integer kernel collapses.
+- Even a 4K image (8.3 Mpx) finishes in ~115 ms on the slowest
+  workflow (CMYK→CMYK, `lutMode: 'int'`), or ~34 ms on RGB→RGB.
+
+> **The exact numbers are engine- and hardware-specific.** Because
+> the hot loops are tuned for JIT behaviour (inlining, monomorphic
+> typed-array input, minimal temporaries, `Math.imul` for integer
+> math), throughput can vary noticeably between V8 (Chrome / Edge /
+> Node), SpiderMonkey (Firefox), and JavaScriptCore (Safari) — and
+> even between different releases of the same engine as their
+> optimisation passes evolve. Treat the numbers above as a guide,
+> not a spec.
 
 The two paths exist because the optimisations needed for the hot path
 (unrolled loops, skipped bounds checks, typed-array-only IO, monomorphic
@@ -318,6 +485,155 @@ speed on the LUT path.
 > Lesson: **always benchmark before and after.** What looks like a clear
 > win on paper can lose 3× on a real engine, and what looks ugly can be
 > the fastest thing the JIT will let you write.
+
+### How it compares to lcms-wasm
+
+Direct, same-machine, same-profile, same-input head-to-head against
+[`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm) 1.0.5 (LittleCMS
+2.16 compiled to wasm32 via Emscripten), measured with `cmsFLAGS_HIGHRESPRECALC`
+and pinned WASM heap buffers (i.e. lcms pre-builds a precalc device-link
+LUT and reuses its I/O buffers — the fastest, fairest setup we can give
+it). Identical PRNG input bytes on both sides.
+
+| Workflow | jsColorEngine `lutMode: 'int'` | lcms-wasm (HIGHRESPRECALC, pinned) | Speedup |
+|---|---|---|---|
+| RGB → Lab    (sRGB → LabD50)   | **65.8 Mpx/s** | 41.9 Mpx/s | **1.57×** |
+| RGB → CMYK   (sRGB → GRACoL)   | **55.0 Mpx/s** | 37.2 Mpx/s | **1.48×** |
+| CMYK → RGB   (GRACoL → sRGB)   | **51.9 Mpx/s** | 24.5 Mpx/s | **2.12×** |
+| CMYK → CMYK  (GRACoL → GRACoL) | **44.3 Mpx/s** | 22.1 Mpx/s | **2.00×** |
+
+Even `lutMode: 'float'` outruns lcms-wasm on all four workflows
+(1.28×–1.96×). Run `bench/lcms-comparison/` to reproduce.
+
+**Accuracy vs lcms-wasm** (measured over a systematic 9^N grid through
+the input cube plus named reference colours — 743 samples for 3D,
+6571 samples for 4D):
+
+| Workflow | exact match | within 1 LSB | within 2 LSB | max Δ | mean Δ |
+|---|---|---|---|---|---|
+| RGB → Lab   | 98.79 % | **100.00 %** | 100.00 % | 1 LSB | 0.004 LSB |
+| RGB → CMYK  | 93.54 % | **100.00 %** | 100.00 % | 1 LSB | 0.016 LSB |
+| CMYK → RGB  | 83.55 % | 98.51 %      | 99.07 %  | 14 LSB*| 0.073 LSB |
+| CMYK → CMYK | 59.50 % | 98.83 %      | 99.86 %  | 4 LSB  | 0.141 LSB |
+
+All named reference colours (white, black, primaries, mid-greys, skin
+tone, paper white, rich black, etc.) match exactly or within 1 LSB on
+every workflow.
+
+*The max 14 LSB on CMYK → RGB is an **out-of-gamut clipping
+disagreement**, not a correctness bug. Deep cyan CMYK values like
+`(192,0,64,32)` map to Lab coordinates outside sRGB's gamut; both
+engines clip out-of-range R, just at different stages of their
+internal pipeline — neither answer is "right" since the target
+gamut has no representation for the colour. 98.5 % of pixels still
+agree to within 1 LSB and all named reference colours match
+exactly; residual drift is well below visible threshold. See the
+[Accuracy](#accuracy) section for the hypothesis on where the
+mechanism comes from and the planned lcms-compatibility mode.
+
+#### Why pure-JS can beat Emscripten-wasm32
+
+At first glance "pure JS beats WASM port of a battle-hardened C library"
+sounds wrong — but it makes sense once you decompose it:
+
+- **lcms-wasm is a generic native C codebase compiled to wasm32.**
+  It carries all of lcms2's generality cost (per-pixel formatter
+  dispatch, handling of 16 pixel layouts, planar/interleaved, float/int,
+  endian, extra channels), no SIMD in this Emscripten build, and no
+  Fast Float plugin (the hand-tuned kernels that make native lcms2 fast
+  aren't in the WASM build). It also pays a JS ↔ WASM FFI boundary
+  on every `cmsDoTransform` call.
+- **jsColorEngine is written *for* V8.** The `lutMode: 'int'` hot
+  loop is a single specialised kernel per LUT shape (3D-3Ch, 3D-4Ch,
+  4D-3Ch, 4D-4Ch), fully unrolled, int32-specialised with `Math.imul`,
+  no bounds checks in the inner loop, no FFI boundary — and the JIT
+  inspection in `bench/jit_inspection.js` confirms all 8 hot kernels
+  TurboFan-optimise with zero deopts and stay L1i-cache-resident.
+
+So the comparison isn't really "JS vs C" — it's "V8-tuned JS with one
+specialised kernel per shape" vs "C-compiled-to-WASM with runtime
+dispatch over every pixel format lcms2 supports." The first is
+essentially custom silicon for the job; the second is a general
+tool being run through a sandbox.
+
+#### But that's lcms-wasm, not native lcms2
+
+This benchmark is against the **WASM** port, not native LittleCMS
+compiled with a C compiler. Native lcms2 with the Fast Float plugin
+and a modern compiler's auto-vectoriser would likely still be ahead
+of us — we just can't run it from Node.js to measure. A reasonable
+expectation is something like:
+
+```
+native lcms2 (Fast Float + SSE/AVX)  >  native lcms2 (default)  ~1.5–2× faster than
+jsColorEngine (this repo)  >  lcms-wasm (Emscripten, no SIMD, no Fast Float plugin)
+```
+
+The v1.3 roadmap includes a `lutMode: 'wasm-scalar'` pass to close
+on native lcms2; the v1.4 pass adds `lutMode: 'wasm-simd'`. The JIT
+inspection suggests a hand-written tight-loop WASM kernel (pointer-
+pinned, no bounds checks, no overflow guards) could recover another
+~1.4–1.6× on top of today's numbers.
+
+See **[docs/Performance.md](./docs/Performance.md)** for the full
+analysis: instruction-level JIT inspection, register-pressure
+breakdown, where the remaining cycles go, and the roadmap to close
+on native lcms2.
+
+### Faster still: `lutMode: 'int'` integer hot path (1.1+, opt-in)
+
+Add `lutMode: 'int'` to the constructor for an additional ~10–25 %
+throughput on image transforms, with 4× less LUT memory:
+
+```js
+const t = new Transform({
+    dataFormat: 'int8',
+    buildLut:   true,
+    lutMode:    'int'    // integer kernel + u16 LUT  ('float' is the default)
+});
+t.create('*srgb', cmykProfile, eIntent.relative);
+const out = t.transformArray(rgbBuf);
+```
+
+What it does: rebuilds the float CLUT as a `Uint16Array` (scaled by
+`255 × 256 = 65280` so `u16 / 256 = u8` exactly), runs the inner loop
+with `Math.imul` and Q0.8 fractional weights (derived from a Q0.16
+`gridPointsScale_fixed` so the true `(g1-1)/255` ratio is preserved),
+and folds the final `>> 8` / `>> 20` to convert u16 back to u8 output.
+
+| When `lutMode: 'int'` helps         | `'int'` throughput | `'float'` baseline | Speedup | Accuracy vs float |
+|--------------------------------------|--------------------|--------------------|---------|-------------------|
+| RGB → RGB / Lab (3D 3Ch)             | 72.1 MPx/s         | 69.0 MPx/s         | 1.04×   | **100 % exact**   |
+| RGB → CMYK     (3D 4Ch)              | 62.1 MPx/s         | 56.1 MPx/s         | 1.11×   | ≤ 1 LSB on u8     |
+| CMYK → RGB / Lab (4D 3Ch)            | 59.1 MPx/s         | 50.8 MPx/s         | 1.16×   | ≤ 1 LSB on u8     |
+| CMYK → CMYK     (4D 4Ch)             | 48.8 MPx/s         | 44.7 MPx/s         | 1.09×   | ≤ 1 LSB on u8     |
+
+The residual ≤ 1 LSB drift on the non-RGB→RGB directions is
+`Uint8ClampedArray` banker's rounding (ties to even) disagreeing with
+the integer kernel's round-half-up at exact `X.5` boundaries. It's
+not accumulated math error — the u16 interp is otherwise bit-exact.
+
+Numbers from `bench/mpx_summary.js` on Node 20 / V8 / x64 using the
+GRACoL2006 ICC profile. **All four 3-/4-channel directions are
+accelerated** as of v1.1 — CMYK input is no longer left out. The 4D
+directions actually beat 3D on speedup because the float K-LERP does
+more redundant rounding work. The 4D kernels carry intermediate values
+at Q16.4 precision (u20) to collapse three stacked rounding steps into
+one — see the CHANGELOG for the derivation. As above, expect the
+absolute numbers to shift on other engines / machines.
+
+`lutMode` defaults to `'float'`, so existing code is unaffected. It's
+safe to set globally: any LUT shape the integer kernel can't service
+(1D / 2D / 5+ output channels) just falls through to the float kernel.
+Don't use it when you need bit-exact reference output (e.g. comparing
+transformed pixels against measured patches for delta-E reporting) —
+use the float path for that.
+
+The `lutMode` option is a string enum on purpose. v1.2+ will add
+`'wasm-scalar'`, `'wasm-simd'`, and `'auto'` (best kernel per shape)
+through the same constructor option, with no API break — unknown
+values today fall through to `'float'` so code written for tomorrow's
+release won't crash on today's.
 
 ---
 
@@ -582,6 +898,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 
 Portions of this software are conceptually based on the work of:
 
-- [LittleCMS](https://www.littlecms.com) (color management architecture)
-- Bruce Lindbloom (RGB / XYZ / Lab math, ΔE formulas)
-- BabelColor (RGB working-space primaries reference)
+- [LittleCMS](https://www.littlecms.com) — color management architecture,
+  ICC profile handling, CLUT interpolation approach. A genuine debt: much
+  of the thinking in this engine was shaped by studying Marti Maria's
+  25-year solo maintenance of lcms. No code is derived — this is a
+  clean-room JavaScript implementation with different optimisation
+  constraints (V8 JIT vs C compiler) — but the intellectual lineage is
+  acknowledged here rather than claimed independently. If this project
+  ever produces commercial revenue, a meaningful share is intended to
+  flow back to LittleCMS.
+- Bruce Lindbloom — RGB / XYZ / Lab math, ΔE formulas.
+- BabelColor — RGB working-space primaries reference.

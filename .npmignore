@@ -7,3 +7,10 @@ speed_tests/
 /.idea/
 *.tgz
 /browser-dev/
+
+# Not needed by library consumers — keep them in git but out of the tarball.
+__tests__/
+bench/
+http/
+.gitignore
+.github/

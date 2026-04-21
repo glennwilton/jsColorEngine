@@ -7,3 +7,12 @@ speed_tests/
 /.idea/
 *.tgz
 /browser-dev/
+
+# Large ephemeral outputs from bench/jit_inspection.js
+/bench/jit_asm_dump.txt
+/bench/turbo-*.json
+/jit_trace.txt
+/jit_asm.txt
+
+# Third-party lcms2 C source checkout (reference-only, not shipped)
+/bench/lcms_c/
