@@ -15,6 +15,11 @@
 #   make run          — builds, then runs with default profile path
 #   make clean        — remove object files + binary
 #   make debug        — -O0 -g for gdb
+#   make steelman     — max-perf rebuild: -ffast-math -funroll-loops -flto
+#                       on top of the release flags. Used to measure
+#                       native lcms2's best-case ceiling. Can shift LUT
+#                       values by ~1 LSB vs the default release build
+#                       due to -ffast-math; ΔE is still well under 1.
 #
 
 LCMS_DIR   := lcms2-2.18
@@ -49,7 +54,7 @@ BENCH_SRC  := bench_lcms.c
 BENCH_OBJ  := bench_lcms.o
 BIN        := bench_lcms
 
-.PHONY: all run clean debug
+.PHONY: all run clean debug steelman
 
 all: $(BIN)
 
@@ -66,6 +71,27 @@ debug: CFLAGS := -O0 -g $(CSTD) -Wall -Wextra -I$(LCMS_INC) \
                  -Wno-unused-parameter -Wno-sign-compare \
                  -Wno-unused-but-set-variable
 debug: clean $(BIN)
+
+# "Steelman" preset — appends the aggressive flags to the release
+# defaults so native lcms2 gets every compiler trick short of PGO.
+# Target-specific variables in GNU Make propagate to prerequisites,
+# so the pattern rule %.o: %.c picks these up automatically.
+#
+#   -ffast-math     : relax strict IEEE 754 — allow FMA contraction,
+#                     reassociation, assume no NaN/Inf, reciprocal
+#                     instead of div. Enables more auto-vectorization.
+#   -funroll-loops  : aggressive unrolling of the tetrahedral / matrix
+#                     inner loops.
+#   -flto           : link-time optimization, lets the compiler inline
+#                     across lcms2 translation units (cmsGetTransform,
+#                     the LUT eval tree, etc.) — normally each .o is
+#                     compiled in isolation.
+steelman: CFLAGS  += -ffast-math -funroll-loops -flto
+steelman: LDFLAGS += -flto
+steelman: clean $(BIN)
+	@echo ""
+	@echo "==> steelman build complete.  Flags: -O3 -march=native -ffast-math -funroll-loops -flto"
+	@echo "    Run: ./$(BIN)"
 
 clean:
 	rm -f $(BIN) $(BENCH_OBJ) $(LCMS_OBJS)

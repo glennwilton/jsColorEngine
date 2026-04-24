@@ -156,8 +156,47 @@ values.
 |---|---|
 | `make` (default) | Build `./bench_lcms` with `-O3 -DNDEBUG -march=native` |
 | `make run` | Build + run with default profile path |
+| `make steelman` | Rebuild with **`-ffast-math -funroll-loops -flto`** on top of the release flags (see below) |
 | `make debug` | Rebuild with `-O0 -g` for `gdb` / `valgrind` |
 | `make clean` | Delete binary + all `.o` files |
+
+### `make steelman` — native lcms2 ceiling
+
+The default build already matches lcms2's own release autotools
+build (`-O3 -march=native -fno-strict-aliasing`). The `steelman`
+target is for answering the honest question *"how fast can native
+lcms actually go?"* — it turns on the three aggressive-but-legit
+compiler flags on top of release:
+
+| Flag | What it does | Cost |
+|---|---|---|
+| `-ffast-math` | Relax strict IEEE 754 — allow FMA contraction, reassociation, assume no NaN/Inf, reciprocal-instead-of-div. Enables a lot more auto-vectorization. | Results can shift by ~1 LSB vs strict-IEEE build. ΔE still well under 1 against the reference LUT. |
+| `-funroll-loops` | Aggressive unrolling of the tetrahedral / matrix inner loops. | Larger binary (~+5-10%). |
+| `-flto` | Link-time optimization — lets the compiler inline across lcms2 translation units (e.g. inline `cmsGetTransform`'s hot leaf fn into the per-pixel dispatcher). | Longer link time (~5-10s extra), nothing at runtime. |
+
+```bash
+cd bench/lcms_c
+make steelman           # fully rebuilds
+./bench_lcms            # or: taskset -c 0 ./bench_lcms
+```
+
+To go back to the reference release build:
+
+```bash
+make clean && make
+```
+
+`-ffast-math` is a free GCC/Clang flag (no license). **PGO**
+(`-fprofile-generate` / `-fprofile-use`) is the next step up and
+would give another ~5-15%, but requires a two-pass build + sample
+workload. Not wired in yet — worth doing if someone wants to push
+the ceiling further.
+
+> **On SIMD:** `-O3 -march=native` on any modern x86_64 CPU already
+> enables SSE4.2 / AVX / AVX2 / FMA for the compiler's auto-vectorizer.
+> lcms2 also has explicit SSE2 intrinsics in `cmsOptimization.c`
+> (unless you build with `-DCMS_DONT_USE_SSE2`, which we don't). No
+> hand-written AVX paths — those come entirely from the compiler.
 
 ## Options at runtime
 

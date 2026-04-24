@@ -748,6 +748,17 @@ are from the same host, same session, same 65k pixels —
 `node bench/lcms-comparison/bench.js` running against the identical
 profile and input generator.
 
+> **Steelmanning lcms2.** The flags above match lcms2's own autotools
+> release build. If you want to see how fast native lcms can actually
+> go — `-ffast-math -funroll-loops -flto` on top of the release flags,
+> the honest ceiling short of PGO — `bench/lcms_c/Makefile` has a
+> `make steelman` target that appends those flags and rebuilds. Same
+> binary, same bench, just with every compiler trick turned up. See
+> [`bench/lcms_c/README.md`](../bench/lcms_c/README.md#make-steelman--native-lcms2-ceiling)
+> for the flag details. On this profile / CPU, the steelman build
+> typically lifts native lcms2 by ~5–15 % over the release reference
+> above — enough to narrow the CMYK gap but not close it.
+
 | Workflow | jsCE `float` | **jsCE `int`** | lcms-wasm (best) | **lcms2 native (best)** | jsCE `int` / native |
 |---|---|---|---|---|---|
 | RGB → Lab    (sRGB → LabD50)   | 55.4 MPx/s | **64.5 MPx/s** | 39.9 | **62.7** | **1.03× (tied)** |
