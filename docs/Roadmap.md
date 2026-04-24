@@ -852,6 +852,38 @@ via `<script>`, work from `file://` so devs can just download + open):
   side-by-side "on screen" vs "what it'll print". Classic use case,
   covers the full pipeline, looks impressive. `img.toSoftproofRGBA()`
   is literally one call.
+- **`softproof-vs-lcms.html`** — **the proof-of-accuracy demo.**
+  Load an image, pick a press profile, run the same softproof
+  through both `jsColorEngine` and `lcms-wasm`, show three panels:
+
+    1. **Left** — jsCE softproof result + transform time (ms) + MPx/s
+    2. **Middle** — pixel-by-pixel diff visualisation with
+       amplification slider (1× to 32×, logarithmic). At 1× identical
+       outputs look black; at 32× a 1-LSB drift is clearly visible.
+       Greyscale by default = absolute per-channel magnitude; toggle
+       to signed-RGB mode (red tint = R channel differs, green = G,
+       blue = B) for directional info.
+    3. **Right** — lcms-wasm softproof result + transform time (ms)
+       + MPx/s
+
+  Stats strip under the diff panel:
+
+    - Max abs diff (0–255 units, per channel)
+    - Mean abs diff
+    - % of pixels that match exactly
+    - % within 1 LSB, % within 2 LSB
+    - Speed ratio (jsCE / lcms)
+
+  Double-value demo: lets users **see for themselves** that the two
+  engines produce visually-indistinguishable output at different
+  speeds (marketing) AND gives **us** a regression surface during
+  v1.3 compat harness work — if the diff panel ever shows structured
+  red blobs where there should be noise, something's drifted.
+
+  ImageHelper shines here: the jsCE side is literally
+  `new ImageHelper({...}).toSoftproofRGBA()` — the whole sample is
+  mostly the lcms-wasm wiring + diff calculation + UI, which
+  highlights how much glue the helper saves. ~250 lines total.
 - **`profile-inspector.html`** — load any ICC file, dump tag table,
   show TRC curves, render the gamut shell in 3D. Genuinely useful
   tool on its own; doubles as a demo of the `Profile` class API
