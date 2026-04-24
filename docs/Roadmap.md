@@ -89,6 +89,14 @@ Headline: `lutMode: 'int'` (pure JS) beats native vanilla lcms2 on
 
 ## v1.3 — 16-bit input/output across int + WASM LUT kernels
 
+**Primary v1.3 focus.** Native Lab 16-bit I/O (`dataFormat: 'int16'`)
+end-to-end — this is the biggest practical gap for print/prepress
+users and closes the ICC v4 PCS story (Lab is encoded as u16 in ICC
+v4, so a 16-bit-in, 16-bit-out path avoids the round-trip through
+u8 we quietly do today). The 16-bit compat tests also become the
+regression harness for the lcms2 `.it8` oracle work (see next
+section).
+
 Once the WASM LUT infrastructure is in place (v1.2, ✅ done), 16-bit
 is a fanout task rather than a net-new one — the same kernel gets a
 u16 input load, u16 store, and Q0.16 → final-shift retuning.
@@ -576,33 +584,54 @@ devices. Without that data we're optimising on vibes.
 These are small opt-in items that may slot into v1.3 or v1.4 depending
 on priorities.
 
-**f32 CLUT variant (`dataType: 'f32'`).** Cheap experiment: clone
-the existing float CLUT as `Float32Array` and benchmark the float
-kernel against it. Tagged as `dataType: 'f32'` on the outer LUT so
-the dispatcher / inspection tooling already handles it.
+**f32 CLUT variant (`dataType: 'f32'`) — fills the accuracy tier
+for LUT-based speed.** Currently the LUT pyramid is **int-only**:
+`int8` → `int-wasm-scalar` → `int-wasm-simd`. Users who need float
+accuracy have to drop to `buildLut: false` (per-pixel f64 pipeline),
+which is ~10–15× slower than the int LUT path. An `f32` LUT variant
+would give them the full speed of the LUT architecture at float
+precision — closing the "LUT speed but with float accuracy" gap
+that measurement / HDR / high-bit-depth workflows actually want.
 
-Hypothesis: measurable win on 4D CMYK profiles (17⁴×4 = 334 KB
-@ f64 drops to 167 KB @ f32, which is the difference between
-"borderline L2/L3" and "fully L2-resident" on most desktop chips).
-Small-to-no win on 3D profiles that already fit L2 comfortably.
+The shape is a direct fanout of the 16-bit work above: same WASM
+kernel plumbing, different number format in the corners. Once the
+u16 i32-SIMD kernel exists, the f32 SIMD kernel is a sibling
+(`f32x4` mul-add in place of `i32x4` mul + Q-shift) — the outer
+dispatch and LUT-build code stays the same.
+
+Hypothesis: dual-win — accuracy tier fills out **and** cache
+pressure drops on 4D CMYK profiles (17⁴×4 = 334 KB @ f64 drops to
+167 KB @ f32, which is the difference between "borderline L2/L3"
+and "fully L2-resident" on most desktop chips). Small-to-no cache
+win on 3D profiles that already fit L2 comfortably — but the
+accuracy-tier value stands on its own.
 
 Risks to measure:
-1. JS f32 load = implicit `cvtss2sd` (f32→f64 widen) per CLUT read.
-   On tetrahedral loops with 4–8 CLUT reads per output channel, the
-   extra uops can eat the cache win. Worth confirming direction per
-   kernel shape.
+1. JS f32 load = implicit `cvtss2sd` (f32→f64 widen) per CLUT read
+   in the JS (non-WASM) kernel path. On tetrahedral loops with 4–8
+   CLUT reads per output channel, the extra uops can eat the cache
+   win. The WASM kernel has no such widening — `f32x4` is native.
 2. V8 will deopt + re-specialise the float kernel the first time it
    sees a `Float32Array` input after running against `Float64Array`.
    Bench must warm separately, not swap mid-run.
 3. Accuracy: f32 mantissa is 24 bits, so CLUT cells in `[0, 1]` land
-   ~6e-8 off. Far below the `1/255 = 0.004` LSB budget for u8 out —
-   expect bit-exact at u8, sub-LSB drift at u16 out.
+   ~6e-8 off — negligible for ΔE but worth documenting for anyone
+   building a conformance suite on top.
 
-**Non-goal**: don't ship an f32 kernel variant if the measurement is
-flat or mixed — f32 LUT is ONLY worth adding if it cleanly wins on
-large 4D profiles, since every new `dataType` is surface area the
-WASM and SIMD paths also have to cover later. Measure first, decide
-after.
+**Plan shape** (when it lands):
+1. Clone `buildLut` to produce a `Float32Array` CLUT alongside the
+   existing u16 one; `dataType: 'f32'` flag on the outer LUT
+   descriptor.
+2. Float JS kernel reads `Float32Array` directly — measure against
+   current f64 kernel for the cache-win direction.
+3. `wasm/tetra{3,4}d_f32.wat` — `f32x4`-SIMD variants of the
+   existing int kernels. `lutMode: 'float-wasm-simd'` enters the
+   demotion chain below `int-wasm-simd` (engage when input is float
+   / high-bit or when the caller asks for it).
+
+**Non-goal**: don't pursue this before 16-bit is done — 16-bit
+gives us the bigger audience (print, photo), and the kernel
+skeleton from the u16 work is what f32 copies.
 
 **Pre-biased u16 CLUT (3D only).** Independently rediscovered during
 the v1.1 cycle: ICC v2 PCS Lab encodes `L* = 100` at 0xFF00 (= 255
