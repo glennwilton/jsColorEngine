@@ -32,14 +32,16 @@ future-facing only.
 
 - [Shipped so far](#shipped-so-far)
 - [v1.3 — 16-bit input/output across int + WASM LUT kernels](#v13--16-bit-inputoutput-across-int--wasm-lut-kernels)
+    - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
     - [Compat harness — `bench/lcms_compat/`](#compat-harness--benchlcms_compat)
 - [v1.4 — Code generation for non-LUT pipelines + smarter `'auto'`](#v14--code-generation-for-non-lut-pipelines--smarter-auto)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
-    - [Candidate micro-optimisations](#candidate-micro-optimisations)
-- [v1.5 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity](#v15-optional--lutmode-int-pipeline--s1516-for-lcms-parity)
+    - [Candidate micro-optimisations — float-wasm-scalar / f32 CLUT / float-wasm-simd](#candidate-micro-optimisations)
+- [v1.5 — Image helper + browser samples](#v15--image-helper--browser-samples)
+    - [Browser samples](#browser-samples)
+- [v1.6 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity](#v16-optional--lutmode-int-pipeline--s1516-for-lcms-parity)
 - [v2 — Separation of concerns: split Transform + Pipeline + Interpolator](#v2--separation-of-concerns-split-transform--pipeline--interpolator)
-- [Browser samples](#browser-samples)
 - [What we are explicitly NOT doing](#what-we-are-explicitly-not-doing)
 - [Historical record — original v1.3 / v1.4 analysis (1D WASM POC)](#historical-record--original-v13--v14-analysis-1d-wasm-poc)
 
@@ -153,6 +155,52 @@ the kernel dispatch adds an `outputPrecision: 'u8' | 'u16'` flag to
 the `LutDescriptor` (which the v2 package split formalises anyway —
 see below). No new `lutMode` value needed; the existing `'int'` /
 `'int-wasm-*'` values all get `outputPrecision` branches.
+
+### Tunable LUT grid size — `lutGridSize` option
+
+Second v1.3 accuracy lever, independent of the 16-bit work above.
+ICC profiles typically ship with `clutPoints = 17` (so a 3D LUT is
+17³ = 4913 cells). Doubling the grid size quadruples accuracy in
+hot-gamut regions at predictable memory cost:
+
+| Grid | 3D f64 | 3D f32 | 4D f64 (CMYK) | 4D f32 (CMYK) |
+|---|---|---|---|---|
+| 17 | 19.6 KB | 9.8 KB | 334 KB | 167 KB |
+| 25 | 62.5 KB | 31 KB  | 1.6 MB  | 781 KB |
+| 33 | 143 KB  | 72 KB  | 9.5 MB  | 4.7 MB |
+| 49 | 470 KB  | 235 KB | 24 MB   | 12 MB  |
+| 65 | 1.1 MB  | 550 KB | 143 MB  | 71 MB  |
+
+**TODO — bench work before shipping:** measure the actual accuracy
+/ speed curve so we can recommend sensible upper bounds:
+
+1. Add a `bench/lutGridSweep.js` that builds the same profile at
+   grid sizes {17, 25, 33, 49, 65, 97, 129} for 3D, {17, 21, 25,
+   33} for 4D, and measures:
+   - ΔE₀₀ RMS and max against the f64 non-LUT pipeline as ground
+     truth, across a gamut sweep (IT8.7/4 target + L*a*b* stratified
+     grid)
+   - MPx/s throughput for each kernel family (JS int, JS float,
+     WASM scalar, WASM SIMD)
+   - L1 / L2 / L3 cache pressure — at what grid size does the
+     tetrahedral loop start missing L2?
+2. Find the **accuracy knee** (grid at which doubling size halves
+   ΔE by less than a round-off) for 3D and 4D separately.
+3. Find the **cache knee** (grid at which throughput drops ≥ 15 %
+   as LUT spills L2) for each kernel. Different for CMYK (3D per
+   K-plane) vs RGB.
+4. Document the sweet spots in Performance.md §7 — likely 33³ for
+   3D and 21⁴ or 25⁴ for 4D, but let the numbers decide.
+
+**API shape:** just `lutGridSize: 17 | 25 | 33 | 49 | 65` at
+`Transform.create()` time. Default `undefined` = use the profile's
+native `clutPoints`. Upper bound enforced (we refuse 65⁴ because
+it's 143 MB and breaks everything), with a clear error.
+
+**Expected win:** at 33³ vs 17³ on a GRACoL profile we should see
+ΔE₀₀ max drop from ~0.4 to ~0.1 in the saturation corners, for
+zero per-pixel cost — the LUT is built once, evaluated the same
+way. Free accuracy for anyone willing to pay 123 extra KB.
 
 ### Compat harness — `bench/lcms_compat/`
 
@@ -584,54 +632,83 @@ devices. Without that data we're optimising on vibes.
 These are small opt-in items that may slot into v1.3 or v1.4 depending
 on priorities.
 
-**f32 CLUT variant (`dataType: 'f32'`) — fills the accuracy tier
-for LUT-based speed.** Currently the LUT pyramid is **int-only**:
-`int8` → `int-wasm-scalar` → `int-wasm-simd`. Users who need float
-accuracy have to drop to `buildLut: false` (per-pixel f64 pipeline),
-which is ~10–15× slower than the int LUT path. An `f32` LUT variant
-would give them the full speed of the LUT architecture at float
-precision — closing the "LUT speed but with float accuracy" gap
-that measurement / HDR / high-bit-depth workflows actually want.
+**Float-LUT WASM tier — the missing half of the speed pyramid.**
+Important correction to an earlier draft of this doc: the JS float
+LUT path **already exists and is already specialised** per output
+channel count. `tetrahedralInterp3DArray_3Ch_loop`,
+`_4Ch_loop`, `_NCh_loop` (and their 4D siblings) are hand-unrolled
+hot kernels that have shipped since ~v1.0. Only `_NCh` is a
+generic fallback (5+ output channels). What's **missing** is the
+WASM tier for float — the int path has JS → WASM scalar → WASM
+SIMD, the float path has only JS. Two orthogonal items close the
+gap; neither requires the other, and they stack cleanly.
 
-The shape is a direct fanout of the 16-bit work above: same WASM
-kernel plumbing, different number format in the corners. Once the
-u16 i32-SIMD kernel exists, the f32 SIMD kernel is a sibling
-(`f32x4` mul-add in place of `i32x4` mul + Q-shift) — the outer
-dispatch and LUT-build code stays the same.
+### `float-wasm-scalar` — the low-complexity win
 
-Hypothesis: dual-win — accuracy tier fills out **and** cache
-pressure drops on 4D CMYK profiles (17⁴×4 = 334 KB @ f64 drops to
-167 KB @ f32, which is the difference between "borderline L2/L3"
-and "fully L2-resident" on most desktop chips). Small-to-no cache
-win on 3D profiles that already fit L2 comfortably — but the
-accuracy-tier value stands on its own.
+This is the sweet spot. Copy the `int-wasm-scalar` kernel
+(`src/wasm/tetra{3,4}d_nch.wat`), replace `i32.mul` + Q-shift with
+`f32.mul` / `f32.add`, drop the rounding bias and narrow tails.
+**The float kernel is actually *simpler* than the int one**:
+
+- No Q-format bookkeeping (weights are just floats in `[0, 1]`)
+- No `+ 0x80 >> 8` round-half-up bias
+- No `i8x16.narrow_i16x8_u` at the tail
+- `f32.mul` + `f32.add` map 1:1 to hardware FMA (when available)
+
+Expected speedup: ~1.2–1.5× over JS float LUT (same band
+`int-wasm-scalar` gave over JS `int` — float kernels hit the same
+JS function-call + typed-array-bounds-check overhead). No SIMD
+complexity, no lane-narrowing games — single rolled n-channel
+kernel covers every output channel count.
+
+`lutMode: 'float-wasm-scalar'` enters the demotion chain below
+`int-wasm-scalar` for callers who explicitly want float accuracy
+at LUT-grade speed.
+
+### `f32 CLUT` (`dataType: 'f32'`) — the cache-footprint win
+
+Orthogonal to the kernel change above. Today the float CLUT is
+`Float64Array`; switching to `Float32Array` halves the bytes:
+
+- 3D profile (17³×4 = 19.6 KB @ f64 → 9.8 KB @ f32): fully
+  L1-resident either way — no cache win.
+- 4D CMYK profile (17⁴×4 = 334 KB @ f64 → 167 KB @ f32): crosses
+  the typical L2 boundary. Measurable win on 4D workflows on
+  desktop-class CPUs.
 
 Risks to measure:
-1. JS f32 load = implicit `cvtss2sd` (f32→f64 widen) per CLUT read
-   in the JS (non-WASM) kernel path. On tetrahedral loops with 4–8
-   CLUT reads per output channel, the extra uops can eat the cache
-   win. The WASM kernel has no such widening — `f32x4` is native.
-2. V8 will deopt + re-specialise the float kernel the first time it
-   sees a `Float32Array` input after running against `Float64Array`.
-   Bench must warm separately, not swap mid-run.
-3. Accuracy: f32 mantissa is 24 bits, so CLUT cells in `[0, 1]` land
-   ~6e-8 off — negligible for ΔE but worth documenting for anyone
-   building a conformance suite on top.
+1. **JS f32 load = implicit f32→f64 widen** (`cvtss2sd`) on every
+   CLUT read in the JS kernel. On tetrahedral loops with 4–8 CLUT
+   reads per output channel, those widens can eat the cache win.
+   The WASM float kernel has no such widening — `f32.load` is
+   native-width.
+2. V8 deopts + re-specialises on first `Float32Array` after
+   `Float64Array`. Bench must warm separately, not swap mid-run.
+3. Accuracy: f32 mantissa is 24 bits, so CLUT cells in `[0, 1]`
+   land ~6e-8 off. Negligible for ΔE; worth documenting.
 
-**Plan shape** (when it lands):
-1. Clone `buildLut` to produce a `Float32Array` CLUT alongside the
-   existing u16 one; `dataType: 'f32'` flag on the outer LUT
-   descriptor.
-2. Float JS kernel reads `Float32Array` directly — measure against
-   current f64 kernel for the cache-win direction.
-3. `wasm/tetra{3,4}d_f32.wat` — `f32x4`-SIMD variants of the
-   existing int kernels. `lutMode: 'float-wasm-simd'` enters the
-   demotion chain below `int-wasm-simd` (engage when input is float
-   / high-bit or when the caller asks for it).
+### `float-wasm-simd` — the ambitious follow-on
 
-**Non-goal**: don't pursue this before 16-bit is done — 16-bit
-gives us the bigger audience (print, photo), and the kernel
-skeleton from the u16 work is what f32 copies.
+If `float-wasm-scalar` + `f32 CLUT` ship, the SIMD variant is the
+natural continuation: `f32x4` channel-parallel in a v128 register,
+copying the `int-wasm-simd` design directly. Same axis choice
+(channel-parallel, not gather — see the SIMD width note in
+[Performance.md](./Performance.md)). The f32 data footprint win
+compounds with the `f32x4` SIMD win here — two-for-one.
+
+### Priority ordering
+
+1. **`float-wasm-scalar`** — cheapest, largest pool of users
+   (anyone using default float accuracy today), most predictable
+   win, simplest kernel of the three.
+2. **`f32 CLUT`** — orthogonal to (1), measurement-dependent. Do
+   the measurement before committing. Stacks with (1) and (3).
+3. **`float-wasm-simd`** — ambitious; depends on (1) and (2) to
+   avoid duplicated effort.
+
+**Non-goal**: none of this before 16-bit is done. 16-bit serves a
+larger audience (print, photo, ICC v4 PCS) and its kernel
+skeleton is what the WASM float work copies.
 
 **Pre-biased u16 CLUT (3D only).** Independently rediscovered during
 the v1.1 cycle: ICC v2 PCS Lab encodes `L* = 100` at 0xFF00 (= 255
@@ -660,7 +737,149 @@ on the LUT indicating "3D-pre-biased" vs "4D-raw").
 
 ---
 
-## v1.5 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity
+## v1.5 — Image helper + browser samples
+
+A small, single-purpose helper class that owns the "I have an image,
+I want to display / proof / inspect it" workflow. **Not a general
+image library** — no resize, no filter, no composite, no format
+encode/decode. Strictly "move bytes around the colour transform,
+visualise what's there."
+
+Lives as a separate class (probably `src/ImageHelper.js`, exported
+as `new ImageHelper({...})`). Used by the browser samples below as
+both a demo vehicle *and* as living documentation of how to drive
+the core engine on real image data.
+
+### API shape
+
+```js
+var img = new ImageHelper({
+    width: 1024,
+    height: 768,
+    data: pixels,              // Uint8Array | Uint16Array | Float32Array
+    deviceProfile: cmykProfile, // what this image IS
+    proofProfile: null,         // optional: what to simulate through
+                                // (e.g. for softproof: source is sRGB,
+                                // proofProfile is the press profile,
+                                // rendered as sRGB → press → sRGB)
+    alpha: false                // or 'straight' | 'premultiplied'
+});
+```
+
+The helper **assumes the display is sRGB** (safe default, overridable
+via a `displayProfile` option if someone cares). It builds its own
+`Transform` objects on construction based on what the image is and
+what the user asks to see:
+
+```js
+img.toScreenRGBA()             // device → sRGB, returns ImageData
+img.toSoftproofRGBA()           // device → proof → device → sRGB
+                                //   (if proofProfile is set)
+img.getChannel('C')             // single-channel Greyscale ImageHelper
+                                //   (in device space)
+img.renderChannelAs('C', '#00AEEF')  // channel greyscale tinted for display,
+                                     //   returns ImageData
+img.pixel(x, y)                 // single-pixel colour object in device space
+                                //   (uses f64 pipeline — accurate)
+```
+
+### Why this shape
+
+- **Transforms are hidden inside.** User says "I want to see this on
+  screen" / "I want to softproof this", the helper wires up the
+  correct `Transform` internally. Beginners don't need to know what a
+  PCS is.
+- **deviceProfile + proofProfile covers 80% of real image workflows.**
+  Image editing, softproofing, ink-channel inspection, press preview
+  — all of it.
+- **Channel extraction is where the helper earns its keep.** Canvas
+  alone cannot give you "the C channel of this CMYK image as a
+  coloured greyscale". It needs the full CMYK → single-channel
+  projection + RGB remapping that the engine already does.
+- **Immutable operations.** `getChannel()` returns a new helper. No
+  "wait which image am I looking at" bugs in demos.
+
+### Design decisions pinned
+
+1. **Buffer ownership:** retain by reference on construction, copy on
+   any op that changes dimensions / format. Keeps the fast path fast.
+2. **No re-transforms:** once built, the internal `Transform` objects
+   stick. Changing `proofProfile` after construction throws; users
+   build a new helper. Demo code reads cleaner that way.
+3. **Rendering target always RGBA Uint8Clamped for `toXxxRGBA()`.**
+   Canvas-ready. Float output is a different method
+   (`.toFloat32(colourSpace)`) if someone wants raw data.
+
+### Non-goals
+
+- Resize, filter, blur, composite, blend modes → use a real image
+  library (ImagiK, libvips, pillow via wasm, etc) *before* jsCE.
+- Format encode/decode (PNG, JPEG, TIFF) → out of scope. Accept
+  ImageData / typed arrays in, emit ImageData / typed arrays out.
+- Video. Not a streaming API.
+
+### When it ships
+
+**v1.5**, after the perf ceiling work of v1.4 is banked. The helper
+is a features-and-samples release, not a performance one — slotting
+it after v1.4 means it rides on top of every speed win by default.
+
+### Browser samples
+
+Dev-adoption angle: most colour libraries are judged in 30 seconds by
+whether there's a working demo someone can click. jsColorEngine has
+the [browser benchmark](./Bench.md) shipped in v1.2 but needs product
+samples as well. The ImageHelper above is the glue that makes the
+image-centric demos short enough to read as documentation.
+
+Target samples (all zero-build, reference `browser/jsColorEngineWeb.js`
+via `<script>`, work from `file://` so devs can just download + open):
+
+- **`rgb-to-cmyk-separations.html`** — image input (drag-drop or file
+  picker) → five side-by-side canvases: composite CMYK→RGB preview +
+  individual C, M, Y, K separations rendered as greyscale with the
+  channel colour as a tint overlay. Demonstrates the image hot path
+  at glance-able speed. Add an FPS counter for the "yes this really
+  is 60+ MPx/s" moment. Primary ImageHelper showcase.
+- **`colour-calculator.html`** — interactive converter between
+  RGB / Lab / XYZ / LCH / CMYK with live round-trip display. Shows
+  the accuracy path (`transform()` on single colours), the helper
+  functions in `convert.js`, and how virtual profiles work without
+  the user needing an ICC file. UI: a row of sliders per colour
+  space, ΔE readout between source and round-tripped destination.
+- **`soft-proof-image.html`** — upload image, pick a press profile
+  from a dropdown of virtual profiles (or drop in your own ICC),
+  side-by-side "on screen" vs "what it'll print". Classic use case,
+  covers the full pipeline, looks impressive. `img.toSoftproofRGBA()`
+  is literally one call.
+- **`profile-inspector.html`** — load any ICC file, dump tag table,
+  show TRC curves, render the gamut shell in 3D. Genuinely useful
+  tool on its own; doubles as a demo of the `Profile` class API
+  surface.
+- **`gamut-viewer.html`** — relicensed + simplified version of the
+  existing `profileViewer.js` (O2 Creative). Three.js-based,
+  vertex-coloured gamut mesh, side-by-side profile comparison with
+  ∆E³ volume readout, add/remove profiles, opacity sliders,
+  wire/solid/trans view modes, mouse-drag rotation + wheel zoom.
+  Already has `addLabPoints` / `addCMYKPoints` / `addRGBPoints`
+  helpers — can plug an image → point-cloud demo on top (drop an
+  image, see the image's pixel distribution as a coloured cloud
+  inside the gamut shell). Before shipping: relicense to match
+  engine, drop jQuery dependency, swap `require` for UMD /
+  `<script>` usage, Three.js via CDN.
+
+Each ~100-200 lines of vanilla JS, no framework, no build step.
+Hosted on GitHub Pages so the README can link to live demos ("Try
+it in your browser →"). Adoption impact per hour of effort is
+higher than almost any feature work.
+
+Samples also double as **the runnable backing for the `docs/Guide.md`
+tuning guide** (when it lands) — each one is the "working copy" of
+a code block in the guide, checked for drift by a tiny sync script.
+
+---
+
+## v1.6 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity
 
 Status: **captured for record, no current commitment.** Included
 because the question will come up ("can jsColorEngine be a drop-in
@@ -702,7 +921,7 @@ path.
   would need parity tests; every kernel needs two variants.
 
 If a real user pulls this forward, the plan is documented here so
-the implementation doesn't start from scratch. Until then, v1.5 is
+the implementation doesn't start from scratch. Until then, v1.6 is
 a skippable release slot.
 
 ---
@@ -840,55 +1059,6 @@ go. v2 is an architectural arc: once the speed is banked, decompose
 so the fast parts can live where they're most useful. Different
 axis, separate release train, worth being explicit about which one
 we're on.
-
----
-
-## Browser samples
-
-Dev-adoption angle: most colour libraries are judged in 30 seconds by
-whether there's a working demo someone can click. jsColorEngine has
-the [browser benchmark](./Bench.md) shipped in v1.2 but needs product
-samples as well.
-
-Target samples (all zero-build, reference `browser/jsColorEngineWeb.js`
-via `<script>`, work from `file://` so devs can just download + open):
-
-- **`rgb-to-cmyk-separations.html`** — image input (drag-drop or file
-  picker) → five side-by-side canvases: composite CMYK→RGB preview +
-  individual C, M, Y, K separations rendered as greyscale with the
-  channel colour as a tint overlay. Demonstrates the image hot path
-  at glance-able speed. Add an FPS counter for the "yes this really
-  is 60+ MPx/s" moment.
-- **`colour-calculator.html`** — interactive converter between
-  RGB / Lab / XYZ / LCH / CMYK with live round-trip display. Shows
-  the accuracy path (`transform()` on single colours), the helper
-  functions in `convert.js`, and how virtual profiles work without
-  the user needing an ICC file. UI: a row of sliders per colour
-  space, ΔE readout between source and round-tripped destination.
-- **`soft-proof-image.html`** — upload image, pick a press profile
-  from a dropdown of virtual profiles (or drop in your own ICC),
-  side-by-side "on screen" vs "what it'll print". Classic use case,
-  covers the full pipeline, looks impressive.
-- **`profile-inspector.html`** — load any ICC file, dump tag table,
-  show TRC curves, render the gamut shell in 3D. Genuinely useful
-  tool on its own; doubles as a demo of the `Profile` class API
-  surface.
-- **`gamut-viewer.html`** — relicensed + simplified version of the
-  existing `profileViewer.js` (O2 Creative). Three.js-based,
-  vertex-coloured gamut mesh, side-by-side profile comparison with
-  ∆E³ volume readout, add/remove profiles, opacity sliders,
-  wire/solid/trans view modes, mouse-drag rotation + wheel zoom.
-  Already has `addLabPoints` / `addCMYKPoints` / `addRGBPoints`
-  helpers — can plug an image → point-cloud demo on top (drop an
-  image, see the image's pixel distribution as a coloured cloud
-  inside the gamut shell). Before shipping: relicense to match
-  engine, drop jQuery dependency, swap `require` for UMD /
-  `<script>` usage, Three.js via CDN.
-
-Each ~100-200 lines of vanilla JS, no framework, no build step.
-Hosted on GitHub Pages so the README can link to live demos ("Try
-it in your browser →"). Adoption impact per hour of effort is
-higher than almost any feature work.
 
 ---
 

@@ -68,7 +68,9 @@ roadmap at the bottom.
     - [Historical record: original v1.3 / v1.4 analysis (1D WASM POC)](#historical-record-original-v13--v14-analysis-1d-wasm-poc)
     - [v1.3+ — see Roadmap.md](#v13-and-beyond--see-roadmapmd)
 - [6. What's not on the roadmap](#6-whats-not-on-the-roadmap)
-- [7. Quick reference — when to enable what](#7-quick-reference--when-to-enable-what)
+- [7. Choosing a configuration](#7-choosing-a-configuration)
+    - [The five tiers — accuracy vs speed](#the-five-tiers--accuracy-vs-speed)
+    - [Quick reference — when to enable what](#quick-reference--when-to-enable-what)
 
 ---
 
@@ -1267,7 +1269,48 @@ SharedArrayBuffer-only paths) lives in
 
 ---
 
-## 7. Quick reference — when to enable what
+## 7. Choosing a configuration
+
+Two lenses for picking a mode — the **tier table** (what's each
+mode actually for?) and the **scenario quick reference** (I have
+workload X, what do I pass?).
+
+### The five tiers — accuracy vs speed
+
+jsColorEngine spans five operating points, each with a distinct
+accuracy / speed / memory profile. Pick by use case:
+
+| Tier | Mode (options) | Best for | Numeric precision | LUT grid | Per-pixel cost | Status |
+|---|---|---|---|---|---|---|
+| **1. Accuracy** | `buildLut: false` | Research, measurement, ΔE validation, single colours | f64 (JS double), full pipeline evaluated per pixel | n/a (no LUT) | Highest — every stage, every pixel | Shipped v1.0 |
+| **2. Balanced** | `buildLut: true, lutMode: 'float'` (or `'auto'` on non-int8 inputs) | High-accuracy batch transforms, measurement against target | f64 CLUT, specialised JS kernel per channel count | 17³–65³ (tunable, see below) | Mid — tetrahedral interp + weight eval | Shipped v1.0 (grid override: v1.3) |
+| **3. Float image** | `buildLut: true, dataFormat: 'f32', lutMode: 'float-wasm-simd'` | HDR, scene-linear, float pixel arrays, measurement pipelines at speed | f32 CLUT + `f32x4` SIMD (~6e-8 rel. error — orders of magnitude below ΔE) | 17³–33³ | Low — 4-lane WASM SIMD | Planned v1.4 |
+| **4. 16-bit image** | `buildLut: true, dataFormat: 'int16'` | Lab workflows, TIFF, ICC v4 PCS native, prepress | Q0.16 fixed-point (1 LSB = 1.5e-5 in `[0, 1]`) | 17³–33³ | Low — scalar WASM | Planned v1.3 |
+| **5. 8-bit image** | `buildLut: true, dataFormat: 'int8'` (current default via `'auto'`) | Photo, web, canvas, 8-bit image pipelines | Q0.8 via u16 CLUT (≤ 1 LSB drift @ 8-bit — visually invisible) | 17³–33³ | Lowest — 4-lane WASM SIMD on 8-bit lanes | Shipped v1.2 |
+
+**How to read the table.** Tiers 1–2 are the *accuracy family*
+(f64 throughout). Tiers 3–5 are the *image family* (native
+bit-depth in, native bit-depth out, LUT grade speed). The default
+`'auto'` picks tier 5 when it detects `int8 + buildLut: true`, and
+tier 2 otherwise — so naïve users get image-grade speed on image
+data and full accuracy on everything else.
+
+**Tunable grid size (v1.3).** Tier 2 and 3 support overriding the
+profile's native `clutPoints` (typically 17) at LUT build time
+via a `lutGridSize` option. 33³ costs 143 KB at f64, 65³ costs
+1.1 MB — both stay in L2 on desktop chips. Pure accuracy win for
+anyone willing to pay the memory. 4D LUTs (CMYK input) realistically
+cap at 17–25; 33⁴ breaks cache.
+
+**Why five and not fewer?** Each tier exists because a real user
+needs something the others can't deliver:
+- ΔE validators need tier 1 (no LUT quantisation at all)
+- Batch colour-chart ops need tier 2 (LUT speed, f64 accuracy)
+- Scene-linear HDR pipelines need tier 3 (float pixels + speed)
+- Prepress / 16-bit TIFF needs tier 4 (no 8-bit round-trip)
+- Everyone else needs tier 5 (canvas, web, images)
+
+### Quick reference — when to enable what
 
 | Scenario | Recommendation |
 |---|---|
