@@ -7,9 +7,10 @@ native JS, zero dependencies, optional WASM for the hot path.**
   4K images per second** on a single CPU thread with WASM SIMD
   enabled. Hot-path kernels hand-tuned for V8 / SpiderMonkey / JSC;
   optional WebAssembly (scalar + SIMD) kernels for the image path.
-  **Faster than native C LittleCMS on 3 of 4 image workflows in
-  pure JavaScript** (same hardware, same profile, measured side-by-
-  side — see [Speed](#speed)).
+  **Faster than steelmanned native C LittleCMS on 3 of 4 image
+  workflows in pure JavaScript** (same hardware, same profile,
+  same compiler, lcms2 built with every optimisation flag short of
+  PGO — see [Speed](#speed)).
 - **Accurate.** **LUT-free mode** (`buildLut: false`) — every pixel
   walks the full f64 pipeline, no LUT quantisation, no rounding
   short-cuts. For colour-critical / prepress / proof / measurement
@@ -45,11 +46,13 @@ reasonable baselines for different audiences:
   Emscripten port that the rest of the JS ecosystem reaches for when
   they need ICC colour today. This is the engine most users would
   realistically compare against.
-- **Native C lcms2** (gcc `-O3 -march=native`, compiled from the
-  upstream `bench/lcms_c/` harness) — what you'd get by calling
-  `liblcms2` via a Node addon, a Python C extension, or a native
-  binary. This is the ceiling of what the C ecosystem offers before
-  you reach for the `fast-float` SIMD plugin or babl.
+- **Native C lcms2** (gcc `-O3 -march=native`, plus the **steelman
+  build** with `-ffast-math -funroll-loops -flto` — see
+  `bench/lcms_c/README.md`) — what you'd get by calling `liblcms2`
+  via a Node addon, a Python C extension, or a native binary. This
+  is the ceiling of what the C ecosystem offers with compiler
+  optimisation alone, before you reach for the `fast-float` SIMD
+  plugin or babl.
 
 We compare against both because one of them (WASM) is what a JS
 developer would actually install, and the other (native) is what
@@ -59,11 +62,13 @@ hardware, in the same session, with the same input bytes.
 
 - **~1.5–2.1× faster than `lcms-wasm`** on pure JS,
   **~4.5–6.5× with WASM SIMD** enabled.
-- **Beats native C LittleCMS on 3 of 4 image workflows in pure
-  JavaScript** on the same hardware (1.03×, 0.90×, 1.47×, 1.41× for
-  RGB→Lab, RGB→CMYK, CMYK→RGB, CMYK→CMYK respectively). Enable the
-  WASM SIMD default and we win all four by **2–5×**. Full measured
-  table in
+- **Beats steelmanned native C LittleCMS on 3 of 4 image workflows
+  in pure JavaScript** on the same hardware (1.04×, 0.93×, 1.49×,
+  1.40× for RGB→Lab, RGB→CMYK, CMYK→RGB, CMYK→CMYK respectively).
+  Native C is compiled with `-O3 -march=native -ffast-math
+  -funroll-loops -flto` — every compiler trick short of PGO — so the
+  comparison isn't a strawman. Enable the WASM SIMD default and we
+  win all four by **2–5×**. Full measured table in
   [docs/Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
 - Bit-exact-or-within-1-LSB against the same LittleCMS reference on
   98.5–100 % of samples on the four standard image workflows. See
@@ -519,22 +524,36 @@ RGB → RGB at 113 fps means a 4K still image (8.3 MPx) finishes in
 ### vs native C LittleCMS — same hardware, same session
 
 Run on a second machine (WSL2 / Ubuntu 20.04, gcc 10.5 `-O3
--march=native`, `taskset -c 0`) with everything measured in the same
-session against identical profiles and inputs. Numbers are lower in
-absolute terms (different CPU) but the **ratios tell the story**:
+-march=native -ffast-math -funroll-loops -flto`, `taskset -c 0`)
+with everything measured in the same session against identical
+profiles and inputs. **Native C is built with full steelman flags**
+(`make steelman` in [`bench/lcms_c/`](./bench/lcms_c/)) — every
+compiler trick short of PGO, so the comparison gives lcms2 every
+advantage we could give it. The **ratios tell the story**:
 
-| Workflow | jsCE `int` (pure JS) | lcms2 native (best) | jsCE / native |
+| Workflow | jsCE `int` (pure JS) | lcms2 native steelman | jsCE / native |
 |---|---|---|---|
-| RGB → Lab    (sRGB → LabD50)   | 64.5 MPx/s | 62.7 MPx/s | **1.03× (tied)** |
-| RGB → CMYK   (sRGB → GRACoL)   | 54.2 MPx/s | 60.3 MPx/s | 0.90× (native +11 %) |
-| CMYK → RGB   (GRACoL → sRGB)   | 53.2 MPx/s | 36.1 MPx/s | **1.47× (jsCE +47 %)** |
-| CMYK → CMYK  (GRACoL → GRACoL) | 43.6 MPx/s | 31.0 MPx/s | **1.41× (jsCE +41 %)** |
+| RGB → Lab    (sRGB → LabD50)   | 64.5 MPx/s | 61.9 MPx/s | **1.04× (jsCE wins)** |
+| RGB → CMYK   (sRGB → GRACoL)   | 54.2 MPx/s | 58.1 MPx/s | 0.93× (native +7 %) |
+| CMYK → RGB   (GRACoL → sRGB)   | 53.2 MPx/s | 35.7 MPx/s | **1.49× (jsCE +49 %)** |
+| CMYK → CMYK  (GRACoL → GRACoL) | 43.6 MPx/s | 31.2 MPx/s | **1.40× (jsCE +40 %)** |
 
-Pure JavaScript beats native vanilla lcms2 on **3 of 4** image
+Pure JavaScript beats native steelmanned lcms2 on **3 of 4** image
 workflows on the same hardware. Swap in the v1.2 default
 (`'int-wasm-simd'`, third column of the Speed table above) and we
 win all four by **2–5×**. Reproduce in ~5 minutes from a fresh WSL2
 install: [`bench/lcms_c/README.md`](./bench/lcms_c/README.md).
+
+> **Why steelman?** Because "we beat native C" is a big enough claim
+> to deserve stress-testing. `-ffast-math -funroll-loops -flto` lifted
+> lcms2 by only **−2 % to +2 %** over `-O3 -march=native` on this
+> profile — inside the bench's run-to-run noise floor. The reason is
+> documented in [Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run):
+> lcms2's hot loop is **dispatch-bound, not ALU-bound**, so compiler
+> flags that improve arithmetic have nothing to optimise. That's
+> also the architectural reason jsColorEngine wins: specialising the
+> kernel at LUT-build time replaces the dispatcher with straight-line
+> code the JIT can crush.
 
 ### Key takeaways
 

@@ -748,23 +748,30 @@ are from the same host, same session, same 65k pixels —
 `node bench/lcms-comparison/bench.js` running against the identical
 profile and input generator.
 
-> **Steelmanning lcms2.** The flags above match lcms2's own autotools
-> release build. If you want to see how fast native lcms can actually
-> go — `-ffast-math -funroll-loops -flto` on top of the release flags,
-> the honest ceiling short of PGO — `bench/lcms_c/Makefile` has a
-> `make steelman` target that appends those flags and rebuilds. Same
-> binary, same bench, just with every compiler trick turned up. See
-> [`bench/lcms_c/README.md`](../bench/lcms_c/README.md#make-steelman--native-lcms2-ceiling)
-> for the flag details. On this profile / CPU, the steelman build
-> typically lifts native lcms2 by ~5–15 % over the release reference
-> above — enough to narrow the CMYK gap but not close it.
+> **Steelmanning lcms2 (measured).** The release flags above match
+> lcms2's own autotools build. To verify that wasn't already leaving
+> perf on the floor, `bench/lcms_c/Makefile` has a `make steelman`
+> target that appends **`-ffast-math -funroll-loops -flto`** on top
+> of the release flags — every compiler trick short of PGO. Measured
+> on this CPU with the same compiler on both builds, **steelman lifted
+> native lcms2 by −2 % to +2 % across the four workflows**. That's
+> inside the bench's own run-to-run noise floor. See the
+> "Dispatch-bound, not ALU-bound" note after the table for why — the
+> steelman row is kept in the comparison as the more conservative
+> "best native C" number, so the ratios below credit lcms2 with every
+> compiler win it can reach.
+>
+> To reproduce: `cd bench/lcms_c && make steelman && ./bench_lcms`.
+> Flag details: [`bench/lcms_c/README.md`](../bench/lcms_c/README.md#make-steelman--native-lcms2-ceiling).
 
-| Workflow | jsCE `float` | **jsCE `int`** | lcms-wasm (best) | **lcms2 native (best)** | jsCE `int` / native |
-|---|---|---|---|---|---|
-| RGB → Lab    (sRGB → LabD50)   | 55.4 MPx/s | **64.5 MPx/s** | 39.9 | **62.7** | **1.03× (tied)** |
-| RGB → CMYK   (sRGB → GRACoL)   | 44.2 MPx/s | 54.2 MPx/s     | 40.2 | **60.3** | 0.90× (native +11 %) |
-| CMYK → RGB   (GRACoL → sRGB)   | 40.1 MPx/s | **53.2 MPx/s** | 24.6 | 36.1 | **1.47× (jsCE +47 %)** |
-| CMYK → CMYK  (GRACoL → GRACoL) | 33.5 MPx/s | **43.6 MPx/s** | 22.0 | 31.0 | **1.41× (jsCE +41 %)** |
+| Workflow | jsCE `float` | **jsCE `int`** | lcms-wasm (best) | lcms2 native release | **lcms2 native steelman** | jsCE `int` / steelman |
+|---|---|---|---|---|---|---|
+| RGB → Lab    (sRGB → LabD50)   | 55.4 MPx/s | **64.5 MPx/s** | 39.9 | 62.3 | **61.9** | **1.04× (jsCE wins)** |
+| RGB → CMYK   (sRGB → GRACoL)   | 44.2 MPx/s | 54.2 MPx/s     | 40.2 | 59.5 | **58.1** | 0.93× (native +7 %) |
+| CMYK → RGB   (GRACoL → sRGB)   | 40.1 MPx/s | **53.2 MPx/s** | 24.6 | 35.6 | **35.7** | **1.49× (jsCE +49 %)** |
+| CMYK → CMYK  (GRACoL → GRACoL) | 33.5 MPx/s | **43.6 MPx/s** | 22.0 | 30.5 | **31.2** | **1.40× (jsCE +40 %)** |
+
+_Release = `-O3 -march=native -fno-strict-aliasing -DNDEBUG`; steelman = release + `-ffast-math -funroll-loops -flto`. Both with gcc 10.5.0, same WSL2 session, `taskset -c 0`. Numbers are "best of the two lcms2 flag variants" (`flags=0` vs `HIGHRESPRECALC`)._
 
 **The measurement replaces the earlier "wasm × 1.5–2.5" estimate for
 native lcms2.** The estimate was high at the top of the band —
@@ -774,17 +781,17 @@ tightly than Emscripten's original targets (V8's tier-2 TurboFan
 closes more of the native gap than the Emscripten team banked on
 when the 1.5-2.5× rule-of-thumb was coined).
 
-**Three things drop out of that table that weren't visible from the
+**Four things drop out of that table that weren't visible from the
 estimate:**
 
 1. **On RGB-input workflows (3D LUT), jsColorEngine `'int'` ≈ native
-   lcms2.** RGB → Lab is a near-dead heat (1.03×); RGB → CMYK tips
-   11 % towards native. Both engines are running specialised 3D
-   tetrahedral kernels and there's not much dispatch to shave off.
-   V8 / TurboFan and `gcc -O3 -march=native` produce comparable
-   machine code for this shape.
+   lcms2.** RGB → Lab is a near-dead heat (1.04× toward jsCE); RGB
+   → CMYK tips 7 % towards native (after steelman). Both engines
+   are running specialised 3D tetrahedral kernels and there's not
+   much dispatch to shave off. V8 / TurboFan and `gcc -O3
+   -march=native` produce comparable machine code for this shape.
 2. **On CMYK-input workflows (4D LUT), jsColorEngine `'int'` wins by
-   40-47 %.** jsCE's 4D K-LERP runs at u20 Q16.4 with single-step
+   40-49 %.** jsCE's 4D K-LERP runs at u20 Q16.4 with single-step
    rounding inlined into the K-plane computation (see v1.1 changelog
    and § 2.1); lcms2's 4D path uses a general stage-walker that
    dispatches per axis. The specialisation gap opens wider here than
@@ -800,6 +807,23 @@ estimate:**
    over typed arrays** — jsColorEngine and native lcms2 differ by
    ~20 % on RGB and by the other sign on CMYK, which is tuning
    variance, not a language-level gap.
+4. **Steelman flags give native lcms2 almost nothing.** Measured
+   `-ffast-math -funroll-loops -flto` on top of `-O3 -march=native`
+   moved the four workflows by −2.4 %, −0.6 %, +0.3 %, +2.3 % —
+   inside the bench's run-to-run noise floor. This is the real
+   payload of point 3: lcms2's hot loop is **dispatch-bound, not
+   ALU-bound**, and compilers only help with the ALU half.
+   Reassociation (`-ffast-math`), unrolling (`-funroll-loops`), and
+   cross-TU inlining (`-flto`) can't optimise what isn't visible at
+   compile time — when the next operation is a `call *%rax`
+   resolved from a stage-walker, no flag saves you. Which is why
+   **specialising the kernel at LUT-build time** (what jsColorEngine
+   does) and **hand-written SIMD for a fixed shape** (what lcms2's
+   `fast-float` plugin does) are the only two routes to meaningfully
+   faster colour-pipeline throughput, regardless of language. jsCE
+   lands on the first route; SIMD via wasm-simd gets us the second
+   one for free. `-O3` in a general-purpose CMS is already close to
+   the ceiling of what the compiler can find on its own.
 
 **Same hardware, same run, all measured** — full comparison table:
 
@@ -809,7 +833,7 @@ estimate:**
 | **jsColorEngine `lutMode: 'int-wasm-scalar'`** | **~60 – 95 MPx/s** | Measured — § 2.3 |
 | **jsColorEngine `lutMode: 'int'`** (pure JS) | **43.6 – 64.5 MPx/s** | Measured — above |
 | jsColorEngine `lutMode: 'float'`              | 33.5 – 55.4 MPx/s | Measured — above |
-| **lcms2 vanilla (native C, scalar)**           | **31.0 – 62.7 MPx/s** | Measured — above |
+| **lcms2 vanilla (native C, scalar)**           | **31.2 – 61.9 MPx/s** | Measured — above (steelman build; release within ±2 %) |
 | lcms-wasm (HIGHRESPRECALC + pinned)           | 22.0 – 40.2 MPx/s | Measured — above |
 | lcms2 + `fast-float` plugin (SSE/AVX)         | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see below) |
 | babl (GIMP)                                   | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes |
