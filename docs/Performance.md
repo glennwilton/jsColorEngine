@@ -835,8 +835,8 @@ estimate:**
 | jsColorEngine `lutMode: 'float'`              | 33.5 – 55.4 MPx/s | Measured — above |
 | **lcms2 vanilla (native C, scalar)**           | **31.2 – 61.9 MPx/s** | Measured — above (steelman build; release within ±2 %) |
 | lcms-wasm (HIGHRESPRECALC + pinned)           | 22.0 – 40.2 MPx/s | Measured — above |
-| lcms2 + `fast-float` plugin (SSE/AVX)         | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see below) |
-| babl (GIMP)                                   | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes |
+| lcms2 + `fast-float` plugin (SSE2, **128-bit — same width as ours**) | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see below) |
+| babl (GIMP, AVX2/AVX-512 256/512-bit)         | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes — wider SIMD than JS/WASM can reach today |
 | lcms2 + multithreaded plugin                  | N × single-thread | Just CPU core scaling, orthogonal |
 
 Ranges are workflow-dependent; all jsCE / lcms-native / lcms-wasm
@@ -871,9 +871,12 @@ Three things fall out of the measured table above:
    time the 1D POC was run (see v1.4 Historical record for the
    0.89× across-pixel SIMD result that suggested LUT SIMD wouldn't
    work); it became possible once we inverted the vectorisation
-   axis. The gap to `fast-float`'s upper band is now mostly about
-   multi-core and AVX2/AVX512 width — single-thread scalar-vs-
-   SIMD-v128 is closed.
+   axis. Importantly, `fast-float` is **SSE2-only (128-bit)**, the
+   same SIMD width as wasm v128 — so `int-wasm-simd` vs `fast-float`
+   is genuinely apples-to-apples on instruction width. The remaining
+   gap to `fast-float`'s upper band is specialisation depth (number
+   of hand-rolled kernel variants × tightness of the plugin
+   dispatcher) and multi-threading, not SIMD width.
 
 ### What is `fast-float`?
 
@@ -881,15 +884,67 @@ Three things fall out of the measured table above:
 [github.com/mm2/Little-CMS/tree/master/plugins/fast_float](https://github.com/mm2/Little-CMS/tree/master/plugins/fast_float))
 that replaces the default scalar CLUT interpolation kernels with:
 
-- Hand-written SSE2 / AVX intrinsics
+- Hand-written **SSE2 intrinsics (128-bit)** — same SIMD width as
+  the `v128` we use in `lutMode: 'int-wasm-simd'`. No AVX2 or
+  AVX-512 paths; the plugin targets the widest SIMD that x86_64
+  guarantees out-of-the-box, exactly like wasm SIMD targets the
+  widest width that's portable across engines.
 - Specialised kernels per (input channels, output channels, bit depth)
   combination — dozens of separate optimised functions
 - Tighter loop unrolling
 - Float math throughout (lcms2 core uses fixed-point Q15.16; the
-  plugin uses float because SSE/AVX have wide float SIMD)
+  plugin name refers to this, not to SIMD width)
 
 It's the same architectural answer we'd reach with WASM SIMD — many
 narrowly-specialised hot kernels behind a dispatcher.
+
+### A note on SIMD width ceilings — JS/WASM vs native C
+
+SIMD width questions come up every time we publish these numbers
+("but couldn't native C go wider with AVX?"). Honest answer:
+
+| SIMD width | Native C | WASM | JS | Who uses it |
+|---|---|---|---|---|
+| **128-bit** (SSE2, NEON, wasm v128) | ✅ baseline on x86_64 / arm64 | ✅ shipping in all major engines since ~2021 | ✅ via wasm v128 | lcms2 `fast-float`, ffmpeg fallback, pillow, **jsColorEngine `int-wasm-simd`** |
+| **256-bit** (AVX, AVX2) | ✅ gcc `-mavx2`, hardware since ~2013 | ❌ not in wasm SIMD spec | ❌ | `pillow-simd`, `libvips`, some `babl` kernels |
+| **512-bit** (AVX-512) | ✅ gcc `-mavx512f`, Intel + Zen4+ | ❌ | ❌ | Intel IPP, hand-tuned HPC kernels |
+
+Three things worth flagging:
+
+1. **SSE2, AVX, AVX2, AVX-512 are all free** — they're CPU
+   instruction-set extensions, not licensed products. Any mainline
+   gcc/clang supports them for free (`-mavx2`, `-mavx512f`, etc),
+   and `-march=native` auto-selects the widest one available on the
+   host. The steelman build already enabled whatever your CPU
+   supports.
+2. **But the *realistic* native-C baseline is also 128-bit.** The
+   standard "go faster" option for LittleCMS in the C ecosystem is
+   its own `fast-float` plugin — and that's **SSE2 only**. No
+   distro-shipped CMS library reaches for AVX2 or AVX-512 by
+   default, because targeting a CPU feature that ~15 % of installed
+   machines don't have breaks packaging and fallback paths. So when
+   we compare `int-wasm-simd` against `fast-float`, both sides are
+   running 128-bit SIMD — **genuinely apples-to-apples on
+   instruction width**. The performance delta, if any, is about
+   kernel specialisation depth and dispatcher overhead, not width.
+3. **WASM SIMD is 128-bit by spec.** There's no 256-bit or 512-bit
+   SIMD in WebAssembly today. The `flexible-vectors` proposal would
+   eventually let wasm code pick wider widths at runtime, but it's
+   not implemented in any shipping engine as of this writing.
+   When it ships, we'd expect roughly 1.8–2.0× from widening the
+   existing SIMD kernels (memory bandwidth and load-ports cap the
+   speedup below the theoretical 2× / 4×). That's a **v1.4+**
+   question — see [Roadmap.md](./Roadmap.md).
+
+So: the "faster than native C lcms2" claim doesn't assume we're
+competing against a hypothetical AVX-512-tuned colour library that
+no one ships. It's against the versions of lcms2 people actually
+install — `-O3 -march=native` vanilla, and `fast-float` with
+SSE2 — both of which top out at the same SIMD width we do. Everything
+above that (babl, pillow-simd, Intel IPP) is a different library
+with a different purpose, **and is also on our honest-comparison
+table** as something we don't claim to beat without wasm SIMD
+widening first.
 
 ### Lessons we picked up from reading `lcms2/src/cmsintrp.c`
 

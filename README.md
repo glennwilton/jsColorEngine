@@ -554,6 +554,21 @@ install: [`bench/lcms_c/README.md`](./bench/lcms_c/README.md).
 > also the architectural reason jsColorEngine wins: specialising the
 > kernel at LUT-build time replaces the dispatcher with straight-line
 > code the JIT can crush.
+>
+> **And when lcms2 reaches for its SIMD plugin** (`fast-float`), that
+> plugin is **SSE2-only (128-bit)** — the *same* SIMD width as wasm
+> v128 in our `int-wasm-simd` kernels. Wider native SIMD (AVX2
+> 256-bit, AVX-512 512-bit) isn't reachable from any JavaScript or
+> WebAssembly engine today — wasm SIMD is 128-bit by spec — but it's
+> also **not what the C colour-management ecosystem ships by
+> default**. No distro-packaged CMS library enables AVX2 or AVX-512
+> paths, because targeting those breaks the ~15 % of installed
+> machines without them. So on the realistic C baseline vs JS
+> baseline, we're on equal SIMD-width ground. Libraries that *do*
+> go wider (babl, pillow-simd, Intel IPP) we explicitly don't claim
+> to beat — see
+> [Performance.md — SIMD width ceilings](./docs/Performance.md#a-note-on-simd-width-ceilings--jswasm-vs-native-c)
+> for the full comparison table.
 
 ### Key takeaways
 
