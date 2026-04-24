@@ -1,0 +1,681 @@
+/* ==========================================================================
+   bench/browser/styles.css
+   Clean, modern, framework-free.
+   Palette: dark slate + lime accent, suitable for long benchmark sessions.
+   ========================================================================== */
+
+:root {
+    --bg:           #0f1419;
+    --bg-card:      #161b22;
+    --bg-card-2:    #1c232c;
+    --border:       #2a323d;
+    --border-soft:  #1f2630;
+    --text:         #e6edf3;
+    --text-dim:     #8b95a4;
+    --text-muted:   #5c6675;
+    --accent:       #a3e635;     /* lime-400 */
+    --accent-2:     #4ade80;     /* green-400 */
+    --warn:         #fbbf24;
+    --error:        #f87171;
+    --row-alt:      #19202a;
+    --row-hover:    #232c38;
+    --bar:          linear-gradient(90deg, #4ade80 0%, #a3e635 100%);
+    --bar-bg:       #1a212b;
+    --bar-int:      #38bdf8;     /* sky-400 for the int reference baseline */
+    --bar-float:    #c084fc;     /* purple-400 for float */
+    --bar-wasm:     #a3e635;     /* lime-400 for WASM */
+    --bar-simd:     #4ade80;     /* green-400 for SIMD */
+    --bar-lcms:     #fb7185;     /* rose-400 for lcms */
+    --bar-nolut:    #fb923c;     /* orange-400 for the accuracy (no-LUT) path */
+    --shadow:       0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.15);
+
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    color: var(--text);
+    background: var(--bg-card-2);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    border: 1px solid var(--border-soft);
+}
+
+main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 24px 48px;
+}
+
+/* ============================================================ TOPBAR + TABS */
+
+.topbar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px 0;
+    margin-bottom: 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: var(--shadow);
+}
+
+.brand {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.brand-mark {
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--accent);
+    letter-spacing: -0.01em;
+}
+.brand-tag {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.tabs {
+    display: flex;
+    gap: 4px;
+    margin-left: -8px; /* visual alignment */
+}
+.tab {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 10px 16px;
+    font: inherit;
+    font-size: 13px;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease;
+    border-radius: 4px 4px 0 0;
+}
+.tab:hover { color: var(--text); }
+.tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* ============================================================ CARD / PANEL  */
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow);
+}
+
+.card h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.005em;
+}
+.card h3 {
+    margin: 18px 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.lead {
+    color: var(--text-dim);
+    margin: 8px 0 16px;
+    max-width: 90ch;
+}
+
+.muted { color: var(--text-muted); font-size: 12px; }
+
+.test-panel { display: block; }
+.test-panel[hidden] { display: none; }
+
+/* ============================================================ INFO PANEL    */
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--border-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.info-cell {
+    background: var(--bg-card-2);
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 50px;
+}
+.info-cell .lbl {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.info-cell .val {
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    word-break: break-word;
+}
+.info-cell .val.is-ok    { color: var(--accent-2); }
+.info-cell .val.is-warn  { color: var(--warn); }
+.info-cell .val.is-error { color: var(--error); }
+
+/* ============================================================ CONTROLS BAR  */
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: flex-end;
+    padding: 14px 16px;
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    margin: 12px 0;
+}
+
+.controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.controls label.check {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    padding-bottom: 8px;
+}
+
+.controls select,
+.controls input[type=number] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 13px;
+    min-width: 130px;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.controls select:focus,
+.controls input[type=number]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 7px 16px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+button:not(:disabled):hover { border-color: var(--accent); }
+
+.btn-primary {
+    background: var(--accent);
+    color: #0a0e12;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.btn-primary:not(:disabled):hover {
+    background: var(--accent-2);
+    border-color: var(--accent-2);
+}
+
+.btn-secondary {
+    color: var(--text-dim);
+}
+
+/* ============================================================ PROGRESS BAR  */
+
+.progress {
+    height: 6px;
+    background: var(--bg-card-2);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+    margin: 12px 0 6px;
+}
+.progress-bar {
+    height: 100%;
+    width: 0;
+    background: var(--bar);
+    transition: width 0.15s ease;
+}
+.progress-text {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-family: var(--mono);
+    text-transform: none;
+    letter-spacing: 0;
+    margin-bottom: 12px;
+    min-height: 14px;
+}
+.progress-text.is-busy { color: var(--accent); }
+.progress-text.is-done { color: var(--accent-2); }
+.progress-text.is-error { color: var(--error); }
+
+/* ============================================================ RESULTS TABLE */
+
+.results-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    background: var(--bg-card-2);
+}
+
+table.results {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+table.results th,
+table.results td {
+    padding: 8px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-soft);
+    white-space: nowrap;
+}
+table.results th {
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+table.results td.num { text-align: right; font-family: var(--mono); }
+table.results th.num { text-align: right; }
+table.results td.bar-col,
+table.results th.bar-col { width: 200px; min-width: 180px; }
+
+table.results tbody tr:nth-child(even) { background: var(--row-alt); }
+table.results tbody tr:hover           { background: var(--row-hover); }
+
+table.results tbody tr.dir-sep td { border-top: 2px solid var(--border); }
+
+/* the "best in this direction" highlight */
+table.results td.is-best { color: var(--accent); font-weight: 600; }
+
+/* relative-speed bar in MPx column */
+.bar {
+    height: 14px;
+    background: var(--bar-bg);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+}
+.bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.2s ease;
+}
+.bar-fill.b-float { background: var(--bar-float); }
+.bar-fill.b-int   { background: var(--bar-int); }
+.bar-fill.b-wasm  { background: var(--bar-wasm); }
+.bar-fill.b-simd  { background: var(--bar-simd); }
+.bar-fill.b-lcms  { background: var(--bar-lcms); }
+.bar-fill.b-nolut { background: var(--bar-nolut); }
+
+.mode-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+/* mode badge: also reused in summary cards for consistent colour mapping */
+.mode-badge.b-float { color: var(--bar-float); border-color: var(--bar-float); }
+.mode-badge.b-int   { color: var(--bar-int);   border-color: var(--bar-int); }
+.mode-badge.b-wasm  { color: var(--bar-wasm);  border-color: var(--bar-wasm); }
+.mode-badge.b-simd  { color: var(--bar-simd);  border-color: var(--bar-simd); }
+.mode-badge.b-lcms  { color: var(--bar-lcms);  border-color: var(--bar-lcms); }
+.mode-badge.b-nolut { color: var(--bar-nolut); border-color: var(--bar-nolut); }
+
+td.mode-cell.demoted .mode-badge::after {
+    content: ' \2192 demoted';
+    color: var(--warn);
+    font-style: italic;
+}
+
+td.error-cell { color: var(--error); font-style: italic; }
+
+/* LUT-description cell: e.g. "33x33x33 u16" or "no LUT (f64 pipeline)". */
+table.results td.lut-cell {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+}
+
+/* ============================================================ SUMMARY CARDS */
+/* Best-of-run cards at the top of the Full-comparison panel. 2x2 grid on
+   wide viewports, 1-col stack on narrow ones. */
+
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin: 12px 0 20px;
+}
+
+.summary-card {
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.summary-card-head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.summary-card-head .mode-badge {
+    align-self: flex-start;
+    font-size: 12px;
+    padding: 3px 10px;
+}
+.summary-card-head .summary-sub {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.03em;
+}
+
+.summary-peak {
+    color: var(--accent);
+    font-size: 12px;
+    font-family: var(--mono);
+    padding: 4px 0 2px;
+    border-bottom: 1px solid var(--border-soft);
+}
+.summary-peak.muted { color: var(--text-muted); }
+
+/* BIG headline range: worst - best MPx/s across the 4 directions. */
+.summary-range {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 0 8px;
+    border-bottom: 1px solid var(--border-soft);
+    font-family: var(--mono);
+    color: var(--accent);
+    line-height: 1.1;
+}
+.summary-range .summary-range-lo,
+.summary-range .summary-range-hi {
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+.summary-range .summary-range-lo { color: var(--text-dim); }
+.summary-range .summary-range-hi { color: var(--accent); }
+.summary-range .summary-range-sep {
+    font-size: 22px;
+    color: var(--text-muted);
+    font-weight: 300;
+}
+.summary-range .summary-range-unit {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: auto;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.summary-range.muted .summary-range-hi { color: var(--text-muted); }
+
+table.summary-body {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+table.summary-body td {
+    padding: 4px 0;
+    border: none;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+table.summary-body td:first-child { color: var(--text); font-size: 12px; }
+table.summary-body td.scr-mode     { color: var(--text-muted); font-family: var(--mono); font-size: 11px; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+table.summary-body td.scr-mpx      { text-align: right; font-family: var(--mono); color: var(--accent-2); font-weight: 600; }
+table.summary-body tr:hover        { background: transparent; }
+
+/* ============================================================ ACCURACY BLOCK */
+/* Each kernel (RGB matrix / CMYK 4D tetra) gets one block with its own
+   header, four headline cards, and a detail table. Blocks are stacked on
+   the page and separated by a top border for visual rhythm. */
+
+.accuracy-result-block {
+    margin: 18px 0 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+}
+.accuracy-result-block:first-of-type {
+    border-top: none;
+    padding-top: 0;
+}
+.accuracy-block-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 6px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    font-weight: 500;
+}
+.accuracy-block-subhead {
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 400;
+}
+.kernel-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+.kernel-badge.k-matrix  { color: var(--bar-float); border-color: var(--bar-float); }
+.kernel-badge.k-tetra4d { color: var(--bar-simd);  border-color: var(--bar-simd); }
+
+/* ============================================================ ACCURACY HEADLINE */
+/* Big-number row shown above the results table on the Accuracy sweep tab. */
+
+.accuracy-headline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 14px 0 16px;
+}
+.ah-card {
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ah-lbl {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.ah-val {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+    font-family: var(--mono);
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+}
+.ah-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+}
+
+/* ============================================================ CHART AREA    */
+
+.chart-wrap {
+    margin-top: 12px;
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 12px;
+}
+.chart-wrap canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--bg-card-2);
+}
+.legend {
+    margin-top: 10px;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.legend-swatch {
+    width: 14px;
+    height: 6px;
+    border-radius: 2px;
+}
+
+/* ============================================================ ABOUT PANEL   */
+
+.explain {
+    color: var(--text-dim);
+    line-height: 1.65;
+    max-width: 90ch;
+    padding-left: 22px;
+}
+.explain li { margin-bottom: 8px; }
+.explain strong { color: var(--text); font-weight: 600; }
+
+/* Compact reference table inside the About panel (e.g. lcms grid rule) */
+table.explain-grid {
+    border-collapse: collapse;
+    margin: 8px 0 12px;
+    font-size: 12px;
+    font-family: var(--mono);
+    max-width: 560px;
+}
+table.explain-grid th,
+table.explain-grid td {
+    padding: 6px 14px;
+    border: 1px solid var(--border-soft);
+    text-align: left;
+    color: var(--text-dim);
+}
+table.explain-grid th {
+    background: var(--bg-card-2);
+    color: var(--text);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+}
+table.explain-grid td.num { text-align: right; color: var(--accent-2); }
+
+/* ============================================================ FOOTER        */
+
+.footer {
+    max-width: 1240px;
+    margin: 24px auto 18px;
+    padding: 16px 24px;
+    color: var(--text-muted);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid var(--border-soft);
+    font-family: var(--mono);
+}
+
+/* ============================================================ RESPONSIVE   */
+
+@media (max-width: 720px) {
+    main { padding: 0 12px 24px; }
+    .topbar { padding: 10px 12px 0; }
+    .card { padding: 16px; }
+    .controls { padding: 12px; gap: 8px 10px; }
+    .controls select { min-width: 110px; }
+    .info-grid { grid-template-columns: 1fr 1fr; }
+    table.results th, table.results td { padding: 7px 10px; font-size: 12px; }
+    table.results td.bar-col, table.results th.bar-col { width: 110px; min-width: 100px; }
+}

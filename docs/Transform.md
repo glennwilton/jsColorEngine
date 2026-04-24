@@ -1,5 +1,17 @@
 # Transform
 
+**jsColorEngine docs:**
+[← Project README](../README.md) ·
+[Bench](./Bench.md) ·
+[Performance](./Performance.md) ·
+[Roadmap](./Roadmap.md) ·
+[Deep dive](./deepdive/) ·
+[Examples](./Examples.md) ·
+[API: Profile](./Profile.md) ·
+[Loader](./Loader.md)
+
+---
+
 The `Transform` class is the colour-conversion engine. You give it a
 source [`Profile`](./Profile.md) and a destination `Profile` (and
 optionally a rendering intent and some custom stages), and it builds an
@@ -174,7 +186,7 @@ new Transform(options)
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `buildLut` | Boolean | `false` | Pre-bake the pipeline into a CLUT. Required for the fast image path. Slight accuracy loss vs. running the full pipeline (LUT quantisation), but typically invisible to the eye and 20–40× faster. *(Legacy spelling `builtLut` is also accepted.)* |
-| `lutMode` | String | `'float'` | **Image hot-path kernel selector.** `'float'` (default) keeps the original float kernels — bit-stable across releases. `'int'` opts into the integer-math kernels (Math.imul + Q0.8 weights + u16 mirror LUT scaled at `255 × 256`; Q0.16 `gridPointsScale_fixed`; 4D kernels use a u20 Q16.4 single-rounding intermediate) for `dataFormat: 'int8'` LUT transforms — adds ~5–25 % throughput across all four 3-/4-channel directions (3D and 4D), uses 4× less LUT memory, and stays within **≤ 1 LSB** of the float kernel on u8 output (RGB→RGB is 100 % bit-exact; other directions hit ≤ 1 LSB, which is just banker's-rounding-vs-half-up disagreement at exact X.5 ties — well under the JND). Falls through to `'float'` for any LUT shape the integer kernel can't service (1D / 2D / 5+ output channels) — always safe to enable. v1.2+ will add `'wasm-scalar'`, `'wasm-simd'`, and `'auto'` through the same option; unknown values fall through to `'float'` so forward-written code won't crash. Don't use `'int'` for color-measurement workflows that need bit-exact reference output against a float path. See the "lutMode" section below. |
+| `lutMode` | String | `'auto'` | **Image hot-path kernel selector.** Five values in v1.2: `'auto'` (default — picks the fastest kernel for the current `(dataFormat, buildLut)` combination), `'float'`, `'int'`, `'int-wasm-scalar'`, `'int-wasm-simd'`. `'auto'` resolves at construction time: `dataFormat: 'int8'` + `buildLut: true` → `'int-wasm-simd'` (with the automatic **SIMD → scalar WASM → JS `'int'`** demotion chain running at `create()` time for hosts that lack WASM or SIMD); anything else → `'float'`. Inspect `xform.lutMode` after construction to see the resolved value. Pin an explicit mode when you want determinism: `'float'` for bit-stable f64 LUT interp across releases, `'int'` for JS-only (no WASM), or `'int-wasm-*'` to fail loudly on hosts that can't run that specific kernel. Unknown values (typos, forward-written code referencing modes added in later versions) auto-resolve the same way `'auto'` does, so code never crashes on upgrade. Don't pin `'int'` / `'int-wasm-*'` for color-measurement workflows that need bit-exact reference output against a float path — pin `'float'` or set `buildLut: false`. See the "lutMode" section below and [deep dive / LUT modes](./deepdive/LutModes.md) for full kernel details. |
 | `dataFormat` | String | `'object'` | `'object'`, `'objectFloat'`, `'int8'`, `'int16'`, `'device'`. Determines the input/output shape of `transform()` / `transformArray()`. The fast LUT path requires `'int8'`. |
 | `BPC` | Boolean \| Boolean[] | `false` | Black Point Compensation. Boolean enables for all stages; array enables per-stage by stage index (0, 1, 2…). |
 | `roundOutput` | Boolean | `true` | Round numeric output. Set `false` to keep raw floats (e.g. `243.20100198…`). |
@@ -309,24 +321,35 @@ diminishing accuracy returns and burns memory and build time. Drop to
 ## lutMode — image hot-path kernel selector (1.1+)
 
 ```js
-new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
+// Default — 'auto' is implicit. Picks int-wasm-simd on int8+LUT
+// transforms, falls back through the demotion chain on older hosts.
+new Transform({ dataFormat: 'int8', buildLut: true });
+
+// Same thing, explicit:
+new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'auto' });
+
+// Pin a specific kernel when you want determinism:
+new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
 ```
 
 `lutMode` selects the inner-loop kernel for the **LUT image fast path**.
 It only matters when `dataFormat: 'int8'` AND `buildLut: true` — the
 single-pixel accuracy path is unaffected and always uses float.
 
-| Value         | Status                | Behaviour |
-|---------------|-----------------------|-----------|
-| `'float'`     | Default               | Original float kernels. Bit-stable across releases. Use for color-measurement / delta-E workflows. |
-| `'int'`       | New in v1.1           | Integer kernels (Math.imul + Q0.8 weights + u16 mirror LUT). 1.10–1.25× speedup, 4× less LUT memory. |
-| `'wasm-scalar'` | Planned v1.3        | Falls through to `'float'` today — the option name is reserved so code written for v1.3 doesn't crash on v1.1. |
-| `'wasm-simd'` | Planned v1.4          | Same — reserved name, falls through to `'float'`. |
-| `'auto'`      | Planned v1.4          | Picks the best kernel per LUT shape. Will become the default in v2.0. |
-| (anything else) | Forward-compat fallback | Falls through to `'float'` with a `console.warn` if `verbose: true`. |
+| Value               | Since | Behaviour |
+|---------------------|-------|-----------|
+| `'auto'`            | v1.2 — **default** | Picks the fastest kernel for this `(dataFormat, buildLut)` combination. `int8` + `buildLut: true` → `'int-wasm-simd'` (with automatic SIMD → scalar WASM → JS `'int'` demotion on older hosts). Anything else → `'float'`. Inspect `xform.lutMode` post-construction to see the resolved value. |
+| `'float'`           | v1.0 | Original float kernels. Bit-stable across releases. Pin for color-measurement / delta-E workflows. |
+| `'int'`             | v1.1 | Integer kernels (Math.imul + Q0.8 weights + u16 mirror LUT). 1.10–1.25× over float, 4× less LUT memory. Pin for JS-only runtimes where you don't want to depend on WASM. |
+| `'int-wasm-scalar'` | v1.2 | Same integer math as `'int'`, executed by a hand-written WASM kernel. 1.22–1.45× over `'int'`. Auto-demotes to `'int'` if WebAssembly isn't available. 4D falls through to the scalar 4D WASM kernel. |
+| `'int-wasm-simd'`   | v1.2 | Channel-parallel WASM SIMD kernel. **2.04–3.50× over `'int'`**. Auto-demotes to `'int-wasm-scalar'` (and then `'int'`) if WASM SIMD / WASM isn't available. This is what `'auto'` picks for int8+LUT transforms. |
+| (anything else)     | forward-compat | Auto-resolves the same way `'auto'` does. A typo or forward-written code referencing a future mode gets the best-available kernel instead of crashing. Verbose mode logs a warning. |
 
 The string-enum API was chosen specifically so future kernels can be
-added without changing the constructor signature.
+added without changing the constructor signature. `'auto'` is the
+default from v1.2+; pre-v1.2 the default was `'float'`, so existing
+code that didn't set `lutMode` gets a transparent speedup on
+int8+LUT transforms after upgrading, with no API change.
 
 ### What `lutMode: 'int'` does
 
@@ -354,7 +377,7 @@ speedup".
 
 - ✅ Image processing: web canvas conversion, ImageData round-trips, video preview, soft-proofing.
 - ✅ Multi-transform apps where LUT memory adds up — the u16 mirror is 4× smaller than the float CLUT, which matters when caching dozens of profile pairs (a typical CMYK→CMYK 4D LUT drops from 2.6 MB to 650 KB).
-- ❌ Color-measurement / proofing accuracy testing where you need bit-exact reproduction of the float reference. Use `lutMode: 'float'` (the default) for that — `'int'` introduces ≤ 1 LSB drift (see accuracy table below), which is visually identical but not bit-identical.
+- ❌ Color-measurement / proofing accuracy testing where you need bit-exact reproduction of the float reference. Pin `lutMode: 'float'` (or set `buildLut: false` for the f64 pipeline) for that — `'int'` introduces ≤ 1 LSB drift (see accuracy table below), which is visually identical but not bit-identical. The default `'auto'` will use `'int-wasm-simd'` on int8+LUT transforms, which shares that ≤ 1 LSB budget.
 - ❌ Single-pixel `transform()` calls. `lutMode` only affects the LUT array path; the accuracy path is unchanged.
 
 ### Accuracy budget

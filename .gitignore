@@ -10,9 +10,30 @@ speed_tests/
 
 # Large ephemeral outputs from bench/jit_inspection.js
 /bench/jit_asm_dump.txt
+/bench/jit_asm_core_dump.txt
 /bench/turbo-*.json
 /jit_trace.txt
 /jit_asm.txt
 
-# Third-party lcms2 C source checkout (reference-only, not shipped)
-/bench/lcms_c/
+# Vendored lcms2 C source (downloaded by bench/lcms_c/fetch-lcms2.sh).
+# We commit the bench glue (bench_lcms.c / Makefile / README / fetch
+# scripts) but NOT the third-party lcms2 source tree — too big, has
+# its own upstream.
+/bench/lcms_c/lcms2-2.18/
+/bench/lcms_c/lcms2-2.19/
+/bench/lcms_c/lcms2-*/
+/bench/lcms_c/*.o
+/bench/lcms_c/bench_lcms
+/bench/lcms_c/bench_lcms.exe
+
+# lcms_compat/ harness — profiles are licensed artefacts (Adobe,
+# IDEAlliance, ECI, RISO, etc.) so user-supplied copies stay local;
+# reference .it8 data is derived measurement data and IS committed.
+# See bench/lcms_compat/profiles/README.md for the licensing split.
+/bench/lcms_compat/profiles/*
+!/bench/lcms_compat/profiles/README.md
+
+# Scratch / work-in-progress instrumented lcms2 tree — will be
+# distilled down to a patch file under bench/lcms_compat/lcms_patch/
+# during v1.3 kick-off, at which point this whole folder goes away.
+/bench/lcms_exposed/

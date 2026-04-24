@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Browser Bench</title>
+<link rel="stylesheet" href="styles.css">
+<!-- jsColorEngine UMD bundle. Built via `npm run browser` -> browser/jsColorEngineWeb.js -->
+<script src="/browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">jsColorEngine</span>
+        <span class="brand-tag">browser bench</span>
+    </div>
+    <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-test="full">Full comparison</button>
+        <button class="tab"           data-test="accuracy">Accuracy sweep</button>
+        <button class="tab"           data-test="warmup">JIT warmup curve</button>
+        <button class="tab"           data-test="sweep">Pixel-count sweep</button>
+        <button class="tab"           data-test="about">About this bench</button>
+    </nav>
+</header>
+
+<main>
+
+<!-- ENGINE INFO PANEL ====================================================== -->
+<section class="card">
+    <h2>Engine info</h2>
+    <div class="info-grid" id="engine-info">
+        <div class="info-cell"><span class="lbl">jsColorEngine</span><span class="val" id="info-jsce">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">WebAssembly</span>  <span class="val" id="info-wasm">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">WASM SIMD</span>    <span class="val" id="info-simd">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">lcms-wasm</span>    <span class="val" id="info-lcms">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Profile</span>      <span class="val" id="info-profile">loading&hellip;</span></div>
+        <div class="info-cell"><span class="lbl">User agent</span>   <span class="val" id="info-ua">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">CPU cores</span>    <span class="val" id="info-cores">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Page</span>         <span class="val" id="info-secure">&mdash;</span></div>
+    </div>
+</section>
+
+<!-- ===== TEST: FULL COMPARISON ============================================ -->
+<section class="card test-panel" id="panel-full">
+    <h2>Full comparison &mdash; every direction &times; every mode</h2>
+    <p class="lead">
+        Runs all four colour-space directions (RGB&rarr;RGB, RGB&rarr;CMYK,
+        CMYK&rarr;RGB, CMYK&rarr;CMYK) against five jsColorEngine modes
+        (<code>no-LUT</code>, <code>float</code>, <code>int</code>,
+        <code>int-wasm-scalar</code>, <code>int-wasm-simd</code>) plus
+        lcms-wasm in three configurations (<code>default</code>,
+        <code>HIGHRESPRECALC</code>, <code>NOOPTIMIZE</code>). Per cell
+        measures <em>LUT build time</em>, <em>cold first transform</em>, and
+        the <em>hot run median ms/iter</em>.
+    </p>
+
+    <!-- best-of summary, four cards grouped by use-case x engine -->
+    <div class="summary-cards" id="summary-full" hidden>
+        <div class="summary-card" id="sum-card-jsce-accuracy">
+            <div class="summary-card-head">
+                <span class="mode-badge b-nolut">Accuracy &middot; jsColorEngine</span>
+                <span class="summary-sub">no LUT &middot; f64 pipeline &middot; 8-bit I/O</span>
+            </div>
+            <div class="summary-range">
+                <span class="summary-range-lo">&mdash;</span>
+                <span class="summary-range-sep">&ndash;</span>
+                <span class="summary-range-hi">&mdash;</span>
+                <span class="summary-range-unit">MPx/s</span>
+            </div>
+            <table class="summary-body">
+                <tbody></tbody>
+            </table>
+        </div>
+        <div class="summary-card" id="sum-card-lcms-accuracy">
+            <div class="summary-card-head">
+                <span class="mode-badge b-lcms">Accuracy &middot; lcms-wasm</span>
+                <span class="summary-sub">NOOPTIMIZE &middot; pipeline &middot; 8-bit I/O</span>
+            </div>
+            <div class="summary-range">
+                <span class="summary-range-lo">&mdash;</span>
+                <span class="summary-range-sep">&ndash;</span>
+                <span class="summary-range-hi">&mdash;</span>
+                <span class="summary-range-unit">MPx/s</span>
+            </div>
+            <table class="summary-body">
+                <tbody></tbody>
+            </table>
+        </div>
+        <div class="summary-card" id="sum-card-jsce-lut">
+            <div class="summary-card-head">
+                <span class="mode-badge b-simd">Image &middot; jsColorEngine</span>
+                <span class="summary-sub">best LUT mode &middot; 8-bit I/O</span>
+            </div>
+            <div class="summary-range">
+                <span class="summary-range-lo">&mdash;</span>
+                <span class="summary-range-sep">&ndash;</span>
+                <span class="summary-range-hi">&mdash;</span>
+                <span class="summary-range-unit">MPx/s</span>
+            </div>
+            <table class="summary-body">
+                <tbody></tbody>
+            </table>
+        </div>
+        <div class="summary-card" id="sum-card-lcms-lut">
+            <div class="summary-card-head">
+                <span class="mode-badge b-lcms">Image &middot; lcms-wasm</span>
+                <span class="summary-sub">best LUT flag &middot; 8-bit I/O</span>
+            </div>
+            <div class="summary-range">
+                <span class="summary-range-lo">&mdash;</span>
+                <span class="summary-range-sep">&ndash;</span>
+                <span class="summary-range-hi">&mdash;</span>
+                <span class="summary-range-unit">MPx/s</span>
+            </div>
+            <table class="summary-body">
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="controls">
+        <label>Pixels per iter
+            <select id="pixels-full">
+                <option value="16384">16 K  (128&times;128)</option>
+                <option value="65536" selected>65 K  (256&times;256)</option>
+                <option value="262144">262 K (512&times;512)</option>
+                <option value="1048576">1 M  (1024&times;1024)</option>
+            </select>
+        </label>
+        <label>Warmup iters
+            <select id="warmup-full">
+                <option value="50">50 (fast)</option>
+                <option value="200" selected>200 (recommended)</option>
+                <option value="500">500 (thorough)</option>
+                <option value="1000">1000</option>
+            </select>
+        </label>
+        <label>Hot iters per batch (&times; 5 batches)
+            <select id="hot-full">
+                <option value="20">20  (~100 iters)</option>
+                <option value="50" selected>50  (~250 iters)</option>
+                <option value="200">200 (~1000 iters)</option>
+            </select>
+        </label>
+        <label class="check">
+            <input type="checkbox" id="incl-lcms-full" checked>
+            include lcms-wasm
+        </label>
+        <button class="btn-primary" id="run-full">Run benchmark</button>
+        <button class="btn-secondary" id="copy-full" disabled>Copy markdown</button>
+    </div>
+
+    <div class="progress" id="progress-full">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <div class="results-wrap">
+        <table class="results" id="results-full">
+            <thead>
+                <tr>
+                    <th>Direction</th>
+                    <th>Mode</th>
+                    <th title="Lookup-table shape &amp; storage (axes = input channels, g1 = grid points per axis). &quot;no LUT&quot; means the per-pixel pipeline is walked in f64.">LUT</th>
+                    <th class="num" title="Time to construct Transform + bake LUT (ms)">LUT&nbsp;build</th>
+                    <th class="num" title="First call &mdash; includes JIT tier-up + WASM compile + cache misses (ms)">Cold&nbsp;1st</th>
+                    <th class="num" title="Median of 5 batches after warmup (ms / iter)">Hot&nbsp;ms</th>
+                    <th class="num">MPx/s</th>
+                    <th class="bar-col">relative speed</th>
+                    <th class="num" title="Speedup vs jsColorEngine `int` for the same direction">vs&nbsp;`int`</th>
+                </tr>
+            </thead>
+            <tbody><!-- populated by main.js --></tbody>
+        </table>
+    </div>
+</section>
+
+<!-- ===== TEST: ACCURACY SWEEP ============================================ -->
+<section class="card test-panel" id="panel-accuracy" hidden>
+    <h2>Accuracy sweep &mdash; Lab &rarr; device &rarr; Lab round-trip</h2>
+    <p class="lead">
+        <strong>jsColorEngine only.</strong> Sweeps the full Lab colour
+        space (L = 0&hellip;100, a = &minus;120&hellip;120,
+        b = &minus;120&hellip;120), converts every Lab point to a target
+        profile's native device space as a <em>Float object</em> (no 8-bit
+        /16-bit quantisation), then converts that float device value
+        <em>back</em> to Lab and measures the residual &Delta;E<sub>76</sub>.
+        This is the most accurate path we ship &mdash; full f64 pipeline, no
+        LUT, no dataFormat rounding.
+    </p>
+    <p class="lead">
+        We run two round-trips per click to exercise both math kernels
+        jsColorEngine ships:
+        <strong>RGB</strong> (matrix + per-channel curves &mdash; pure linear
+        algebra), and <strong>CMYK</strong> (4-input tetrahedral interpolation
+        against the profile's BToA/AToB pipeline). In this path the
+        per-object overhead (object allocation, whitePoint
+        carry-over, Lab&nbsp;staging) tends to dominate over the math, so both
+        kernels land in the same 1&ndash;4&nbsp;M&nbsp;round-trip/s ballpark on
+        modern hardware &mdash; the raw math-kernel gap shows up much more
+        starkly in the <em>Full comparison</em> tab's LUT-accelerated
+        8-bit&nbsp;image path, where per-pixel work drops low enough for the
+        actual kernel cost to matter.
+    </p>
+    <p class="lead">
+        lcms-wasm is <em>not</em> included on this tab: its high-level JS
+        binding exposes 8-bit and 16-bit buffer APIs but not a per-object
+        float path, so the comparison wouldn't be like-for-like. If you want a
+        pure-float lcms round-trip you need to drop down to
+        <code>cmsDoTransform</code> with <code>TYPE_Lab_DBL</code> /
+        <code>TYPE_CMYK_DBL</code> buffers &mdash; not currently wired up.
+    </p>
+
+    <div class="controls">
+        <label>RGB target (matrix kernel)
+            <select id="rgb-accuracy">
+                <option value="srgb"     selected>sRGB (built-in)</option>
+                <option value="adobergb">AdobeRGB (built-in)</option>
+            </select>
+        </label>
+        <label>CMYK target (4D tetra kernel)
+            <select id="cmyk-accuracy" disabled>
+                <option value="gracol" selected>GRACoL2006_Coated1v2 (loaded)</option>
+            </select>
+        </label>
+        <label>Intent
+            <select id="intent-accuracy">
+                <option value="relative" selected>Relative colorimetric</option>
+                <option value="perceptual">Perceptual</option>
+                <option value="absolute">Absolute colorimetric</option>
+                <option value="saturation">Saturation</option>
+            </select>
+        </label>
+        <label>Sweep step (L, a, b)
+            <select id="step-accuracy">
+                <option value="10">10 &mdash;    ~6 875 pts</option>
+                <option value="5" selected>5 &mdash;   ~50 421 pts</option>
+                <option value="3">3 &mdash;  ~223 074 pts</option>
+                <option value="2">2 &mdash;  ~746 691 pts</option>
+                <option value="1">1 &mdash; ~5 867 381 pts (slow)</option>
+            </select>
+        </label>
+        <label class="check">
+            <input type="checkbox" id="ingamut-accuracy">
+            report in-gamut subset only (&Delta;E &lt; 2)
+        </label>
+        <button class="btn-primary" id="run-accuracy">Run sweep</button>
+        <button class="btn-secondary" id="copy-accuracy" disabled>Copy markdown</button>
+    </div>
+
+    <div class="progress" id="progress-accuracy">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <!-- result blocks: one per kernel family -->
+    <div class="accuracy-result-block" id="result-block-rgb" hidden>
+        <h3 class="accuracy-block-head">
+            <span class="kernel-badge k-matrix">RGB round-trip &middot; matrix kernel</span>
+            <span class="accuracy-block-subhead" id="block-rgb-label">&mdash;</span>
+        </h3>
+        <div class="accuracy-headline">
+            <div class="ah-card">
+                <div class="ah-lbl">Round-trip rate</div>
+                <div class="ah-val" id="ah-rate-rgb">&mdash;</div>
+                <div class="ah-sub" id="ah-rate-rgb-sub">M round-trips / s</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Total time</div>
+                <div class="ah-val" id="ah-time-rgb">&mdash;</div>
+                <div class="ah-sub">ms for full sweep</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Points swept</div>
+                <div class="ah-val" id="ah-pts-rgb">&mdash;</div>
+                <div class="ah-sub" id="ah-pts-rgb-sub">Lab points</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Median &Delta;E<sub>76</sub></div>
+                <div class="ah-val" id="ah-dE-rgb">&mdash;</div>
+                <div class="ah-sub" id="ah-dE-rgb-sub">in-gamut accuracy</div>
+            </div>
+        </div>
+        <div class="results-wrap">
+            <table class="results" id="results-rgb">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th class="num">Value</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody><!-- populated by main.js --></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="accuracy-result-block" id="result-block-cmyk" hidden>
+        <h3 class="accuracy-block-head">
+            <span class="kernel-badge k-tetra4d">CMYK round-trip &middot; 4D tetrahedral kernel</span>
+            <span class="accuracy-block-subhead" id="block-cmyk-label">&mdash;</span>
+        </h3>
+        <div class="accuracy-headline">
+            <div class="ah-card">
+                <div class="ah-lbl">Round-trip rate</div>
+                <div class="ah-val" id="ah-rate-cmyk">&mdash;</div>
+                <div class="ah-sub" id="ah-rate-cmyk-sub">M round-trips / s</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Total time</div>
+                <div class="ah-val" id="ah-time-cmyk">&mdash;</div>
+                <div class="ah-sub">ms for full sweep</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Points swept</div>
+                <div class="ah-val" id="ah-pts-cmyk">&mdash;</div>
+                <div class="ah-sub" id="ah-pts-cmyk-sub">Lab points</div>
+            </div>
+            <div class="ah-card">
+                <div class="ah-lbl">Median &Delta;E<sub>76</sub></div>
+                <div class="ah-val" id="ah-dE-cmyk">&mdash;</div>
+                <div class="ah-sub" id="ah-dE-cmyk-sub">in-gamut accuracy</div>
+            </div>
+        </div>
+        <div class="results-wrap">
+            <table class="results" id="results-cmyk">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th class="num">Value</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody><!-- populated by main.js --></tbody>
+            </table>
+        </div>
+    </div>
+
+    <p class="muted" style="margin-top:12px">
+        <strong>What the &Delta;E numbers mean.</strong>
+        When the starting Lab point is <em>inside</em> the target profile's
+        gamut, the round-trip dE is the engine's residual numerical error
+        &mdash; typically &lt; 0.2 dE for jsColorEngine.
+        When the starting Lab is <em>outside</em> gamut, the dE mostly reflects
+        how far the gamut-mapping had to travel to land on the boundary; dE
+        values of 20&ndash;80+ are normal for highly out-of-gamut Lab
+        (e.g. pure a = &plusmn;120) and are a property of the profile, not the
+        engine. Tick "in-gamut only" to filter those and see the pure
+        math-fidelity number.
+    </p>
+    <p class="muted">
+        <strong>What the two kernels actually do.</strong> A Lab&rarr;RGB
+        <code>forward()</code> is a matrix profile: 3&nbsp;curve evaluations +
+        a 3&times;3 matrix multiply + 3 inverse curves. That's &lt; 30 scalar
+        ops of pure linear algebra. A Lab&rarr;CMYK <code>forward()</code> is a
+        4-input tetrahedral interpolation against the profile's BToA LUT
+        (17<sup>4</sup> or 33<sup>4</sup> grid): find the enclosing
+        tetrahedron (sort 4 weights), fetch 5 grid corners with 4 output
+        channels each (20 memory loads), barycentric blend. &sim;80&ndash;100
+        ops, memory-bound.
+    </p>
+    <p class="muted">
+        In this <em>per-object float</em> path both kernels are dominated by
+        the surrounding JS overhead (object allocation, whitePoint carry-over,
+        Lab staging), so you'll see similar numbers for the two targets. The
+        kernel cost difference is front-and-centre in the <em>Full
+        comparison</em> tab's 8-bit image path &mdash; that's where jsColorEngine's
+        SIMD kernel pulls 2&ndash;3&times; ahead on CMYK&rarr;CMYK and roughly matches
+        lcms-wasm on RGB&rarr;RGB (because matrix math doesn't vectorise much
+        beyond pairing loads, but 4D tetra does).
+    </p>
+</section>
+
+<!-- ===== TEST: JIT WARMUP CURVE =========================================== -->
+<section class="card test-panel" id="panel-warmup" hidden>
+    <h2>JIT warmup curve &mdash; watch TurboFan tier up</h2>
+    <p class="lead">
+        Runs the same transform <code>N</code> times and plots the per-iteration
+        time. The first 50&ndash;300 iters typically run in Ignition / Sparkplug
+        (slower); once V8 collects enough type feedback, TurboFan compiles the
+        kernel and times drop sharply. WASM modes show much less ramp because
+        the compiler runs once at <code>create()</code> time, not per-iter.
+    </p>
+
+    <div class="controls">
+        <label>Direction
+            <select id="dir-warmup">
+                <option value="rgb-rgb">RGB &rarr; RGB  (sRGB &rarr; AdobeRGB)</option>
+                <option value="rgb-cmyk" selected>RGB &rarr; CMYK (sRGB &rarr; GRACoL)</option>
+                <option value="cmyk-rgb">CMYK &rarr; RGB (GRACoL &rarr; sRGB)</option>
+                <option value="cmyk-cmyk">CMYK &rarr; CMYK (GRACoL &rarr; GRACoL)</option>
+            </select>
+        </label>
+        <label>Mode
+            <select id="mode-warmup">
+                <option value="no-lut">jsColorEngine no-LUT (f64)</option>
+                <option value="float">jsColorEngine float</option>
+                <option value="int" selected>jsColorEngine int</option>
+                <option value="int-wasm-scalar">jsColorEngine int-wasm-scalar</option>
+                <option value="int-wasm-simd">jsColorEngine int-wasm-simd</option>
+                <option value="lcms-highres">lcms-wasm HIGHRESPRECALC</option>
+                <option value="lcms-noopt">lcms-wasm NOOPTIMIZE (no LUT)</option>
+            </select>
+        </label>
+        <label>Pixels per iter
+            <select id="pixels-warmup">
+                <option value="16384">16 K</option>
+                <option value="65536" selected>65 K</option>
+                <option value="262144">262 K</option>
+            </select>
+        </label>
+        <label>Iters to record
+            <select id="iters-warmup">
+                <option value="200">200</option>
+                <option value="500" selected>500</option>
+                <option value="1500">1500</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="run-warmup">Run</button>
+    </div>
+
+    <div class="progress" id="progress-warmup">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <div class="chart-wrap">
+        <canvas id="chart-warmup" width="900" height="320"></canvas>
+        <div class="legend" id="legend-warmup"></div>
+    </div>
+</section>
+
+<!-- ===== TEST: PIXEL-COUNT SWEEP ========================================== -->
+<section class="card test-panel" id="panel-sweep" hidden>
+    <h2>Pixel-count sweep &mdash; throughput vs buffer size</h2>
+    <p class="lead">
+        Same direction + mode, swept across pixel counts from 4&nbsp;K to 4&nbsp;M.
+        Throughput should be roughly flat &mdash; if it falls off at large sizes
+        the bottleneck is memory bandwidth, not the kernel. (4&nbsp;K = 64&times;64,
+        4&nbsp;M = 2048&times;2048.) Useful for sanity-checking that small-buffer
+        cache effects aren't dominating the headline MPx/s number.
+    </p>
+
+    <div class="controls">
+        <label>Direction
+            <select id="dir-sweep">
+                <option value="rgb-rgb">RGB &rarr; RGB</option>
+                <option value="rgb-cmyk" selected>RGB &rarr; CMYK</option>
+                <option value="cmyk-rgb">CMYK &rarr; RGB</option>
+                <option value="cmyk-cmyk">CMYK &rarr; CMYK</option>
+            </select>
+        </label>
+        <label>Mode
+            <select id="mode-sweep">
+                <option value="no-lut">jsColorEngine no-LUT (f64)</option>
+                <option value="float">jsColorEngine float</option>
+                <option value="int" selected>jsColorEngine int</option>
+                <option value="int-wasm-scalar">jsColorEngine int-wasm-scalar</option>
+                <option value="int-wasm-simd">jsColorEngine int-wasm-simd</option>
+                <option value="lcms-highres">lcms-wasm HIGHRES</option>
+            </select>
+        </label>
+        <label>Hot iters per size
+            <select id="hot-sweep">
+                <option value="20">20</option>
+                <option value="50" selected>50</option>
+                <option value="200">200</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="run-sweep">Run</button>
+    </div>
+
+    <div class="progress" id="progress-sweep">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <div class="results-wrap">
+        <table class="results" id="results-sweep">
+            <thead>
+                <tr>
+                    <th>Buffer (W&times;H)</th>
+                    <th class="num">Pixels</th>
+                    <th class="num">Hot ms / iter</th>
+                    <th class="num">MPx/s</th>
+                    <th class="bar-col">relative</th>
+                </tr>
+            </thead>
+            <tbody><!-- populated by main.js --></tbody>
+        </table>
+    </div>
+</section>
+
+<!-- ===== TEST: ABOUT ====================================================== -->
+<section class="card test-panel" id="panel-about" hidden>
+    <h2>About this bench</h2>
+
+    <h3>What gets measured</h3>
+    <ol class="explain">
+        <li>
+            <strong>LUT build</strong> &mdash; wall-clock time of
+            <code>new Transform(&hellip;); .create(src, dst, intent)</code>. Includes
+            the optimiser pass + integer-mirror LUT bake (for <code>int*</code> modes)
+            + WebAssembly module compile (for <code>int-wasm-*</code> modes). One-shot,
+            paid once per Transform; for lcms it's
+            <code>cmsCreateTransform(&hellip;)</code>.
+        </li>
+        <li>
+            <strong>Cold first transform</strong> &mdash; the very first
+            <code>transformArray()</code> call. Captures Ignition&rarr;Sparkplug&rarr;
+            TurboFan tier-up cost on the JS path, and any first-touch page
+            faults / cache misses on the WASM linear-memory path. Always
+            slower than the steady-state hot number; the gap is "JIT warmup
+            tax", not "the kernel is slow".
+        </li>
+        <li>
+            <strong>Hot run</strong> &mdash; 200+ warmup iters (so V8 has
+            stabilised), then the median of 5 timed batches. This is the number
+            to report if you want to know how fast the kernel actually runs in
+            steady state.
+        </li>
+    </ol>
+
+    <h3>Modes</h3>
+    <p>
+        This bench tests every <code>lutMode</code> explicitly, one row per
+        kernel, so you can see each cell. In real-world code you'll
+        usually just write
+        <code>new Transform({ dataFormat: 'int8', buildLut: true })</code>
+        and let the new v1.2 default <code>lutMode: 'auto'</code> pick
+        <code>int-wasm-simd</code> for you (with automatic demotion to
+        scalar WASM or JS <code>int</code> on older hosts). The explicit
+        rows below are what <code>'auto'</code> is choosing from.
+    </p>
+    <ul class="explain">
+        <li><strong>jsColorEngine no-LUT (f64)</strong> &mdash; <code>buildLut: false</code>. No CLUT is built; every pixel walks the full per-stage pipeline (curves &rarr; matrix &rarr; LUT &rarr; PCS &rarr; inverse&hellip;) in 64-bit float. <em>This is the accuracy configuration</em> &mdash; use it when you need the most faithful math jsColorEngine can produce. Slowest by design; roughly comparable to <code>lcms-wasm NOOPTIMIZE</code>.</li>
+        <li><strong>jsColorEngine float</strong> &mdash; <code>buildLut: true</code> + <code>lutMode: 'float'</code>. Float64Array CLUT (grid size shown in the <em>LUT</em> column, typically 33<sup>3</sup> for RGB and 33<sup>4</sup> for CMYK), tetrahedral interp in f64. Same float math as <em>no-LUT</em> for the interp step, but the pipeline is pre-collapsed to a LUT so it's much faster. If you want "float accuracy without the f64-pipeline tax", this is it.</li>
+        <li><strong>jsColorEngine int</strong> &mdash; Uint16Array CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via <code>Math.imul</code>. 8-bit I/O, bit-exact vs the float path. Added in v1.1 as the first non-float kernel.</li>
+        <li><strong>jsColorEngine int-wasm-scalar</strong> &mdash; same int math compiled to WebAssembly. ~1.4&times; over <code>int</code> on 3D, ~1.2&times; on 4D.</li>
+        <li><strong>jsColorEngine int-wasm-simd</strong> &mdash; channel-parallel WASM SIMD. ~3.0&ndash;3.5&times; over <code>int</code> on 3D, ~2.1&ndash;2.6&times; on 4D. Falls back to scalar if your browser lacks WASM SIMD.</li>
+        <li><strong>lcms-wasm default</strong> &mdash; LittleCMS 2.16 compiled to wasm32, <code>flags = 0</code>. What every real-world lcms app uses &mdash; lcms picks the precalc LUT grid from the table below based on input channel count. Pinned heap buffers.</li>
+        <li><strong>lcms-wasm HIGHRES</strong> &mdash; same, with <code>cmsFLAGS_HIGHRESPRECALC</code>: 49-grid for RGB, 23-grid for CMYK. The accuracy ceiling of the LUT path.</li>
+        <li><strong>lcms-wasm NOOPT</strong> &mdash; same, with <code>cmsFLAGS_NOOPTIMIZE</code> so each call walks the full per-pixel pipeline. The lcms equivalent of jsce <code>no-LUT</code>, and the fair accuracy-vs-accuracy comparison.</li>
+    </ul>
+
+    <h3>The four benchmark directions, and why RGB&rarr;RGB is
+        sRGB&rarr;<em>AdobeRGB</em></h3>
+    <p>
+        Each of the four directions exercises a genuinely distinct math
+        path. The choice of endpoints matters &mdash; particularly on
+        RGB&rarr;RGB, which is the one place where a naive choice lets one
+        engine silently cheat.
+    </p>
+    <ul class="explain">
+        <li>
+            <strong>RGB &rarr; RGB</strong> &mdash; <code>sRGB &rarr; AdobeRGB1998</code>.
+            Both profiles are matrix + tone-curve type, so the transform is
+            three 1D curves + a 3&times;3 matrix + three inverse 1D curves. Pure
+            linear algebra, &lt;&nbsp;30 scalar ops per pixel.
+            <strong>This direction must NOT be sRGB&rarr;sRGB.</strong> When
+            source and destination are the same profile, lcms's
+            <code>_cmsOptimizePipeline</code> detects the identity during
+            <code>cmsCreateTransform()</code> and collapses the hot path to
+            a byte copy; <em>measured impact: roughly +80% on lcms-wasm
+            RGB&rarr;RGB throughput, purely from the bogus passthrough.</em>
+            Firefox 165 &rarr; 91&nbsp;MPx/s moving from
+            sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB, same machine, same
+            session &mdash; that's the size of the cheat. jsColorEngine
+            doesn't have an equivalent identity-elision pass, so it was never
+            affected, but matrix-shaper collapse is a legitimate lcms
+            optimisation on RGB&rarr;RGB; we just need it to be exercised
+            against a <em>different</em> RGB profile so it's real work.
+            <br>Our <code>__tests__/AdobeRGB1998.icc</code> is the
+            560-byte reference Adobe RGB (1998) profile. lcms-wasm
+            doesn't export <code>cmsCreateRGBProfile</code> /
+            <code>cmsBuildGamma</code>, so we load the ICC bytes rather
+            than synthesise the profile in memory.
+        </li>
+        <li>
+            <strong>RGB &rarr; CMYK</strong> &mdash; <code>sRGB &rarr; GRACoL2006_Coated1v2</code>.
+            Matrix-shaper on input, 3D tetrahedral interp into a CMYK LUT on
+            output. Real print-production workload.
+        </li>
+        <li>
+            <strong>CMYK &rarr; RGB</strong> &mdash; <code>GRACoL &rarr; sRGB</code>.
+            4D tetrahedral interp on input, matrix-shaper on output.
+            Identical profile on both sides is fine here (verified: CMYK&rarr;sRGB
+            and CMYK&rarr;AdobeRGB land within 1.5% of each other on the same
+            host, so lcms isn't getting an identity shortcut this way round).
+        </li>
+        <li>
+            <strong>CMYK &rarr; CMYK</strong> &mdash; <code>GRACoL &rarr; GRACoL</code>.
+            Yes, same profile. No identity collapse happens even though the
+            profiles are pointer-equal: a CMYK profile's AToB (device&rarr;PCS)
+            and BToA (PCS&rarr;device) tags aren't mathematical inverses
+            (intent, black-point compensation and quantisation all break the
+            symmetry), so the round-trip is genuinely two tetrahedral LUT
+            traversals. Verified at 18&nbsp;MPx/s on node &mdash; <em>slower</em>
+            than CMYK&rarr;sRGB, which would be impossible if a passthrough
+            were hitting.
+        </li>
+    </ul>
+
+    <h3>How the LUT column is derived</h3>
+    <p>
+        The <em>LUT</em> column in the results table is ground-truth, not a
+        guess. For jsColorEngine we read it straight from the Transform
+        (<code>xform.lut.g1</code> / <code>.inputChannels</code> /
+        <code>.intLut.CLUT</code>). For lcms-wasm, which doesn't expose the
+        precalc-LUT shape via its public API, we mirror the exact rule from
+        <code>lcms2-2.18/src/cmspcs.c&nbsp;::&nbsp;_cmsReasonableGridpointsByColorspace</code>:
+    </p>
+    <table class="explain-grid">
+        <thead>
+            <tr><th>Input channels</th><th>default</th><th>HIGHRESPRECALC</th><th>LOWRESPRECALC</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>1 (mono)</td><td class="num">33</td><td class="num">49</td><td class="num">33</td></tr>
+            <tr><td>3 (RGB, Lab)</td><td class="num">33</td><td class="num">49</td><td class="num">17</td></tr>
+            <tr><td>4 (CMYK)</td><td class="num">17</td><td class="num">23</td><td class="num">17</td></tr>
+            <tr><td>&gt;4 (HiFi)</td><td class="num">7</td><td class="num">7</td><td class="num">6</td></tr>
+        </tbody>
+    </table>
+    <p class="muted">
+        So the RGB&rarr;CMYK row with <code>lcms default</code> shows
+        <code>33&times;33&times;33 u16</code> (grid indexed by the 3-channel
+        RGB input, picked by the default branch for 3-channel colour spaces),
+        and the CMYK&rarr;RGB row with <code>lcms HIGHRES</code> shows
+        <code>23&times;23&times;23&times;23 u16</code> (4-channel CMYK input,
+        HIGHRES branch). jsColorEngine&rsquo;s own grid picks happen to line
+        up with lcms&rsquo;s defaults &mdash; <code>33<sup>3</sup></code> for
+        RGB input, <code>17<sup>4</sup></code> for CMYK &mdash; which is a
+        convergent-evolution thing, not coordinated. Both engines arrive at
+        the same size/fidelity tradeoff.
+    </p>
+
+    <h3>Accuracy vs image: which mode for which job?</h3>
+    <p>
+        The four summary cards at the top of the <em>Full comparison</em> panel
+        answer this directly. In short:
+    </p>
+    <ul class="explain">
+        <li><strong>Accuracy case (colour-critical, proofs, measurement)</strong> &mdash; 8-bit I/O, full pipeline per pixel, float math throughout. <code>jsce no-LUT</code> vs <code>lcms NOOPTIMIZE</code>. Slowest throughput; most faithful colour.</li>
+        <li><strong>Image case (display, export, batch ICC conversion)</strong> &mdash; 8-bit I/O, LUT-baked. Any of <code>jsce int*</code> / <code>jsce float</code> vs <code>lcms default</code> / <code>lcms HIGHRES</code>. Orders of magnitude faster; the grid quantisation error is typically well under 1 delta-E for a 33<sup>3</sup>/33<sup>4</sup> LUT. This is what you want for every non-colour-critical workflow.</li>
+    </ul>
+    <p class="muted">
+        Worth noting: <code>jsce float</code> is <em>also</em> a LUT-backed mode
+        (Float64Array CLUT), so it lives in the <em>image</em> family even
+        though the interp math is f64. The precision difference vs the
+        <code>int</code> (Q0.16 u16) path is below the noise floor for 8-bit
+        output &mdash; use whichever is faster on your host, or reach for
+        <code>no-LUT</code> when you need no-LUT precision.
+    </p>
+
+    <h3>Why RGB and CMYK sit on different performance curves</h3>
+    <p>
+        The single most useful lens for reading the results table is
+        <em>which math kernel is this row using?</em>. Every colour conversion
+        is either:
+    </p>
+    <ul class="explain">
+        <li><strong>Matrix + curves</strong> (RGB&nbsp;&harr;&nbsp;RGB, RGB&nbsp;&harr;&nbsp;Lab). The profile is
+            a 3&times;3 matrix and three per-channel curves. A forward() call is
+            &lt;&nbsp;30 scalar float ops &mdash; trivially fast, and trivially fast in
+            any reasonable implementation, including scalar-only builds like
+            stock lcms-wasm. SIMD still roughly doubles this because
+            jsColorEngine packs 3 channels into one v128 register and
+            collapses the 3&times;3 matrix + curves into 4&ndash;5 fused
+            operations, but the <em>absolute</em> gap is smaller in ops
+            than on the tetra paths, and the pressure on the memory
+            subsystem is near-zero either way.</li>
+        <li><strong>3D tetrahedral LUT</strong> (RGB&nbsp;&harr;&nbsp;CMYK, any RGB-profile
+            conversion that can&apos;t be collapsed to matrix). A 3-input
+            tetrahedral interp reads 4 corners of a 33&times;33&times;33 grid
+            per pixel and does a barycentric blend. &sim;40 ops,
+            memory-ish bound. SIMD pays off meaningfully (v128 unit-weight
+            mul + load-pair makes a 4-channel output a single fused op).
+            jsColorEngine&apos;s int-wasm-simd kernel wins here by
+            2&ndash;3&times; over scalar, and by 3&ndash;4&times; over lcms-wasm
+            default.</li>
+        <li><strong>4D tetrahedral LUT</strong> (CMYK&nbsp;&harr;&nbsp;CMYK, CMYK as the
+            input side of any non-matrix transform). 4-input tetra
+            interpolation on a 17<sup>4</sup> or 33<sup>4</sup> grid: sort 4 weights
+            to find the enclosing tetrahedron, fetch 5 corners with 4 output
+            channels each (20 memory loads), barycentric blend.
+            &sim;80&ndash;100 ops per pixel, heavily memory-bound.
+            <em>This is where scalar implementations fall off a
+            cliff</em> &mdash; lcms-wasm&apos;s CMYK&rarr;CMYK number drops to
+            25&ndash;30&nbsp;MPx/s on the same host where its
+            RGB&rarr;RGB number is in the 90&ndash;130 range.
+            jsColorEngine&apos;s SIMD kernel stays above 100&nbsp;MPx/s
+            because the channel-parallel v128 layout hides the
+            memory-port pressure.</li>
+    </ul>
+    <p>
+        So when you see lcms-wasm being ~2&times; behind jsColorEngine on
+        RGB&rarr;RGB and 4&times;&ndash;5&times; behind on
+        CMYK&rarr;CMYK: that's not two different stories. It's the same
+        story (scalar kernel runs fine on the cheap math path, suffers on
+        the expensive one), reading differently because the two directions
+        exercise fundamentally different code.
+    </p>
+    <p class="muted">
+        <em>History note.</em> An earlier version of this doc claimed
+        lcms-wasm was within 1.2&times; of jsColorEngine&apos;s SIMD kernel
+        on RGB&rarr;RGB. That number was wrong &mdash; we were benchmarking
+        <code>sRGB&rarr;sRGB</code> (identity, optimised to memcpy by lcms),
+        which gave lcms a &sim;+80% boost on that row only. Switching to
+        <code>sRGB&rarr;AdobeRGB</code> (real matrix + curves) fixed it;
+        the gap is now ~2&times;, consistent with the 3D / 4D tetra directions
+        and with the general "SIMD lets us compete even where scalar
+        implementations are already decent" thesis.
+    </p>
+
+    <h3>Is lcms-wasm really running at full speed?</h3>
+    <p>
+        Yes. Verified by construction:
+    </p>
+    <ul class="explain">
+        <li>Input and output buffers are <code>_malloc</code>'d once at <code>create()</code> time and reused across every call (<em>pinned heap buffers</em>).</li>
+        <li>The hot path calls <code>_cmsDoTransform(xf, inPtr, outPtr, pixelCount)</code> <em>directly</em> &mdash; the raw C export. We deliberately skip <code>lcms.cmsDoTransform(...)</code> (no underscore), because that high-level wrapper does <code>_malloc</code> + <code>new Uint8Array(HEAPU8, &hellip;).set()</code> + <code>ccall</code> + <code>.slice()</code> + <code>_free</code> &times;2 <em>per call</em> &mdash; an order-of-magnitude slowdown. We give lcms the same pinned-heap path a production app would use.</li>
+        <li>Three flag variants are tested: <code>flags=0</code>, <code>HIGHRESPRECALC</code>, and <code>NOOPTIMIZE</code>. The best of the three is the "lcms at its best" number.</li>
+        <li>Same seeded-PRNG input bytes as jsColorEngine, same <code>INTENT_RELATIVE_COLORIMETRIC</code>, same <code>TYPE_*_8</code> formats, same GRACoL profile, same pixel count.</li>
+    </ul>
+    <p>
+        Where does the speed gap come from then? <strong>lcms-wasm is a stock
+        emscripten build of LittleCMS 2.16 <em>without</em> <code>-msimd128</code></strong>,
+        so every lcms kernel runs scalar regardless of host SIMD support.
+        jsColorEngine's <code>int-wasm-simd</code> path ships hand-tuned
+        channel-parallel v128 kernels for 3D and 4D tetrahedral interpolation.
+        That's a real capability gap, not a benchmark bias &mdash; the "lcms-wasm"
+        line in the engine info panel says <code>scalar build (no -msimd128)</code>
+        precisely to flag this.
+    </p>
+    <p>
+        A SIMD-compiled lcms-wasm (same source, built with <code>-msimd128 -O3</code>)
+        would close a lot of the gap. We'd welcome that comparison if anyone
+        wants to rebuild lcms with SIMD on and ship it back to
+        <code>bench/lcms-comparison/node_modules/lcms-wasm/dist/lcms.wasm</code>.
+    </p>
+
+    <h3>How to read the result</h3>
+    <p>
+        The right-hand bar in the results table is normalised per direction so
+        the fastest mode for that direction fills the bar. The
+        <em>vs&nbsp;`int`</em> column is the speedup vs jsColorEngine
+        <code>int</code> for the same direction &mdash; this is the
+        apples-to-apples "how much does the WASM/SIMD port buy us" number,
+        and the one most directly comparable to the figures in
+        <code>docs/Performance.md</code>.
+    </p>
+
+    <h3>Caveats</h3>
+    <ul class="explain">
+        <li>Run with the browser tab focused. Background tabs throttle <code>setTimeout</code> and (sometimes) <code>performance.now()</code> precision.</li>
+        <li>Close other heavy tabs / apps. CPU contention shows up directly in MPx/s.</li>
+        <li>First run after page load includes WASM compile + profile decode &mdash; hit "Run benchmark" twice for stable numbers.</li>
+        <li>Numbers in the same browser are highly reproducible (&plusmn;5%); cross-browser they can swing 30%+. Use a single browser when comparing modes.</li>
+        <li>Mobile CPUs throttle aggressively under sustained load. The "Hot iters" setting is conservative by default &mdash; bumping it on mobile can show throttling kick in.</li>
+    </ul>
+
+    <p class="muted">
+        Source: <code>bench/browser/</code> in the
+        <a href="https://github.com/glennwilton/jsColorEngine">jsColorEngine repo</a>.
+        Stop the server with Ctrl+C in the terminal that ran
+        <code>node bench/browser/serve.js</code>.
+    </p>
+</section>
+
+</main>
+
+<footer class="footer">
+    <span>jsColorEngine v<span id="info-version">?</span> &middot; bench/browser</span>
+    <span>Profiles: GRACoL2006_Coated1v2.icc + AdobeRGB1998.icc</span>
+</footer>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

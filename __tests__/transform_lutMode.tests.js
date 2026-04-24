@@ -25,7 +25,7 @@
  * `'wasm-simd'`, `'auto'`) can be added through the same option without
  * breaking the call signature. Unknown values fall through to `'float'`.
  */
-const {Transform, eIntent} = require('../src/main');
+const {Transform, eIntent, eColourType} = require('../src/main');
 const Profile = require('../src/Profile');
 const path = require('path');
 
@@ -97,9 +97,15 @@ test("lutMode='int': sRGB->AdobeRGB matches float within 1 LSB", () => {
 
     var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     floatT.create('*srgb', '*adobergb', eIntent.relative);
+    // Requested mode must survive create() — 'float' has no demotion chain.
+    expect(floatT.lutMode).toBe('float');
+    expect(floatT.lutModeRequested).toBe('float');
 
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create('*srgb', '*adobergb', eIntent.relative);
+    // 'int' has no demotion chain either; requested === actual after create().
+    expect(intT.lutMode).toBe('int');
+    expect(intT.lutModeRequested).toBe('int');
 
     expect(intT.lut.intLut).toBeTruthy();
     expect(intT.lut.intLut.CLUT).toBeInstanceOf(Uint16Array);
@@ -129,9 +135,11 @@ test("lutMode='int': sRGB->GRACoL CMYK matches float within 2 LSB", async () => 
 
     var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     floatT.create('*srgb', cmykProfile, eIntent.relative);
+    expect(floatT.lutMode).toBe('float');
 
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create('*srgb', cmykProfile, eIntent.relative);
+    expect(intT.lutMode).toBe('int');
 
     expect(intT.lut.intLut).toBeTruthy();
     expect(intT.lut.intLut.outputChannels).toBe(4);
@@ -163,9 +171,11 @@ test("lutMode='int': CMYK->sRGB matches float within 1 LSB (4D)", async () => {
 
     var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     floatT.create(cmykProfile, '*srgb', eIntent.relative);
+    expect(floatT.lutMode).toBe('float');
 
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create(cmykProfile, '*srgb', eIntent.relative);
+    expect(intT.lutMode).toBe('int');
 
     // 4D intLut MUST exist now (v1.1 added 4D support).
     expect(intT.lut.intLut).toBeTruthy();
@@ -201,9 +211,11 @@ test("lutMode='int': CMYK->CMYK matches float within 1 LSB (4D u20)", async () =
 
     var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     floatT.create(cmykProfile, cmykProfile, eIntent.relative);
+    expect(floatT.lutMode).toBe('float');
 
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create(cmykProfile, cmykProfile, eIntent.relative);
+    expect(intT.lutMode).toBe('int');
 
     expect(intT.lut.intLut).toBeTruthy();
     expect(intT.lut.intLut.inputChannels).toBe(4);
@@ -231,6 +243,7 @@ test("lutMode='int': buildIntLut handles all four shapes in v1.1", async () => {
     // 3D 3Ch — supported
     var t3x3 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     t3x3.create('*srgb', '*adobergb', eIntent.relative);
+    expect(t3x3.lutMode).toBe('int');
     expect(t3x3.lut.intLut).toBeTruthy();
     expect(t3x3.lut.intLut.inputChannels).toBe(3);
     expect(t3x3.lut.intLut.outputChannels).toBe(3);
@@ -265,6 +278,7 @@ test("lutMode='int': buildIntLut handles all four shapes in v1.1", async () => {
     // 3D 4Ch — supported
     var t3x4 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     t3x4.create('*srgb', cmykProfile, eIntent.relative);
+    expect(t3x4.lutMode).toBe('int');
     expect(t3x4.lut.intLut).toBeTruthy();
     expect(t3x4.lut.intLut.inputChannels).toBe(3);
     expect(t3x4.lut.intLut.outputChannels).toBe(4);
@@ -272,6 +286,7 @@ test("lutMode='int': buildIntLut handles all four shapes in v1.1", async () => {
     // 4D 3Ch — supported (NEW in v1.1)
     var t4x3 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     t4x3.create(cmykProfile, '*srgb', eIntent.relative);
+    expect(t4x3.lutMode).toBe('int');
     expect(t4x3.lut.intLut).toBeTruthy();
     expect(t4x3.lut.intLut.inputChannels).toBe(4);
     expect(t4x3.lut.intLut.outputChannels).toBe(3);
@@ -280,18 +295,24 @@ test("lutMode='int': buildIntLut handles all four shapes in v1.1", async () => {
     // 4D 4Ch — supported (NEW in v1.1)
     var t4x4 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     t4x4.create(cmykProfile, cmykProfile, eIntent.relative);
+    expect(t4x4.lutMode).toBe('int');
     expect(t4x4.lut.intLut).toBeTruthy();
     expect(t4x4.lut.intLut.inputChannels).toBe(4);
     expect(t4x4.lut.intLut.outputChannels).toBe(4);
     // 4D kernels widen the accumulator to u20 (Q16.4) for single-rounding
     expect(t4x4.lut.intLut.accWidth).toBe(20);
 
-    // lutMode='float' (default) — must NOT build intLut
+    // explicit lutMode='float' — must NOT build intLut; lutMode stays 'float'.
     var tFloat = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     tFloat.create('*srgb', '*adobergb', eIntent.relative);
+    expect(tFloat.lutMode).toBe('float');
     expect(tFloat.lut.intLut).toBeUndefined();
 
-    // dataFormat NOT int8 — must NOT build intLut even with lutMode='int'
+    // dataFormat NOT int8 — must NOT build intLut even with lutMode='int'.
+    // Note: lutMode stays 'int' (the property reflects the user's request),
+    // but since intLut is undefined the dispatcher will fall through to the
+    // float kernel at call time. The dispatcher check is tested by
+    // "dispatcher throws on incompatible intLut tag" below.
     var tObj = new Transform({dataFormat: 'object', buildLut: true, lutMode: 'int'});
     tObj.create('*srgb', '*adobergb', eIntent.relative);
     expect(tObj.lut.intLut).toBeUndefined();
@@ -304,6 +325,7 @@ test("lutMode='int': buildIntLut handles all four shapes in v1.1", async () => {
 test("lutMode='int': preserveAlpha works in 3D 3Ch kernel", () => {
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create('*srgb', '*adobergb', eIntent.relative);
+    expect(intT.lutMode).toBe('int');
 
     var input = [
         255,   0,   0, 11,
@@ -334,6 +356,7 @@ test("lutMode='int': preserveAlpha works in 4D 3Ch kernel (CMYK->RGB)", async ()
 
     var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     intT.create(cmykProfile, '*srgb', eIntent.relative);
+    expect(intT.lutMode).toBe('int');
 
     // CMYKA input, 4 pixels with distinct alpha values.
     var input = [
@@ -354,30 +377,170 @@ test("lutMode='int': preserveAlpha works in 4D 3Ch kernel (CMYK->RGB)", async ()
 
 
 // -----------------------------------------------------------------------
-// 8. lutMode option parsing
+// 8. lutMode option parsing — v1.2+: 'auto' is the default
 // -----------------------------------------------------------------------
-test("lutMode: option parsing — defaults, valid values, unknown values", () => {
-    // default (omitted) → 'float'
-    var tDefault = new Transform({dataFormat: 'int8', buildLut: true});
-    expect(tDefault.lutMode).toBe('float');
+test("lutMode: option parsing — 'auto' default, resolution rule, valid values", () => {
+    // default (omitted) + int8 + buildLut=true → resolves to 'int-wasm-simd'
+    // (then demotes to scalar/int/float at create() time if the host lacks
+    // WASM or SIMD — not covered by this test; see transform_lutMode_wasm_*
+    // test files for demotion behaviour).
+    var tDefaultInt8 = new Transform({dataFormat: 'int8', buildLut: true});
+    expect(tDefaultInt8.lutMode).toBe('int-wasm-simd');
+    expect(tDefaultInt8.lutModeRequested).toBe('auto');
 
-    // explicit 'float'
+    // default (omitted) + dataFormat NOT int8 → resolves to 'float'
+    var tDefaultObj = new Transform({dataFormat: 'object', buildLut: true});
+    expect(tDefaultObj.lutMode).toBe('float');
+    expect(tDefaultObj.lutModeRequested).toBe('auto');
+
+    // default (omitted) + buildLut=false → resolves to 'float'
+    // (no LUT will be built, so the LUT kernel selector is irrelevant;
+    //  'float' is the honest answer for what will run)
+    var tDefaultNoLut = new Transform({dataFormat: 'int8'});
+    expect(tDefaultNoLut.lutMode).toBe('float');
+    expect(tDefaultNoLut.lutModeRequested).toBe('auto');
+
+    // explicit 'auto' — same resolution as omitted default
+    var tAuto = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'auto'});
+    expect(tAuto.lutMode).toBe('int-wasm-simd');
+    expect(tAuto.lutModeRequested).toBe('auto');
+
+    // explicit 'float' — pinned, no auto-resolution
     var tFloat = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
     expect(tFloat.lutMode).toBe('float');
+    expect(tFloat.lutModeRequested).toBe('float');
 
-    // explicit 'int'
+    // explicit 'int' — pinned
     var tInt = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
     expect(tInt.lutMode).toBe('int');
+    expect(tInt.lutModeRequested).toBe('int');
 
-    // unknown value → falls back to 'float' (no throw — defensive)
+    // explicit 'int-wasm-scalar' — pinned
+    var tScalar = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
+    expect(tScalar.lutMode).toBe('int-wasm-scalar');
+    expect(tScalar.lutModeRequested).toBe('int-wasm-scalar');
+
+    // explicit 'int-wasm-simd' — pinned
+    var tSimd = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
+    expect(tSimd.lutMode).toBe('int-wasm-simd');
+    expect(tSimd.lutModeRequested).toBe('int-wasm-simd');
+
+    // unknown value (typo) on an int8+LUT transform → auto-resolution
+    // ('int-wasm-simd'). Previously fell back to 'float'; the new
+    // behaviour is strictly better for "someone wrote lutMode: 'turbojet'"
+    // because they almost certainly meant "fast".
     var tBogus = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'turbojet'});
-    expect(tBogus.lutMode).toBe('float');
+    expect(tBogus.lutMode).toBe('int-wasm-simd');
+    expect(tBogus.lutModeRequested).toBe('auto');
 
-    // future modes that don't exist yet — also fall back to 'float' so a
-    // user setting `lutMode: 'wasm-scalar'` against this version doesn't crash,
-    // they just get the float kernel until they upgrade.
-    var tWasm = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'wasm-scalar'});
-    expect(tWasm.lutMode).toBe('float');
+    // unknown value on a non-LUT transform → auto-resolution ('float').
+    var tBogusObj = new Transform({dataFormat: 'object', buildLut: true, lutMode: 'turbojet'});
+    expect(tBogusObj.lutMode).toBe('float');
+    expect(tBogusObj.lutModeRequested).toBe('auto');
+
+    // future modes that don't exist yet — also auto-resolve. A user
+    // setting `lutMode: 'wasm-simd'` against this version doesn't crash
+    // and gets the best available kernel for their (dataFormat, buildLut).
+    var tFutureInt8 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'wasm-simd'});
+    expect(tFutureInt8.lutMode).toBe('int-wasm-simd');
+    expect(tFutureInt8.lutModeRequested).toBe('auto');
+});
+
+
+// -----------------------------------------------------------------------
+// 8b. lutMode='auto' end-to-end — survives create() through the full
+//     demotion chain, produces correct output, and `xform.lutMode`
+//     accurately reflects the kernel that actually runs afterwards.
+//
+// The earlier "option parsing" test asserts constructor-time resolution.
+// This one asserts that `create()` doesn't silently undo that resolution
+// on a host where the initial pick (int-wasm-simd) is available — and
+// that what `xform.lutMode` reports is honest.
+// -----------------------------------------------------------------------
+test("lutMode='auto': survives create() across all four directions", async () => {
+    var cmykProfile = new Profile();
+    await cmykProfile.loadPromise('file:' + cmykFilename);
+
+    var input3 = buildInput3Ch();
+    var input4 = buildInput4Ch();
+
+    // All four directions through 'auto' on int8+LUT. On this host (Node
+    // 20 / V8 with SIMD) 'auto' resolves to 'int-wasm-simd' and stays
+    // there through create(). On a non-SIMD host the demotion chain
+    // would land on 'int-wasm-scalar' / 'int' — that's covered by
+    // transform_lutMode_wasm{,_simd}{,_4d}.tests.js. Here we just assert
+    // the default path is healthy.
+    var directions = [
+        {label: 'RGB->RGB',   src: '*srgb',      dst: '*adobergb',  input: input3},
+        {label: 'RGB->CMYK',  src: '*srgb',      dst: cmykProfile,  input: input3},
+        {label: 'CMYK->RGB',  src: cmykProfile,  dst: '*srgb',      input: input4},
+        {label: 'CMYK->CMYK', src: cmykProfile,  dst: cmykProfile,  input: input4},
+    ];
+
+    for(var i = 0; i < directions.length; i++){
+        var d = directions[i];
+
+        var autoT = new Transform({dataFormat: 'int8', buildLut: true}); // 'auto' is implicit
+        expect(autoT.lutMode).toBe('int-wasm-simd');   // constructor-time resolution
+        expect(autoT.lutModeRequested).toBe('auto');
+
+        autoT.create(d.src, d.dst, eIntent.relative);
+
+        // After create(), the SIMD kernel module must have loaded (on any
+        // modern host). If it demoted silently this test catches it —
+        // which is the whole point of the user's "inspect lutMode after
+        // create" ask.
+        expect(autoT.lutMode).toBe('int-wasm-simd');
+        expect(autoT.lutModeRequested).toBe('auto');
+
+        // intLut must exist — SIMD kernel reads the same u16 mirror LUT
+        // the 'int' kernel does.
+        expect(autoT.lut.intLut).toBeTruthy();
+
+        // Against the pinned 'float' reference, the 'auto' (SIMD) kernel
+        // must produce output within the ≤ 2 LSB integer-kernel budget.
+        // We intentionally don't compare against 'int-wasm-simd' pinned
+        // — the dedicated WASM/SIMD test files do the bit-exactness work.
+        // This test's job is "did auto route us to the right place?", not
+        // "is the SIMD kernel correct?".
+        var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
+        floatT.create(d.src, d.dst, eIntent.relative);
+        expect(floatT.lutMode).toBe('float');
+
+        var oAuto = autoT.transformArray(d.input);
+        var oFloat = floatT.transformArray(d.input);
+        expect(oAuto.length).toBe(oFloat.length);
+        expect(maxAbsDiff(oAuto, oFloat)).toBeLessThanOrEqual(2);   // integer-kernel budget
+    }
+});
+
+// Separately: 'auto' on a non-int8 Transform resolves to 'float' and
+// that survives create() too. Covers the branch where auto routes away
+// from the WASM kernels because the dataFormat doesn't support them.
+test("lutMode='auto': non-int8 transform resolves to 'float' and stays there", () => {
+    var autoObj = new Transform({dataFormat: 'object', buildLut: true});
+    expect(autoObj.lutMode).toBe('float');
+    expect(autoObj.lutModeRequested).toBe('auto');
+
+    autoObj.create('*srgb', '*adobergb', eIntent.relative);
+    expect(autoObj.lutMode).toBe('float');
+    expect(autoObj.lutModeRequested).toBe('auto');
+
+    // No intLut built (float kernel doesn't need it)
+    expect(autoObj.lut.intLut).toBeUndefined();
+
+    // Float kernel reads the f64 CLUT that create() always builds for
+    // buildLut: true transforms.
+    expect(autoObj.lut).toBeTruthy();
+    expect(autoObj.lut.CLUT).toBeInstanceOf(Float64Array);
+
+    // Smoke — round-trip a single RGB through the object interface so
+    // we know the float kernel actually runs.
+    var out = autoObj.transform({R: 128, G: 128, B: 128, type: eColourType.RGB});
+    expect(out).toBeTruthy();
+    expect(typeof out.R).toBe('number');
+    expect(typeof out.G).toBe('number');
+    expect(typeof out.B).toBe('number');
 });
 
 

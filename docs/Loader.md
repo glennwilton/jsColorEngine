@@ -1,5 +1,17 @@
 # Loader
 
+**jsColorEngine docs:**
+[← Project README](../README.md) ·
+[Bench](./Bench.md) ·
+[Performance](./Performance.md) ·
+[Roadmap](./Roadmap.md) ·
+[Deep dive](./deepdive/) ·
+[Examples](./Examples.md) ·
+[API: Profile](./Profile.md) ·
+[Transform](./Transform.md)
+
+---
+
 A small **optional** convenience class for managing a collection of
 [`Profile`](./Profile.md)s — a simple registry that lets you queue
 profiles up by key, optionally preload them in parallel, and then look

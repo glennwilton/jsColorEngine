@@ -25,6 +25,7 @@
     var Profile = require('./Profile');
     var convert = require('./convert');
     var defs = require('./def');
+    var wasmLoader = require('./wasm/wasm_loader');
 
     var eIntent = defs.eIntent;
     var eProfileType = defs.eProfileType;
@@ -267,34 +268,110 @@
      *      Clip RGB values to 0..1 inside the pipeline (useful when going
      *      through extreme abstract profiles).
      *
-     *  @param {('float'|'int')} [options.lutMode='float']
+     *  @param {('auto'|'float'|'int'|'int-wasm-scalar'|'int-wasm-simd')} [options.lutMode='auto']
      *      LUT-based image hot-path kernel selector. Only meaningful when
      *      `dataFormat: 'int8'` AND `buildLut: true`. Non-LUT (accuracy)
      *      paths are unaffected — they always run the float code.
      *
      *      Modes (each one falls through to the previous if its kernel
-     *      can't service the LUT shape):
+     *      can't service the LUT shape or the host can't run it):
      *
-     *        - 'float'  — the original floating-point kernels. Safe
-     *                     default, bit-stable across releases.
+     *        - 'auto' (default, v1.2+) — the engine picks the fastest
+     *                               applicable kernel at construction
+     *                               time based on `dataFormat` and
+     *                               `buildLut`:
+     *                                 • `dataFormat: 'int8'` + `buildLut:
+     *                                   true` → resolves to 'int-wasm-simd'
+     *                                   (with the SIMD → scalar → int
+     *                                   demotion chain running at
+     *                                   `create()` time for hosts that
+     *                                   lack WASM or SIMD).
+     *                                 • any other configuration →
+     *                                   resolves to 'float'. (lutMode
+     *                                   is ignored for non-int8
+     *                                   dataFormats anyway, so the
+     *                                   resolved value matches what
+     *                                   actually runs.)
+     *                               Inspect `xform.lutMode` after
+     *                               construction to see the resolved
+     *                               value — it reflects what will run.
      *
-     *        - 'int'    — integer-math kernels reading a u16 mirror LUT
-     *                     with Q0.8 fractional weights and Math.imul.
-     *                     Typical 1.10–1.15× speedup vs float on real
-     *                     ICC profiles, with accuracy ≤2 LSB vs float
-     *                     (well under perceptual threshold for u8 image
-     *                     data). Uses 4× less LUT memory (Uint16Array
-     *                     instead of Float64Array).
+     *        - 'float'            — the original floating-point kernels.
+     *                               Pin this explicitly when you want
+     *                               bit-stable f64 LUT interp regardless
+     *                               of release.
      *
-     *      v1.2+ will add 'wasm-scalar' / 'wasm-simd' / 'auto'. The
-     *      string-enum API is deliberately forward-compatible — you can
-     *      set `lutMode: 'auto'` once available and the engine picks
-     *      the best kernel for each transform shape.
+     *        - 'int'              — integer-math kernels reading a u16
+     *                               mirror LUT with Q0.8 fractional weights
+     *                               and Math.imul. Typical 1.10–1.15×
+     *                               speedup vs float on real ICC profiles,
+     *                               with accuracy ≤2 LSB vs float (well
+     *                               under perceptual threshold for u8 image
+     *                               data). Uses 4× less LUT memory
+     *                               (Uint16Array instead of Float64Array).
      *
-     *      The integer kernel is NOT recommended for color-measurement
+     *        - 'int-wasm-scalar'  — (v1.2) same integer math as 'int' but
+     *                               executed by a hand-written WebAssembly
+     *                               kernel. Bit-exact against 'int' across
+     *                               millions of verified pixels (6-config
+     *                               matrix in `bench/wasm_poc/`). ~1.40×
+     *                               over 'int' on x64 for 3D tetrahedral
+     *                               workloads; see docs/Performance.md
+     *                               "WASM scalar — measured" section.
+     *
+     *                               If WebAssembly is unavailable in the
+     *                               host (very rare today — sandboxed
+     *                               environments, ancient runtimes) this
+     *                               silently demotes to 'int' at
+     *                               `create()` time. 4D kernels are not
+     *                               yet ported; 4D workloads through this
+     *                               mode run the 'int' JS kernel.
+     *
+     *        - 'int-wasm-simd'    — (v1.2) channel-parallel WebAssembly
+     *                               SIMD kernel for 3D tetrahedral LUTs.
+     *                               Bit-exact against both the 'int' and
+     *                               'int-wasm-scalar' paths across the
+     *                               same 6-config matrix. ~3.0-3.5× over
+     *                               'int' (2.0-2.5× over 'int-wasm-scalar')
+     *                               on x64 for 3D RGB→RGB / RGB→CMYK; see
+     *                               docs/Performance.md "WASM SIMD —
+     *                               channel-parallel" section.
+     *
+     *                               Supports cMax ∈ {3, 4} only — other
+     *                               channel counts fall through to the
+     *                               scalar WASM kernel, then to 'int'. 4D
+     *                               kernels are not ported. On hosts that
+     *                               lack WebAssembly SIMD support this
+     *                               silently demotes to 'int-wasm-scalar'
+     *                               at `create()` time; demotes further
+     *                               to 'int' if WebAssembly itself is
+     *                               unavailable.
+     *
+     *      The 'auto' heuristic today is just "int8 + LUT → best WASM
+     *      kernel". Future releases may add per-Transform microbenchmarks
+     *      (int JS can beat scalar WASM on older / weaker CPUs in some
+     *      workloads) or host-capability heuristics. The public API is
+     *      stable either way — 'auto' always means "pick the fastest
+     *      applicable kernel for this Transform on this host".
+     *
+     *      The integer kernels are NOT recommended for color-measurement
      *      workflows that compare transformed pixel values to reference
-     *      targets — use 'float' for that. See `bench/fastLUT_real_world.js`
-     *      for accuracy/speed numbers on real profiles.
+     *      targets — pin `lutMode: 'float'` (or `buildLut: false` for the
+     *      f64 pipeline) for that. See `bench/fastLUT_real_world.js` for
+     *      accuracy/speed numbers on real profiles.
+     *
+     *  @param {Object} [options.wasmCache]
+     *      Optional shared cache bag for the compiled `WebAssembly.Module`.
+     *      Used when `lutMode` is `'int-wasm-scalar'` or `'int-wasm-simd'`.
+     *      Each Transform still gets its own `WebAssembly.Instance` (its
+     *      own linear memory); sharing the compiled module just avoids
+     *      redundant compile work. Scalar and SIMD modules live under
+     *      different private keys on the bag, so you can use a single
+     *      cache for a mix of Transforms. Example:
+     *
+     *          const wasmCache = {};
+     *          const t1 = new Transform({ lutMode: 'int-wasm-simd',   wasmCache });
+     *          const t2 = new Transform({ lutMode: 'int-wasm-scalar', wasmCache });
      *
      *  @param {boolean}            [options.verbose=false]
      *  @param {boolean}            [options.verboseTiming=false]
@@ -316,22 +393,74 @@
         this.lutGridPoints4D = (isNaN(Number(options.lutGridPoints4D))) ? 17 : Number(options.lutGridPoints4D);
 
         // LUT image-hot-path kernel selector. See JSDoc above for full
-                // semantics. v1.1 ships 'float' (default) and 'int'. Future
-        // releases will add 'wasm-scalar', 'wasm-simd', and 'auto'.
-        // Unknown values fall back to 'float' so a typo can never crash
-        // a production transform — verbose mode warns when this happens.
-        var rawLutMode = (options.lutMode === undefined) ? 'float' : ('' + options.lutMode);
+        // semantics. v1.2+ ships 'auto' (default), 'float', 'int',
+        // 'int-wasm-scalar', 'int-wasm-simd'. Unknown values fall back
+        // to 'auto' so a typo or forward-written code can never crash a
+        // production transform — verbose mode warns when this happens.
+        var rawLutMode = (options.lutMode === undefined) ? 'auto' : ('' + options.lutMode);
         switch(rawLutMode){
             case 'float':
             case 'int':
+            case 'int-wasm-scalar':
+            case 'int-wasm-simd':
                 this.lutMode = rawLutMode;
+                this.lutModeRequested = rawLutMode;
+                break;
+            case 'auto':
+                // 'auto' is a heuristic: pick the fastest kernel that's
+                // applicable to this Transform's (dataFormat, buildLut)
+                // combination. int8 + buildLut=true gets the full WASM
+                // SIMD hot path (with SIMD → scalar → int demotion at
+                // create() time for older hosts). Everything else runs
+                // the float kernel — which is what the engine would have
+                // used anyway, because lutMode is ignored for non-int8
+                // dataFormats. Resolving to 'float' here makes
+                // xform.lutMode self-documenting: it always reflects
+                // the kernel that will actually run.
+                this.lutMode = (options.dataFormat === 'int8' && this.builtLut)
+                    ? 'int-wasm-simd'
+                    : 'float';
+                this.lutModeRequested = 'auto';
                 break;
             default:
                 if(options.verbose === true){
-                    console.warn('Unknown lutMode "' + rawLutMode + '" — falling back to "float". Valid values: float, int.');
+                    console.warn('Unknown lutMode "' + rawLutMode + '" — falling back to "auto". Valid values: auto, float, int, int-wasm-scalar, int-wasm-simd.');
                 }
-                this.lutMode = 'float';
+                // Forward-compat: unknown modes resolve as if user had
+                // said 'auto' — gets them the best-available kernel
+                // without crashing, better than the previous behaviour
+                // (silent demote to slowest) for someone writing against
+                // a future version that adds a new mode.
+                this.lutMode = (options.dataFormat === 'int8' && this.builtLut)
+                    ? 'int-wasm-simd'
+                    : 'float';
+                this.lutModeRequested = 'auto';
         }
+
+        // WASM kernel state. Populated at create() time when lutMode is
+        // 'int-wasm-scalar' or 'int-wasm-simd' and the host supports
+        // WebAssembly. Null means "no WASM available or no WASM kernel
+        // eligible for this LUT shape"; the dispatcher falls back to the
+        // JS 'int' kernel on null.
+        //
+        // All four states can be present simultaneously when lutMode=
+        // 'int-wasm-simd':
+        //   - wasmTetra3DSimd : 3D SIMD, cMax ∈ {3, 4}
+        //   - wasmTetra3D     : 3D scalar, every cMax (fallthrough)
+        //   - wasmTetra4DSimd : 4D SIMD, cMax ∈ {3, 4}
+        //   - wasmTetra4D     : 4D scalar, every cMax (fallthrough)
+        // If the SIMD module fails to compile (host lacks SIMD), lutMode
+        // is demoted to 'int-wasm-scalar' and both wasmTetra*Simd are
+        // left null; the two scalar states stay loaded.
+        //
+        // The optional shared-module cache is taken here so multiple
+        // Transforms created from the same bag share compile work. Each
+        // Transform still has its own linear-memory instance.
+        this.wasmCache       = options.wasmCache || null;
+        this.wasmTetra3D     = null;
+        this.wasmTetra3DSimd = null;
+        this.wasmTetra4D     = null;
+        this.wasmTetra4DSimd = null;
 
         this.interpolation3D = options.interpolation3D ? options.interpolation3D.toLowerCase() : 'tetrahedral';
         this.interpolation4D = options.interpolation4D ? options.interpolation4D.toLowerCase() : 'tetrahedral';
@@ -801,14 +930,118 @@
 
         this.pipelineCreated = true;
 
-        // INTEGER HOT PATH (lutMode === 'int'): build the u16 mirror LUT
-        // once, after the optimiser has folded the device->int stage and
-        // `lut.outputScale` has been bumped from 1 to 255. Build is silent
-        // — if the LUT shape isn't supported (1D, 2D, or non-{3,4} output
-        // channels), intLut stays undefined and the dispatcher falls back
-        // to the float kernel automatically.
-        if(this.lutMode === 'int' && this.lut && this.dataFormat === 'int8'){
+        // INTEGER HOT PATH (lutMode is any of 'int', 'int-wasm-scalar',
+        // 'int-wasm-simd'): build the u16 mirror LUT once, after the
+        // optimiser has folded the device->int stage and `lut.outputScale`
+        // has been bumped from 1 to 255. Build is silent — if the LUT shape
+        // isn't supported (1D, 2D, or non-{3,4} output channels), intLut
+        // stays undefined and the dispatcher falls back to the float
+        // kernel automatically.
+        //
+        // The WASM paths need the same mirror LUT as the 'int' path (same
+        // u16 CLUT, same gps, same stride metadata), so all modes run
+        // buildIntLut unconditionally.
+        if((this.lutMode === 'int'
+                || this.lutMode === 'int-wasm-scalar'
+                || this.lutMode === 'int-wasm-simd')
+            && this.lut && this.dataFormat === 'int8'){
             this.buildIntLut(this.lut);
+        }
+
+        // WASM KERNEL INIT (lutMode begins with 'int-wasm-'): try to
+        // compile and instantiate the tetrahedral WASM kernel(s) once,
+        // at create() time. On any failure (no WebAssembly global, SIMD
+        // unsupported by host, module bytes missing, instantiate throws)
+        // demote lutMode to the next-best mode (simd → scalar → int) so
+        // the best available kernel runs instead. Soft-fail-loud-log:
+        // warning in verbose mode, silent otherwise. The dispatcher
+        // then sees the demoted lutMode and skips inapplicable WASM
+        // routing on every call — zero per-call overhead from the
+        // demotion.
+        //
+        // For 'int-wasm-simd' we try to load BOTH the SIMD module
+        // (for 3D cMax ∈ {3, 4}) and the scalar module (for everything
+        // else the SIMD kernel doesn't cover — currently just 3D with
+        // cMax ∉ {3, 4}). If the SIMD module compile fails but the
+        // scalar compile succeeds, we demote to 'int-wasm-scalar'.
+        if(this.lutMode === 'int-wasm-simd'){
+            var simdState = wasmLoader.createTetra3DSimdState({ wasmCache: this.wasmCache });
+            if(simdState !== null){
+                this.wasmTetra3DSimd = simdState;
+                // Also load scalar as a fallthrough step for cMax ∉ {3,4}.
+                // Scalar compile rarely fails when SIMD compile succeeds
+                // (SIMD is a strict superset of scalar capability in V8),
+                // but we still check — on failure we leave wasmTetra3D
+                // null and let the dispatcher fall through to 'int' JS
+                // for those off-path cases.
+                var scalarState = wasmLoader.createTetra3DState({ wasmCache: this.wasmCache });
+                if(scalarState !== null){
+                    this.wasmTetra3D = scalarState;
+                }
+                if(this.verbose){
+                    console.log('  lutMode=int-wasm-simd: WebAssembly SIMD kernel loaded'
+                        + (scalarState !== null ? ' (+ scalar fallthrough)' : ' (scalar fallthrough unavailable)'));
+                }
+            } else {
+                if(this.verbose){
+                    console.warn('  lutMode=int-wasm-simd: WebAssembly SIMD unavailable — demoting to "int-wasm-scalar"');
+                }
+                this.lutMode = 'int-wasm-scalar';
+            }
+        }
+
+        if(this.lutMode === 'int-wasm-scalar'){
+            var wasmState = wasmLoader.createTetra3DState({ wasmCache: this.wasmCache });
+            if(wasmState !== null){
+                this.wasmTetra3D = wasmState;
+                if(this.verbose){
+                    console.log('  lutMode=int-wasm-scalar: WebAssembly kernel loaded');
+                }
+            } else {
+                if(this.verbose){
+                    console.warn('  lutMode=int-wasm-scalar: WebAssembly unavailable — demoting to "int"');
+                }
+                this.lutMode = 'int';
+            }
+        }
+
+        // 4D WASM (CMYK input). Loaded alongside 3D any time lutMode is
+        // still 'int-wasm-*' after the 3D blocks above ran. If the 3D
+        // path just demoted to 'int' we don't try 4D either — there's
+        // no meaningful scenario where the 4D module would instantiate
+        // on a host where the 3D one didn't.
+        //
+        // For 'int-wasm-simd' we also load the 4D SIMD kernel for
+        // cMax ∈ {3, 4} (which covers CMYK → RGB and CMYK → CMYK, i.e.
+        // every real-world 4D pipeline). The scalar 4D state stays
+        // loaded as a fallthrough for other cMax values.
+        //
+        // On 4D-load failure we DON'T demote lutMode — 3D can still run
+        // through WASM; 4D just falls through to the JS 'int' kernel on
+        // the dispatcher side. Soft degradation, matches pre-4D-WASM
+        // behaviour exactly.
+        if(this.lutMode === 'int-wasm-simd'){
+            var wasm4DSimdState = wasmLoader.createTetra4DSimdState({ wasmCache: this.wasmCache });
+            if(wasm4DSimdState !== null){
+                this.wasmTetra4DSimd = wasm4DSimdState;
+                if(this.verbose){
+                    console.log('  lutMode=int-wasm-simd: WebAssembly 4D SIMD kernel loaded');
+                }
+            } else if(this.verbose){
+                console.warn('  lutMode=int-wasm-simd: WebAssembly 4D SIMD kernel unavailable — 4D inputs will use scalar 4D WASM or JS int fallback');
+            }
+        }
+
+        if(this.lutMode === 'int-wasm-scalar' || this.lutMode === 'int-wasm-simd'){
+            var wasm4DState = wasmLoader.createTetra4DState({ wasmCache: this.wasmCache });
+            if(wasm4DState !== null){
+                this.wasmTetra4D = wasm4DState;
+                if(this.verbose){
+                    console.log('  lutMode=' + this.lutMode + ': WebAssembly 4D scalar kernel loaded');
+                }
+            } else if(this.verbose){
+                console.warn('  lutMode=' + this.lutMode + ': WebAssembly 4D scalar kernel unavailable — 4D inputs will use JS int fallback');
+            }
         }
 
         if(this.verbose){
@@ -1502,7 +1735,10 @@
         // If you are calling `transformArrayViaLUT` directly with a
         // pre-built intLut you got from somewhere else, this is the
         // guardrail.
-        if(this.lutMode === 'int' && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
+        if((this.lutMode === 'int'
+                || this.lutMode === 'int-wasm-scalar'
+                || this.lutMode === 'int-wasm-simd')
+            && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
             throw new Error(
                 'jsColorEngine: intLut format tag incompatible with this version. ' +
                 'Got {version:' + lut.intLut.version +
@@ -1524,14 +1760,87 @@
                 break;
 
             case 3: // RGB or Lab
+                // WASM SIMD FAST PATH (lutMode === 'int-wasm-simd',
+                // cMax ∈ {3, 4} only). Channel-parallel tetrahedral
+                // kernel, ~3.0-3.5× over 'int' JS and ~2.0-2.5× over
+                // 'int-wasm-scalar'. Bit-exact against both across the
+                // 6-config matrix. See docs/Performance.md "WASM SIMD
+                // — channel-parallel" section.
+                //
+                // Alpha and gating semantics identical to the scalar
+                // WASM path below. cMax outside {3, 4} falls through
+                // to the scalar WASM path (if loaded) and then to int
+                // JS — no visible behaviour change.
+                if(this.lutMode === 'int-wasm-simd'
+                    && this.wasmTetra3DSimd !== null
+                    && (outputChannels === 3 || outputChannels === 4)
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPPsimd  = inputHasAlpha  ? 4 : 3;
+                    var outBPPsimd = outputHasAlpha ? outputChannels + 1 : outputChannels;
+                    this.wasmTetra3DSimd.bind(lut.intLut, pixelCount, outputChannels, inBPPsimd, outBPPsimd);
+                    this.wasmTetra3DSimd.runTetra3D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
+                // WASM SCALAR FAST PATH ('int-wasm-scalar', or
+                // 'int-wasm-simd' that fell through to here for
+                // cMax ∉ {3, 4}). One n-channel kernel handles cMax
+                // ∈ {3, 4, 5+}, ~1.40× over the JS 'int' path on x64
+                // for 3D tetrahedral workloads. See docs/Performance.md
+                // "WASM scalar — measured".
+                //
+                // Alpha: the kernel supports all three paths (input-only
+                // alpha = skip, output-only = fill 255, preserveAlpha =
+                // copy-through). Interpolation math is unchanged; alpha
+                // is ~10 extra WAT instructions at the end of each pixel.
+                //
+                // Gates:
+                //   - WASM instance successfully loaded at create() time
+                //     (this.wasmTetra3D !== null; otherwise lutMode was
+                //     demoted to 'int' so this branch won't be entered).
+                //   - intLut built for this LUT shape.
+                //   - pixelCount >= WASM_DISPATCH_MIN_PIXELS. Below
+                //     ~a few hundred pixels the memcpy-in / memcpy-out
+                //     overhead outweighs the per-pixel kernel win.
+                //     Threshold is a constant for now; will be benched
+                //     and tuned in the v1.2 main work.
+                //
+                // Falls through to the 'int' JS dispatch below on any
+                // gate miss — no visible behaviour change, no error.
+                if((this.lutMode === 'int-wasm-scalar' || this.lutMode === 'int-wasm-simd')
+                    && this.wasmTetra3D !== null
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPP  = inputHasAlpha  ? 4 : 3;
+                    var outBPP = outputHasAlpha ? outputChannels + 1 : outputChannels;
+                    this.wasmTetra3D.bind(lut.intLut, pixelCount, outputChannels, inBPP, outBPP);
+                    this.wasmTetra3D.runTetra3D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
                 // INT FAST PATH: integer kernel using u16 LUT and Q0.8 weights.
                 // Eligible when lutMode='int' was selected AND buildIntLut()
                 // built the mirror LUT (only for supported shapes — see
                 // buildIntLut). Falls through to the float kernel otherwise.
+                // Also handles the WASM-gate-miss fallthrough from above
+                // (lutMode==='int-wasm-scalar' cases that couldn't use WASM
+                // this call — e.g. small pixelCount, alpha present).
                 // See JSDoc on the lutMode constructor option for the
                 // speed/accuracy tradeoff and bench/fastLUT_real_world.js
                 // for numbers.
-                if(this.lutMode === 'int' && lut.intLut){
+                if((this.lutMode === 'int'
+                        || this.lutMode === 'int-wasm-scalar'
+                        || this.lutMode === 'int-wasm-simd')
+                    && lut.intLut){
                     switch (outputChannels) {
                         case 3: // RGB > RGB or RGB > Lab — integer hot path
                             this.tetrahedralInterp3DArray_3Ch_intLut_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
@@ -1571,12 +1880,76 @@
                 }
                 break;
             case 4: // CMYK
+                // WASM SIMD FAST PATH for 4D LUTs (CMYK input), cMax ∈
+                // {3, 4} only. Channel-parallel tetrahedral kernel with
+                // hoisted K prologue + flag-gated K-plane loop; K0 u20
+                // intermediate lives in a v128 register across the K
+                // iteration (no scratch memory). Measured avg 2.39× over
+                // JS 'int' (range 2.04×–2.57×) and avg 1.98× over scalar
+                // WASM across the 6-config bench matrix. Bit-exact vs
+                // both. See docs/Performance.md §1b "4D SIMD — measured".
+                //
+                // Alpha and gating semantics identical to the 3D SIMD
+                // path. cMax outside {3, 4} falls through to the scalar
+                // 4D WASM path (if loaded) and then to JS int — no
+                // visible behaviour change.
+                if(this.lutMode === 'int-wasm-simd'
+                    && this.wasmTetra4DSimd !== null
+                    && (outputChannels === 3 || outputChannels === 4)
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPP4Dsimd  = inputHasAlpha  ? 5 : 4;
+                    var outBPP4Dsimd = outputHasAlpha ? outputChannels + 1 : outputChannels;
+                    this.wasmTetra4DSimd.bind(lut.intLut, pixelCount, outputChannels, inBPP4Dsimd, outBPP4Dsimd);
+                    this.wasmTetra4DSimd.runTetra4D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
+                // WASM SCALAR FAST PATH for 4D LUTs (CMYK input). One
+                // rolled n-channel kernel covers every outputChannels;
+                // bit-exact against the JS `_intLut_loop` kernels and
+                // ~1.22× faster on average (1.13–1.49× across the
+                // 6-config bench matrix). See docs/Performance.md §1b
+                // "4D scalar — measured".
+                //
+                // Handles both 'int-wasm-scalar' and 'int-wasm-simd'
+                // fallthroughs — if the SIMD 4D kernel didn't load or
+                // cMax is ∉ {3, 4}, we route here before falling through
+                // to the JS INT FAST PATH below.
+                //
+                // Gates mirror the 3D path: WASM state present, intLut
+                // built for this LUT shape, pixelCount above the memcpy
+                // break-even threshold.
+                if((this.lutMode === 'int-wasm-scalar' || this.lutMode === 'int-wasm-simd')
+                    && this.wasmTetra4D !== null
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPP4D  = inputHasAlpha  ? 5 : 4;
+                    var outBPP4D = outputHasAlpha ? outputChannels + 1 : outputChannels;
+                    this.wasmTetra4D.bind(lut.intLut, pixelCount, outputChannels, inBPP4D, outBPP4D);
+                    this.wasmTetra4D.runTetra4D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
                 // INT FAST PATH for 4D LUTs (CMYK input). Same gating as 3D
-                // above: requires lutMode='int' AND buildIntLut() to have
+                // above: requires lutMode='int' (or 'int-wasm-*' that fell
+                // through from the WASM fast path above — small pixelCount,
+                // or 4D WASM kernel not loaded) AND buildIntLut() to have
                 // built the mirror LUT (skipped for unsupported shapes).
                 // Bench reference: bench/int_vs_float_4d.js (1.6× standalone,
                 // 1.10–1.20× expected in-engine after class-method effect).
-                if(this.lutMode === 'int' && lut.intLut){
+                if((this.lutMode === 'int'
+                        || this.lutMode === 'int-wasm-scalar'
+                        || this.lutMode === 'int-wasm-simd')
+                    && lut.intLut){
                     switch(outputChannels){
                         case 3: // CMYK > RGB or CMYK > Lab — integer hot path
                             this.tetrahedralInterp4DArray_3Ch_intLut_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
@@ -2146,7 +2519,7 @@
             this.optimisePipeline();
         }
 
-        // Ensure pipeline is valid by checing that the output of one stage matches the input of the next
+        // Ensure pipeline is valid by checking that the output of one stage matches the input of the next
         this.verifyPipeline();
     };
 
@@ -4404,6 +4777,10 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return data;
     };
 
+    emit_js_stage_debug(index, stage){
+        return '//Debug Stage  - not implemented in compiled \n';
+    }
+
     addDebugHistory(label, stageName, lastData, data){
 
         if(label.indexOf('{name}') >= 0 ){
@@ -4433,6 +4810,10 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return input;
     };
 
+    emit_js_stage_null(index, stage){
+        return '';
+    }
+
     stage_history(input, info){
 
         // Add the info to the history
@@ -4441,7 +4822,9 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return input;
     };
 
-
+    emit_js_stage_history(index, stage){
+        return '//History Stage  - not implemented in compiled \n';
+    }
 
     ////////////////////////////////////////////////////////////////////////////////
     //
@@ -4455,18 +4838,39 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         };
     };
 
+    emit_js_stage_device_to_Gray(index, stage){
+        return `return {\n` +
+                    `G: (device[0] * 255),\n` +
+                    `type: eColourType.Gray\n` +
+                `}\n`
+    };
+
     stage_device_to_Grayf(device){
         return {
             Gf: device[0],
             type: eColourType.Grayf
         };
     };
-
+        
+    emit_js_stage_device_to_Grayf(index, stage){
+        return `return {\n` +
+            `Gf: device[0],\n` +
+            `type: eColourType.Grayf\n` +
+            `}\n`
+    };
+        
     stage_device_to_Gray_round(device, precision){
         return {
             G: roundN(device[0] * 255, precision),
             type: eColourType.Gray
         };
+    };
+
+    emit_js_stage_device_to_Gray_round(index, stage){
+        return `return {\n` +
+            `G: Math.round(device[0] * 255 * pp) / pp,\n` +
+            `type: eColourType.Gray\n` +
+            `}\n`
     };
 
     /**
@@ -4480,6 +4884,11 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         throw 'stage_Gray_to_Device: cmsInput expects _cmsGray';
     };
 
+    emit_js_stage_Gray_to_Device(index, stage){
+        return `return [G / 255]\n`
+    };
+
+
     ////////////////////////////////////////////////////////////////////////////////
     //
     //  Stages for Duotone (2 colour) Data
@@ -4492,6 +4901,14 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             b: (device[1] * 100),
             type: eColourType.Duo
         };
+    };
+
+    emit_js_stage_device_to_Duo(index, stage){
+        return `return {\n` +
+            `a: (device[0] * 100),\n` +
+            `a: (device[1] * 100),\n` +
+            `type: eColourType.Duo\n` +
+            `}\n`
     };
 
     stage_device_to_Duof(device){
@@ -11276,6 +11693,56 @@ trilinearInterp3D_NCh(input, lut){
         return blackLab;
     };
 
+
+    compile(options = {}) {
+        const target = options.target || 'js';
+
+        if (!this.pipelineCreated || this.pipeline.length === 0) {
+            throw 'No pipeline to compile';
+        }
+
+        // Assign index to each stage and collect binary data
+        const store = { version: "1.2.0" };
+        this.pipeline.forEach((stage, idx) => {
+            stage._compileIndex = idx;
+            if (typeof stage.attachToStore === 'function') {
+                stage.attachToStore(store, idx);
+            }
+        });
+
+        let src = `// Compiled Transform - ${target}\n`;
+        src += `const rawStore = ${JSON.stringify(store)};\n\n`;
+        src += `function decodeStore(r) { /* decode u16@ etc */ return r; }\n`;
+        src += `let s = null;\n`;
+        src += `function getStore() { if(!s) s=decodeStore(rawStore); return s; }\n\n`;
+        src += `export function transform(input) {\n`;
+        src += `  const store = getStore();\n`;
+        src += `  let r=input[0]/255, g=input[1]/255, b=input[2]/255;\n`;
+        src += `  let X=0,Y=0,Z=0, pcsL=0,pcsA=0,pcsB=0, c=0,m=0,y=0,k=0;\n\n`;
+        src += `  let device=[];\n\n`;
+        src += `  let places = ${this.precision};\n\n`;
+        let pp =  Math.pow(10, this.precision)
+        src += `  let pp = ${pp};\n\n`;
+
+        this.pipeline.forEach(stage => {
+            const m = `emit_${target}_${stage.stageName}`;
+            if (typeof this[m] === 'function') {
+                src += `// Stage : ${stage.stageName}\n`;
+                src += this[m](stage._compileIndex, stage);
+            } else {
+                src += `  // TODO: ${m}\n`;
+            }
+        });
+
+        src += `  return [c,m,y,k];\n`;
+        src += `}\n`;
+
+        return { source: src, store };
+    }
+
+    _buildRawStoreForCompile() {
+        return { version: "1.2.0", note: "placeholder" };
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -11376,7 +11843,29 @@ function data2String(color, format, precision){
     function n2str(n){
         return isNaN(n) ? n : n.toFixed(precision);
     }
+
+
+
+
+
 }
+
+// ---------------------------------------------------------------------------
+// Class statics — dispatch thresholds, magic numbers, etc.
+// ---------------------------------------------------------------------------
+
+// Minimum pixelCount for the WASM 3D tetrahedral dispatcher to kick in.
+// Below this, the per-call memcpy-in / kernel-call / memcpy-out overhead
+// exceeds the arithmetic savings of the WASM kernel, and the JS 'int'
+// kernel is actually faster.
+//
+// Chosen at 256 as an initial conservative value — will be profiled and
+// re-tuned in the v1.2 main work using bench/wasm_dispatch_threshold.js
+// (sweeping 100/200/300/400 pixel-counts, per user plan). Setting this
+// from outside (Transform.WASM_DISPATCH_MIN_PIXELS = 0) is a valid
+// escape hatch for pathological test cases that want to force WASM on
+// single-pixel loops.
+Transform.WASM_DISPATCH_MIN_PIXELS = 256;
 
 
 module.exports = Transform;

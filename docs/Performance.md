@@ -1,32 +1,130 @@
 # Performance — where we are, what we learned, where we're going
 
+**jsColorEngine docs:**
+[← Project README](../README.md) ·
+[Bench](./Bench.md) ·
+[Roadmap](./Roadmap.md) ·
+[Deep dive](./deepdive/) ·
+[Examples](./Examples.md) ·
+[API: Profile](./Profile.md) ·
+[Transform](./Transform.md) ·
+[Loader](./Loader.md)
+
+---
+
 This document captures the performance findings from the v1.1 work
-(`lutMode: 'int'` integer hot path), how jsColorEngine compares to the
-industry-standard C implementations (LittleCMS, babl), and the planned
-v1.2 / v1.3 / v1.4 future work.
+(`lutMode: 'int'` integer hot path), the v1.2 WASM LUT kernel
+additions (`'int-wasm-scalar'` + `'int-wasm-simd'`, 3D **and** 4D
+both shipped and bit-exact across the 12-config matrix, plus
+`lutMode: 'auto'` as the new default — all three items complete),
+how jsColorEngine compares to the industry-standard C implementations
+(LittleCMS, babl), and the planned v1.3 / v1.4 / v1.5 / v2 future
+work.
 
 It's intentionally a "lab notebook" — the numbers are real, the
 explanations are blunt, and the conclusions feed directly into the
 roadmap at the bottom.
 
+> **Technical deep-dive lives in [`docs/deepdive/`](./deepdive/).**
+> This page is the journey — headline numbers, compare-to-lcms, the
+> surprises, the roadmap. The deep-dive has the V8 asm walkthroughs,
+> op-count tables, `.wat` design discussions, and reproduction
+> recipes. §2 and §3 below summarise each deep-dive page and link to
+> it, so you can stay at journey-level or drop into the evidence
+> when something looks suspicious.
+
 ---
 
-## 1. Current numbers (v1.1, single-threaded, V8 / Node 20)
+## Table of contents
 
-Measured with `bench/mpx_summary.js` against the GRACoL2006 ICC
-profile, 65 K pixels per iter, 5 batches × 100 iters median, 500 iter
-warmup.
+- [1. Where we are — current numbers](#1-where-we-are--current-numbers)
+    - [Headline throughput table (v1.2, V8 / Node 20)](#headline-throughput-table-v12-v8--node-20)
+    - [⚠ Caution — benchmark context matters (a lot)](#-caution--benchmark-context-matters-a-lot)
+    - [Where the 10–15% comes from in production](#where-the-1015-comes-from-in-production)
+- [2. What we learned](#2-what-we-learned)
+    - [2.1 The JS hot path is already close to the x64 ceiling](#21-the-js-hot-path-is-already-close-to-the-x64-ceiling)
+    - [2.2 Named temps at microbench scale — we tested, then declined to refactor](#22-named-temps-at-microbench-scale--we-tested-then-declined-to-refactor)
+    - [2.3 WASM scalar — the predicted 1.4× landed](#23-wasm-scalar--the-predicted-14-landed)
+    - [2.4 WASM SIMD 3D — channel-parallel was the right axis](#24-wasm-simd-3d--channel-parallel-was-the-right-axis)
+    - [2.5 WASM 4D — hoisted prologue + flag-gated K-plane loop](#25-wasm-4d--hoisted-prologue--flag-gated-k-plane-loop)
+    - [Reproducing every number on this page](#reproducing-every-number-on-this-page)
+- [3. Discoveries in the journey](#3-discoveries-in-the-journey)
+    - [3.1 lcms-wasm RGB→RGB is a no-op — a benchmarking trap](#31-lcms-wasm-rgbrgb-is-a-no-op--a-benchmarking-trap)
+    - [3.2 First WASM 4D ran 25 % slower than JS — V8's inliner refused the helper](#32-first-wasm-4d-ran-25-slower-than-js--v8s-inliner-refused-the-helper)
+    - [3.3 The 1D POC ruled out SIMD for LUTs — POC was vectorising the wrong axis](#33-the-1d-poc-ruled-out-simd-for-luts--poc-was-vectorising-the-wrong-axis)
+    - [3.4 WASM SIMD detection false-negative in browsers](#34-wasm-simd-detection-false-negative-in-browsers)
+    - [3.5 u16 CLUT scaled by 65535 vs 65280](#35-u16-clut-scaled-by-65535-vs-65280)
+- [4. How does this compare to LittleCMS in C?](#4-how-does-this-compare-to-littlecms-in-c)
+    - [Measured — vs `lcms-wasm` (direct, same-machine)](#measured--vs-lcms-wasm-direct-same-machine)
+    - [Why pure-JS can beat an Emscripten-wasm32 port](#why-pure-js-can-beat-an-emscripten-wasm32-port)
+    - [Measured — vs native LittleCMS (same hardware, same run)](#measured--vs-native-littlecms-same-hardware-same-run)
+    - [What the gap actually is](#what-the-gap-actually-is)
+    - [What is `fast-float`?](#what-is-fast-float)
+    - [Lessons we picked up from reading `lcms2/src/cmsintrp.c`](#lessons-we-picked-up-from-reading-lcms2srccmsintrpc)
+- [5. What shipped in v1.1 and v1.2](#5-what-shipped-in-v11-and-v12)
+    - [v1.1 — 4D integer kernels (CMYK input) + u20 refactor  ✅ SHIPPED](#v11--4d-integer-kernels-cmyk-input--u20-refactor---shipped)
+    - [Design constraint — float OR u16 only](#design-constraint--float-or-u16-only)
+    - [v1.2 — WASM LUT kernels (3D + 4D, scalar + SIMD) and `lutMode: 'auto'`](#v12--wasm-lut-kernels-3d--4d-scalar--simd-and-lutmode-auto)
+    - [Historical record: original v1.3 / v1.4 analysis (1D WASM POC)](#historical-record-original-v13--v14-analysis-1d-wasm-poc)
+    - [v1.3+ — see Roadmap.md](#v13-and-beyond--see-roadmapmd)
+- [6. What's not on the roadmap](#6-whats-not-on-the-roadmap)
+- [7. Quick reference — when to enable what](#7-quick-reference--when-to-enable-what)
 
-| Direction | No LUT (accuracy) | `lutMode: 'float'` (f64) | `lutMode: 'int'` (u16) | int/float speedup | int/no-LUT speedup | Accuracy (u8) |
-|---|---|---|---|---|---|---|
-| RGB → RGB  (3D 3Ch) | 5.0 MPx/s | 69.0 MPx/s | **72.1 MPx/s** | 1.04× | 14× | **0 LSB (100 % exact)** |
-| RGB → CMYK (3D 4Ch) | 4.1 MPx/s | 56.1 MPx/s | **62.1 MPx/s** | 1.11× | 15× | ≤ 1 LSB |
-| CMYK → RGB (4D 3Ch) | 4.5 MPx/s | 50.8 MPx/s | **59.1 MPx/s** | 1.16× | 13× | ≤ 1 LSB |
-| CMYK → CMYK (4D 4Ch) | 3.8 MPx/s | 44.7 MPx/s | **48.8 MPx/s** | 1.09× | 13× | ≤ 1 LSB |
+---
+
+## 1. Where we are — current numbers
+
+### Headline throughput table (v1.2, V8 / Node 20)
+
+JS-side numbers measured with `bench/mpx_summary.js` against the
+GRACoL2006 ICC profile (65 K pixels per iter, 5 batches × 100 iters
+median, 500 iter warmup). WASM scalar and SIMD numbers come from the
+shipped kernel matrix (`bench/wasm_poc/tetra3d_simd_run.js` +
+`tetra4d_simd_run.js`, 33-grid configs which are the closest match
+to a real ICC LUT shape — full per-grid matrix in
+[deep-dive / WASM kernels](./deepdive/WasmKernels.md)). All four
+directions × all four `lutMode` values are now shipped and bit-exact
+against the JS `'int'` reference.
+
+| Direction | No LUT (accuracy) | `'float'` (f64) | `'int'` (u16) | `'int-wasm-scalar'` | **`'int-wasm-simd'`** | SIMD vs `'int'` | Accuracy (u8) |
+|---|---|---|---|---|---|---|---|
+| RGB → RGB  (3D 3Ch) | 5.0 MPx/s | 69.0 MPx/s | 72.1 MPx/s | ~99 MPx/s | **~216 MPx/s** | **3.0×** | **0 LSB (100 % exact)** |
+| RGB → CMYK (3D 4Ch) | 4.1 MPx/s | 56.1 MPx/s | 62.1 MPx/s | ~84 MPx/s | **~210 MPx/s** | **3.5×** | ≤ 1 LSB |
+| CMYK → RGB (4D 3Ch) | 4.5 MPx/s | 50.8 MPx/s | 59.1 MPx/s | ~70 MPx/s | **~128 MPx/s** | **2.1×** | ≤ 1 LSB |
+| CMYK → CMYK (4D 4Ch) | 3.8 MPx/s | 44.7 MPx/s | 48.8 MPx/s | ~60 MPx/s | **~128 MPx/s** | **2.6×** | ≤ 1 LSB |
+
+Full 6-config × 2-axis matrix (g1 ∈ {17, 33, 65}, cMax ∈ {3, 4}),
+bit-exact verification against both the JS `'int'` reference and the
+shipping WASM scalar kernel, plus alpha-mode handling and dispatcher
+design, are documented in [deep-dive / WASM kernels](./deepdive/WasmKernels.md):
+
+- [WASM scalar — 3D](./deepdive/WasmKernels.md#wasm-scalar-3d--the-first-kernel)
+  (avg **1.40×** over `'int'`, range 1.37-1.45×)
+- [WASM SIMD — 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)
+  (avg **3.25×** over `'int'`, range 2.94-3.50×)
+- [WASM scalar — 4D](./deepdive/WasmKernels.md#wasm-scalar-4d--and-the-function-call-lesson)
+  (avg **1.22×** over `'int'`, range 1.13-1.49×)
+- [WASM SIMD — 4D](./deepdive/WasmKernels.md#wasm-simd-4d--the-k-plane-loop-in-one-v128)
+  (avg **2.39×** over `'int'`, range 2.04-2.57× — flat ~125 MPx/s
+  across LUT sizes from 38 KB to 9 MB)
+
+> **v1.2 status:** `lutMode: 'auto'` shipped as the default — `int8`
+> + `buildLut: true` transparently picks `'int-wasm-simd'` with the
+> full demotion chain; everything else resolves to `'float'`. The
+> native-lcms2 head-to-head [has now been measured](#measured--vs-native-littlecms-same-hardware-same-run)
+> via [`bench/lcms_c/`](../bench/lcms_c) — jsColorEngine `'int'` beats
+> native vanilla lcms2 on 3 of 4 workflows in pure JS, and the WASM
+> SIMD default wins on all four by 2–5×. v1.2 is feature-complete.
 
 **MPx/s = millions of pixels per second.** A 4K image is ~8.3 MPx, so
 72 MPx/s converts a 4K RGB→RGB frame in ~115 ms single-threaded; the
-slowest workflow (CMYK→CMYK) still finishes a 4K frame in ~170 ms.
+slowest JS workflow (CMYK→CMYK) still finishes a 4K frame in ~170 ms.
+With `'int-wasm-scalar'` the 4K RGB→RGB frame drops to ~84 ms; with
+`'int-wasm-simd'` both 4K RGB→RGB **and** 4K RGB→CMYK drop to ~**39 ms**,
+and 4K CMYK→CMYK to ~**65 ms** — still single-threaded. (CMYK output
+runs at the same wall-clock as RGB output under SIMD because the 4th
+channel was in a lane that was already present; see §2.4 and
+[deep-dive / WASM kernels — SIMD 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once).)
 
 The 4D directions beat 3D on speedup because the float K-LERP does
 more redundant rounding work per pixel, and the 4D integer kernels
@@ -129,277 +227,402 @@ production, the answer is very probably here.
 
 ---
 
-## 1b. JIT inspection — measured, not assumed
+## 2. What we learned
 
-The performance story of `lutMode: 'int'` rests on three assumptions
-about V8:
+These are the headline findings from the v1.1 / v1.2 work. The full
+walkthroughs — V8 asm dumps, op-count tables, spill classifications,
+`.wat` design discussions, bit-exact matrices, reproduction recipes —
+live in the [deep-dive](./deepdive/) folder. This section is the
+30-second version of each finding, with the key number and a link to
+the evidence.
 
-1. The kernels are actually promoted to TurboFan (not stuck in
-   the Ignition interpreter or Sparkplug baseline after warmup).
-2. V8 emits pure int32 arithmetic — not boxed HeapNumber / float64.
-3. Real-world inputs don't cause the JIT to deopt, throwing away
-   the specialised code.
+### 2.1 The JS hot path is already close to the x64 ceiling
 
-If any of these is wrong, the whole design is wrong. So we verified
-them directly using V8's native APIs, not by inference. Run the bench
-yourself any time with:
+**What we did.** Verified with V8's `--print-opt-code` that each hot
+kernel is actually promoted to TurboFan (not stuck in Ignition /
+Sparkplug), emits pure int32 arithmetic (or pure f64 for the float
+kernels — never both), and doesn't deopt during real
+`transformArray` runs. Then classified the emitted instruction mix
+to price every opcode.
 
-```
-node --allow-natives-syntax bench/jit_inspection.js
-```
+**What we found.** All eight hot kernels — four integer, four float —
+tier to TurboFan after warmup, stay there, and commit to a numerical
+domain at compile time (zero `cvt*` conversion ops in any kernel).
+Kernel sizes 4.5–10.8 KB, every one sits inside L1i even on 2008-era
+x64. The surprise was how close to the hardware this is:
 
-**Measured result (Node 20.13 / V8 11.3, Windows x64, 2026-04):**
+- The float core-line hot body is **13 XMM double ops** with no
+  spills, no boxing, no allocations.
+- The int core-line hot body is **14 GPR ops** (`imull` + `leal` +
+  `sarl` + one `jo` overflow guard).
 
-All eight hot kernels (four `_intLut_loop` integer kernels and four
-`*Array_*Ch_loop` float kernels) are confirmed:
+Where the remaining cost goes, from instruction-mix analysis:
 
-- **Tier**: TurboFan (best tier) on all eight, after warmup.
-- **Deopts during `transformArray`**: zero on both families.
-- **Numerical-domain purity** confirmed from `--print-opt-code`
-  disassembly — int kernels use zero float ops, float kernels keep
-  their math in XMM registers and never convert to int:
-
-| Kernel | `imul` | `add` | `sub` | shifts | `mulsd` | `addsd` | `subsd` | conv. | runtime |
-|---|---|---|---|---|---|---|---|---|---|
-| 3D 3Ch INT (RGB→RGB) | 34 | 58 | 27 | 24 | **0** | **0** | **0** | 0 | 0 |
-| 3D 4Ch INT (RGB→CMYK) | 181 | 74 | 36 | 30 | **0** | **0** | **0** | 0 | 0 |
-| 4D 3Ch INT (CMYK→RGB) | 251 | 125 | 64 | 65 | **0** | **0** | **0** | 0 | 0 |
-| 4D 4Ch INT (CMYK→CMYK) | 92 | 158 | 85 | 84 | **0** | **0** | **0** | 0 | 0 |
-| 3D 3Ch FLT (RGB→RGB) | 3 | 53 | 1 | 0 | 40 | 27 | 30 | 0 | 0 |
-| 3D 4Ch FLT (RGB→CMYK) | 3 | 66 | 1 | 0 | 52 | 36 | 39 | 0 | 0 |
-| 4D 3Ch FLT (CMYK→RGB) | 4 | 98 | 2 | 0 | 80 | 63 | 67 | 0 | 0 |
-| 4D 4Ch FLT (CMYK→CMYK) | 6 | 122 | 2 | 0 | 106 | 85 | 88 | 0 | 1* |
-
-<small>*The single CallRuntime in 4D 4Ch FLT is a deopt-guard on a
-rarely-taken edge; it's not in the per-pixel hot path.</small>
-
-Zero conversion ops (`cvtss2sd`, `cvtsd2si`, etc.) in any kernel
-means V8 never bounces a value between the integer and float
-domains inside the loop — the domain choice is committed at
-compile time. Op counts scale with kernel complexity, confirming
-the hand-unrolled tetrahedral branches in the source survive
-TurboFan and aren't being collapsed back into a loop.
-
-### Working-set size — does the unroll fit in L1i?
-
-Emitted machine code sizes (from V8's `Instructions (size = ...)` header):
-
-| Kernel | Code size | % of 32 KB L1i |
+| Class of instruction | Share | Can we delete it? |
 |---|---|---|
-| 3D 3Ch INT | 4.5 KB | 14 % |
-| 3D 4Ch INT | 5.4 KB | 17 % |
-| 4D 3Ch INT | 7.6 KB | 24 % |
-| 4D 4Ch INT | 9.4 KB | 30 % |
-| 3D 3Ch FLT | 4.7 KB | 15 % |
-| 3D 4Ch FLT | 5.6 KB | 17 % |
-| 4D 3Ch FLT | 8.6 KB | 27 % |
-| 4D 4Ch FLT | 10.8 KB | **34 %** |
+| Compute (`imul`, `add`, `sub`, shifts, `mulsd`, `addsd`, ...) | 22–47 % | No — this is the work |
+| Data moves — spills to/from `[rbp±N]` stack slots | 36–53 % of moves | Partly (WASM; see §2.3) |
+| Bounds checks (`cmp` + `jae` pairs) | 6–8 % | Yes, WASM deletes these |
+| Overflow guards (`jo` after speculative int32 math) | 8–9 % | Yes, WASM deletes these (`i32.add` wraps by spec) |
 
-Every kernel sits comfortably in the 32 KB L1 instruction cache that
-has been standard since Core 2 Duo (2008). Even the largest — 4D 4Ch
-CMYK→CMYK float kernel with all six tetrahedral cases unrolled inline —
-uses only 34 % of L1i on a modern chip. Int kernels run 4-13 % smaller
-than their float counterparts (integer immediates encode in fewer
-bytes than the equivalent float-load sequences). On Apple M-series
-with 192 KB L1i the kernels are effectively invisible.
+Deletable-by-WASM-on-today's-JS = **~15 %** of every kernel. That's
+the "40 %" ceiling the WASM port aimed for (§2.3), and landed.
 
-The actual *hot path* through any one pixel is smaller still (one of
-six tetrahedral branches is taken, not all six), so the cold-branch
-bytes don't compete for L1i during a typical tight row sweep.
+**→ See [deep-dive / JIT inspection](./deepdive/JitInspection.md)** for
+the op-count tables, the core-line x64 walkthrough (both float and int),
+the spill classification, and the ARM64 headroom projection.
 
-**The unroll pays for itself on modern CPUs precisely *because* the
-working set fits L1i.** Re-rolling back to a `switch` would save
-~5 KB of code but introduce one or two branch mispredicts per pixel
-(rx/ry/rz/rk magnitudes vary between neighbours → ~50 % misprediction
-rate × ~15–20 cycles per miss). On anything built in the last 15
-years the unroll wins. This is the "counter-intuitive unroll"
-mentioned in the README `## How it works` callout — documented here
-with real numbers so future-us doesn't tidy the source in a way that
-trades a 5 KB L1i saving for 5–10 cycles of branch penalty per pixel.
+### 2.2 Named temps at microbench scale — we tested, then declined to refactor
 
-### Instruction-mix breakdown — what is V8 actually spending time on?
+**What we did.** The `PERFORMANCE LESSONS` comment at the top of
+`src/Transform.js` has said for years: "don't extract intermediate
+locals in hot expressions, we measured a 15-25 % regression". That
+comment was written against 2019-era V8. We re-measured on today's
+TurboFan with the production core line.
 
-From `bench/jit_asm_boundscheck.ps1` against the same dump, isolated
-per optimised-code block:
+**What we found.** At ~11-live-value microbench scale, named-temps
+are actually **+2 % to +6 % *faster*** than the in-place form —
+V8's allocator picks a cleaner SSA colouring from the explicit names.
+But this is a low-register-pressure scenario. The real kernel
+operates at ~14 live values across a 6× tetrahedral × 3-channel × 2
+K-plane unroll, right on top of the 11-GPR knee. At full-kernel scale
+the 2019 finding almost certainly still holds — the microbench result
+is a low-pressure *floor*, not a universal win.
 
-| Kernel | Total inst | Compute¹ | Data moves² | Safety³ | Tight bounds-check pairs⁴ |
-|---|---|---|---|---|---|
-| 3D 3Ch INT | 668 | **24.7 %** | 39.7 % | 21.6 % | 7.0 % |
-| 3D 4Ch INT | 799 | **43.7 %** | 38.7 % | 22.0 % | 7.5 % |
-| 4D 3Ch INT | 1,155 | **47.1 %** | 36.4 % | 20.0 % | 7.1 % |
-| 4D 4Ch INT | 1,422 | 33.1 % | 36.7 % | 20.2 % | 7.5 % |
-| 3D 3Ch FLT | 722 | 21.3 % | 29.5 % | 20.6 % | 6.0 % |
-| 3D 4Ch FLT | 860 | 22.9 % | 28.4 % | 21.2 % | 6.5 % |
-| 4D 3Ch FLT | 1,299 | 24.2 % | 32.3 % | 19.2 % | 5.9 % |
-| 4D 4Ch FLT | 1,611 | 25.4 % | 32.8 % | 19.1 % | 6.3 % |
+**Decision.** Production source stays in-line-expression. Comment in
+`src/Transform.js` stays. If someone wants to re-open the question,
+the experimental recipe is in the deep-dive.
 
-<small>¹ `imul`+`add`+`sub`+shifts+LEA (int kernels) or `mulsd`+`addsd`+`subsd`+int32 indexing (float kernels).  
-² All mov-class instructions: `movl`/`movq`/`movzx` (int) + `movsd`/`movss` (float).  
-³ `cmp` + `test` + unsigned jumps — upper bound on safety/bounds machinery.  
-⁴ `cmp` immediately followed by `ja`/`jae`/`jnc` — canonical bounds-check signature.</small>
+**→ See [deep-dive / JIT inspection — "Does 'named temps hurt'?"](./deepdive/JitInspection.md#does-named-temps-hurt--a-micro-test-that-is-not-the-final-word)**
+for the side-by-side asm, four-way bench, and the reasoning.
 
-**Five findings that shape the WASM / ARM roadmap:**
+### 2.3 WASM scalar — the predicted 1.4× landed
 
-1. **Int kernels are 7-12 % smaller and ~1.5-2× more compute-dense
-   than their float counterparts.** Matches the ~10-15 % real-world
-   speedup we see for `lutMode: 'int'` — the gain comes from needing
-   fewer instructions per pixel, not a shorter critical path.
+**What we did.** Hand-wrote a `.wat` port of the 3D tetrahedral
+integer kernel (`src/wasm/tetra3d_nch.wat`). Same Q0.16 gps, same u16
+CLUT, same `(x + 0x80) >> 8` rounding — line-by-line translation of
+the JS. Then benched a 6-config matrix (g1 ∈ {17, 33, 65} × cMax ∈
+{3, 4}) against the shipping JS `'int'` kernel, 1 Mi pixels × 500
+iters per config. Same exercise for 4D (`tetra4d_nch.wat`).
 
-2. **Bounds checks are ~6-8 % of instructions, not "a big penalty".**
-   V8's bounds-check elimination is good — it hoists the proof out
-   of tight loops and only keeps checks for computed-index reads
-   (e.g. `CLUT[base + X*go0 + Y*go1 + Z*go2]`). The branches that
-   remain are near-zero runtime cost because they're always-not-taken
-   and predicted perfectly after the first pixel. WASM's guard-page
-   memory model removes this overhead entirely, but the ceiling win
-   from that alone is only ~3-4 % of runtime.
+**What we found.**
 
-2b. **Overflow checks (`jo`) are 7.9-8.5 % of every kernel — more
-   than the bounds checks.** V8 speculatively compiles `a + b` or
-   `a * b` as signed int32 arithmetic and emits `jo bailout` after
-   each op to deopt if the speculation overflows (JS `Number` is
-   float64; int32 is only ever V8 guessing). `Math.imul` is the one
-   exception — it *contractually* wraps, so V8 emits it without the
-   `jo`. Overflow checks appear in BOTH int AND float kernels
-   because the base-pointer/index arithmetic uses plain `+`/`*`.
-   **WASM eliminates these entirely** — `i32.add`, `i32.mul`, etc.
-   are defined to wrap by spec, no guard needed.
+| Kernel | Avg vs JS `'int'` | Range | Bit-exact |
+|---|---|---|---|
+| 3D tetrahedral scalar | **1.40×** | 1.29–1.45× across 6 configs | ✓ 314 M bytes verified |
+| 4D tetrahedral scalar | **1.22×** | 1.13–1.49× across 6 configs | ✓ all 6 configs |
 
-   Combined WASM-eliminatable safety (bounds + overflow):
+The 3D 1.40× lands right at the bottom of the predicted 1.4–1.6×
+band from §2.1 — bounds-check + overflow-guard deletion accounts for
+almost all of it. The 4D 1.22× is smaller because the JS 4D kernel
+was already very tight (v1.1 u20 single-rounding design) and because
+a rolled n-channel WASM loop has to stash intermediate channel values
+to scratch memory (WASM locals aren't runtime-indexable). That
+scratch round-trip is *the* 4D scalar cost; it disappears in 4D SIMD
+(§2.5).
 
-   | Kernel | Bounds % | Overflow % | Combined |
-   |---|---|---|---|
-   | 3D 3Ch INT | 7.0 % | 7.9 % | 14.9 % |
-   | 4D 4Ch INT | 7.5 % | 8.5 % | **16.0 %** |
-   | 3D 3Ch FLT | 6.0 % | 8.3 % | 14.3 % |
-   | 4D 4Ch FLT | 6.3 % | 8.2 % | 14.5 % |
+Both kernels collapse the JS side's 20+ specialised `*_loop`
+functions (one per dimensionality × channel count × int/float ×
+alpha-on/off tuple) into **two 1.8–2.5 KB `.wasm` files**. Single
+kernel handles cMax ∈ {3, 4, 5, 6, ...} at the same relative speed.
 
-   That's ~15 % of instructions WASM would delete just from safety
-   elimination alone. Combined with reduced spill pressure (WASM's
-   linear-memory aliasing rules let the compiler pin pointers in
-   registers), the realistic WASM-scalar-over-`'int'` speedup lands
-   around **1.4-1.6×**, not the 1.3× we initially estimated.
+**→ See [deep-dive / WASM kernels — scalar 3D](./deepdive/WasmKernels.md#wasm-scalar-3d--the-first-kernel)**
+for the 6-config matrix, alpha-mode handling, and the
+dispatch-counter test pattern.
+**→ See [deep-dive / WASM kernels — scalar 4D](./deepdive/WasmKernels.md#wasm-scalar-4d--and-the-function-call-lesson)**
+for the scratch-region design and the function-call-cost lesson
+(see also §3.2 below).
 
-3. **Data moves dominate both families** — 30-40 % of every kernel —
-   and most of those moves are *spills*, not real memory traffic.
-   See the spill analysis below; this is the biggest untapped
-   optimisation lever.
+### 2.4 WASM SIMD 3D — channel-parallel was the right axis
 
-4. **Float kernels have measurably LESS GPR pressure than int
-   kernels at 3D** (see spill table below), because float values
-   live in XMM registers which are a separate file from the GPRs.
-   At 4D both families saturate the GPRs anyway, so the advantage
-   evaporates.
+**What we did.** The original v1.3 1D POC (preserved in the
+"Historical record" under §5) had ruled SIMD out for LUT kernels —
+vectorising across pixels needed a per-lane LUT gather, which on x64
+pre-AVX2 is four scalar loads in disguise. The POC measured **0.89×**
+(slower than scalar). Plan at the time: keep SIMD for matrix-shaper
+work only.
 
-5. **`subsd` exists in the float kernels** (absent from int, because
-   `sub` is used instead). That's expected — float subtraction is
-   a distinct x86 instruction, not `addsd` with a negated operand.
+Then we noticed the n channels at each CLUT grid corner are stored
+**contiguously** in memory — layout `[X][Y][Z][ch]` has `ch` as the
+fastest-moving axis. So the 4 tetrahedral anchor reads can each be a
+single 64-bit contiguous load (`v128.load64_zero` +
+`i32x4.extend_low_i16x8_u`), unpacking directly into 4 i32 lanes. No
+gather. Vectorise across *channels*, not across pixels.
 
-### Move classification — spills vs real memory traffic
+**What we found.**
 
-From `bench/jit_asm_spillcheck.ps1`:
+| Kernel | Avg vs JS `'int'` | Range | vs WASM scalar |
+|---|---|---|---|
+| 3D tetrahedral SIMD | **3.25×** | 2.94–3.50× across 6 configs | 2.37× avg |
+| 4D tetrahedral SIMD | **2.39×** | 2.04–2.57× across 6 configs | 1.98× avg |
 
-| Kernel | Moves | Spill traffic⁵ | Real heap I/O⁶ | Reg-to-reg |
-|---|---|---|---|---|
-| 3D 3Ch INT | 265 | **47.5 %** | 25.3 % | 8.3 % |
-| 3D 4Ch INT | 309 | **50.2 %** | 24.9 % | 7.1 % |
-| 4D 3Ch INT | 420 | **49.5 %** | 24.8 % | 6.0 % |
-| 4D 4Ch INT | 522 | **52.3 %** | 23.8 % | 5.7 % |
-| 3D 3Ch FLT | 213 | 36.6 % | 34.3 % | 3.3 % |
-| 3D 4Ch FLT | 244 | 36.9 % | 35.2 % | 2.9 % |
-| 4D 3Ch FLT | 420 | **50.2 %** | 31.2 % | 3.1 % |
-| 4D 4Ch FLT | 528 | **52.7 %** | 30.5 % | 2.7 % |
+cMax = 4 lands at a flat 3.50× regardless of LUT size (28.8 KB fits
+L1d; 2.1 MB is way past L3). We're at an algorithmic ceiling, not a
+cache one. cMax = 3 pays a 14 % lane-waste tax for the unused 4th
+lane (one lane of junk interpolation, next pixel's `R` overwrites
+it), but still delivers 3.00× flat — dilute by the scalar per-pixel
+prologue that doesn't SIMDify.
 
-<small>⁵ Moves to/from the `[rbp±N]` / `[rsp±N]` frame slots — register
-spills V8 inserted because it ran out of registers.  
-⁶ Moves to/from a non-stack address — TypedArray loads/stores, the
-work we actually want.</small>
+Post-scalar gap is 2.4×, not the 4× theoretical. Amdahl's law: the
+per-pixel grid-index math (boundary patch, X0/Y0/Z0, rx/ry/rz, case
+dispatch) stays scalar. If that's ~20 % of the kernel, best SIMD is
+1 / (0.2 + 0.8/4) = 2.5× — measured 2.37× agrees within noise.
 
-**Two striking findings:**
+**→ See [deep-dive / WASM kernels — SIMD 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)**
+for the inverted-axis design, lane-3-don't-care trick, and the
+rolling-shutter non-decision (why 3Ch → 3.0× is acceptable).
 
-1. **Between 36 % and 53 % of every mov is a stack spill.** V8 ran out
-   of GPRs (x86-64 has 16; V8 reserves ~5, leaving ~11 allocatable;
-   the kernel wants ~13-15 live simultaneously: `rx/ry/rz`,
-   `c0/c1/c2`, up to four `base` pointers, `outputPos/outputEnd`, two
-   TypedArray base pointers, 1-2 temps). Reloads outnumber stores
-   ~1.3×, the fingerprint of long-lived values (weights, channel
-   shifts) being parked once and pulled back multiple times.
+### 2.5 WASM 4D — hoisted prologue + flag-gated K-plane loop
 
-2. **Float kernels at 3D show measurably less GPR pressure** (36-37 %
-   spill rate) than int kernels at 3D (47-50 %). Float values live in
-   XMM0-XMM15 — a separate 16-register file — so arithmetic
-   intermediates don't compete for GPRs with pointers, indices, and
-   counters. At 4D this advantage evaporates because the 4-axis grid
-   bookkeeping alone (4 weights + 4 bases + 4 index temps) is enough
-   to saturate the GPRs regardless of the numerical domain.
+**What we did.** 4D (CMYK input) kernel needs two 3D interpolations
+per pixel, one at each K grid plane, then a K-LERP between them.
+Naive design: inline the 3D body twice. That's ~50-60 % more `.wasm`
+bytes and duplicates all the C/M/Y-only setup (boundary patch,
+X0/Y0/Z0, rx/ry/rz, case dispatch, base offsets) which are identical
+across both K planes. Better design: **hoist everything C/M/Y-only
+into the outer pixel loop, and run the 3D interp body inside a
+flag-gated WASM `loop` so it's emitted exactly once but executes
+twice per pixel**.
 
-**Implications for future work:**
+For SIMD, the additional win is that the K0 u20 intermediate lives in
+a single v128 local across the K-plane loop back-edge — all 3-4
+channels travel together in one v128 register. No scratch memory
+round-trip (which cost 4D scalar half its potential headroom).
 
-- **ARM64 (Apple M-series, modern Cortex-A) has 31 GPRs.** V8 keeps
-  ~26 allocatable, vs ~11 on x86-64. Our 13-15 value working set fits
-  with huge headroom — register pressure should largely *vanish* on
-  ARM. Measuring on an M1/M4 would quantify how much of our current
-  cost is x86-specific, and is the obvious next experiment.
-  Expected outcome: spill rate drops from ~50 % to single-digits on
-  the 3D kernels, perhaps 10-20 % on the 4D kernels (still more
-  live values than allocatable registers, but far less acute).
-- **WASM scalar on x86-64** wins here too, and perhaps more than we
-  initially credited. WASM's linear memory is a single base pointer
-  with no aliasing constraints, so the WASM compiler can pin the
-  CLUT/output/input pointers in registers freeing ~2 GPRs. That
-  alone probably accounts for more of the 1.84× POC speedup than the
-  bounds-check elimination does.
-- **Candidate JS-level experiments** (for a future release, measured
-  in a branch with a dedicated bench):
-  - Load `c0/c1/c2` just-in-time per channel rather than upfront —
-    +3 heap loads per pixel, −6 to −9 spill/reload pairs.
-  - Re-order the CLUT reads to narrow each value's live range —
-    pull loads closer to use *without* introducing named temps
-    (named temps *worsen* spills; see PERFORMANCE LESSONS in
-    `src/Transform.js`).
-  - Probable ceiling is 10-20 % on top of current `'int'`, or zero
-    if V8's allocator is already at the local optimum. Worth
-    testing, worth being ready for "no effect" as the answer.
+**What we found.**
 
-3. **Compute is only 9-18 %, so the kernel is memory-move-bound, not ALU-bound.**
-   This refines the SIMD expectation: vectorising the *arithmetic* alone gives a max ~`0.14 × 4 = 56 %` theoretical speedup on compute, not the usual "4× SIMD dream". The big SIMD win has to come from vectorising **moves** — loading 4 CLUT cells with one `v128.load`, doing the interpolation chain across 4 cells in parallel, storing 4 outputs with one `v128.store`. Which works great *when the 4 cells are contiguous*, and degrades to 4 scalar loads when they aren't (SIMD gathers on x64 pre-AVX2 are slow, and the POC showed this directly — WASM SIMD with gathers ran *slower* than WASM scalar).
+```
+  g1  cMax  CLUT         JS    scalar  SIMD    SIMD/JS  SIMD/scalar
+  --  ----  --------   -----  -------  -----   -------  -----------
+   9    3    38.4 KB    61.3    69.1   124.8   2.04×    1.81×
+   9    4    51.3 KB    50.6    59.7   124.5   2.46×    2.08×
+  17    3   489.4 KB    48.6    70.5   125.0   2.57×    1.77×
+  17    4   652.5 KB    50.2    57.8   128.1   2.55×    2.22×
+  33    3  6948.8 KB    59.9    69.4   128.2   2.14×    1.85×
+  33    4  9265.0 KB    50.0    59.5   128.0   2.56×    2.15×
+```
 
-### Runtime-safe languages, bounds checks, and the "unsafe" escape hatch
+4D SIMD runs at essentially flat **~125 MPx/s** across LUT sizes
+from 38 KB to 9 MB. The L1d → L2 → L3 transitions that hurt the
+scalar kernels (9–45 % slowdown past L2) barely register here — SIMD
+is doing so much less work per pixel that memory latency is the
+bottleneck, and the prefetcher + compact 4-corners-per-pixel access
+pattern keep it fed.
 
-A tangential but useful framing: every runtime-safe language has this tension. C# has `unsafe` + `fixed`. Rust has `unsafe` + `get_unchecked`. Swift has `withUnsafeBufferPointer`. WASM has guard pages (safety implemented by the OS via `mprotect`, not per-access checks). **JavaScript is unusual in having no opt-out** — every TypedArray access *must* be bounds-checked (or proved safe by the JIT, which it does for well-shaped loops).
+The `rk=0` short-circuit (pixel lies on a K grid plane — common for
+CMYK regions with K=0 or K=255, solid whites and rich blacks)
+survives the SIMD port, exiting the K-plane loop after one iteration
+and rounding `(vU20 + 0x800) >> 12` directly to u8.
 
-For our kernels the "well-shaped loop" proof works ~95 % of the time — we're only paying for the 4-5 % that V8 can't hoist. The remaining bounds checks are the price of not having an unsafe API, and on modern CPUs it's a price the branch predictor pays on our behalf.
+A u16-output path falls out for free — the final narrow is the only
+width-specific step, so skipping it and storing `vU20` gives a u16
+output mode. That's the v1.3 hook (§5).
 
-If we ever find ourselves wanting `CLUT.getUnchecked(i)` semantics in JS, the practical answer is "ship it as WASM" — same effect, portable, and already on the v1.2/v1.3 roadmap.
+**→ See [deep-dive / WASM kernels — SIMD 4D](./deepdive/WasmKernels.md#wasm-simd-4d--the-k-plane-loop-in-one-v128)**
+for the flag-gated loop structure, the i32x4 K-LERP derivation, and
+the three design wins that made 4D SIMD actually beat scalar.
 
-### If you want to verify yourself
+### Reproducing every number on this page
 
-Three flag combos, increasing in detail:
+All the benches are shipped. Node 20 and a standard install, no extra
+deps:
 
 ```bash
-# Tier + deopt count (what the bench output asserts):
+# Op-count and instruction-mix tables (§2.1)
 node --allow-natives-syntax bench/jit_inspection.js
 
-# Every optimize / deopt event logged as it happens:
-node --allow-natives-syntax --trace-opt --trace-deopt bench/jit_inspection.js
+# Full emitted x64 asm dump (~15 MB) + classifier scripts (§2.1)
+node --allow-natives-syntax --print-opt-code --code-comments \
+     bench/jit_inspection.js 2>&1 > bench/jit_asm_dump.txt
+pwsh bench/jit_asm_boundscheck.ps1   # compute / moves / safety mix
+pwsh bench/jit_asm_spillcheck.ps1    # spills vs real memory traffic
 
-# Full emitted assembly (big — ~10 MB):
-node --allow-natives-syntax --print-opt-code --code-comments bench/jit_inspection.js 2>&1 > bench/jit_asm_dump.txt
-#   then run the analysis scripts against the dump:
-#     powershell -ExecutionPolicy Bypass -File bench/jit_asm_grep.ps1          # int32 vs float64 op counts
-#     powershell -ExecutionPolicy Bypass -File bench/jit_asm_size.ps1          # real .text byte sizes (L1i fit)
-#     powershell -ExecutionPolicy Bypass -File bench/jit_asm_boundscheck.ps1   # compute vs moves vs safety mix
-#     powershell -ExecutionPolicy Bypass -File bench/jit_asm_spillcheck.ps1    # spills vs real memory traffic
+# Just the core line (§2.1) — fastest path to the asm snippets
+node --allow-natives-syntax --print-opt-code --code-comments \
+     bench/jit_asm_core_line.js 2>&1 > bench/jit_asm_core_dump.txt
+
+# Throughput through the shipped dispatcher, all four lutModes (§1)
+node bench/mpx_summary.js
+
+# WASM 3D scalar matrix — 6 configs × bit-exact vs JS int (§2.3)
+node bench/wasm_poc/tetra3d_run.js
+
+# WASM 3D SIMD matrix — 6 configs × bit-exact vs JS + WASM scalar (§2.4)
+node bench/wasm_poc/tetra3d_simd_run.js
+
+# WASM 4D scalar matrix — 6 configs × bit-exact (§2.3)
+node bench/wasm_poc/tetra4d_nch_run.js
+
+# WASM 4D SIMD matrix — 6 configs × bit-exact (§2.5)
+node bench/wasm_poc/tetra4d_simd_run.js
+
+# In-browser comparison vs lcms-wasm (§4) — opens a UI at localhost:8080
+node bench/browser/serve.js
 ```
+
+If your numbers differ meaningfully from the tables above, we want to
+know — open an issue with your CPU, OS, Node version, and the raw
+bench output attached. The ratios (1.40× scalar, 3.25× SIMD 3D, 2.39×
+SIMD 4D) should be stable across x64 microarchitectures; absolute
+MPx/s moves with the CPU.
 
 ---
 
-## 2. How does this compare to LittleCMS in C?
+## 3. Discoveries in the journey
+
+The things that didn't fit in a planned milestone — the accidents,
+false positives, and "wait, that can't be right" moments that shaped
+the design and are worth remembering so we don't re-learn them
+badly.
+
+### 3.1 lcms-wasm RGB→RGB is a no-op — a benchmarking trap
+
+The first time we wired `lcms-wasm` into the browser bench, sRGB →
+sRGB ran at ~**165 MPx/s** on Firefox — more than 2× the CMYK
+directions. It looked like lcms was astonishingly fast on
+matrix-shaper workloads, comfortably beating our scalar WASM.
+
+It wasn't. lcms2 detects identity transforms at `cmsCreateTransform`
+time (same source and destination profile, or profile pair that
+cancels) and short-circuits `cmsDoTransform` to `memcpy`. We were
+timing `memcpy`.
+
+Swapping the target to AdobeRGB forced a real matrix-shaper
+conversion and the number fell to ~**91 MPx/s** in Firefox — right
+in line with our own scalar WASM number. Documented in the browser
+bench "About" panel, and the fair number (sRGB → AdobeRGB) is what's
+in §1's table.
+
+**Lesson for anyone benchmarking a colour engine:** always pair your
+RGB-input test with a *different* RGB output profile than the input.
+Identity short-circuiting is standard in production CMS
+implementations (lcms, macOS ColorSync, Photoshop, Firefox's gfx
+stack) — you will hit this in any fair bench. If the speedup looks
+suspiciously uniform across directions, that's the shape of the tell.
+
+### 3.2 First WASM 4D ran 25 % slower than JS — V8's inliner refused the helper
+
+Our first 4D scalar build ran at **0.77× JS** — a 25 % regression,
+despite being bit-exact and having a tighter per-pixel op count. The
+kernel had a 7-site tail-dispatch pattern (cases 0–5 + alpha tail),
+each site calling an `$emit_tail` helper function that did the 3-way
+split (direct u8 store on `!interpK`, scratch store on K0, K-LERP +
+store on K1). We assumed V8 would inline it.
+
+It didn't. The helper had an early `return` inside one of its
+conditional arms, and V8's WASM TurboFan inliner is conservative
+about multi-exit functions in a branch-stack-inside-a-rolled-loop
+caller. Every per-channel iteration paid a full call-frame setup +
+teardown: ~5 cycles × 8 calls × pixel count = ~13 ns of pure call
+overhead, against a ~60 ns pixel budget.
+
+Inlining the `$emit_tail` body at every call site — 7 copies, ~30 WAT
+instructions each — flipped the kernel to **1.22× JS**. The `.wasm`
+grew from 1.9 KB to 2.5 KB; peak perf jumped 60 %.
+
+**Lesson that transfers to all WASM work:**
+- Never put a `return` inside a helper function you want inlined.
+  Rewrite as a conditional expression with a single exit point.
+- For hot-loop helpers, inline by hand first, measure, then de-inline
+  if size matters. WASM function-call cost is real and much higher
+  than the equivalent native C — V8's inliner decisions aren't always
+  the ones you'd make.
+- V8's WASM module-level compilation still feels like `-O0` relative
+  to the JS TurboFan baseline. WASM can't promote runtime-indexed
+  data to registers; JS TurboFan can (after enough feedback samples).
+  The SIMD path (§2.5) wins most of that gap back by keeping the K0
+  intermediate in a single v128 local rather than a scratch region.
+
+**→ See [deep-dive / WASM kernels — function-call cost lesson](./deepdive/WasmKernels.md#the-function-call-cost-lesson-v8-wasm-inliner-was-the-hidden-tax).**
+
+### 3.3 The 1D POC ruled out SIMD for LUTs — POC was vectorising the wrong axis
+
+The v1.3 roadmap originally had WASM SIMD for matrix-shaper
+pipelines only and declared LUT kernels scalar-only under WASM. That
+decision came from a 1D POC
+([`bench/wasm_poc/`](../bench/wasm_poc/), still preserved) that
+vectorised *across pixels*: four pixels' LUT lookups packed into one
+v128 per lane. The POC measured **0.89×** — slower than scalar —
+because each lane needed its own LUT gather, and x64 pre-AVX2 has
+no native gather (four scalar loads + `replace_lane` per pixel).
+Conclusion at the time: "LUT kernels will run worse under SIMD.
+Correct for across-pixel. Wrong for across-channel."
+
+That conclusion was wrong *because the axis was wrong*. The 3D SIMD
+win in §2.4 came from vectorising across *channels* instead, using
+the contiguous `[ch]` storage at each grid corner to turn four
+corner reads into one 64-bit load each. Three months of roadmap
+based on "SIMD doesn't work for LUTs" evaporated in one weekend's
+POC.
+
+**Lesson:** when a POC says something doesn't work, note *what shape
+of working* it ruled out. "SIMD with across-pixel gather is slow" is
+the real finding, and it's still true (we verified). "SIMD for LUTs
+is slow" is the over-generalisation, and it wasted three months of
+planning.
+
+The 1D POC's other three findings (WASM scalar 1.84× on gather-heavy
+work, `Math.imul` no longer worth specialising, 67.7× WASM SIMD
+ceiling on pure-math non-gather kernels) all still hold and are what
+drove the v1.4 pipeline code-generation plan. Full POC findings
+preserved in §5's "Historical record: original v1.3 / v1.4 analysis".
+
+**→ See [deep-dive / WASM kernels — SIMD 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)**
+for the detailed inversion story.
+
+### 3.4 WASM SIMD detection false-negative in browsers
+
+An early version of `detectWasmSimd()` in the browser bench returned
+`false` in Chrome and Firefox even though both engines fully support
+v128. The detection module's bytecode was malformed — it compiled
+but didn't actually exercise a SIMD instruction, so V8's "well, it
+parses" check passed in Node but the browser's stricter validation
+rejected it. Fixed by emitting a minimal but *valid* v128 test
+module (load, op, store) that every SIMD-capable host accepts.
+
+Easy fix once spotted, worth flagging for anyone building similar
+detection: `WebAssembly.validate()` on a module that *uses no SIMD
+opcodes* tells you nothing about SIMD support. The detection module
+has to actually contain an `i32x4.add` or equivalent.
+
+### 3.5 u16 CLUT scaled by 65535 vs 65280
+
+The first `lutMode: 'int'` implementation scaled the u16 CLUT to the
+full u16 range (0..65535) and divided by 256 in the kernel to
+produce u8. That's a systematic +0.4 % high bias at every LUT cell:
+`255 / 256 × 65535 / 256 ≠ 255`. On CMYK → RGB specifically, 100 %
+of off-by-one errors went the same direction (`int > float`),
+producing a consistent ~3 LSB drift on ~1 % of channels where the
+float path was already close to a rounding boundary.
+
+Fix was one arithmetic constant: scale by **255 × 256 = 65280** so
+`u16 / 256 = u8` exactly. Drift dropped from 3 LSB to ≤ 1 LSB
+overnight, and the residual 1 LSB is `Uint8ClampedArray`'s
+banker's-rounding (round-half-to-even) disagreeing with the kernel's
+round-half-up at `X.5` boundaries — a rounding-mode mismatch at
+half-ties, not accumulated math error.
+
+Two more arithmetic constants needed the same "what exactly does
+this map to?" check at the same time:
+`gridPointsScale_fixed` carried at **Q0.16** (not Q0.8) so the true
+`(g1-1)/255` ratio is preserved through the weight extraction, and
+the 4D kernels carry intermediates at **u20 Q16.4** so four stacked
+rounding steps collapse into one final `>> 20`.
+
+**Lesson:** when an integer math kernel disagrees with its float
+reference and the errors are all one-directional, the bug is almost
+certainly a rounding-bias or scaling-constant mismatch, not an
+algorithmic drift. Check the constants before you check the algorithm.
+Took us a release cycle to learn that pattern; write it down.
+
+---
+
+## 4. How does this compare to LittleCMS in C?
 
 ### Measured — vs `lcms-wasm` (direct, same-machine)
 
-Before the estimated native-C comparison below, here is a **direct,
-measured** head-to-head. The [`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm)
+Before the native-C comparison below, here is a **direct,
+measured** head-to-head against the WASM port. The [`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm)
 npm package is LittleCMS 2.16 compiled to wasm32 through Emscripten,
 maintained by Matt DesLauriers. It is MIT-licensed and we can run it
 next to jsColorEngine in the same Node process, same machine, same
@@ -476,8 +699,8 @@ visible threshold for any practical image-processing application.
 ### Why pure-JS can beat an Emscripten-wasm32 port
 
 At first glance "pure JS beats WASM port of a battle-hardened C library"
-sounds wrong, but it follows directly from the JIT inspection data in
-§1b above:
+sounds wrong, but it follows directly from the JIT inspection data
+summarised in §2.1 (full tables in [deep-dive / JIT inspection](./deepdive/JitInspection.md)):
 
 | | lcms-wasm | jsColorEngine |
 |---|---|---|
@@ -486,8 +709,8 @@ sounds wrong, but it follows directly from the JIT inspection data in
 | **SIMD** | None in this build | None (no stable JS SIMD) |
 | **Fast Float plugin** | Not included in the WASM build | We are effectively our own Fast Float plugin in JS |
 | **FFI boundary** | JS ↔ WASM on every `cmsDoTransform` | None — JS calling JS with typed arrays |
-| **Bounds checks** | WASM sandbox bounds-checks every linear-memory load | V8 bounds-checks typed-array loads (~6-8 %, measured in §1b) |
-| **Register pressure** | wasm32 is a register-allocated VM, not true hardware regs | V8 compiles to real x64/ARM64 registers directly; 4D kernels do spill (§1b) but stay L1i-resident |
+| **Bounds checks** | WASM sandbox bounds-checks every linear-memory load | V8 bounds-checks typed-array loads (~6-8 %, measured in §2.1) |
+| **Register pressure** | wasm32 is a register-allocated VM, not true hardware regs | V8 compiles to real x64/ARM64 registers directly; 4D kernels do spill (see [deep-dive / JIT inspection](./deepdive/JitInspection.md)) but stay L1i-resident |
 
 So the comparison is not really "JS vs C" — it is "V8-tuned JS with
 one specialised int32 kernel per shape" vs "C-compiled-to-WASM with
@@ -496,70 +719,126 @@ is essentially custom silicon for the problem; the second is a
 general tool running through an extra layer. That framing makes the
 measured 1.5–2× gap unsurprising.
 
-**The v1.3 WASM-scalar plan is not about catching up** — it is about
-**extending the lead** into territory even V8 can't reach (pointer
-pinning with no bounds checks, no overflow guards, explicit register
-allocation). Handwritten tight-loop WASM should win another 1.4–1.6×
-over today's `lutMode: 'int'`, per the JIT analysis in §1b. That
-would put us past the **estimated** native-scalar lcms2 numbers in
-the next subsection, though still below Fast Float + SIMD (which
-needs v1.4's `wasm-simd` pass).
+**The v1.2 WASM-scalar work was never about catching up** — it was
+about **extending the lead** into territory even V8 can't reach
+(pointer pinning with no bounds checks, no overflow guards, explicit
+register allocation). Measured (§2.3): **1.40×** over today's
+`lutMode: 'int'` across the 3D 6-config matrix, right at the bottom
+of the predicted 1.4-1.6× band. That puts us past the **measured**
+native-scalar lcms2 vanilla numbers in the next subsection (which
+have since been confirmed directly rather than estimated). And the
+channel-parallel WASM SIMD 3D port — also shipped in v1.2, against
+the prediction below that ruled it out — chases the Fast Float +
+SIMD band directly: **3.25×** over `'int'` on 3D RGB-input workloads,
+landing into lcms2 `fast-float` territory on a single CPU thread.
 
-### Estimated comparison with native LittleCMS
+### Measured — vs native LittleCMS (same hardware, same run)
 
-We have measured numbers for jsColorEngine and for lcms-wasm. To
-estimate **native** lcms2 throughput we apply a native-vs-wasm factor.
-Emscripten-wasm32 typically runs **1.5–2.5× slower** than native on
-scalar integer / float loops of this kind (no SIMD, extra bounds
-checks, no compiler-specific tail optimisations). So:
+Native lcms2 measurement, same methodology as the `lcms-wasm`
+comparison above (same profiles, same 65k-pixel seeded PRNG input,
+same warmup + median-of-5-batches timing loop, same
+`INTENT_RELATIVE_COLORIMETRIC`, all `TYPE_*_8`). Harness is
+[`bench/lcms_c/`](../bench/lcms_c); any reader can reproduce this
+on their own hardware in ~5 minutes from a fresh WSL2 install.
 
-    native lcms2 vanilla  ≈  lcms-wasm measured  ×  1.5 to 2.5
+**Reference run** (below) — WSL2 Ubuntu 20.04 on Windows 11,
+gcc 10.5.0 with `-O3 -march=native -fno-strict-aliasing -DNDEBUG`,
+`taskset -c 0`, Intel x86_64. jsColorEngine / `lcms-wasm` numbers
+are from the same host, same session, same 65k pixels —
+`node bench/lcms-comparison/bench.js` running against the identical
+profile and input generator.
 
-Applying that to the measured numbers in §2 above:
+| Workflow | jsCE `float` | **jsCE `int`** | lcms-wasm (best) | **lcms2 native (best)** | jsCE `int` / native |
+|---|---|---|---|---|---|
+| RGB → Lab    (sRGB → LabD50)   | 55.4 MPx/s | **64.5 MPx/s** | 39.9 | **62.7** | **1.03× (tied)** |
+| RGB → CMYK   (sRGB → GRACoL)   | 44.2 MPx/s | 54.2 MPx/s     | 40.2 | **60.3** | 0.90× (native +11 %) |
+| CMYK → RGB   (GRACoL → sRGB)   | 40.1 MPx/s | **53.2 MPx/s** | 24.6 | 36.1 | **1.47× (jsCE +47 %)** |
+| CMYK → CMYK  (GRACoL → GRACoL) | 33.5 MPx/s | **43.6 MPx/s** | 22.0 | 31.0 | **1.41× (jsCE +41 %)** |
 
-| Engine | Approx throughput (by direction) | Source |
+**The measurement replaces the earlier "wasm × 1.5–2.5" estimate for
+native lcms2.** The estimate was high at the top of the band —
+reality is `native ≈ lcms-wasm × 1.4–1.6` on this profile / CPU, not
+`× 1.5–2.5`. The most likely reason: modern V8 compiles wasm32 more
+tightly than Emscripten's original targets (V8's tier-2 TurboFan
+closes more of the native gap than the Emscripten team banked on
+when the 1.5-2.5× rule-of-thumb was coined).
+
+**Three things drop out of that table that weren't visible from the
+estimate:**
+
+1. **On RGB-input workflows (3D LUT), jsColorEngine `'int'` ≈ native
+   lcms2.** RGB → Lab is a near-dead heat (1.03×); RGB → CMYK tips
+   11 % towards native. Both engines are running specialised 3D
+   tetrahedral kernels and there's not much dispatch to shave off.
+   V8 / TurboFan and `gcc -O3 -march=native` produce comparable
+   machine code for this shape.
+2. **On CMYK-input workflows (4D LUT), jsColorEngine `'int'` wins by
+   40-47 %.** jsCE's 4D K-LERP runs at u20 Q16.4 with single-step
+   rounding inlined into the K-plane computation (see v1.1 changelog
+   and § 2.1); lcms2's 4D path uses a general stage-walker that
+   dispatches per axis. The specialisation gap opens wider here than
+   on 3D because there's more dispatch overhead to skip.
+3. **`lcms-wasm` and native lcms2 sit within ~1.5× of each other.**
+   A surprising but internally consistent result — lcms2's hot loop
+   is dominated by function-pointer dispatch and memory-indirect
+   stage walking, not by arithmetic. Neither native x86 nor
+   wasm32-compiled-to-x86 gets to vectorise the dispatch. The
+   limiting factor for a general-purpose CMS is its own generality,
+   not the language it's written in. This has a knock-on for the
+   "is JS slow?" question: **JS isn't slow for hot numerical loops
+   over typed arrays** — jsColorEngine and native lcms2 differ by
+   ~20 % on RGB and by the other sign on CMYK, which is tuning
+   variance, not a language-level gap.
+
+**Same hardware, same run, all measured** — full comparison table:
+
+| Engine | MPx/s band (across 4 workflows) | Source |
 |---|---|---|
-| **jsColorEngine `lutMode: 'int'`**  | **44 – 66 MPx/s** | **Measured** (§2) |
-| jsColorEngine `lutMode: 'float'`    | 41 – 60 MPx/s     | **Measured** (§2) |
-| lcms-wasm (HIGHRESPRECALC + pinned) | 22 – 42 MPx/s     | **Measured** (§2) |
-| lcms2 vanilla (native C, scalar)    | ≈ 33 – 100 MPx/s  | Estimated — wasm × 1.5–2.5 |
-| lcms2 + `fast-float` plugin (SSE/AVX) | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see §"What is `fast-float`") |
-| babl (GIMP)                          | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes |
-| lcms2 + multithreaded plugin         | N × single-thread  | Just CPU core scaling, orthogonal |
+| **jsColorEngine `lutMode: 'int-wasm-simd'`** (v1.2 default) | **~110 – 210 MPx/s** | Measured — § 2.4 / 2.5 |
+| **jsColorEngine `lutMode: 'int-wasm-scalar'`** | **~60 – 95 MPx/s** | Measured — § 2.3 |
+| **jsColorEngine `lutMode: 'int'`** (pure JS) | **43.6 – 64.5 MPx/s** | Measured — above |
+| jsColorEngine `lutMode: 'float'`              | 33.5 – 55.4 MPx/s | Measured — above |
+| **lcms2 vanilla (native C, scalar)**           | **31.0 – 62.7 MPx/s** | Measured — above |
+| lcms-wasm (HIGHRESPRECALC + pinned)           | 22.0 – 40.2 MPx/s | Measured — above |
+| lcms2 + `fast-float` plugin (SSE/AVX)         | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see below) |
+| babl (GIMP)                                   | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes |
+| lcms2 + multithreaded plugin                  | N × single-thread | Just CPU core scaling, orthogonal |
 
-The ranges are wide because throughput depends on profile complexity
-(grid size, parametric vs LUT curves) and CPU. But the relative
-ordering is right, and now **anchored to measured numbers** rather
-than folklore.
+Ranges are workflow-dependent; all jsCE / lcms-native / lcms-wasm
+rows are from the same run, same hardware, same inputs. Re-run on
+your hardware via `bench/lcms_c/` + `bench/lcms-comparison/` — the
+ratios are stable across CPUs even when the absolute numbers shift.
 
 ### What the gap actually is
 
-Two things fall out of that table:
+Three things fall out of the measured table above:
 
-1. **We are roughly at parity with estimated *vanilla scalar* lcms2.**
-   For the fastest native direction (~100 MPx/s) we are ~40 % behind;
-   for the slowest native direction (~33 MPx/s) we are actually
-   *ahead*. That places jsColorEngine `lutMode: 'int'` somewhere
-   between "on par with" and "1.5× behind" native vanilla scalar C
-   for typical 8-bit colour-managed image work — a genuinely
-   respectable place to be for pure JS.
+1. **`lutMode: 'int'` wins against native vanilla lcms2 on 3 of 4
+   image workflows.** Tied on RGB → Lab (+3 %), behind on
+   RGB → CMYK (-10 %), and comfortably ahead on both CMYK-input
+   workflows (+41 % / +47 %). On average across the 4 workflows,
+   jsCE `int` ≈ native lcms2 × 1.20. **In pure JavaScript, with no
+   WebAssembly, on a single CPU thread.** The "old" `lutMode: 'int'`
+   path already closes the expected JS-vs-native gap; the newer
+   WASM paths open a different kind of gap on top.
 
-2. **The remaining gap is almost entirely `fast-float` + SIMD.**
-   The ~3–8× ahead of the plugin comes from SSE2/AVX wide-float
-   intrinsics plus hand-tuned per-shape kernels. That gap is not
-   closable in JavaScript at all — JS has no stable scalar SIMD
-   (the `SIMD.js` proposal was abandoned in favour of WebAssembly
-   v128). The one remaining lever in the whole stack is **WASM SIMD**
-   (see roadmap §3, v1.4).
+2. **`lutMode: 'int-wasm-scalar'` overtakes native vanilla lcms2 on
+   every workflow.** Measured 1.40× over `'int'` on the 3D matrix,
+   landing at ~85–95 MPx/s on 3D and ~60-70 on 4D — ahead of every
+   measured native-lcms2 row. On pure WebAssembly, on a single CPU
+   thread, with JavaScript as the outer language.
 
-There is one pragmatic implication: the v1.3 `lutMode: 'wasm-scalar'`
-pass is genuinely about **overtaking native vanilla lcms2**, not just
-catching up with it. The JIT inspection in §1b shows a tight-loop
-WASM kernel (pointer-pinned, no bounds checks, no overflow guards)
-should recover another ~1.4–1.6× over today's `lutMode: 'int'`,
-which would land us around 65–100 MPx/s — right into the estimated
-native lcms2 vanilla band, possibly past it. v1.4's `wasm-simd` is
-then the pass that chases the Fast Float plugin.
+3. **`lutMode: 'int-wasm-simd'` chases the Fast Float + SIMD
+   plugin.** Measured 3.25× over `'int'` on 3D RGB-input workloads,
+   landing at ~210 MPx/s — past the vanilla lcms2 band (both
+   measured and estimated) and into the lcms2 `fast-float` plugin's
+   estimated 150-500 MPx/s range. This was *not* predicted at the
+   time the 1D POC was run (see v1.4 Historical record for the
+   0.89× across-pixel SIMD result that suggested LUT SIMD wouldn't
+   work); it became possible once we inverted the vectorisation
+   axis. The gap to `fast-float`'s upper band is now mostly about
+   multi-core and AVX2/AVX512 width — single-thread scalar-vs-
+   SIMD-v128 is closed.
 
 ### What is `fast-float`?
 
@@ -600,7 +879,12 @@ it wouldn't be in C.
 
 ---
 
-## 3. Roadmap
+## 5. What shipped in v1.1 and v1.2
+
+> Forward-looking plans (v1.3 onward) live in
+> [Roadmap.md](./Roadmap.md) — single source of truth for what's
+> coming next. This section covers what already landed in v1.1 and
+> v1.2 and the measurement / design notes that go with it.
 
 ### v1.1 — 4D integer kernels (CMYK input) + u20 refactor  ✅ SHIPPED
 
@@ -660,91 +944,193 @@ because every new backend would need to understand the same
 representation. u16 (scaled at 255 × 256) is the contract.
 
 The integer hot path is exposed through a string-enum option,
-`lutMode: 'int'`, rather than a boolean. The enum was chosen
-specifically so future kernels (WASM scalar / SIMD / auto) can be
-added through the same option without breaking the call signature —
-unknown enum values fall through to `'float'`, so code written for a
-future release won't crash on the current one.
+`lutMode`, rather than a boolean. The enum was chosen specifically
+so future kernels could be added through the same option without
+breaking the call signature — v1.1 shipped `'int'`, v1.2 added
+`'int-wasm-scalar'`, `'int-wasm-simd'`, and `'auto'` (the new
+default), all through the same option. Unknown enum values
+auto-resolve (v1.2+) to the best applicable kernel for the
+Transform's `(dataFormat, buildLut)` combination, so code written
+against a future release can't crash on the current one — it just
+runs whichever of today's kernels fits best.
 
-### v1.2 — 16-bit input/output for `lutMode: 'int'`
+> **Roadmap update, Apr 2026.** The WASM scalar + SIMD 3D work arrived
+> earlier and faster than this roadmap originally predicted, so the
+> remaining stages have been re-planned. Headline change: v1.2 now
+> covers **all** WASM LUT work (was split across v1.2-v1.4), pulling
+> `'auto'` mode up from v1.4. 16-bit moves to v1.3. v1.4 pivots from
+> "matrix-shaper SIMD" to a bigger idea — code generation for the
+> non-LUT pipeline. v1.5 is a new placeholder for an optional
+> S15.16 internal pipeline for lcms parity, deferred unless demanded.
+> The v2 package-split target is unchanged.
+>
+> The historical sections below (v1.3 original 1D POC analysis and
+> v1.4 original matrix-shaper-only plan) are preserved under the new
+> v1.4 heading because their findings still drive design.
 
-Currently the integer kernel is u8-only. Real-world workflows often want u16:
+### v1.2 — WASM LUT kernels (3D + 4D, scalar + SIMD) and `lutMode: 'auto'`
 
-- Print prepress workflows are 16-bit end-to-end
-- Photo editors hold images in u16 to avoid posterisation in heavy
-  edits
-- ICC v4 itself encodes Lab as u16
+One release that consolidates every integer-LUT WASM kernel and
+exposes an auto-picker. Status at time of writing:
 
-Plan:
+| Sub-task | Status |
+|---|---|
+| `src/wasm/tetra3d_nch.wat` — 3D n-channel scalar kernel, cMax ∈ {3, 4, 5+}, 4-mode alpha | ✅ shipped |
+| `src/wasm/tetra3d_simd.wat` — 3D channel-parallel SIMD kernel, cMax ∈ {3, 4}, 4-mode alpha | ✅ shipped |
+| `lutMode: 'int-wasm-scalar'` dispatcher + `wasmCache` + dispatch-counter tests | ✅ shipped |
+| `lutMode: 'int-wasm-simd'` dispatcher + SIMD→scalar→int demotion chain + dispatch-counter tests | ✅ shipped |
+| Measured 3D matrix: 6 configs × {JS-int, WASM-scalar, WASM-SIMD}, all bit-exact, 1.40× / 3.25× over int | ✅ shipped |
+| `src/wasm/tetra4d_nch.wat` — 4D scalar (CMYK input), cMax ∈ {3, 4, 5+}, same 4-mode alpha, hoisted-prologue + flag-gated K-plane loop, 1.22× over JS `int` (see [deep-dive / WASM kernels — scalar 4D](./deepdive/WasmKernels.md#wasm-scalar-4d--and-the-function-call-lesson)) | ✅ shipped |
+| `lutMode: 'int-wasm-scalar'` 4D dispatcher for inputChannels=4 + Jest suite + 4-mode alpha coverage | ✅ shipped |
+| `src/wasm/tetra4d_simd.wat` — 4D channel-parallel SIMD kernel, cMax ∈ {3, 4}, hoisted-prologue + flag-gated K-plane loop + u20 K-LERP, K0 in v128 register (no scratch), 2.39× over JS `int` / 1.98× over WASM scalar 4D (see [deep-dive / WASM kernels — SIMD 4D](./deepdive/WasmKernels.md#wasm-simd-4d--the-k-plane-loop-in-one-v128)) | ✅ shipped |
+| `lutMode: 'int-wasm-simd'` 4D SIMD dispatcher for inputChannels=4 + Jest suite + 4-mode alpha coverage | ✅ shipped |
+| Measured 4D matrix: 6 configs × {JS-int, WASM-scalar, WASM-SIMD}, all bit-exact, 1.22× / 2.39× over int | ✅ shipped |
+| `lutMode: 'auto'` — new default, heuristic picks best kernel at construction time | ✅ shipped |
+| 4K-target bench run through the final dispatcher, measured vs lcms-wasm + native vanilla | TBC |
 
-1. **u16 input → u8 output** (free; we already have the high-precision
-   u16 LUT, just feed u8-bucketed indices from the high byte). One-line
-   kernel variant.
-2. **u16 input → u16 output** (the real prize). The math stays Q0.16,
-   the final shift becomes `(acc + 0x8000) >> 16` instead of `+0x80 >> 8`.
-   Single-step rounding (Q0.15 weights) gave best accuracy in the POC
-   bench — see `bench/int_vs_float.js` FINDING #5.
-3. **u8 input → u16 output** (cheap). Useful for "convert once,
-   downstream tools handle 16-bit" pipelines.
+**`'auto'` as the new default.** Rather than picking per-LUT-shape
+at `create()` time with a big dispatcher, the shipped v1.2 `'auto'`
+uses a simpler heuristic at construction time:
 
-Open question: do we keep the u16 LUT as the canonical int LUT and
-use it for both u8 and u16 output, or build a separate u15 LUT for
-"safe 32-bit accumulator" math? POC concluded u16 + Q0.8 has zero
-overflow problems for u8 output; u16 output needs careful accumulator
-sizing. **Likely answer:** u16 LUT, Q0.16 accumulator (32-bit, fits
-in Math.imul output), single-step round-and-shift.
-
-### v1.3 — `lutMode: 'wasm-scalar'`  (Web Workers deferred)
-
-The WASM POC (1.84× over JS-plain) makes WASM scalar a stronger next
-step than Web Workers. Workers can be added on top of any kernel
-later; WASM is a one-time port that benefits every subsequent feature.
-
-**Where the WASM scalar win actually comes from** (see §1b instruction
-mix): our JS integer kernels are ~37 % data moves, ~20 % safety
-machinery (including ~8 % `jo` overflow guards we don't need and ~7 %
-bounds-check pairs), and only 25-47 % arithmetic. WASM removes both
-classes of safety machinery for free — `i32` math wraps by spec
-(no `jo` needed) and linear memory uses guard pages for bounds
-safety (no `cmp`/`jae` pairs needed).
-
-**Expected WASM-scalar-over-`'int'` speedup**: with ~15 % of
-instructions eliminated from safety alone, plus reduced spill
-pressure from pinning the linear-memory base pointer in a register,
-we expect **1.4-1.6× over the v1.1 `'int'` kernels** (compared to
-the 1.84× POC vs JS-plain, which had additional wins from escaping
-Smi/HeapNumber plumbing at call boundaries).
-
-Adds new enum value:
-
-```js
-new Transform({ ..., lutMode: 'wasm-scalar' });
+```
+// new Transform({...}).lutMode resolution
+if (dataFormat === 'int8' && buildLut === true):
+    lutMode = 'int-wasm-simd'     // demotion chain kicks in at create()
+                                  // for hosts without SIMD / WASM
+else:
+    lutMode = 'float'             // lutMode is ignored for non-int8
+                                  // anyway; resolving to 'float' makes
+                                  // xform.lutMode self-documenting
 ```
 
-Falls through to `'int'` if WASM isn't available in the host (e.g.
-sandboxed environments without WASM), which falls through to
-`'float'` for unsupported LUT shapes. The whole point of the enum is
-this fall-through chain.
+The demotion chain at `create()` time handles everything else:
+`'int-wasm-simd'` → `'int-wasm-scalar'` (no SIMD) → `'int'` (no WASM).
+No runtime cost per call. The string-enum API is already
+forward-compatible — a user who wrote `lutMode: 'auto'` against
+pre-v1.2 would have fallen through to `'float'`; once v1.2 lands the
+same call site opts into the best available kernel for their runtime.
+The unknown-mode fallback in v1.2+ routes through the same
+auto-resolution, so code written against a future version that adds
+a new `lutMode` value never crashes — it auto-resolves to the best
+applicable existing kernel.
 
-Work items:
-- Hand-written `.wat` (or AssemblyScript) port of the four 3D/4D
-  integer kernels — payload <5 KB inlined.
-- Compile-at-load via `wabt` dev-time tooling, ship the `.wasm`
-  binary inline as base64 in the bundle.
-- Three-tier dispatcher in `transformArrayViaLUT`.
-- Re-run `bench/jit_asm_boundscheck.ps1`'s equivalent against the
-  WASM-emitted x64 to confirm the move/safety reduction actually
-  materialises. If it doesn't, the 1.3× prediction is wrong and we
-  regroup.
+Per-Transform microbenchmarking (a true "measure every kernel once,
+pick the fastest" dispatcher) is a v1.4 item — see §5 below. In
+practice `'int' > 'int-wasm-scalar'` shows up on weaker CPUs for
+small 3D LUTs, and a one-shot microbench at `create()` would let
+`'auto'` make that call — but it's not worth the complexity until
+we have the profiling data to prove it's worth a ≥ 5 ms cold-start
+hit.
 
-### v1.4 — `lutMode: 'wasm-simd'` and `lutMode: 'auto'`
+**4D SIMD — landed on the projection.** The measured 4D SIMD
+kernel lives at `src/wasm/tetra4d_simd.wat` / 1.6 KB `.wasm` and
+averages **2.39× over JS `int`** across the 6-config matrix
+(2.04–2.57× range), **1.98× over WASM scalar 4D** (1.77–2.22×).
+Flat ~125 MPx/s across LUT sizes from 38 KB to 9 MB — the curve
+that showed cache-boundary wobble on the scalar kernels is essentially
+gone at SIMD speeds. Bit-exact against both the scalar WASM 4D
+kernel and the JS 4D int kernels on all configs on first compile.
 
-The proof of concept lives in `bench/wasm_poc/`. It implements the
-**same** 1D LERP-through-u16-LUT kernel four ways (JS plain, JS with
-`Math.imul`, WASM scalar, WASM SIMD) plus a control kernel
-(`vectorMul_simd`) showing the WASM SIMD ceiling without LUT gather.
+Design recap (full breakdown with pseudo-code and measurements in
+[deep-dive / WASM kernels — SIMD 4D](./deepdive/WasmKernels.md#wasm-simd-4d--the-k-plane-loop-in-one-v128)):
 
-**Measured results (Node 20, 1 Mi pixels per pass):**
+1. **Hoist all C/M/Y-only setup into the outer 4D pixel loop.**
+   Compute `X0/Y0/Z0`, `rx/ry/rz`, plus `K0/rk/interpK` once per
+   pixel. Splat weights to four v128 locals.
+2. **Run the 3D interp body inside a flag-gated WASM `loop`** —
+   emitted once in `.wasm`, iterates once (when `rk==0`) or
+   twice (when `interpK`) per pixel. Body: recompute base0..4
+   from XYZ + K0, four `v128.load64_zero + extend` corner loads,
+   the sub-mul-add SIMD ops, then `vU20 = (vC << 4) + ((vSum +
+   0x08) >> 4)`. At end of iter 1 with `interpK`: stash
+   `vU20_K0 = vU20`, `K0 += goK`, `br` back to loop start.
+3. **K-LERP once at u20 precision.** `((vU20_K0 << 8) + (vU20 -
+   vU20_K0) * vRk + 0x80000) >> 20` with saturating narrow to u8.
+   `(u20_K1 - u20_K0) * rk` fits signed i32 (max ~2²⁸), so the
+   entire K-LERP runs in a single `i32x4.mul` — no widening to i64.
+
+The architectural win over scalar 4D is that **the K0 u20
+intermediate lives in a single v128 local** across the K-plane
+loop back-edge. All 3–4 channels travel together in one register —
+no `$scratchPtr` i32.store/i32.load round-trip per channel that
+capped the scalar 4D win at 1.22×. The SIMD `.wasm` is 37 %
+smaller than scalar 4D (1.6 KB vs 2.5 KB) mostly because there's
+no rolled channel loop + 7 per-channel tail-dispatch sites.
+
+The `rk=0` short-circuit (pixel lies on a K grid plane, common
+for solid-K CMYK regions) is preserved — when `interpK` is 0
+the K-plane loop exits after one pass and the tail rounds
+`(vU20 + 0x800) >> 12` directly to u8, matching both the JS and
+scalar WASM 4D kernels.
+
+A u16-output path falls out for free — the final narrow is the
+only piece that's width-specific; skipping it and storing vU20
+gives a u16 output mode. That's the v1.3 hook.
+
+**Remaining work items**
+
+- ~~4D scalar `.wat` port.~~ **Shipped** — measured 1.22× avg
+  over JS `int` (1.13× min, 1.49× max), bit-exact across all 6
+  configs. See [deep-dive / WASM kernels — scalar 4D](./deepdive/WasmKernels.md#wasm-scalar-4d--and-the-function-call-lesson)
+  for the bench run and the function-call-inlining lesson that
+  unblocked it (also summarised in §3.2 above).
+- ~~4D SIMD `.wat` port.~~ **Shipped** — measured 2.39× avg over
+  JS `int` (2.04× min, 2.57× max), 1.98× avg over WASM scalar 4D,
+  bit-exact across all 6 configs on first compile. See [deep-dive
+  / WASM kernels — SIMD 4D](./deepdive/WasmKernels.md#wasm-simd-4d--the-k-plane-loop-in-one-v128)
+  for the bench run; the design note for the K0-in-v128-register
+  approach is in the subsection above.
+- `lutMode: 'auto'` — dispatcher + tests + docs + "why we recommend
+  auto" paragraph.
+- Extend the 6-config 3D bench to a 12-config matrix that includes
+  the 4D scalar + 4D SIMD runs, published as a single table in
+  [deep-dive / WASM kernels](./deepdive/WasmKernels.md).
+- ~~Flip the `test.failing` tripwires in both WASM test suites once
+  4D routes through WASM~~ — **done** for both `int-wasm-scalar`
+  (when the 4D scalar dispatcher shipped) and `int-wasm-simd`
+  (when the 4D SIMD dispatcher shipped); both suites now assert
+  the 4D WASM path is actually hit.
+
+At the end of v1.2 we should have one table that says: "every LUT
+shape jsColorEngine supports runs through a SIMD or scalar WASM
+kernel, bit-exact against the JS int sibling, auto-selected per
+Transform, with a measured 2-3.5× over JS int across the 12-config
+matrix." Of the 12 matrix cells, all 12 are now shipped; the only
+remaining work is the `'auto'` dispatcher + bench aggregation.
+
+### v1.3 and beyond — see [Roadmap.md](./Roadmap.md)
+
+Forward-looking plans (v1.3 16-bit, v1.4 non-LUT code generation +
+smarter `'auto'` via per-Transform microbench, v1.5 optional S15.16
+lcms parity, v2 package split) are the single source of truth in
+[Roadmap.md](./Roadmap.md). This page stays retrospective — what
+shipped, what we measured, what we learned while doing it. The
+"historical record" subsection below is the one exception: its
+numbers still inform current kernel design, and the 67.7 × ceiling
+is the baseline for v1.4 code-generation targets, so it's cross-
+posted in both places.
+
+### Historical record: original v1.3 / v1.4 analysis (1D WASM POC)
+
+The two analyses below drove the original v1.3 / v1.4 split. Both
+have since been superseded — v1.3 (WASM scalar) landed in v1.2,
+and v1.4's matrix-shaper-only plan was subsumed by the v1.4 code-
+generation target. The numbers and findings are preserved because
+they still inform design decisions (especially the SIMD ceiling
+number for v1.4 emission, and the "LUT gather ≠ vectorise across
+pixels" rule that's easy to forget).
+
+**Where the WASM scalar win actually came from** (1D POC, v1.3
+analysis): our JS integer kernels are ~37 % data moves, ~20 %
+safety machinery (including ~8 % `jo` overflow guards we don't
+need and ~7 % bounds-check pairs), and only 25-47 % arithmetic.
+WASM removes both classes of safety machinery for free — `i32`
+math wraps by spec (no `jo` needed) and linear memory uses guard
+pages for bounds safety (no `cmp`/`jae` pairs needed). Prediction
+was 1.4-1.6× over `'int'`; measured 1.40× on the production 3D
+tetrahedral kernel (§2.3).
+
+**Original 1D POC results (Node 20, 1 Mi pixels per pass):**
 
 | Kernel | MPx/s | vs JS plain |
 |---|---|---|
@@ -754,99 +1140,53 @@ The proof of concept lives in `bench/wasm_poc/`. It implements the
 | WASM SIMD (with LUT gather) | 606 | 1.63× |
 | WASM SIMD (no LUT, pure math) | 25 180 | **67.7×** |
 
-All four LERP kernels are bit-exact against each other across 1 Mi
+All four kernels were bit-exact against each other across 1 Mi
 pixels. See `bench/wasm_poc/README.md` for the full analysis.
 
-**Surprises that drove the v1.3 / v1.4 split:**
+**Four findings that still drive the roadmap:**
 
-1. **WASM scalar beat JS by 1.84×** for this kernel. We expected
-   1.0–1.2×. V8 is excellent at integer JS, but WASM still wins
-   thanks to no bounds checks, no de-opt risk, and tighter machine
-   code. This makes WASM scalar interesting on its own — we don't
-   need SIMD to justify the port. **→ v1.3 (`lutMode: 'wasm-scalar'`)**
-
-2. **WASM SIMD with LUT gather is *slower* than WASM scalar** (0.89×).
-   WASM SIMD has no native gather instruction; each lane lookup is a
-   scalar `i32.load16_u` + `replace_lane` round-trip. For LUT-heavy
-   kernels (which color management is), the lane-juggling exceeds
-   the parallelism win. **The 3D/4D tetrahedral kernels do 8/16
-   gathers per pixel, so SIMD will perform worse there.** → 3D/4D
-   LUT kernels stay scalar in WASM.
-
-3. **WASM SIMD pure math IS 67.7× faster** when the algorithm fits.
-   This is the ceiling for kernels that don't need LUT lookup —
-   matrix-shaper RGB transforms, gamma curves applied with a
-   polynomial approximation, RGB↔YUV, channel reordering. **This is
-   where WASM SIMD belongs in jsColorEngine.** → v1.4 (`lutMode:
-   'wasm-simd'`) targets matrix-shaper, not LUT.
-
-4. **`Math.imul` is no longer worth using as a perf optimisation in
-   modern V8.** It's still useful as insurance against accidental
+1. **WASM scalar beats JS by 1.84×** for gather-heavy kernels. V8
+   is excellent at integer JS, but WASM wins via no bounds checks,
+   no de-opt risk, and tighter machine code. Drove v1.3 → now
+   shipped as `'int-wasm-scalar'`.
+2. **WASM SIMD with across-pixel LUT gather is *slower* than WASM
+   scalar** (0.89×). WASM SIMD has no native gather instruction;
+   each lane lookup is a scalar `i32.load16_u` + `replace_lane`
+   round-trip. Original conclusion: "3D/4D LUT kernels will
+   perform worse under SIMD." **Correct for across-pixel; wrong
+   for across-channel** — see §2.4 and [deep-dive / WASM kernels —
+   SIMD 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)
+   for the inversion that hit 3.25×. The "we ruled SIMD out for
+   LUTs" story is §3.3.
+3. **WASM SIMD pure math IS 67.7× faster** on no-gather math.
+   This is the ceiling for emitted non-LUT pipelines — drives
+   v1.4 code-generation target. Matrix-shaper, gamma polynomial,
+   RGB↔YUV, channel reordering all live here.
+4. **`Math.imul` is no longer worth using as a perf optimisation**
+   in modern V8. Still useful as insurance against accidental
    float promotion, but plain `*` produces identical machine code.
 
-**Per-kernel WASM decisions:**
+---
 
-| Kernel | Decision |
-|---|---|
-| 3D/4D tetrahedral LUT (the integer kernels we just shipped) | **WASM scalar** — likely 1.5–2× win on top of current `'int'`. ~300–500 lines of `.wat` per kernel. |
-| 3D/4D tetrahedral LUT — SIMD | **No** — gather pattern doesn't vectorise (POC #2). |
-| Matrix-shaper RGB transforms | **WASM SIMD** — no LUT gather, approaches the 67× ceiling (POC #3). |
-| 1D shaper curves (gamma, parametric) | **WASM scalar** — small, easy win, the POC kernel itself. |
+## 6. What's not on the roadmap
 
-**Architectural decision** (still deferred): ship WASM as a separate
-`jscolorengine-wasm` package, or as an opt-in bundle inside the core?
-The POC numbers (227-byte scalar kernel, 761-byte SIMD kernel)
-suggest "inside the core, gated behind a feature flag" is fine —
-total inline WASM payload is < 5 KB.
-
-The dispatcher fall-through chain is the entire reason `lutMode` is
-a string enum:
-
-```
-switch (this.lutMode) {
-    case 'auto':         pickBest(); break;          // v1.4
-    case 'wasm-simd':    if (canDoWasmSimd) ...      // v1.4 (matrix only)
-    case 'wasm-scalar':  if (canDoWasm) ...          // v1.3
-    case 'int':          if (lut.intLut) ...         // v1.1 (current)
-    case 'float':        // always works               (current)
-}
-// every level falls through to the next on capability miss.
-```
+Full "explicitly not doing" list (GPU shaders, Lab-input integer
+kernels, Web Workers, profile-decode optimisation, asm.js /
+SharedArrayBuffer-only paths) lives in
+[Roadmap.md § What we are explicitly NOT doing](./Roadmap.md#what-we-are-explicitly-not-doing).
 
 ---
 
-## 4. What we are explicitly NOT doing
-
-- **GPU (WebGL / WebGPU shaders).** Tempting because GPUs eat 3D LUTs
-  for breakfast, but: (a) upload+download latency dominates for
-  anything under ~10 MPx, (b) WebGPU isn't universally available yet,
-  (c) the API surface is huge. Maybe v2.x; not on the near roadmap.
-- **Lab whitepoint awareness in `lutMode: 'int'`.** Lab a/b are signed;
-  our integer kernels assume unsigned u8/u16 inputs. We sidestep this
-  by always going through device color (RGB or CMYK) when `lutMode:
-  'int'` is on. If you need Lab→Lab, use `lutMode: 'float'`.
-- **Web Workers / parallel transformArray.** Was on the v1.3 roadmap
-  but bumped — the WASM POC numbers (1.84× scalar) make WASM the
-  better next step, and Web Workers can be added on top of any
-  kernel later. Will revisit post-v1.4 once `'auto'` exists.
-- **Profile decode optimisation.** Profile parsing is a one-time cost;
-  the engine spends 99.9% of its life inside `transformArray`. Not
-  worth the code complexity.
-- **Asm.js / sharedarraybuffer-only paths.** asm.js was superseded by
-  WASM; SharedArrayBuffer requires CORS headers most users don't
-  control. We'll use them where available but won't *require* them.
-
----
-
-## 5. Quick reference — when to enable what
+## 7. Quick reference — when to enable what
 
 | Scenario | Recommendation |
 |---|---|
-| Single colour (picker, swatch) | Float accuracy path (`transform.transform(color)`). LUT not needed. |
-| <100 colours (palette) | Float path with `buildLut: false`. |
-| 100–10k colours (chart, batch convert) | `dataFormat: 'int8', buildLut: true`. `lutMode: 'int'` optional (gives ~12%). |
-| Image processing (any size) | `dataFormat: 'int8', buildLut: true, lutMode: 'int'`. |
-| Image processing, RGB↔RGB or RGB→CMYK | `lutMode: 'int'` gives ~12% (3D 1.12×). |
-| Image processing, CMYK input | `lutMode: 'int'` gives ~21% (4D 1.21×, new in v1.1). |
-| Color-measurement (delta-E vs target) | Float path. Don't use `lutMode: 'int'` — ≤ 1 LSB drift is visually invisible but non-zero, and in bulk can shift ΔE decisions at the margin. |
-| Real-time video / large 4K+ images | `lutMode: 'int'` today; `'wasm-scalar'` when available (v1.3); `'auto'` when available (v1.4). |
+| Single colour (picker, swatch) | `transform.transform(color)` — f64 pipeline, `lutMode` doesn't apply. |
+| <100 colours (palette) | `buildLut: false`. f64 pipeline, same as above. |
+| 100–10k colours (chart, batch convert) | `dataFormat: 'int8', buildLut: true` — default `'auto'` picks `'int-wasm-simd'`. |
+| Image processing (any size) | `dataFormat: 'int8', buildLut: true` — default `'auto'` → SIMD with automatic demotion. |
+| Image processing, RGB↔RGB or RGB→CMYK | Default `'auto'` — 3.0–3.5× over `'int'` via SIMD (3D kernel). |
+| Image processing, CMYK input | Default `'auto'` — 2.1–2.6× over `'int'` via SIMD (4D kernel, new in v1.2). |
+| Color-measurement (delta-E vs target) | `buildLut: false` for full f64 pipeline, or pin `lutMode: 'float'` if you need the LUT path. Don't use integer kernels — ≤ 1 LSB drift is visually invisible but non-zero, and in bulk can shift ΔE decisions at the margin. |
+| Real-time video / large 4K+ images | Default `'auto'` — dispatcher picks `'int-wasm-simd'` (shipped v1.2) and demotes to scalar WASM / `'int'` on hosts without SIMD / WASM. |
+| Pinned benchmarking / CI determinism | Explicit `lutMode: 'int-wasm-simd'` (or any specific kernel name) to fail loudly on hosts that can't run it, instead of silently demoting. |

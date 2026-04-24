@@ -1,5 +1,17 @@
 # Profile
 
+**jsColorEngine docs:**
+[← Project README](../README.md) ·
+[Bench](./Bench.md) ·
+[Performance](./Performance.md) ·
+[Roadmap](./Roadmap.md) ·
+[Deep dive](./deepdive/) ·
+[Examples](./Examples.md) ·
+[API: Transform](./Transform.md) ·
+[Loader](./Loader.md)
+
+---
+
 The `Profile` class loads and decodes ICC profiles (and synthesises
 "virtual" profiles like sRGB / Adobe RGB from hard-coded primaries +
 gammas) into an in-memory representation that the [`Transform`](./Transform.md)
