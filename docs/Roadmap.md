@@ -880,6 +880,34 @@ via `<script>`, work from `file://` so devs can just download + open):
   v1.3 compat harness work — if the diff panel ever shows structured
   red blobs where there should be noise, something's drifted.
 
+  **Sales pitch compressed into one screen.** Three conclusions in
+  ~15 seconds with no reading required:
+  - *"Same images"* → visually identical → **accuracy**
+  - *"47 ms vs 182 ms"* → inline timing → **speed**
+  - *"JS only"* vs *"+ 340 KB WASM"* in the stats strip →
+    **simplicity of integration** (the quiet killer for anyone
+    who's fought a corporate CSP or a Webpack bundle size review)
+
+  **Design details that matter:**
+  - **Logarithmic diff slider** (1, 2, 4, 8, 16, 32×) — linear would
+    waste range on the middle. `gain = Math.pow(2, sliderPct * 5)`.
+  - **Swap-sides button** — humans have LTR scan bias; letting users
+    put either engine on either side removes "is it just a
+    perception artefact?" doubt. Tiny feature, disproportionate
+    credibility payoff.
+  - **Signed-RGB diff toggle** — magnitude view tells you *where*
+    engines disagree; signed-RGB (red tint = R channel differs, etc)
+    tells you *how*. The debugging-speedrun mode for v1.3 regression
+    triage: uniform red = R-channel quantisation drift, blue-in-
+    shadows = BPC interaction, structured pattern along gamut
+    boundary = clip-vs-compress disagreement.
+  - **Honesty by construction.** User runs it live on their own
+    machine with their own image — we can't fudge the numbers, and
+    any future regression (a v1.4 change that trades 2% accuracy
+    for 5% speed, say) surfaces immediately and publicly. Same
+    forcing function as the `.it8` harness gives us internally,
+    just in public.
+
   ImageHelper shines here: the jsCE side is literally
   `new ImageHelper({...}).toSoftproofRGBA()` — the whole sample is
   mostly the lcms-wasm wiring + diff calculation + UI, which
