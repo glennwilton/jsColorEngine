@@ -31,17 +31,21 @@
 > on hold while v1.3 (16-bit I/O + lcms compat) ships.
 >
 > **Why on hold, not abandoned.** The POC validated everything we
-> needed it to: the speedup (3–5× for the no-LUT accuracy tier), the
-> correctness path (bit-exact to f64), the measurement methodology
-> (NOP-differential + profiler + instrumentation triangulated to the
-> same bottleneck), and the architecture (per-stage emitters, opt-in
-> diagnostic modes). v1.3 (the 16-bit I/O work and the `.it8`-based
-> lcms compat harness) is a stricter dependency for the project's
-> credibility than another speed multiplier on the slowest tier —
-> and that work needs the engine *as-is* as its baseline. We'll
-> resume compile work as v1.4 once v1.3 ships, with the headline
-> reframed (see [Should we ship this as default?](#should-we-ship-this-as-default--honest-assessment)
-> below).
+> needed it to: the speedup (1.8× bit-exact, up to 5.4× with opt-in
+> lossy LUT-gamma + hot-loop), the correctness path (bit-exact to
+> f64), the measurement methodology (NOP-differential + profiler +
+> instrumentation triangulated to the same bottleneck), and the
+> architecture (per-stage emitters, opt-in diagnostic modes).
+> Mapped onto browser-bench numbers, plain `compile()` lands the
+> no-LUT accuracy tier at ~12 MPx/s (≈2× lcms-wasm NOOPT, ≈2× our
+> own no-LUT runtime, **bit-exact**), and the lossy-LUT-gamma +
+> hot-loop combo lands at ~36 MPx/s — within ~1.5× of LUT-mode lcms.
+> v1.3 (the 16-bit I/O work and the `.it8`-based lcms compat
+> harness) is a stricter dependency for the project's credibility
+> than another speed multiplier — and that work needs the engine
+> *as-is* as its baseline. We'll resume compile work as v1.4 once
+> v1.3 ships (see [Should we ship this as default?](#should-we-ship-this-as-default--honest-assessment)
+> below for the full assessment).
 
 ## TL;DR
 
@@ -602,27 +606,57 @@ this when picking compile work back up post-v1.3.
 
 ### Where compile actually sits in the speed stack
 
-Mapping the `compile_poc` numbers onto the same baseline used by
-the [browser bench](../Bench.md) (RGB→CMYK, GRACoL2006, real
-hardware), the tier picture looks like this:
+Applying the `compile_poc` speedup ratios (1.78× / 4.92× / 5.36×)
+to the no-LUT runtime baseline measured by the
+[browser bench](../Bench.md) (6.7 MPx/s for `jsce no-LUT (f64)`
+on RGB→GRACoL CMYK), the tier picture looks like this:
 
 ```
-jsce float (33³ LUT)        7.73 MPx/s    speed-tier (image bulk work)
-jsce int-wasm-simd          7.30 MPx/s    speed-tier (image bulk work)
-─────────────────────────────────────────────────────────────────────
-jsce compile + LUT + hot   ~1.3 MPx/s     [NEW: accuracy-tier, ~5× over today]
-jsce no-LUT runtime         0.25 MPx/s    accuracy-tier (today)
-lcms-wasm NOOPT             0.11 MPx/s    accuracy-tier (lcms equivalent)
+jsce int-wasm-simd          171 MPx/s    speed-tier (image bulk work)  — SIMD CLUT
+jsce int-wasm-scalar         80 MPx/s    speed-tier
+jsce int                     57 MPx/s    speed-tier
+jsce float (33³ LUT)         54 MPx/s    speed-tier
+lcms-wasm default            52 MPx/s    speed-tier
+─────────────────────────────────────────────────────────────────────────────────
+jsce compile + LUT + hot    ~36 MPx/s    [NEW: lossy LUT-gamma, ~5× over runtime]
+jsce compile + useGammaLUT  ~33 MPx/s    [NEW: lossy LUT-gamma, ~5× over runtime]
+jsce compile() plain        ~12 MPx/s    [NEW: bit-exact f64,   ~1.8× over runtime]
+jsce no-LUT runtime          6.7 MPx/s   accuracy-tier (today, baseline)
+lcms-wasm NOOPT              6.1 MPx/s   accuracy-tier (lcms equivalent)
 ```
 
-Compile is **not a LUT-killer**. It's a **no-LUT-tier accelerator**.
-It moves the floor of the accuracy path up by ~5× — which is
-exactly the rung that has no acceleration story today (every other
-tier already has a WASM/SIMD option). Image-bulk users will stay on
-the LUT tier; compile is for callers who picked the no-LUT path
-specifically *because* they wanted bit-exact f64 — colour
-measurement, ΔE reporting, single-colour lookups, named-colour
-resolution, gamut-boundary checks.
+> *Caveat — extrapolation, not direct measurement.* The compile_poc
+> bench harness has a tighter per-pixel call envelope than the
+> browser bench, so the **ratios** are reproducible (they fall out
+> of the per-stage cost analysis) but the **absolute MPx/s** numbers
+> for the compile rows above are projections, accurate within ~±25 %.
+> Direct browser-bench rows for compile() will land alongside v1.4
+> when the API is stable.
+
+Three things to read off the corrected stack:
+
+- **Plain compile is already a real win on the accuracy tier.**
+  ~12 MPx/s, **bit-exact**, ~2× over both lcms-wasm NOOPT and
+  our own no-LUT runtime walker. No accuracy trade-offs. This
+  alone justifies shipping the API.
+- **compile + LUT-gamma + hot-loop punches into the LUT tier.**
+  ~36 MPx/s vs lcms-wasm default's 52 MPx/s and `jsce float`'s
+  54 MPx/s — within ~1.5× of the LUT speed tier on the accuracy
+  path. This was the surprise: the no-LUT codegen is no longer in
+  a different league from LUT-mode lcms; it's in the same
+  conversation.
+- **The SIMD-CLUT speed tier (171 MPx/s) stays untouched.** Image
+  bulk work that already lives on `int-wasm-simd` has nothing to
+  gain from compile. Compile is for callers who picked the no-LUT
+  path specifically *because* they wanted f64 math — colour
+  measurement, ΔE reporting, single-colour lookups, named-colour
+  resolution, gamut-boundary checks.
+
+The tier rewrite is: compile is **not a LUT-killer**, but it is a
+**no-LUT-tier promotion** strong enough that "compile() ON" should
+arguably become the default for the no-LUT path the moment v1.4
+ships. People who deliberately picked the bit-exact f64 pipeline
+get a free 1.8× boot, identical results.
 
 ### Pros (what the POC validated)
 
@@ -717,13 +751,35 @@ update when v1.4 ships.
 
 ### Verdict
 
-Yes worth shipping — **as opt-in for v1.4**, with the LUT path
-remaining the auto-pick for bulk image work. Anyone who picks the
-no-LUT accuracy path then layers `compile()` gets the ~5× boot
-"for free, identical results" (bit-exact unless they explicitly
-opt into `useGammaLUT`). The current POC is **paused, not
-abandoned** — uncommitted code is committed at the v1.3-pivot
-checkpoint so the measurement record stands.
+Yes worth shipping. The corrected tier numbers turn out stronger
+than the original framing suggested:
+
+- **Plain `compile()` (bit-exact f64) at ~12 MPx/s already doubles
+  both lcms-wasm NOOPT and our own no-LUT runtime walker.** No
+  accuracy trade-off, just removed dispatch overhead. This is the
+  default we'd want anyone on the no-LUT path to get
+  automatically once stage coverage is complete in v1.4.
+- **`compile({ useGammaLUT, hotLoop })` at ~36 MPx/s lands within
+  ~1.5× of LUT-mode lcms (52 MPx/s) and `jsce float` (54 MPx/s)** —
+  the no-LUT accuracy tier is no longer in a different league from
+  LUT-mode lcms; it's in the same conversation. Opt-in (lossy) for
+  callers who want LUT-tier speed without giving up on a 3D CLUT.
+- **The SIMD-CLUT speed tier (171 MPx/s) is untouched.** Bulk image
+  work stays where it is. Compile doesn't compete with `int-wasm-simd`,
+  it complements the accuracy tier nothing else accelerated.
+
+Direction for v1.4 (when we resume post-v1.3):
+
+- Stage-emitter coverage to all ~25 stages (the real bill).
+- Plain `compile()` becomes the **default for the no-LUT path** the
+  moment coverage is complete — anyone using no-LUT mode gets the
+  ~1.8× boot for free, bit-identical results.
+- `useGammaLUT` and `hotLoop` stay opt-in (lossy / structural).
+- `getSource()` and `toModule()` ship as the marquee distribution
+  features.
+
+The current POC is **paused, not abandoned** — committed at the
+v1.3-pivot checkpoint so the measurement record stands.
 
 ## Reproducing the numbers
 
