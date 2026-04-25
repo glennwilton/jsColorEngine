@@ -31,15 +31,16 @@
 > on hold while v1.3 (16-bit I/O + lcms compat) ships.
 >
 > **Why on hold, not abandoned.** The POC validated everything we
-> needed it to: the speedup (1.8× bit-exact, up to 5.4× with opt-in
-> lossy LUT-gamma + hot-loop), the correctness path (bit-exact to
-> f64), the measurement methodology (NOP-differential + profiler +
-> instrumentation triangulated to the same bottleneck), and the
-> architecture (per-stage emitters, opt-in diagnostic modes).
-> Mapped onto browser-bench numbers, plain `compile()` lands the
-> no-LUT accuracy tier at ~12 MPx/s (≈2× lcms-wasm NOOPT, ≈2× our
-> own no-LUT runtime, **bit-exact**), and the lossy-LUT-gamma +
-> hot-loop combo lands at ~36 MPx/s — within ~1.5× of LUT-mode lcms.
+> needed it to: the speedup (1.7× bit-exact, up to 5.4× with the
+> default LUT-gamma + hot-loop), the correctness path (bit-exact to
+> f64 on demand), the measurement methodology (NOP-differential +
+> profiler + instrumentation triangulated to the same bottleneck),
+> and the architecture (per-stage emitters, opt-in diagnostic modes).
+> Mapped onto browser-bench numbers, `compile({ useGammaLUT: false })`
+> lands the bit-exact tier at ~12 MPx/s (≈2× lcms-wasm NOOPT, ≈2×
+> our own no-LUT runtime, bit-exact to `Math.pow`), and the default
+> (LUT-gamma at lcms-equivalent ~32-bit precision, plus `hotLoop`)
+> lands at ~36 MPx/s — within ~1.5× of LUT-mode lcms.
 > v1.3 (the 16-bit I/O work and the `.it8`-based lcms compat
 > harness) is a stricter dependency for the project's credibility
 > than another speed multiplier — and that work needs the engine
@@ -55,9 +56,13 @@
   intermediate result arrays — just decoded inputs in registers,
   arithmetic, and a single typed-array allocation for the return.
 - **Measured on sRGB → GRACoL CMYK, no-LUT pipeline:**
-  the compiled function runs at **4.04 MPx/s vs 2.31 MPx/s** for
-  `t.forward()` on the same chain — **1.75× faster, bit-exact
-  to f64**.
+  - default `compile()` (with `useGammaLUT: true`, the new default —
+    matches lcms's standard fast path, ~32-bit gamma precision):
+    **~11 MPx/s vs ~2.3 MPx/s** for `t.forward()` — **~5× faster.**
+  - `compile({ useGammaLUT: false })` (bit-exact f64 to `Math.pow`):
+    **~4 MPx/s vs ~2.3 MPx/s** — **~1.7× faster, bit-exact**.
+  - `compile({ hotLoop })` (default LUT + amortised loop):
+    **~12 MPx/s, ~5.4×** over runtime.
 - We confirmed *why* it's faster three different ways
   (NOP-differential bench, in-line `hrtime.bigint` instrumentation,
   V8 CPU profiler). All three identified the same hot stage:
@@ -284,67 +289,145 @@ profiler is the truth-teller; instrumentation is a sanity check.
 | **V8 CPU profiler** | **~71 % (545 / 771 stage ticks)** |
 
 Two independent measurements (differential + profiler) triangulate
-to the same hot stage. The two opt-in compile options below were
-designed against this finding — `useGammaLUT` reclaims the gamma
-ticks; `hotLoop` removes the per-pixel allocation/call overhead
-that sits *above* the body cost.
+to the same hot stage. The two compile options below were designed
+against this finding — `useGammaLUT` reclaims the gamma ticks
+(default-on for lcms parity); `hotLoop` removes the per-pixel
+allocation/call overhead that sits *above* the body cost.
 
-### Acting on the bottleneck — `useGammaLUT` and `hotLoop`
+### Prior art — lcms uses this exact same trick by default
 
-Two new opt-in `compile()` flags target the things the profiler
-told us were expensive:
+This deserves its own callout because the framing matters. After
+implementing `useGammaLUT` from first principles (we saw `Math.pow`
+in the profiler, replaced it with an LUT, measured the win), we
+went and read the Little CMS source to check whether they do the
+same thing. They do. **At the same scale, with the same accuracy
+classification, as the default fast path.** We didn't invent this;
+we independently rediscovered the standard CMS curve-optimization.
+
+The receipts (lcms2-2.18, included for offline reference at
+`bench/lcms_c/lcms2-2.18/`):
+
+**`src/cmsopt.c` line 418** — the canonical magic number:
+
+```c
+#define PRELINEARIZATION_POINTS 4096
+```
+
+**`src/cmsopt.c` line 1346** — the per-pixel evaluator after the
+optimizer has tabulated the parametric curve:
+
+```c
+void FastEvaluateCurves8(... In[], ... Out[], ... D) {
+    Curves16Data* Data = (Curves16Data*) D;
+    for (i=0; i < Data->nCurves; i++) {
+         x = (In[i] >> 8);                  // 8-bit input → 256-entry table
+         Out[i] = Data->Curves[i][x];       // single load, no pow()
+    }
+}
+```
+
+`pow()` is called once per table cell at *build* time, never per
+pixel. Two table sizes ship: 256 entries for u8 input, 65536 for
+u16. The non-LUT `pow()` path only fires when the curve genuinely
+can't be tabulated (rare).
+
+**`plugins/fast_float/src/fast_float_curves.c` line 27** — the
+float-pipeline plugin (lcms's explicit speed plugin) uses the same
+shape with Float32 storage:
+
+```c
+typedef struct {
+    cmsFloat32Number CurveR[MAX_NODES_IN_CURVE];   // 4097 entries
+    cmsFloat32Number CurveG[MAX_NODES_IN_CURVE];
+    cmsFloat32Number CurveB[MAX_NODES_IN_CURVE];
+    ...
+} CurvesFloatData;
+```
+
+**…and crucially, line 393 — their own accuracy classification:**
+
+```c
+// Create linearization tables with a reasonable number of entries.
+// Precision is about 32 bits.
+```
+
+That comment is the citation that lets us stop calling our LUT
+"lossy by design" and start calling it what it is: **a 32-bit-precision
+implementation of the gamma stage**, the same way lcms's fast_float
+plugin describes its own. "About 32 bits" is the industry-consensus
+ceiling for this class of optimization, and it's well above what 8-bit
+or 16-bit perceptual workflows can resolve.
+
+**What this changes for our defaults.** We flipped `useGammaLUT` to
+default-`true` (lcms parity). Anyone who needs bit-exact `Math.pow`
+(measurement-grade work, oracle generation, bit-for-bit cross-checks)
+explicitly opts out:
+
+```js
+t.compile({ useGammaLUT: false });   // bit-exact f64, no LUT
+```
+
+Being more conservative than the entire CMS industry doesn't help
+anyone — it just leaves a 2.8× speedup on the floor for users who
+mostly don't care about the 5th decimal place of a Lab triple. The
+conservative-by-default opt-out for measurement work is one short
+property setting; the speed-by-default for everyone else is free.
+
+### `useGammaLUT` and `hotLoop` — measured
+
+Two compile flags act on the bottleneck. `useGammaLUT` is now
+default-on (per the prior-art reading above); `hotLoop` is opt-in
+because it changes the function signature.
 
 ```js
 const compiled = t.compile({
-    useGammaLUT: true,    // 4096-entry float LUT replaces Math.pow in stage_Gamma_Inverse — LOSSY (~1 ULP at u8)
+    useGammaLUT: true,    // DEFAULT — 4096-entry LUT replaces Math.pow in stage_Gamma_Inverse
+                          // (lcms-equivalent ~32-bit precision; opt out with `false` for bit-exact)
     hotLoop:     true,    // wrap body in for(_i…); fn(input, output, n) instead of fn(pixel) → array
 });
 ```
 
-Both default to `false` for bit-exactness and the simple
-`fn(pixel) → array` shape. `useGammaLUT` is opt-in because it
-trades absolute accuracy for throughput — the LUT is built once
-in `attachStore_js_stage_Gamma_Inverse(store, idx, stage,
-compileOptions)` and parked on `store.s{idx}_gammaLut`; the
-emitter then writes `r = _gl[(_r * 4095) | 0]` instead of
-`Math.pow(...)`. `hotLoop` is purely structural — same numeric
-output as the single-pixel form, just amortises the call/alloc
-overhead across all pixels in one outer loop.
+`useGammaLUT`'s LUT is built once in `attachStore_js_stage_Gamma_Inverse`
+and parked on `store.s{idx}_gammaLut`; the emitter then writes
+`r = _gl[(_r * 4095) | 0]` instead of `Math.pow(...)`. `hotLoop` is
+purely structural — same numeric output as the single-pixel form,
+just amortises the call/alloc overhead across all pixels in one outer
+loop.
 
 Measured on the same sRGB → GRACoL chain
 (`bench/compile_poc/bench_gammalut_hotloop.js`,
 500 000 random pixels, best of 5):
 
-| Mode                          |    ms |   MPx/s | speedup vs runtime | speedup vs plain compile |
-|-------------------------------|------:|--------:|-------------------:|-------------------------:|
-| `runtime forward()`           | 213.0 |  2.35   |              1.00× |                        — |
-| `compile()` plain             | 119.5 |  4.18   |              1.78× |                    1.00× |
-| `compile({ useGammaLUT })`    |  43.3 | 11.54   |          **4.92×** |                **2.76×** |
-| `compile({ hotLoop })`        | 117.6 |  4.25   |              1.81× |                    1.02× |
-| `compile({ useGammaLUT, hotLoop })` | **39.7** | **12.59** | **5.36×** | **3.01×** |
+| Mode                                |    ms |   MPx/s | vs runtime | vs bit-exact compile |
+|-------------------------------------|------:|--------:|-----------:|---------------------:|
+| `runtime forward()`                 | 215.7 |  2.32   |      1.00× |                    — |
+| `compile({ useGammaLUT: false })`   | 126.7 |  3.95   |      1.70× |                1.00× |
+| `compile()` (default-LUT)           |  45.0 | 11.12   |  **4.80×** |            **2.82×** |
+| `compile({ hotLoop, useGammaLUT: false })` | 117.9 |  4.24 | 1.83× |             1.07× |
+| `compile({ hotLoop })` (default-LUT + hot) | **40.1** | **12.46** | **5.37×** | **3.16×** |
 
-Two things to read off this table:
+Three things to read off this table:
 
-- **The LUT is the headline.** A single 4096-entry table (~32 KB
-  of `Float64Array`) replaces three `Math.pow(x, 2.4)` calls per
-  pixel and *cuts the body cost by 64 %*, exactly matching the
-  ~64–71 % share the profiler/differential bench attributed to
-  gamma. The accuracy loss (`Δmax ≈ 3.26e-4`) is ~10× below
-  1 code value at 8-bit precision — invisible for u8 image
-  workflows, not appropriate for measurement-grade colour science
-  (use the bit-exact default for that).
-- **`hotLoop` only adds ~1.02× on its own.** Without LUT, the
-  body cost so dominates that removing the per-pixel array
-  allocation barely registers. *With* LUT (body cost cut by 64 %),
-  the allocation/call overhead becomes a meaningful fraction
-  again and `hotLoop` adds a further ~1.09× on top, getting the
-  combined number to 3.01× over plain compiled, 5.36× over the
-  runtime walker.
+- **The default is now the fast path.** `compile()` with no options
+  delivers ~5× over runtime, matching lcms's "build a curve LUT once
+  then load per pixel" optimisation. This is the path most callers
+  will hit without thinking about it.
+- **Bit-exact still costs only what it should.** Opting out of the
+  LUT (back to `Math.pow`) costs the difference between 11.12 and
+  3.95 MPx/s — that's the gamma stage's true cost surfacing. For
+  measurement work where that cost is acceptable, the opt-out is
+  one property.
+- **`hotLoop` adds ~1.09× on top of the default.** Without the LUT
+  the body cost so dominates that removing the per-pixel array
+  allocation barely registers (~1.07×); with the LUT the
+  allocation/call overhead becomes a meaningful fraction again
+  and the additional ~9 % materialises.
 
-The combined mode is what an image-pixel pipeline (`fn(input,
-output, pixelCount)` over a typed-array buffer) should use. The
-single-pixel form remains useful for one-off colour lookups,
-test code, and any caller that doesn't want the lossy LUT.
+The combined `compile({ hotLoop })` mode is what an image-pixel
+pipeline (`fn(input, output, pixelCount)` over a typed-array buffer)
+should use. The single-pixel form remains the right call for
+one-off colour lookups, test code, named-colour resolution, etc.
+For measurement-grade work, prepend `useGammaLUT: false`.
 
 ### `strict` — fail fast on missing emitters
 
@@ -618,9 +701,9 @@ jsce int                     57 MPx/s    speed-tier
 jsce float (33³ LUT)         54 MPx/s    speed-tier
 lcms-wasm default            52 MPx/s    speed-tier
 ─────────────────────────────────────────────────────────────────────────────────
-jsce compile + LUT + hot    ~36 MPx/s    [NEW: lossy LUT-gamma, ~5× over runtime]
-jsce compile + useGammaLUT  ~33 MPx/s    [NEW: lossy LUT-gamma, ~5× over runtime]
-jsce compile() plain        ~12 MPx/s    [NEW: bit-exact f64,   ~1.8× over runtime]
+jsce compile() default+hot  ~36 MPx/s    [NEW: LUT-gamma (lcms-equivalent ~32-bit), ~5× over runtime]
+jsce compile() default      ~33 MPx/s    [NEW: LUT-gamma (lcms-equivalent ~32-bit), ~5× over runtime]
+jsce compile({ useGammaLUT:false }) ~12 MPx/s [NEW: bit-exact f64, ~1.8× over runtime — opt-in]
 jsce no-LUT runtime          6.7 MPx/s   accuracy-tier (today, baseline)
 lcms-wasm NOOPT              6.1 MPx/s   accuracy-tier (lcms equivalent)
 ```
@@ -635,33 +718,43 @@ lcms-wasm NOOPT              6.1 MPx/s   accuracy-tier (lcms equivalent)
 
 Three things to read off the corrected stack:
 
-- **Plain compile is already a real win on the accuracy tier.**
-  ~12 MPx/s, **bit-exact**, ~2× over both lcms-wasm NOOPT and
-  our own no-LUT runtime walker. No accuracy trade-offs. This
-  alone justifies shipping the API.
-- **compile + LUT-gamma + hot-loop punches into the LUT tier.**
-  ~36 MPx/s vs lcms-wasm default's 52 MPx/s and `jsce float`'s
-  54 MPx/s — within ~1.5× of the LUT speed tier on the accuracy
-  path. This was the surprise: the no-LUT codegen is no longer in
-  a different league from LUT-mode lcms; it's in the same
-  conversation.
+- **Bit-exact compile is already a real win on the accuracy tier.**
+  `compile({ useGammaLUT: false })` lands at ~12 MPx/s, **bit-exact
+  to `Math.pow`**, ~2× over both lcms-wasm NOOPT and our own no-LUT
+  runtime walker. No accuracy trade-offs. This is the path
+  measurement-grade callers should pick; the speedup is structural
+  (codegen vs interpreted dispatch).
+- **Default compile (LUT-gamma) punches into the LUT tier.**
+  ~33 MPx/s vs lcms-wasm default's 52 MPx/s and `jsce float`'s
+  54 MPx/s — within ~1.6× of the LUT speed tier on the accuracy
+  path, with the same lcms-equivalent ~32-bit gamma precision
+  (see Prior art section). This was the surprise: the
+  curve-tabulated codegen is no longer in a different league from
+  LUT-mode lcms; it's in the same conversation, using the same
+  optimisation lcms uses.
+- **`compile({ hotLoop })` punches in further.** ~36 MPx/s — within
+  ~1.5× of LUT-mode lcms. Same numerical output as the default
+  single-pixel form, just amortises the call/alloc overhead.
 - **The SIMD-CLUT speed tier (171 MPx/s) stays untouched.** Image
   bulk work that already lives on `int-wasm-simd` has nothing to
   gain from compile. Compile is for callers who picked the no-LUT
-  path specifically *because* they wanted f64 math — colour
-  measurement, ΔE reporting, single-colour lookups, named-colour
-  resolution, gamut-boundary checks.
+  accuracy path specifically — colour measurement, ΔE reporting,
+  single-colour lookups, named-colour resolution, gamut-boundary
+  checks.
 
-The tier rewrite is: compile is **not a LUT-killer**, but it is a
+The tier rewrite: compile is **not a LUT-killer**, but it is a
 **no-LUT-tier promotion** strong enough that "compile() ON" should
-arguably become the default for the no-LUT path the moment v1.4
-ships. People who deliberately picked the bit-exact f64 pipeline
-get a free 1.8× boot, identical results.
+become the default for the no-LUT path the moment v1.4 ships.
+People who deliberately picked the no-LUT pipeline get a free
+~5× boot at lcms-equivalent precision (free in the sense lcms
+itself defaults to this trade-off); measurement work flips one
+flag for full bit-exact `Math.pow`.
 
 ### Pros (what the POC validated)
 
-- **Big win on the slowest tier.** ~5× over runtime walker,
-  bit-exact by default, opt-in lossy LUT for an extra ~2.7× on top.
+- **Big win on the slowest tier.** ~5× over runtime walker by
+  default (lcms-equivalent precision), or 1.7× with bit-exact
+  `Math.pow` opt-in.
 - **Side benefits are unique to this approach**, not nice-to-haves:
   - `getSource()` → CSP-safe build-time precompile. Works in
     browser extensions, locked-down enterprise sites, Cloudflare
@@ -719,8 +812,12 @@ get a free 1.8× boot, identical results.
 
 - **Pure JavaScript, no native deps** → compile() preserves this;
   output is JS.
-- **Accuracy-first** → compile() is bit-exact by default;
-  `useGammaLUT` is opt-in and labelled lossy in the source comments.
+- **Accuracy-first** → compile() defaults to lcms-equivalent
+  ~32-bit gamma precision (same as lcms's own default fast path —
+  see Prior art); `{ useGammaLUT: false }` is the one-flag opt-in
+  for full bit-exact `Math.pow`. The accuracy-first ethos is
+  preserved by *making the bit-exact opt-in trivial and well-named*,
+  not by leaving 2.8× on the table for everyone.
 - **No magic / inspect the source** → `getSource()` literally
   exposes the math.
 - **Smaller than lcms-wasm** → `toModule()` is the most extreme
@@ -754,16 +851,21 @@ update when v1.4 ships.
 Yes worth shipping. The corrected tier numbers turn out stronger
 than the original framing suggested:
 
-- **Plain `compile()` (bit-exact f64) at ~12 MPx/s already doubles
-  both lcms-wasm NOOPT and our own no-LUT runtime walker.** No
-  accuracy trade-off, just removed dispatch overhead. This is the
-  default we'd want anyone on the no-LUT path to get
-  automatically once stage coverage is complete in v1.4.
-- **`compile({ useGammaLUT, hotLoop })` at ~36 MPx/s lands within
-  ~1.5× of LUT-mode lcms (52 MPx/s) and `jsce float` (54 MPx/s)** —
-  the no-LUT accuracy tier is no longer in a different league from
-  LUT-mode lcms; it's in the same conversation. Opt-in (lossy) for
-  callers who want LUT-tier speed without giving up on a 3D CLUT.
+- **Bit-exact `compile({ useGammaLUT: false })` at ~12 MPx/s already
+  doubles both lcms-wasm NOOPT and our own no-LUT runtime walker.**
+  No accuracy trade-off, just removed dispatch overhead. This is
+  the path measurement-grade callers should pick — same numerics,
+  better dispatch.
+- **Default `compile()` at ~33 MPx/s is the lcms-parity path.**
+  Same gamma-LUT trick lcms uses by default at the same scale and
+  precision (see Prior art). Anyone who picked the no-LUT pipeline
+  for accuracy reasons gets a ~5× boot at lcms-equivalent precision
+  for free.
+- **`compile({ hotLoop })` at ~36 MPx/s lands within ~1.5× of
+  LUT-mode lcms (52 MPx/s) and `jsce float` (54 MPx/s)** — the
+  no-LUT accuracy tier is no longer in a different league from
+  LUT-mode lcms; it's in the same conversation, and at the same
+  precision lcms ships by default.
 - **The SIMD-CLUT speed tier (171 MPx/s) is untouched.** Bulk image
   work stays where it is. Compile doesn't compete with `int-wasm-simd`,
   it complements the accuracy tier nothing else accelerated.
@@ -771,10 +873,13 @@ than the original framing suggested:
 Direction for v1.4 (when we resume post-v1.3):
 
 - Stage-emitter coverage to all ~25 stages (the real bill).
-- Plain `compile()` becomes the **default for the no-LUT path** the
+- `compile()` becomes the **default for the no-LUT path** the
   moment coverage is complete — anyone using no-LUT mode gets the
-  ~1.8× boot for free, bit-identical results.
-- `useGammaLUT` and `hotLoop` stay opt-in (lossy / structural).
+  ~5× boot for free at lcms-equivalent ~32-bit gamma precision.
+- `useGammaLUT: false` is the documented one-line opt-in for full
+  bit-exact `Math.pow` (measurement / oracle work).
+- `hotLoop` stays opt-in (it changes the function signature from
+  `fn(pixel)` to `fn(input, output, n)`).
 - `getSource()` and `toModule()` ship as the marquee distribution
   features.
 

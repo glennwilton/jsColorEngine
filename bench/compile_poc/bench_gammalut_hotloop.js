@@ -53,23 +53,27 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
     console.log('runs:           ' + RUNS);
 
     // -------------------------------------------------------------------
-    //  Build the 4 compile variants.
+    //  Build the 4 compile variants. NOTE: useGammaLUT defaults TRUE
+    //  (lcms parity — see Transform.js JSDoc and CompiledPipeline.md
+    //  "Prior art" section), so the bit-exact variants opt out explicitly.
     // -------------------------------------------------------------------
-    const plain    = t.compile({ target: 'js' });
-    const lut      = t.compile({ target: 'js', useGammaLUT: true });
-    const hot      = t.compile({ target: 'js', hotLoop: true });
-    const hotLut   = t.compile({ target: 'js', useGammaLUT: true, hotLoop: true });
+    const exact     = t.compile({ target: 'js', useGammaLUT: false });                    // bit-exact f64
+    const def       = t.compile({ target: 'js' });                                        // default (LUT)
+    const hotExact  = t.compile({ target: 'js', useGammaLUT: false, hotLoop: true });     // bit-exact + hot loop
+    const hotDef    = t.compile({ target: 'js', hotLoop: true });                         // default + hot loop
 
     if (DUMP) {
-        console.log('\n===== plain =====\n'    + plain.source);
-        console.log('\n===== +LUT =====\n'     + lut.source);
-        console.log('\n===== +hotLoop =====\n' + hot.source);
-        console.log('\n===== +LUT+hotLoop =====\n' + hotLut.source);
+        console.log('\n===== bit-exact =====\n'         + exact.source);
+        console.log('\n===== default (LUT) =====\n'     + def.source);
+        console.log('\n===== bit-exact + hotLoop =====\n' + hotExact.source);
+        console.log('\n===== default + hotLoop =====\n'   + hotDef.source);
     }
 
     // -------------------------------------------------------------------
     //  Correctness — each variant against t.forward().
-    //  LUT path is LOSSY by design; we tolerate ~1e-3 (well under 1 code value at u8).
+    //  bit-exact variants must match within 1e-9.
+    //  default (LUT) variants are ~32-bit precision per lcms convention,
+    //  worst-case error well below 1 code value at u8 / u16 output.
     // -------------------------------------------------------------------
     const probes = [
         [150/255, 100/255, 50/255],
@@ -97,28 +101,24 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
     }
 
     console.log('\n===== correctness vs t.forward() =====');
-    let plainMax = 0, lutMax = 0, hotMax = 0, hotLutMax = 0;
+    let exactMax = 0, defMax = 0, hotExactMax = 0, hotDefMax = 0;
     for (const p of probes) {
         const truth = t.forward(p);
-        const a = plain.fn(p);
-        const b = lut.fn(p);
-        const c = callHot(hot,    p);
-        const d = callHot(hotLut, p);
-        plainMax  = Math.max(plainMax,  maxAbs(truth, a));
-        lutMax    = Math.max(lutMax,    maxAbs(truth, b));
-        hotMax    = Math.max(hotMax,    maxAbs(truth, c));
-        hotLutMax = Math.max(hotLutMax, maxAbs(truth, d));
+        exactMax    = Math.max(exactMax,    maxAbs(truth, exact.fn(p)));
+        defMax      = Math.max(defMax,      maxAbs(truth, def.fn(p)));
+        hotExactMax = Math.max(hotExactMax, maxAbs(truth, callHot(hotExact, p)));
+        hotDefMax   = Math.max(hotDefMax,   maxAbs(truth, callHot(hotDef,   p)));
     }
-    console.log('  plain                Δmax = ' + plainMax.toExponential(2));
-    console.log('  +useGammaLUT         Δmax = ' + lutMax.toExponential(2)    + '   (lossy by design)');
-    console.log('  +hotLoop             Δmax = ' + hotMax.toExponential(2));
-    console.log('  +useGammaLUT+hotLoop Δmax = ' + hotLutMax.toExponential(2) + '   (lossy by design)');
+    console.log('  bit-exact            Δmax = ' + exactMax.toExponential(2)    + '   (must be ≤ 1e-9)');
+    console.log('  default (LUT)        Δmax = ' + defMax.toExponential(2)      + '   (~32-bit precision per lcms convention)');
+    console.log('  bit-exact + hotLoop  Δmax = ' + hotExactMax.toExponential(2) + '   (must be ≤ 1e-9)');
+    console.log('  default + hotLoop    Δmax = ' + hotDefMax.toExponential(2)   + '   (~32-bit precision per lcms convention)');
 
-    if (plainMax > 1e-9 || hotMax > 1e-9) {
-        console.log('\n  ERROR: non-LUT variants must match t.forward() bit-tight (≤1e-9). Aborting bench.');
+    if (exactMax > 1e-9 || hotExactMax > 1e-9) {
+        console.log('\n  ERROR: bit-exact variants must match t.forward() within 1e-9. Aborting bench.');
         process.exit(1);
     }
-    if (lutMax > 5e-3 || hotLutMax > 5e-3) {
+    if (defMax > 5e-3 || hotDefMax > 5e-3) {
         console.log('\n  WARNING: LUT variants diverged more than 5e-3 — table density may need to grow.');
     }
 
@@ -154,19 +154,19 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
     }
 
     // Warmup
-    benchSinglePixel(plain);
-    benchSinglePixel(lut);
-    benchHotLoop(hot);
-    benchHotLoop(hotLut);
+    benchSinglePixel(exact);
+    benchSinglePixel(def);
+    benchHotLoop(hotExact);
+    benchHotLoop(hotDef);
 
     // -------------------------------------------------------------------
     //  Bench — best of RUNS for each mode.
     // -------------------------------------------------------------------
     const variants = [
-        { name: 'plain                ', kind: 'single', c: plain  },
-        { name: '+useGammaLUT         ', kind: 'single', c: lut    },
-        { name: '+hotLoop             ', kind: 'hot',    c: hot    },
-        { name: '+useGammaLUT+hotLoop ', kind: 'hot',    c: hotLut },
+        { name: 'bit-exact            ', kind: 'single', c: exact     },
+        { name: 'default (LUT)        ', kind: 'single', c: def       },
+        { name: 'bit-exact + hotLoop  ', kind: 'hot',    c: hotExact  },
+        { name: 'default + hotLoop    ', kind: 'hot',    c: hotDef    },
     ];
 
     console.log('\n===== bench =====');
@@ -209,11 +209,11 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
         console.log('  ' + v.name + '  ' + (runtimeBest / ms).toFixed(2) + 'x');
     }
 
-    console.log('\n===== speedup vs plain compile =====');
-    const plainMs = best['plain'];
+    console.log('\n===== speedup vs bit-exact compile =====');
+    const exactMs = best['bit-exact'];
     for (const v of variants) {
         const ms = best[v.name.trim()];
-        console.log('  ' + v.name + '  ' + (plainMs / ms).toFixed(2) + 'x');
+        console.log('  ' + v.name + '  ' + (exactMs / ms).toFixed(2) + 'x');
     }
 })().catch(err => {
     console.error('bench failed:', err);

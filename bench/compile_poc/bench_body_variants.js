@@ -301,7 +301,10 @@ function wrap(body, store) {
     const t = new Transform({ dataFormat: 'device', buildLut: false, lutMode: 'float' });
     t.create('*srgb', cmyk, eIntent.relative);
 
-    const compiled = t.compile({ target: 'js' });
+    // Body-rewrite variants need the bit-exact Math.pow gamma in the source
+    // (the nopMathPow regex matches Math.pow). compile() defaults useGammaLUT=true
+    // for lcms parity, which would emit LUT lookups instead.
+    const compiled = t.compile({ target: 'js', useGammaLUT: false });
     const baseBody = compiled.source;
     const store    = compiled.store;
 

@@ -54,7 +54,10 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
     const t = new Transform({ dataFormat: 'device', buildLut: false, lutMode: 'float' });
     t.create('*srgb', cmyk, eIntent.relative);
 
-    const compiled = t.compile({ target: 'js' });
+    // Variants must match t.forward() bit-exact (see correctness check below),
+    // so opt OUT of the now-default useGammaLUT (LUT is ~32-bit precision
+    // vs t.forward()'s f64). compile() defaults useGammaLUT=true for lcms parity.
+    const compiled = t.compile({ target: 'js', useGammaLUT: false });
     const store    = compiled.store;
     const body     = compiled.source; // includes "use strict" + locals + body + return
 

@@ -43,7 +43,11 @@ const cmykFilename = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_C
     });
     t.create('*srgb', cmyk, eIntent.relative);
 
-    const compiled = t.compile({ target: 'js' });
+    // Explicitly opt OUT of useGammaLUT — this bench asserts bit-exact
+    // (Δmax ≤ 1e-9) against t.forward(), so we need the bit-exact Math.pow
+    // path. compile() now defaults useGammaLUT=true (lcms parity) so this
+    // override is needed to preserve the regression test.
+    const compiled = t.compile({ target: 'js', useGammaLUT: false });
 
     if (DUMP_SRC) {
         console.log('===== emitted source =====');
