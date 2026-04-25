@@ -11,6 +11,25 @@ This directory is jsColorEngine's long-term **compatibility and
 accuracy regression suite**, measured against LittleCMS 2.16 as the
 de-facto reference implementation.
 
+## Conclusion — jsColorEngine is a faithful float-precision peer of lcms
+
+jsColorEngine's float pipeline matches Little CMS's float pipeline
+within visual-noise levels across the full 130-file ICC oracle
+suite. On Lab outputs the worst case is **0.06 ΔE76** — sixteen
+times below the ΔE 1.0 visibility threshold and well inside lcms's
+own per-stage rounding tolerance. On 8-bit RGB the worst case is
+**1.24 LSB** (invisible at u8 display precision) and on CMYK the
+worst case is **0.04 % ink** (well below dot-gain measurement
+noise). The only structural divergence is lcms's Perceptual
+rendering on 1-channel grey output profiles without BPC, which
+bakes in a black-point lift jsCE doesn't reproduce (~17 LSB) — a
+real algorithmic difference, not a numerical one, that resolves to
+<0.01 LSB the moment BPC is enabled or the intent switches to
+Relative. **Conclusion: jsCE is a faithful float-precision peer of
+lcms**, with the remaining drift small enough that v1.3's 16-bit
+kernels can land directly against this oracle without ambiguity
+about whose math is "right."
+
 ## TL;DR — first-pass numbers (v1.2.0 vs lcms2 2.16 float oracle)
 
 Both engines on full f64 (`TYPE_*_DBL` in lcms, `dataFormat: 'objectFloat'`
