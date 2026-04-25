@@ -4777,8 +4777,29 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return data;
     };
 
+    // Compile-time emitter for stage_debug. The pipeline's auto-inserted
+    // 'Start' and 'END' markers are also stage_debug (just with different
+    // stageNames — see addStage() calls in create() when pipelineDebug is
+    // on). compile() routes any stage whose .funct === stage_debug here,
+    // so there's a single place to control debug emission.
+    //
+    // For these stages the human-readable label is passed via stageData
+    // (NOT debugFormat) — that's how stage_debug's runtime signature
+    // works: stage_debug(data, label) where 'label' is the stageData arg.
     emit_js_stage_debug(index, stage){
-        return '//Debug Stage  - not implemented in compiled \n';
+        var name  = (stage && stage.stageName) ? stage.stageName : 'stage_debug';
+        var label = '';
+        if (stage) {
+            if (typeof stage.stageData === 'string')   label = stage.stageData;
+            else if (typeof stage.debugFormat === 'string') label = stage.debugFormat;
+        }
+        // The runtime substitutes {data}/{name}/etc. into the format; at
+        // compile time we just want a clean single-line breadcrumb.
+        var hint = label.replace(/\{[a-z]+\}/gi, '').replace(/\|/g, ' ').replace(/\s+/g, ' ').trim();
+        if (hint.length > 0) {
+            return '// debug marker (' + name + '): ' + hint + ' — compile-time no-op';
+        }
+        return '// debug marker (' + name + ') — compile-time no-op';
     }
 
     addDebugHistory(label, stageName, lastData, data){
@@ -4822,8 +4843,27 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return input;
     };
 
+    // Compile-time emitter for stage_history. Like stage_debug, this is a
+    // pure side-effect stage at runtime (writes to this.debugHistory and
+    // returns input unchanged) — so it compiles to a no-op comment carrying
+    // the human-readable info string for source readability.
+    //
+    // The info string is passed as stageData (see runtime stage_history
+    // signature: stage_history(input, info)). compile() routes any stage
+    // whose .funct === stage_history here, so this fires for every name
+    // injected by addStage(_, '<name>', this.stage_history, '<info>', _).
     emit_js_stage_history(index, stage){
-        return '//History Stage  - not implemented in compiled \n';
+        var name  = (stage && stage.stageName) ? stage.stageName : 'stage_history';
+        var info  = '';
+        if (stage && typeof stage.stageData === 'string') info = stage.stageData;
+        // Collapse whitespace and trim long info strings so the comment
+        // stays single-line in the dumped source.
+        var hint = info.replace(/\s+/g, ' ').trim();
+        if (hint.length > 120) hint = hint.slice(0, 117) + '...';
+        if (hint.length > 0) {
+            return '// history marker (' + name + '): ' + hint + ' — compile-time no-op';
+        }
+        return '// history marker (' + name + ') — compile-time no-op';
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -5390,6 +5430,72 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             Math.pow(i2, data.gamma)
         ]
     }
+
+    // Compiled-pipeline POC: device-RGB clamp + inverse TRC.
+    // In: r, g, b   Out: r, g, b   (in-place)
+    //
+    // Two emit modes:
+    //   default        bit-exact `Math.pow` (or piecewise sRGB)
+    //   useGammaLUT    4096-entry float LUT lookup attached to store —
+    //                  ~70 % cheaper but lossy (~1 ULP at u8 precision)
+    attachStore_js_stage_Gamma_Inverse(store, index, stage, compileOptions){
+        if (!compileOptions || !compileOptions.useGammaLUT) return;
+        var data = stage.stageData;
+        var N = 4096;
+        var lut = new Float64Array(N);
+        if (data.issRGB) {
+            for (var i = 0; i < N; i++) {
+                var x = i / (N - 1);
+                lut[i] = (x <= 0.04045) ? (x / 12.92) : Math.pow((x + 0.055) / 1.055, 2.4);
+            }
+        } else {
+            var g = data.gamma;
+            for (var j = 0; j < N; j++) {
+                var y = j / (N - 1);
+                lut[j] = Math.pow(y, g);
+            }
+        }
+        store['s' + index + '_gammaLut'] = lut;
+        store['s' + index + '_gammaLutMax'] = N - 1;
+    }
+
+    emit_js_stage_Gamma_Inverse(index, stage, store, compileOptions){
+        var data = stage.stageData;
+        var useLUT = !!(compileOptions && compileOptions.useGammaLUT);
+        var lines = [];
+        lines.push('{');
+        lines.push('  let _r = r < 0 ? 0 : (r > 1 ? 1 : r);');
+        lines.push('  let _g = g < 0 ? 0 : (g > 1 ? 1 : g);');
+        lines.push('  let _b = b < 0 ? 0 : (b > 1 ? 1 : b);');
+        if (useLUT) {
+            // LUT path. The table baked by attachStore_js_stage_Gamma_Inverse
+            // already encodes either the sRGB piecewise inverse or the plain
+            // power curve, so this emit stays curve-agnostic. We use a
+            // truncating `| 0` index (no rounding) and let LUT density
+            // (4096 entries) carry the accuracy. For 8-bit image input
+            // the worst-case error is well below 1 code value.
+            var lutVar = '_gl' + index;
+            var maxIdx = (store['s' + index + '_gammaLutMax']);
+            lines.push('  // LUT-based inverse gamma — issRGB=' + (!!data.issRGB) + ', gamma=' + data.gamma + ' (lossy: ~' + (4096) + '-entry table)');
+            lines.push('  const ' + lutVar + ' = store.s' + index + '_gammaLut;');
+            lines.push('  r = ' + lutVar + '[(_r * ' + maxIdx + ') | 0];');
+            lines.push('  g = ' + lutVar + '[(_g * ' + maxIdx + ') | 0];');
+            lines.push('  b = ' + lutVar + '[(_b * ' + maxIdx + ') | 0];');
+        } else if (data.issRGB) {
+            // sRGB piecewise inverse — bit-exact with convert.sRGBGammaInv.
+            lines.push('  r = _r <= 0.04045 ? _r / 12.92 : Math.pow((_r + 0.055) / 1.055, 2.4);');
+            lines.push('  g = _g <= 0.04045 ? _g / 12.92 : Math.pow((_g + 0.055) / 1.055, 2.4);');
+            lines.push('  b = _b <= 0.04045 ? _b / 12.92 : Math.pow((_b + 0.055) / 1.055, 2.4);');
+        } else {
+            // Plain power gamma. Bake exponent as a numeric literal.
+            lines.push('  r = Math.pow(_r, ' + data.gamma + ');');
+            lines.push('  g = Math.pow(_g, ' + data.gamma + ');');
+            lines.push('  b = Math.pow(_b, ' + data.gamma + ');');
+        }
+        lines.push('}');
+        return lines.join('\n');
+    }
+
     //m[row][column]
     //  00   01    02
     //  10   11    12
@@ -5406,6 +5512,22 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         o2 = i0 * matrix.m20 + i1 * matrix.m21 + i2 * matrix.m22;
 
         return [o0, o1, o2];
+    }
+
+    // Compiled-pipeline POC: 3x3 RGB→PCSXYZ matrix.
+    // In: r, g, b   Out: X, Y, Z
+    // Coefficients baked as numeric literals so V8 folds them into the
+    // emitted machine code; no per-pixel object property lookups.
+    emit_js_stage_matrix_rgb(index, stage){
+        var m = stage.stageData;
+        var lines = [];
+        lines.push('{');
+        lines.push('  let _r = r, _g = g, _b = b;');
+        lines.push('  X = _r * ' + m.m00 + ' + _g * ' + m.m01 + ' + _b * ' + m.m02 + ';');
+        lines.push('  Y = _r * ' + m.m10 + ' + _g * ' + m.m11 + ' + _b * ' + m.m12 + ';');
+        lines.push('  Z = _r * ' + m.m20 + ' + _g * ' + m.m21 + ' + _b * ' + m.m22 + ';');
+        lines.push('}');
+        return lines.join('\n');
     }
 
     stage_chromaticAdaptation(PCSXYZ, data){
@@ -5638,6 +5760,55 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
             (lab.a + 128) * 256 / 65535.0,
             (lab.b + 128) * 256 / 65535.0
         ];
+    };
+
+    // Compiled-pipeline POC: PCSXYZ → PCSv2.
+    // In: X, Y, Z   Out: pcsL, pcsa, pcsb
+    // PCSXYZ is the ICC encoding where 1.0 == 0xFFFF (so values 0..2 map to
+    // 0..1). The first scale (* 1.999969...) lifts back to "real" XYZ; then
+    // XYZ2Lab vs D50; then the PCSv2 packing scales (Lab → 0..1 16-bit
+    // integer fractions). All constants baked.
+    emit_js_stage_PCSXYZ_to_PCSv2(index, stage){
+        // ICC PCSXYZ -> CIE Lab (D50) -> PCSv2-packed Lab.
+        //
+        //   PCSXYZ scale factor k = 65535/32768 (so 1.0 -> 32768/65535).
+        //   D50 illuminant (illuminant.d50): WX=0.96422, WY=1.0, WZ=0.82521.
+        //   Lab perceptual curve breakpoint  = (6/29)^3 = 0.008856...
+        //   Lab linear-segment slope         = 841/108  ~ 7.787037
+        //   Lab linear-segment offset        = 16/116   ~ 0.137931
+        //
+        // Math.cbrt is used in place of Math.pow(x, 1.0/3.0): same value to
+        // within 1 ULP and roughly 4-5x faster on V8 (cbrt is a dedicated
+        // intrinsic; pow runs a generic polynomial path even for fixed
+        // exponents). Verified: bench/compile_poc/bench_body_variants.js
+        // shows ~35% body-time reduction from this single substitution.
+        var k        = 1.999969482421875;
+        var WX       = 0.96422;
+        var WY       = 1.0;
+        var WZ       = 0.82521;
+        var labLimit = (24.0/116.0) * (24.0/116.0) * (24.0/116.0);
+        var A        = 841.0/108.0;
+        var B        = 16.0/116.0;
+        var scaleL   = 652.80 / 65535.0;   // L  in [0,100]   -> [0,1]
+        var scaleAB  = 256.0  / 65535.0;   // ab in [-128,127] -> [0,1]
+
+        var lines = [];
+        lines.push('{');
+        lines.push('  // PCSXYZ -> XYZ relative to D50 (k/W literals baked in)');
+        lines.push('  let _fx = X * ' + (k / WX) + ';');
+        lines.push('  let _fy = Y * ' + (k / WY) + ';');
+        lines.push('  let _fz = Z * ' + (k / WZ) + ';');
+        lines.push('  // Lab perceptual curve: f(t) = t^(1/3) for t > (6/29)^3, else linear segment');
+        lines.push('  _fx = _fx <= ' + labLimit + ' ? ' + A + ' * _fx + ' + B + ' : Math.cbrt(_fx);');
+        lines.push('  _fy = _fy <= ' + labLimit + ' ? ' + A + ' * _fy + ' + B + ' : Math.cbrt(_fy);');
+        lines.push('  _fz = _fz <= ' + labLimit + ' ? ' + A + ' * _fz + ' + B + ' : Math.cbrt(_fz);');
+        lines.push('  // CIE Lab (L:0..100, a/b:-128..127) packed into PCSv2 (all 0..1).');
+        lines.push('  // Inlined the (_L,_a,_b) temps; V8 collapses them to the same SSA either way.');
+        lines.push('  pcsL =  (116.0 * _fy - 16.0)       * ' + scaleL  + '; // L');
+        lines.push('  pcsa = (500.0 * (_fx - _fy) + 128) * ' + scaleAB + '; // a');
+        lines.push('  pcsb = (200.0 * (_fy - _fz) + 128) * ' + scaleAB + '; // b');
+        lines.push('}');
+        return lines.join('\n');
     };
     /**
      *
@@ -5977,6 +6148,61 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
         return output;
     };
 
+    // Compiled-pipeline POC: per-channel linear-interp of a v2 curve table.
+    // Channel basis derived from the stage's input encoding:
+    //   PCSv2 (1) → reads/writes pcsL, pcsa, pcsb            (3 channels)
+    //   device (0) → reads/writes d0..d{channels-1}          (n channels)
+    // The Float64 table goes on the store; entries / offsets are baked
+    // numeric literals so the per-channel block is straight-line.
+    attachStore_js_stage_curve_v2(store, idx, stage){
+        store['s' + idx + '_table'] = stage.stageData.tablef;
+    }
+
+    emit_js_stage_curve_v2(index, stage){
+        var c          = stage.stageData;
+        var entries    = c.entries;
+        var entriesM1  = entries - 1;
+        var channels   = c.channels;
+        var tableKey   = 's' + index + '_table';
+        var inEnc      = stage.inputEncoding;
+
+        var DEVICE_VARS = ['d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7'];
+        var vars;
+        if (inEnc === 1 /* PCSv2 */ || inEnc === 2 /* PCSv4 */) {
+            vars = ['pcsL', 'pcsa', 'pcsb'].slice(0, channels);
+        } else {
+            vars = DEVICE_VARS.slice(0, channels);
+        }
+
+        var lines = [];
+        lines.push('{');
+        // Pull table reference once.
+        lines.push('  const _t = store.' + tableKey + ';');
+
+        var offset = 0;
+        for (var ch = 0; ch < channels; ch++) {
+            var v = vars[ch];
+            var off = offset; // baked
+            lines.push('  // ch ' + ch + ' → ' + v);
+            lines.push('  {');
+            lines.push('    let _p = ' + v + ';');
+            lines.push('    if (_p >= 1.0) ' + v + ' = _t[' + (off + entriesM1) + '];');
+            lines.push('    else if (_p <= 0.0) ' + v + ' = _t[' + off + '];');
+            lines.push('    else {');
+            lines.push('      let _pX = _p * ' + entriesM1 + ';');
+            lines.push('      let _p0 = _pX | 0;');
+            lines.push('      let _rr = _pX - _p0;');
+            lines.push('      let _y0 = _t[' + off + ' + _p0];');
+            lines.push('      let _y1 = _t[' + off + ' + _p0 + 1];');
+            lines.push('      ' + v + ' = _y0 + (_y1 - _y0) * _rr;');
+            lines.push('    }');
+            lines.push('  }');
+            offset += entries;
+        }
+        lines.push('}');
+        return lines.join('\n');
+    };
+
 
 
 
@@ -6080,6 +6306,76 @@ createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, int
  *                           inputScale, outputScale, go0..go2, etc.).
  * @returns {number[]}       New array of length lut.outputChannels.
  */
+// Compiled-pipeline POC: 3D trilinear interpolation (PCSv2 in → device out).
+// In: pcsL, pcsa, pcsb (3 channels)
+// Out: d0..d{outputChannels-1}
+// CLUT goes on the store; grid strides / scales / outputScale baked as
+// numeric literals. Whole 4-channel evaluation is unrolled — no inner loop.
+attachStore_js_trilinearInterp3D(store, idx, stage){
+    store['s' + idx + '_clut'] = stage.stageData.CLUT;
+}
+
+emit_js_trilinearInterp3D(index, stage){
+    var lut             = stage.stageData;
+    var outCh           = lut.outputChannels;
+    var gridEnd         = lut.g1 - 1;
+    var inputScale      = lut.inputScale;
+    var gridPointsScale = gridEnd * inputScale;
+    var outputScale     = lut.outputScale;
+    var go0             = lut.go0;
+    var go1             = lut.go1;
+    var go2             = lut.go2;
+    var clutKey         = 's' + index + '_clut';
+
+    var DEVICE_VARS = ['d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7'];
+    var dVars = DEVICE_VARS.slice(0, outCh);
+
+    var lines = [];
+    lines.push('{');
+    lines.push('  const _CLUT = store.' + clutKey + ';');
+    // Clamp PCS inputs to 0..1.
+    lines.push('  let _i0 = pcsL < 0 ? 0 : (pcsL > 1 ? 1 : pcsL);');
+    lines.push('  let _i1 = pcsa < 0 ? 0 : (pcsa > 1 ? 1 : pcsa);');
+    lines.push('  let _i2 = pcsb < 0 ? 0 : (pcsb > 1 ? 1 : pcsb);');
+    // Scale into grid space.
+    lines.push('  let _px = _i0 * ' + gridPointsScale + ';');
+    lines.push('  let _py = _i1 * ' + gridPointsScale + ';');
+    lines.push('  let _pz = _i2 * ' + gridPointsScale + ';');
+    lines.push('  let _X0 = ~~_px, _rx = _px - _X0;');
+    lines.push('  let _Y0 = ~~_py, _ry = _py - _Y0;');
+    lines.push('  let _Z0 = ~~_pz, _rz = _pz - _Z0;');
+    lines.push('  let _X1, _Y1, _Z1;');
+    // Upper-edge clamp (matches runtime _NCh kernel).
+    lines.push('  if (_X0 === ' + gridEnd + ') { _X1 = _X0 *= ' + go2 + '; } else { _X0 *= ' + go2 + '; _X1 = _X0 + ' + go2 + '; }');
+    lines.push('  if (_Y0 === ' + gridEnd + ') { _Y1 = _Y0 *= ' + go1 + '; } else { _Y0 *= ' + go1 + '; _Y1 = _Y0 + ' + go1 + '; }');
+    lines.push('  if (_Z0 === ' + gridEnd + ') { _Z1 = _Z0 *= ' + go0 + '; } else { _Z0 *= ' + go0 + '; _Z1 = _Z0 + ' + go0 + '; }');
+    // Per-output-channel trilinear lerp. Channel `c` lives at base+c
+    // (because the runtime CLUT is interleaved [X][Y][Z][ch] with
+    // the inner-channel stride = 1).
+    for (var c = 0; c < outCh; c++) {
+        var dv = dVars[c];
+        lines.push('  {');
+        lines.push('    let _d000 = _CLUT[_X0 + _Y0 + _Z0 + ' + c + '];');
+        lines.push('    let _d001 = _CLUT[_X0 + _Y0 + _Z1 + ' + c + '];');
+        lines.push('    let _d010 = _CLUT[_X0 + _Y1 + _Z0 + ' + c + '];');
+        lines.push('    let _d011 = _CLUT[_X0 + _Y1 + _Z1 + ' + c + '];');
+        lines.push('    let _d100 = _CLUT[_X1 + _Y0 + _Z0 + ' + c + '];');
+        lines.push('    let _d101 = _CLUT[_X1 + _Y0 + _Z1 + ' + c + '];');
+        lines.push('    let _d110 = _CLUT[_X1 + _Y1 + _Z0 + ' + c + '];');
+        lines.push('    let _d111 = _CLUT[_X1 + _Y1 + _Z1 + ' + c + '];');
+        lines.push('    let _dx00 = _d000 + _rx * (_d100 - _d000);');
+        lines.push('    let _dx01 = _d001 + _rx * (_d101 - _d001);');
+        lines.push('    let _dx10 = _d010 + _rx * (_d110 - _d010);');
+        lines.push('    let _dx11 = _d011 + _rx * (_d111 - _d011);');
+        lines.push('    let _dxy0 = _dx00 + _ry * (_dx10 - _dx00);');
+        lines.push('    let _dxy1 = _dx01 + _ry * (_dx11 - _dx01);');
+        lines.push('    ' + dv + ' = (_dxy0 + _rz * (_dxy1 - _dxy0)) * ' + outputScale + ';');
+        lines.push('  }');
+    }
+    lines.push('}');
+    return lines.join('\n');
+}
+
 trilinearInterp3D_NCh(input, lut){
     var rx,ry,rz;
     var X0,X1,Y0,Y1,Z0,Z1,px,py,pz, input0, input1, input2;
@@ -11694,54 +11990,479 @@ trilinearInterp3D_NCh(input, lut){
     };
 
 
-    compile(options = {}) {
-        const target = options.target || 'js';
+    /**
+     * POC monolithic-pipeline code generator.
+     *
+     * Walks the (already-optimised) stage list and asks each stage to emit a
+     * straight-line block of JS that operates on a fixed set of semantic
+     * scalar locals. There is no input/output variable tracking — by
+     * convention each stage knows which names hold its inputs and where it
+     * should write its outputs:
+     *
+     *      r,g,b               device RGB 0..1            (pipeline input)
+     *      X,Y,Z               PCS XYZ 0..1
+     *      pcsL,pcsa,pcsb      PCSv2 0..1
+     *      d0..d7              device output 0..1         (pipeline output)
+     *
+     * Stage data that is too big to bake as numeric literals (curve tables,
+     * CLUTs) is parked on a plain `store` object and read once at the top
+     * of each emitted block. Matrix coefficients, scalar scaling factors,
+     * D50 components, etc. are baked as numeric literals so V8 can fold
+     * them into the emitted machine code.
+     *
+     * Stages dispatch by name:
+     *   - emit_<target>_<stageName>(idx, stage, store)         → string of JS
+     *   - attachStore_<target>_<stageName>(store, idx, stage)  → optional
+     *
+     * Currently only the chain used by RGB-matrix-shaper -> v2-LUT-CMYK
+     * (sRGB → GRACoL etc.) is wired end-to-end:
+     *      stage_Gamma_Inverse
+     *      stage_matrix_rgb
+     *      stage_PCSXYZ_to_PCSv2
+     *      stage_curve_v2     (3-channel and 4-channel)
+     *      trilinearInterp3D
+     *
+     * Stages without an emitter fall back to a runtime call into the
+     * original stage funct via a per-call temp array — correct but slow,
+     * useful as a "still-runs" guarantee while the emitter set grows.
+     *
+     * @param {object}  [options]
+     * @param {string}  [options.target='js']      emit target (only 'js' for now)
+     * @param {boolean} [options.instrument=false] Wrap each stage in a
+     *      hrtime() timer that accumulates per-stage ns into store._instTime[].
+     *      Tanks throughput (timer overhead is roughly the same magnitude as
+     *      a stage's actual work) — only meaningful for relative comparisons.
+     *      Read back via Transform.instrumentReport(compiled).
+     * @param {boolean} [options.profilable=false] Lift each stage's body into
+     *      its own NAMED function at factory scope (closed over the shared
+     *      state vars). The per-pixel function then calls each named stage.
+     *      Costs ~function-call overhead per stage but lets V8's CPU profiler
+     *      (`node --prof`, Chrome DevTools, vmprof, etc.) attribute samples
+     *      per stage instead of lumping them all into one giant compiled fn.
+     *      Use this when you want the PROFILER to tell you which stage is
+     *      hot, on real workloads, without timer-induced perturbation.
+     * @param {boolean} [options.useGammaLUT=false] Replace `Math.pow` calls
+     *      in inverse-gamma stages with a precomputed 4096-entry float LUT
+     *      built once into `store.sN_gammaLut`. **Lossy** — accuracy drops
+     *      from full f64 to ~1 ULP at u8 precision (still well below ΔE
+     *      visibility for u8 image workflows; not appropriate for
+     *      measurement-grade pipelines). Reclaims most of the ~70 % of body
+     *      time the profiler attributes to `Math.pow(x, 2.4)` in the sRGB
+     *      gamma stage. Opt-in only — defaults to bit-exact `Math.pow`.
+     * @param {boolean} [options.strict=true] Throw if any pipeline stage has
+     *      no `emit_<target>_*` function. The runtime-fallback path
+     *      (`_compile_emit_runtime_fallback`) is best-effort and is known to
+     *      produce wrong output across non-trivial encoding boundaries (e.g.
+     *      CMYK→CMYK chains with `tetrahedralInterp4D`). Set `strict: false`
+     *      to opt back into the fallback for stages you've audited yourself.
+     * @param {boolean} [options.hotLoop=false] Emit the per-pixel body
+     *      wrapped in a tight outer loop with signature
+     *      `fn(inputArray, outputArray, pixelCount)`. Removes the result-array
+     *      allocation per pixel and the call overhead of invoking `fn(input)`
+     *      per pixel — the two biggest hidden costs above the body itself.
+     *      `inputArray` and `outputArray` should be typed arrays
+     *      (Float64Array / Float32Array) sized for `pixelCount` × stride.
+     * @returns {{source:string, store:object, fn:function, mode:string}}
+     */
+    compile(options) {
+        options = options || {};
+        var target       = options.target || 'js';
+        var instrument   = options.instrument === true;
+        var profilable   = options.profilable === true;
+        var useGammaLUT  = options.useGammaLUT === true;
+        var strict       = options.strict !== false;     // default true
+        var hotLoop      = options.hotLoop === true;
+
+        if (instrument && profilable) {
+            // Both modes rewrite the body shape; combining them is messy and
+            // the profiler-visible numbers wouldn't be the real ones anyway.
+            throw new Error('compile(): instrument and profilable are mutually exclusive');
+        }
+        if (hotLoop && profilable) {
+            // hotLoop wraps a single body in an outer for-loop. profilable
+            // splits the body across N named functions. Combining them
+            // would put the function-call overhead inside the hot loop,
+            // which defeats both modes. Pick one.
+            throw new Error('compile(): hotLoop and profilable are mutually exclusive');
+        }
+        if (hotLoop && instrument) {
+            throw new Error('compile(): hotLoop and instrument are mutually exclusive');
+        }
+
+        // Bundle the option set so emit/attach helpers can branch on it
+        // (e.g. emit_js_stage_Gamma_Inverse switching between Math.pow and
+        // a LUT lookup based on options.useGammaLUT).
+        var compileOptions = {
+            target:      target,
+            instrument:  instrument,
+            profilable:  profilable,
+            useGammaLUT: useGammaLUT,
+            strict:      strict,
+            hotLoop:     hotLoop
+        };
 
         if (!this.pipelineCreated || this.pipeline.length === 0) {
             throw 'No pipeline to compile';
         }
 
-        // Assign index to each stage and collect binary data
-        const store = { version: "1.2.0" };
-        this.pipeline.forEach((stage, idx) => {
-            stage._compileIndex = idx;
-            if (typeof stage.attachToStore === 'function') {
-                stage.attachToStore(store, idx);
+        var store = { _version: '1.2.0-poc' };
+        var stageEntries = [];   // [{ idx, sname, header, body }]
+        var coverage = { emitted: [], fallback: [] };
+
+        // Instrumentation scaffolding: per-stage ns counters + call counters
+        // + a captured hrtime() reference. We attach Number-typed-arrays so
+        // the per-stage `+=` is a fast indexed double store, not a property
+        // lookup against a sparse object.
+        if (instrument) {
+            var hr = (typeof process !== 'undefined' && process.hrtime && process.hrtime.bigint)
+                ? process.hrtime.bigint
+                : function () { return BigInt(Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) * 1e6)); };
+            store._instHr     = hr;
+            store._instCount  = 0;
+            store._instTime   = new Float64Array(this.pipeline.length);
+            store._instCalls  = new Uint32Array(this.pipeline.length);
+            store._instLabels = new Array(this.pipeline.length);
+        }
+
+        for (var i = 0; i < this.pipeline.length; i++) {
+            var stage   = this.pipeline[i];
+            var sname   = stage.stageName;
+            // Diagnostic stages (stage_debug, stage_history) are injected with
+            // arbitrary, descriptive stageNames — 'Start', 'END', 'Black Point Info:',
+            // etc. — but always with the same funct. Route them by funct identity
+            // so a single emitter handles every name they take. Adding a new
+            // descriptive marker later (e.g. 'BeforeCLUT') needs no compile-time
+            // changes; it just becomes another no-op comment in the source.
+            var emitName = sname;
+            if      (stage.funct === this.stage_debug)   emitName = 'stage_debug';
+            else if (stage.funct === this.stage_history) emitName = 'stage_history';
+            var attachM  = 'attachStore_' + target + '_' + emitName;
+            var emitM    = 'emit_' + target + '_' + emitName;
+
+            if (typeof this[attachM] === 'function') {
+                this[attachM](store, i, stage, compileOptions);
             }
-        });
 
-        let src = `// Compiled Transform - ${target}\n`;
-        src += `const rawStore = ${JSON.stringify(store)};\n\n`;
-        src += `function decodeStore(r) { /* decode u16@ etc */ return r; }\n`;
-        src += `let s = null;\n`;
-        src += `function getStore() { if(!s) s=decodeStore(rawStore); return s; }\n\n`;
-        src += `export function transform(input) {\n`;
-        src += `  const store = getStore();\n`;
-        src += `  let r=input[0]/255, g=input[1]/255, b=input[2]/255;\n`;
-        src += `  let X=0,Y=0,Z=0, pcsL=0,pcsA=0,pcsB=0, c=0,m=0,y=0,k=0;\n\n`;
-        src += `  let device=[];\n\n`;
-        src += `  let places = ${this.precision};\n\n`;
-        let pp =  Math.pow(10, this.precision)
-        src += `  let pp = ${pp};\n\n`;
+            if (instrument) store._instLabels[i] = sname;
 
-        this.pipeline.forEach(stage => {
-            const m = `emit_${target}_${stage.stageName}`;
-            if (typeof this[m] === 'function') {
-                src += `// Stage : ${stage.stageName}\n`;
-                src += this[m](stage._compileIndex, stage);
+            // Build the stage body, then optionally wrap in a per-stage timer.
+            var header = '// ----- stage ' + i + ' : ' + sname + ' -----';
+            var body;
+            if (typeof this[emitM] === 'function') {
+                coverage.emitted.push(i + ':' + sname);
+                body = this[emitM](i, stage, store, compileOptions);
             } else {
-                src += `  // TODO: ${m}\n`;
+                coverage.fallback.push(i + ':' + sname);
+                if (strict) {
+                    // Default path. The runtime fallback is best-effort and
+                    // known to produce wrong output across non-trivial
+                    // encoding boundaries (CMYK→CMYK chains with
+                    // tetrahedralInterp4D and PCSv2_to_PCSv4 are the
+                    // worked example). Fail fast and tell the caller
+                    // exactly which emitter to add — much better than
+                    // silently returning garbage colour.
+                    throw new Error(
+                        "compile(): no JS emitter for stage '" + sname + "' " +
+                        "(index " + i + "). Add Transform.prototype.emit_" + target + "_" +
+                        emitName + " (and optionally attachStore_" + target + "_" + emitName + ") " +
+                        "or pass { strict: false } to use the runtime fallback (best-effort, " +
+                        "may produce wrong output across encoding boundaries)."
+                    );
+                }
+                store['_fb_' + i + '_funct']     = stage.funct;
+                store['_fb_' + i + '_stageData'] = stage.stageData;
+                store['_fb_' + i + '_self']      = this;
+                header = '// ----- stage ' + i + ' : ' + sname + ' (RUNTIME FALLBACK — best-effort) -----';
+                body   = this._compile_emit_runtime_fallback(i, stage);
             }
-        });
 
-        src += `  return [c,m,y,k];\n`;
-        src += `}\n`;
+            stageEntries.push({ idx: i, sname: sname, header: header, body: body });
+        }
 
-        return { source: src, store };
+        // Final return shape: derive from the last stage's outputEncoding /
+        // from how many d-slots the pipeline filled. For the RGB→CMYK POC
+        // we only need 4 device output channels.
+        var lastStage = this.pipeline[this.pipeline.length - 1];
+        var returnExpr = this._compile_emit_return(lastStage);
+
+        var headerBanner =
+            '// jsColorEngine compiled transform — target=' + target +
+                (instrument  ? '  [INSTRUMENTED — perf measurements only, do not ship]' : '') +
+                (profilable  ? '  [PROFILABLE — named per-stage fns for CPU profiler attribution]' : '') +
+                (hotLoop     ? '  [HOTLOOP — array-in / array-out tight loop wrapper]'             : '') +
+                (useGammaLUT ? '  [GAMMA-LUT — lossy ~4096-entry LUT replacing Math.pow]'           : '') + '\n' +
+            '// chain: ' + this.pipeline.map(function (s) { return s.stageName; }).join(' > ') + '\n' +
+            '// inputs assumed: device RGB floats in input[0..2], 0..1\n';
+
+        var src;
+        var fn;
+        var mode = profilable ? 'profilable' : (hotLoop ? 'hotLoop' : (instrument ? 'instrument' : 'plain'));
+
+        if (hotLoop) {
+            // -------- hot-loop mode --------
+            // Wrap the per-pixel body in a tight outer for-loop and write
+            // results straight into the caller's output buffer. Removes the
+            // two biggest hidden costs above the body itself:
+            //   1. the [d0,d1,d2,d3] array allocation per pixel (GC pressure)
+            //   2. the function-call overhead of invoking fn(input) per pixel
+            // V8 keeps the entire loop body in one TurboFan-compiled blob,
+            // so register pressure for r,g,b,X,Y,Z,d0..d3 stays low.
+            //
+            // Signature: fn(input, output, n)
+            //   input   — flat interleaved typed array, stride = inStride (3 for RGB)
+            //   output  — flat interleaved typed array, stride = outStride (basis.length)
+            //   n       — pixel count
+            //   returns output (for chaining)
+            var basis    = this._compile_output_basis();
+            var outStride = basis.length;
+            var inStride  = 3;   // POC: hardcoded RGB input. Will widen with CMYK-input emitters.
+
+            var loopBodyParts = [];
+            for (var hk = 0; hk < stageEntries.length; hk++) {
+                var heK = stageEntries[hk];
+                loopBodyParts.push('        ' + heK.header);
+                loopBodyParts.push(heK.body);
+            }
+            var writeOuts = [];
+            for (var wo = 0; wo < basis.length; wo++) {
+                writeOuts.push('        output[_oi + ' + wo + '] = ' + basis[wo] + ';');
+            }
+
+            src =
+                headerBanner +
+                '"use strict";\n' +
+                'return function compiledTransformLoop(input, output, n) {\n' +
+                '    let r = 0, g = 0, b = 0;\n' +
+                '    let X = 0, Y = 0, Z = 0;\n' +
+                '    let pcsL = 0, pcsa = 0, pcsb = 0;\n' +
+                '    let d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0, d5 = 0, d6 = 0, d7 = 0;\n' +
+                '    for (let _i = 0; _i < n; _i++) {\n' +
+                '        const _ii = _i * ' + inStride  + ';\n' +
+                '        const _oi = _i * ' + outStride + ';\n' +
+                '        r = input[_ii]; g = input[_ii + 1]; b = input[_ii + 2];\n' +
+                loopBodyParts.join('\n') + '\n' +
+                writeOuts.join('\n') + '\n' +
+                '    }\n' +
+                '    return output;\n' +
+                '};\n';
+
+            fn = new Function('store', src)(store);
+        } else if (profilable) {
+            // -------- profilable mode --------
+            // Lift each stage's body into its own named function expression
+            // at FACTORY scope, closed over the shared state vars (r, g, b,
+            // X, Y, Z, pcsL, pcsa, pcsb, d0..d7). Per-pixel fn is just a
+            // straight-line list of named calls, so the V8 CPU profiler
+            // attributes samples per stage instead of one giant compiled fn.
+            //
+            // Naming: each stage becomes  _s{idx}_{stageName_safe}  so the
+            // profiler shows e.g. "_s0_stage_Gamma_Inverse" / "_s4_trilinearInterp3D".
+            // Diagnostic stages (Start/END/history markers) get their own no-op
+            // named functions too, so the profiler reports they were called.
+            var safeName = function (s) { return s.replace(/[^A-Za-z0-9_]/g, '_'); };
+            var stageDecls = [];
+            var stageCalls = [];
+            for (var k = 0; k < stageEntries.length; k++) {
+                var e   = stageEntries[k];
+                var fnm = '_s' + e.idx + '_' + safeName(e.sname);
+                stageDecls.push('  ' + e.header);
+                stageDecls.push('  function ' + fnm + '() {');
+                stageDecls.push(e.body);
+                stageDecls.push('  }');
+                stageDecls.push('');
+                stageCalls.push('    ' + fnm + '();');
+            }
+
+            var factorySrc =
+                headerBanner +
+                '"use strict";\n' +
+                '// shared state at factory scope — closed over by both stage fns and the per-pixel entry\n' +
+                'var r = 0, g = 0, b = 0;\n' +
+                'var X = 0, Y = 0, Z = 0;\n' +
+                'var pcsL = 0, pcsa = 0, pcsb = 0;\n' +
+                'var d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0, d5 = 0, d6 = 0, d7 = 0;\n' +
+                '\n' +
+                stageDecls.join('\n') +
+                '\n' +
+                'return function compiledTransform(input) {\n' +
+                '    r = input[0]; g = input[1]; b = input[2];\n' +
+                stageCalls.join('\n') + '\n' +
+                '    ' + returnExpr + '\n' +
+                '};\n';
+            src = factorySrc;
+            fn  = new Function('store', factorySrc)(store);
+        } else {
+            // -------- plain or instrument mode --------
+            // Both produce a single per-pixel function. Instrument adds
+            // hrtime taps around each stage body; plain leaves them inline.
+            var instrumentPrelude = instrument
+                ? '// instrumentation aliases (per-stage hrtime taps)\n' +
+                  'const _hr        = store._instHr;\n' +
+                  'const _instTime  = store._instTime;\n' +
+                  'const _instCalls = store._instCalls;\n' +
+                  'store._instCount++;\n'
+                : '';
+
+            var bodyParts = [];
+            for (var j = 0; j < stageEntries.length; j++) {
+                var ej = stageEntries[j];
+                bodyParts.push(ej.header);
+                if (instrument) {
+                    bodyParts.push('{ const _tB = _hr();');
+                    bodyParts.push(ej.body);
+                    bodyParts.push('  const _tA = _hr(); _instTime[' + ej.idx + '] += Number(_tA - _tB); _instCalls[' + ej.idx + ']++; }');
+                } else {
+                    bodyParts.push(ej.body);
+                }
+            }
+
+            src =
+                headerBanner +
+                '"use strict";\n' +
+                'var r = input[0], g = input[1], b = input[2];\n' +
+                'var X = 0, Y = 0, Z = 0;\n' +
+                'var pcsL = 0, pcsa = 0, pcsb = 0;\n' +
+                'var d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0, d5 = 0, d6 = 0, d7 = 0;\n' +
+                '\n' +
+                instrumentPrelude +
+                bodyParts.join('\n') +
+                '\n' +
+                returnExpr + '\n';
+
+            fn = new Function('store', 'input', src).bind(null, store);
+        }
+
+        return {
+            source:   src,
+            store:    store,
+            fn:       fn,
+            mode:     mode,
+            options:  compileOptions,
+            coverage: coverage
+        };
     }
 
-    _buildRawStoreForCompile() {
-        return { version: "1.2.0", note: "placeholder" };
+    /**
+     * Format the per-stage instrumentation captured by an instrumented
+     * compile()'d function. Pass the object returned by compile() — reads
+     * compiled.store._instTime / _instCalls / _instCount / _instLabels.
+     *
+     * Returns a printable report string (also returned as `lines` array of
+     * { stageName, calls, totalNs, perCallNs, percent }).
+     *
+     * Caveats: hrtime() itself adds ~50-100ns per measurement point, so the
+     * absolute "ns per stage" values are inflated. RELATIVE proportions
+     * (the percent column) are the trustworthy bit — that's what tells you
+     * which stage is hottest. For an absolute number, run an uninstrumented
+     * compile() on the same chain in parallel and compare totals.
+     */
+    static instrumentReport(compiled) {
+        var s = compiled && compiled.store;
+        if (!s || !s._instTime) {
+            return 'instrumentReport: this compiled fn was not built with { instrument: true }';
+        }
+        var n      = s._instCount | 0;
+        var labels = s._instLabels || [];
+        var times  = s._instTime;
+        var calls  = s._instCalls;
+
+        var totalNs = 0;
+        for (var i = 0; i < times.length; i++) totalNs += times[i];
+
+        var lines = [];
+        var rows  = [];
+        lines.push('===== per-stage instrumentation report =====');
+        lines.push('runs:        ' + n + ' calls of compiled fn');
+        lines.push('total time:  ' + (totalNs / 1e6).toFixed(2) + ' ms across all stages');
+        lines.push('per-call:    ' + (n > 0 ? (totalNs / n).toFixed(1) : '?') + ' ns/pixel (sum of stages, includes timer overhead)');
+        lines.push('');
+        lines.push('  idx  stage                                       calls         %       ns/call');
+        lines.push('  ---  ------------------------------------------  ----------  -------  --------');
+        for (var i = 0; i < times.length; i++) {
+            var pct       = totalNs > 0 ? (100 * times[i] / totalNs) : 0;
+            var perCallNs = calls[i] > 0 ? (times[i] / calls[i])     : 0;
+            var label     = labels[i] || '?';
+            if (label.length > 42) label = label.slice(0, 39) + '...';
+            label = label.padEnd(42, ' ');
+            var idxStr    = String(i).padStart(3, ' ');
+            var callStr   = String(calls[i]).padStart(10, ' ');
+            var pctStr    = pct.toFixed(2).padStart(6, ' ') + '%';
+            var perStr    = perCallNs.toFixed(1).padStart(8, ' ');
+            lines.push('  ' + idxStr + '  ' + label + '  ' + callStr + '  ' + pctStr + '  ' + perStr);
+            rows.push({ stageName: labels[i], calls: calls[i], totalNs: times[i], perCallNs: perCallNs, percent: pct });
+        }
+        return { text: lines.join('\n'), rows: rows, totalNs: totalNs, runs: n };
+    }
+
+    /** Reset the per-stage counters on an instrumented compiled fn (for warmup). */
+    static instrumentReset(compiled) {
+        var s = compiled && compiled.store;
+        if (!s || !s._instTime) return;
+        s._instCount = 0;
+        s._instTime.fill(0);
+        s._instCalls.fill(0);
+    }
+
+    /** Runtime fallback for stages without a JS emitter. */
+    _compile_emit_runtime_fallback(idx, stage) {
+        // Best-effort: feed whichever set of locals the stage's input
+        // encoding implies, into a temp array, call the original funct,
+        // then unpack into whichever set the output encoding implies.
+        // Conservative — just enough to keep the chain runnable until a
+        // real emitter lands.
+        var inEnc  = stage.inputEncoding;
+        var outEnc = stage.outputEncoding;
+
+        var inVars  = this._compile_basis_for(inEnc);
+        var outVars = this._compile_basis_for(outEnc);
+
+        var lines = [];
+        lines.push('{');
+        lines.push('  var _in = [' + inVars.join(', ') + '];');
+        lines.push('  var _out = store._fb_' + idx + '_funct.call(store._fb_' + idx + '_self, _in, store._fb_' + idx + '_stageData, null);');
+        for (var c = 0; c < outVars.length; c++) {
+            lines.push('  ' + outVars[c] + ' = _out[' + c + '];');
+        }
+        lines.push('}');
+        return lines.join('\n');
+    }
+
+    /** Map a stage encoding + a default channel count to local names. */
+    _compile_basis_for(encoding) {
+        // 1 = PCSv2, others (0 device, 2 PCSv4, 3 PCSXYZ) → keep simple defaults.
+        // The fallback only fires for stages we haven't emitted yet, so this
+        // table is intentionally tiny — extend as new emitters land.
+        if (encoding === 3 /* PCSXYZ */) return ['X', 'Y', 'Z'];
+        if (encoding === 1 /* PCSv2 */)  return ['pcsL', 'pcsa', 'pcsb'];
+        if (encoding === 2 /* PCSv4 */)  return ['pcsL', 'pcsa', 'pcsb'];
+        // device (0) or unknown → assume 4-channel device for output stages
+        // and 3-channel for input stages. This is rough; the POC chain
+        // never exercises the fallback so the rough heuristic is fine.
+        return ['d0', 'd1', 'd2', 'd3'];
+    }
+
+    /** Resolve the output variable list (e.g. ['d0','d1','d2','d3']) for the
+     *  pipeline by walking back from the last stage to the last one that
+     *  carries informative outputEncoding (END/debug markers don't). */
+    _compile_output_basis() {
+        var lastStage = this.pipeline[this.pipeline.length - 1];
+        var outEnc = lastStage && lastStage.outputEncoding;
+        var basis  = this._compile_basis_for(outEnc);
+        if (outEnc === false || outEnc == null) {
+            for (var i = this.pipeline.length - 1; i >= 0; i--) {
+                if (this.pipeline[i].outputEncoding !== false && this.pipeline[i].outputEncoding != null) {
+                    basis = this._compile_basis_for(this.pipeline[i].outputEncoding);
+                    break;
+                }
+            }
+        }
+        return basis;
+    }
+
+    /** Emit the final `return [...]` based on the last stage's output. */
+    _compile_emit_return(lastStage) {
+        var basis = this._compile_output_basis();
+        return 'return [' + basis.join(', ') + '];';
     }
 }
 

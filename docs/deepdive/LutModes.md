@@ -14,7 +14,8 @@
 [← Index](./README.md) ·
 [Architecture](./Architecture.md) ·
 [JIT inspection](./JitInspection.md) ·
-[WASM kernels](./WasmKernels.md)
+[WASM kernels](./WasmKernels.md) ·
+[Compiled pipeline](./CompiledPipeline.md)
 
 ---
 

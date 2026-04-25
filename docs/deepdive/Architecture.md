@@ -14,7 +14,8 @@
 [← Index](./README.md) ·
 [LUT modes](./LutModes.md) ·
 [JIT inspection](./JitInspection.md) ·
-[WASM kernels](./WasmKernels.md)
+[WASM kernels](./WasmKernels.md) ·
+[Compiled pipeline](./CompiledPipeline.md)
 
 ---
 

@@ -34,7 +34,7 @@ future-facing only.
 - [v1.3 — 16-bit input/output across int + WASM LUT kernels](#v13--16-bit-inputoutput-across-int--wasm-lut-kernels)
     - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
     - [Compat harness — `bench/lcms_compat/`](#compat-harness--benchlcms_compat)
-- [v1.4 — Code generation for non-LUT pipelines + smarter `'auto'`](#v14--code-generation-for-non-lut-pipelines--smarter-auto)
+- [v1.4 — Compiled non-LUT transforms + `toModule()` distribution](#v14--compiled-non-lut-transforms--tomodule-distribution)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [Candidate micro-optimisations — float-wasm-scalar / f32 CLUT / float-wasm-simd](#candidate-micro-optimisations)
@@ -386,17 +386,33 @@ the complexity. We don't commit to either direction pre-measurement.
 
 ---
 
-## v1.4 — Code generation for non-LUT pipelines + smarter `'auto'`
+## v1.4 — Compiled non-LUT transforms + `toModule()` distribution
 
-> **Scope note.** v1.4 was originally "WASM SIMD for matrix-shaper
-> transforms". `'auto'` moved up to v1.2. Matrix-shaper alone is a
-> smaller target than the original 1D POC findings suggest — a
-> general **Transform-time code generator** for the non-LUT pipeline
-> is a strictly larger win that subsumes it. The 1D POC result
-> (67.7× WASM SIMD ceiling on no-gather math, see Historical record
-> below) is the evidence that emitted code of this shape has a very
-> high ceiling in both JS-through-TurboFan and WASM-SIMD lowerings.
-> What was "one kernel" becomes "one codegen family".
+> **Scope reframe (Apr 2026, post-POC).** v1.4 was originally "WASM
+> SIMD for matrix-shaper transforms", then broadened to "code
+> generation for non-LUT pipelines + smarter `'auto'`". The
+> [POC results](./deepdive/CompiledPipeline.md) flipped the
+> priority order:
+>
+> - The **JS-emit path is already enough** for the accuracy tier:
+>   ~5× over the runtime walker on sRGB→CMYK, bit-exact, no WASM
+>   needed. The bottleneck is `Math.pow`, which WASM doesn't make
+>   materially faster (the LUT does).
+> - The **`toModule()` distribution story** turned out to be the
+>   marquee feature — a unique capability nothing else in the JS
+>   colour-management space offers. ~50–80 KB standalone, dep-free,
+>   bit-exact transform modules from any source/dest profile pair.
+> - The **WASM emit target is deferred to v1.5+**. Worth keeping on
+>   the radar (the 1D POC ceiling stands), but the dev complexity
+>   no longer pays back for the workload that actually benefits.
+>
+> Headline order is now: (1) finish stage-emitter coverage,
+> (2) ship `getSource()` / `toModule()`, (3) document the
+> coverage matrix, (4) stay opt-in (do NOT auto-route in
+> `'auto'` yet — LUT modes remain the default for bulk image
+> work). See
+> [deepdive/CompiledPipeline.md § Should we ship this](./deepdive/CompiledPipeline.md#should-we-ship-this-as-default--honest-assessment)
+> for the full reasoning.
 
 ### Non-LUT pipeline code generation (`new Function` + emitted WASM)
 
@@ -605,6 +621,39 @@ more, expand to CMYK. If it's less than 2×, shelve — `lutMode: 'int'`
 and `lutMode: 'wasm-*'` cover the speed-sensitive use cases, and the
 accuracy path staying at 5 MPx/s is tolerable for its use cases
 (single colours, UI pickers, ΔE reporting).
+
+### POC `compile()` options — what's shipped now
+
+The proof-of-concept `Transform.compile()` (sRGB → CMYK chain,
+covered in detail in
+[deepdive/CompiledPipeline.md](./deepdive/CompiledPipeline.md))
+ships with four opt-in flags that make the emitter a useful
+measurement vehicle for the larger v1.4 effort:
+
+```js
+t.compile({
+    target:      'js',     // emit target — only 'js' for now (WASM is the v1.4 backend)
+    instrument:  false,    // wrap each stage in hrtime() for relative timing
+    profilable:  false,    // lift each stage into its own NAMED fn for V8 --prof attribution
+    useGammaLUT: false,    // 4096-entry LUT replaces Math.pow(x, 2.4) — LOSSY, ~3× speedup
+    hotLoop:     false,    // wrap body in for(_i…); fn(input, output, n) instead of fn(pixel)
+    strict:      true,     // throw if any stage lacks emit_<target>_<stageName>
+});
+```
+
+`useGammaLUT` and `hotLoop` are the two perf-meaningful flags;
+`useGammaLUT` alone reaches **2.76× over plain compile, 4.92×
+over `t.forward()`** on sRGB→CMYK, both stacked reach **3.01× /
+5.36×**. `instrument` and `profilable` are diagnostic — they
+exist so we can keep measuring as new emitters land.
+
+These are POC-shipped, not the v1.4 contract. The v1.4 work
+generalises this to:
+- multi-channel input preambles (CMYK input, not just RGB),
+- emitters for the remaining stages (`tetrahedralInterp4D`,
+  `stage_PCSv2_to_PCSv4`, adaptation, absolute-intent),
+- `getSource()` / `toModule()` (above),
+- a WASM emit target sharing the same stage-emitter shape.
 
 ### Per-Transform microbench for `'auto'`
 
@@ -927,6 +976,97 @@ via `<script>`, work from `file://` so devs can just download + open):
   inside the gamut shell). Before shipping: relicense to match
   engine, drop jQuery dependency, swap `require` for UMD /
   `<script>` usage, Three.js via CDN.
+- **`live-video-softproof.html`** — *(late-night brain-dump, capture
+  for later.)* Side-by-side `<video>` elements, HD (720p probably —
+  lots of other overhead on the page, and 30 fps is already the
+  "oh wow" threshold; don't need 60). Left = original sRGB, right =
+  live CMYK softproof with gamut warnings, profile swappable from a
+  dropdown mid-playback.
+
+  The trick that makes this cheap: **bake the gamut warning into
+  the LUT at build time.** For each grid point in the RGB→CMYK→RGB
+  softproof LUT, also compute ΔE₀₀ between the input RGB (converted
+  to Lab) and the round-tripped RGB (converted to Lab). If ΔE
+  exceeds a threshold, stamp the output cell as either:
+
+    1. **Clobber mode** — overwrite the RGB with pure RED (simple,
+       one demo-line change, produces pink smears along gamut
+       boundaries due to tetra interp between "clean" and "warning"
+       cells — which actually reads as a nice soft warning gradient
+       rather than a bug).
+    2. **Alpha-channel mode** *(preferred)* — keep the real
+       softproof RGB in the first 3 output channels, store
+       `clamp(ΔE / threshold, 0, 1)` in a 4th alpha channel. The
+       existing `outputChannels = 4` LUT path (`src/Transform.js`
+       around `create3DDeviceLUT` / the CMYK output branch) already
+       carries 4-ch output cells, so the LUT layout doesn't change
+       — the interpolator just writes RGBA instead of RGB. Final
+       compositing is a single `mix(rgb, warning_tint, a)` in the
+       canvas draw, so the warning colour / zebra stripes / desat
+       stays UI-tuneable without rebuilding the LUT.
+
+  The headline is **zero hot-path cost.** The WASM SIMD tetra
+  kernel doesn't know or care whether a cell carries a softproof
+  RGB or a warning-stamped one — it just blends 8 corners. All the
+  ΔE work amortises into the ~50-100 ms LUT bake. Profile change
+  on the fly = rebuild LUT on a worker, atomic pointer swap between
+  frames (ping-pong two LUT buffers so a change mid-frame doesn't
+  tear).
+
+  Video → canvas pipeline: `ctx.drawImage(videoElement, ...)` on a
+  hidden 2D canvas, `getImageData()` for the pixel buffer, feed to
+  `ImageHelper.toSoftproofRGBA()`, `putImageData()` to the visible
+  canvas. Modern browsers also expose `VideoFrame` (WebCodecs) +
+  `OffscreenCanvas` + `requestVideoFrameCallback()` which skips a
+  CPU copy and lines up with the decoder cadence — worth using if
+  available, fallback to the `drawImage` path otherwise.
+
+  Budget check: 1280 × 720 @ 30 fps = **27.6 MPx/s**, vs the SIMD
+  3D path already sitting at hundreds of MPx/s per
+  `docs/Performance.md` — plenty of slack even after `drawImage`
+  round-trip overhead, and a generous buffer for a side-by-side
+  "original vs softproof" layout (double the pixel count). 1080p30
+  = 62 MPx/s, also reachable; 4K30 = 249 MPx/s sits at the edge of
+  what the kernel can sustain and probably wants OffscreenCanvas +
+  worker threading. Start at 720p, see where it lands.
+
+  Demo value: *"here's your video on a press, right now, with the
+  out-of-gamut areas glowing."* Profile-swap dropdown makes the
+  difference between FOGRA39 and SWOP visible in real-time — which
+  is a thing colour-managed workflows normally can only show on
+  stills, and only after a render-wait. Fits naturally after
+  `soft-proof-image.html` as the "same idea but moving" follow-up.
+
+  **Pitch voice (lean all the way in).** The page leads with a
+  single oversized headline — something like:
+
+  > **"Ever wondered how your holiday video would look printed on
+  > a newspaper? No? Well now you can find out anyway."**
+
+  Other lines in rotation, pick the funniest on the day:
+
+  - *"Logo - The video PRINTER" in the theme of old world hand panted photo cars*
+  - *"The world's first — and, frankly, most unnecessary — real-time
+    video softproofing engine."*
+  - *"Because somewhere, someone needs to know whether their cat
+    video is CMYK-safe for FOGRA39. That person is probably not
+    you. But the button is right there."*
+  - *"Live video, live press simulation, live gamut warnings. Three
+    things nobody asked for, bundled into one web page."*
+  - *"Print your videos! (Figuratively. Please do not actually do
+    this.)"*
+  - *"Watch your wedding footage go out of gamut in real time. It's
+    fine. The highlights were always going to clip on coated
+    stock anyway."*
+
+  A small "Why?" link under the headline opens a modal that, with
+  a completely straight face, explains the engineering: baked
+  gamut-warning LUT, zero hot-path cost, profile ping-pong,
+  tetrahedral interpolation of warning cells as a feature not a
+  bug. Joke on the tin, receipts in the footnote. The contrast is
+  the whole gag — and it quietly demonstrates that the engine is
+  fast enough to do a genuinely silly thing at 30 fps, which is the
+  actual sales pitch dressed up as a punchline.
 
 Each ~100-200 lines of vanilla JS, no framework, no build step.
 Hosted on GitHub Pages so the README can link to live demos ("Try

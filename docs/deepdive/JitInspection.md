@@ -14,7 +14,8 @@
 [← Index](./README.md) ·
 [Architecture](./Architecture.md) ·
 [LUT modes](./LutModes.md) ·
-[WASM kernels](./WasmKernels.md)
+[WASM kernels](./WasmKernels.md) ·
+[Compiled pipeline](./CompiledPipeline.md)
 
 ---
 

@@ -14,7 +14,8 @@
 [← Index](./README.md) ·
 [Architecture](./Architecture.md) ·
 [LUT modes](./LutModes.md) ·
-[JIT inspection](./JitInspection.md)
+[JIT inspection](./JitInspection.md) ·
+[Compiled pipeline](./CompiledPipeline.md)
 
 ---
 

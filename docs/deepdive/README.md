@@ -77,6 +77,7 @@ recipes.
 | [LUT modes](./LutModes.md) | `float` / `int` / `int-wasm-scalar` / `int-wasm-simd` — what each mode is, when it's picked, how it's bit-exact vs the reference |
 | [JIT inspection](./JitInspection.md) | V8 emitted x64 assembly walked line-by-line. Working-set size, instruction mix, move classification, the "named temps" micro-test. Why the scalar JS kernel is as fast as it is |
 | [WASM kernels](./WasmKernels.md) | Hand-written `.wat` for 3D and 4D tetrahedral interp. SIMD channel-parallel layout, rolling-shutter pack, the V8 inliner lesson. Reproduction recipes |
+| [Compiled pipeline (POC)](./CompiledPipeline.md) | `transform.compile()` — turning the runtime stage walker into one straight-line JS function per profile chain. 1.75× on sRGB→CMYK, three measurement methods, and the path to `getSource()` / `toModule()` |
 
 ## Learn more (external)
 
