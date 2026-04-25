@@ -65,6 +65,15 @@ has a deep-dive page behind it if you want the receipts.
   plugin". The comparison is really about *specialisation*, not language
   choice. → [Performance](../Performance.md)
 
+- **And the *answers* match too — jsCE's float pipeline agrees with
+  lcms's float pipeline within visual-noise levels** across a
+  130-file ICC oracle suite (worst case 0.06 ΔE76 on Lab outputs,
+  1.24 LSB on RGB, 0.04 % ink on CMYK). The one structural
+  divergence (~17 LSB on a niche grey-1c Perceptual path) is fully
+  diagnosed and parked with a documented reason. We're a faithful
+  float-precision peer, not a port. →
+  [Accuracy](./Accuracy.md)
+
 The rest of this folder is the evidence. If any of these claims smell
 wrong, the detail pages carry the asm dumps, bench scripts, and repro
 recipes.
@@ -78,6 +87,7 @@ recipes.
 | [JIT inspection](./JitInspection.md) | V8 emitted x64 assembly walked line-by-line. Working-set size, instruction mix, move classification, the "named temps" micro-test. Why the scalar JS kernel is as fast as it is |
 | [WASM kernels](./WasmKernels.md) | Hand-written `.wat` for 3D and 4D tetrahedral interp. SIMD channel-parallel layout, rolling-shutter pack, the V8 inliner lesson. Reproduction recipes |
 | [Compiled pipeline (POC)](./CompiledPipeline.md) | `transform.compile()` — turning the runtime stage walker into one straight-line JS function per profile chain. 1.75× on sRGB→CMYK, three measurement methods, and the path to `getSource()` / `toModule()` |
+| [Accuracy](./Accuracy.md) | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
 
 ## Learn more (external)
 

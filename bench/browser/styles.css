@@ -22,9 +22,12 @@
     --bar:          linear-gradient(90deg, #4ade80 0%, #a3e635 100%);
     --bar-bg:       #1a212b;
     --bar-int:      #38bdf8;     /* sky-400 for the int reference baseline */
+    --bar-int16:    #22d3ee;     /* cyan-400 for int16 - sibling shade of int */
     --bar-float:    #c084fc;     /* purple-400 for float */
     --bar-wasm:     #a3e635;     /* lime-400 for WASM */
     --bar-simd:     #4ade80;     /* green-400 for SIMD */
+    --bar-int16ws:  #2dd4bf;     /* teal-400 for int16-wasm-scalar (int16 family + wasm hue) */
+    --bar-int16wsi: #14b8a6;     /* teal-500 for int16-wasm-simd  (int16 family + simd hue) */
     --bar-lcms:     #fb7185;     /* rose-400 for lcms */
     --bar-nolut:    #fb923c;     /* orange-400 for the accuracy (no-LUT) path */
     --shadow:       0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.15);
@@ -366,12 +369,15 @@ table.results td.is-best { color: var(--accent); font-weight: 600; }
     border-radius: 2px;
     transition: width 0.2s ease;
 }
-.bar-fill.b-float { background: var(--bar-float); }
-.bar-fill.b-int   { background: var(--bar-int); }
-.bar-fill.b-wasm  { background: var(--bar-wasm); }
-.bar-fill.b-simd  { background: var(--bar-simd); }
-.bar-fill.b-lcms  { background: var(--bar-lcms); }
-.bar-fill.b-nolut { background: var(--bar-nolut); }
+.bar-fill.b-float    { background: var(--bar-float); }
+.bar-fill.b-int      { background: var(--bar-int); }
+.bar-fill.b-int16    { background: var(--bar-int16); }
+.bar-fill.b-wasm     { background: var(--bar-wasm); }
+.bar-fill.b-simd     { background: var(--bar-simd); }
+.bar-fill.b-int16ws  { background: var(--bar-int16ws); }
+.bar-fill.b-int16wsi { background: var(--bar-int16wsi); }
+.bar-fill.b-lcms     { background: var(--bar-lcms); }
+.bar-fill.b-nolut    { background: var(--bar-nolut); }
 
 .mode-badge {
     display: inline-block;
@@ -383,12 +389,15 @@ table.results td.is-best { color: var(--accent); font-weight: 600; }
     border: 1px solid var(--border);
 }
 /* mode badge: also reused in summary cards for consistent colour mapping */
-.mode-badge.b-float { color: var(--bar-float); border-color: var(--bar-float); }
-.mode-badge.b-int   { color: var(--bar-int);   border-color: var(--bar-int); }
-.mode-badge.b-wasm  { color: var(--bar-wasm);  border-color: var(--bar-wasm); }
-.mode-badge.b-simd  { color: var(--bar-simd);  border-color: var(--bar-simd); }
-.mode-badge.b-lcms  { color: var(--bar-lcms);  border-color: var(--bar-lcms); }
-.mode-badge.b-nolut { color: var(--bar-nolut); border-color: var(--bar-nolut); }
+.mode-badge.b-float    { color: var(--bar-float);    border-color: var(--bar-float); }
+.mode-badge.b-int      { color: var(--bar-int);      border-color: var(--bar-int); }
+.mode-badge.b-int16    { color: var(--bar-int16);    border-color: var(--bar-int16); }
+.mode-badge.b-wasm     { color: var(--bar-wasm);     border-color: var(--bar-wasm); }
+.mode-badge.b-simd     { color: var(--bar-simd);     border-color: var(--bar-simd); }
+.mode-badge.b-int16ws  { color: var(--bar-int16ws);  border-color: var(--bar-int16ws); }
+.mode-badge.b-int16wsi { color: var(--bar-int16wsi); border-color: var(--bar-int16wsi); }
+.mode-badge.b-lcms     { color: var(--bar-lcms);     border-color: var(--bar-lcms); }
+.mode-badge.b-nolut    { color: var(--bar-nolut);    border-color: var(--bar-nolut); }
 
 td.mode-cell.demoted .mode-badge::after {
     content: ' \2192 demoted';

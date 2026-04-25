@@ -46,13 +46,16 @@
     <h2>Full comparison &mdash; every direction &times; every mode</h2>
     <p class="lead">
         Runs all four colour-space directions (RGB&rarr;RGB, RGB&rarr;CMYK,
-        CMYK&rarr;RGB, CMYK&rarr;CMYK) against five jsColorEngine modes
+        CMYK&rarr;RGB, CMYK&rarr;CMYK) against eight jsColorEngine modes
         (<code>no-LUT</code>, <code>float</code>, <code>int</code>,
-        <code>int-wasm-scalar</code>, <code>int-wasm-simd</code>) plus
-        lcms-wasm in three configurations (<code>default</code>,
-        <code>HIGHRESPRECALC</code>, <code>NOOPTIMIZE</code>). Per cell
-        measures <em>LUT build time</em>, <em>cold first transform</em>, and
-        the <em>hot run median ms/iter</em>.
+        <code>int16</code>, <code>int16-wasm-scalar</code>,
+        <code>int16-wasm-simd</code>, <code>int-wasm-scalar</code>,
+        <code>int-wasm-simd</code>) plus lcms-wasm in three flag
+        configurations &times; two I/O widths (<code>default</code>,
+        <code>HIGHRESPRECALC</code>, <code>NOOPTIMIZE</code> at both 8-bit
+        and 16-bit). Per cell measures <em>LUT build time</em>,
+        <em>cold first transform</em>, and the <em>hot run median
+        ms/iter</em>.
     </p>
 
     <!-- best-of summary, four cards grouped by use-case x engine -->
@@ -396,11 +399,17 @@
             <select id="mode-warmup">
                 <option value="no-lut">jsColorEngine no-LUT (f64)</option>
                 <option value="float">jsColorEngine float</option>
-                <option value="int" selected>jsColorEngine int</option>
+                <option value="int" selected>jsColorEngine int (u8 I/O)</option>
+                <option value="int16">jsColorEngine int16 (u16 I/O)</option>
+                <option value="int16-wasm-scalar">jsColorEngine int16-wasm-scalar</option>
+                <option value="int16-wasm-simd">jsColorEngine int16-wasm-simd</option>
                 <option value="int-wasm-scalar">jsColorEngine int-wasm-scalar</option>
                 <option value="int-wasm-simd">jsColorEngine int-wasm-simd</option>
-                <option value="lcms-highres">lcms-wasm HIGHRESPRECALC</option>
-                <option value="lcms-noopt">lcms-wasm NOOPTIMIZE (no LUT)</option>
+                <option value="lcms-highres">lcms-wasm HIGHRES (8-bit)</option>
+                <option value="lcms-noopt">lcms-wasm NOOPT  (8-bit, no LUT)</option>
+                <option value="lcms-default-16">lcms-wasm default 16-bit</option>
+                <option value="lcms-highres-16">lcms-wasm HIGHRES 16-bit</option>
+                <option value="lcms-noopt-16">lcms-wasm NOOPT  16-bit (no LUT)</option>
             </select>
         </label>
         <label>Pixels per iter
@@ -455,10 +464,14 @@
             <select id="mode-sweep">
                 <option value="no-lut">jsColorEngine no-LUT (f64)</option>
                 <option value="float">jsColorEngine float</option>
-                <option value="int" selected>jsColorEngine int</option>
+                <option value="int" selected>jsColorEngine int (u8 I/O)</option>
+                <option value="int16">jsColorEngine int16 (u16 I/O)</option>
+                <option value="int16-wasm-scalar">jsColorEngine int16-wasm-scalar</option>
+                <option value="int16-wasm-simd">jsColorEngine int16-wasm-simd</option>
                 <option value="int-wasm-scalar">jsColorEngine int-wasm-scalar</option>
                 <option value="int-wasm-simd">jsColorEngine int-wasm-simd</option>
-                <option value="lcms-highres">lcms-wasm HIGHRES</option>
+                <option value="lcms-highres">lcms-wasm HIGHRES (8-bit)</option>
+                <option value="lcms-highres-16">lcms-wasm HIGHRES 16-bit</option>
             </select>
         </label>
         <label>Hot iters per size
@@ -537,11 +550,13 @@
         <li><strong>jsColorEngine no-LUT (f64)</strong> &mdash; <code>buildLut: false</code>. No CLUT is built; every pixel walks the full per-stage pipeline (curves &rarr; matrix &rarr; LUT &rarr; PCS &rarr; inverse&hellip;) in 64-bit float. <em>This is the accuracy configuration</em> &mdash; use it when you need the most faithful math jsColorEngine can produce. Slowest by design; roughly comparable to <code>lcms-wasm NOOPTIMIZE</code>.</li>
         <li><strong>jsColorEngine float</strong> &mdash; <code>buildLut: true</code> + <code>lutMode: 'float'</code>. Float64Array CLUT (grid size shown in the <em>LUT</em> column, typically 33<sup>3</sup> for RGB and 33<sup>4</sup> for CMYK), tetrahedral interp in f64. Same float math as <em>no-LUT</em> for the interp step, but the pipeline is pre-collapsed to a LUT so it's much faster. If you want "float accuracy without the f64-pipeline tax", this is it.</li>
         <li><strong>jsColorEngine int</strong> &mdash; Uint16Array CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via <code>Math.imul</code>. 8-bit I/O, bit-exact vs the float path. Added in v1.1 as the first non-float kernel.</li>
+        <li><strong>jsColorEngine int16 (u16 I/O)</strong> &mdash; v1.3 16-bit-I/O JS kernel: <code>Uint16Array</code> CLUT scaled to the full [0..0xFFFF] range with Q0.13 fractional weights. Identity transforms round-trip to within &le;1 LSB of u16. Triggered by <code>{ dataFormat: 'int16', buildLut: true, lutMode: 'int16' }</code>; with no explicit <code>lutMode</code> the auto-resolver demotes through <code>int16-wasm-simd</code> &rarr; <code>int16-wasm-scalar</code> &rarr; <code>int16</code> based on host capability. Targeted at HDR / 16-bit TIFF / measurement workflows where banding from u8 quantisation is unacceptable.</li>
+        <li><strong>jsColorEngine int16-wasm-scalar</strong> &mdash; v1.3 WASM port of the JS u16 kernel. Same Q0.13 CLUT, same arithmetic, bit-exact with the JS u16 row (0 LSB delta). Headline win: ~1.4&times; over <code>int16</code> on 3D, modest on 4D.</li>
+        <li><strong>jsColorEngine int16-wasm-simd</strong> &mdash; v1.3 WASM SIMD u16 kernel (channel-parallel <code>v128</code>, Q0.13). Bit-exact with both <code>int16</code> and <code>int16-wasm-scalar</code> &mdash; SIMD is a pure speed lift, not a precision trade. ~1.7&ndash;2.4&times; over <code>int16-wasm-scalar</code>, ~2.0&ndash;2.6&times; over JS <code>int16</code>, ~3.9&ndash;4.9&times; over the fastest <code>lcms 16-bit</code> row. Falls back to <code>int16-wasm-scalar</code> on hosts without WASM SIMD.</li>
         <li><strong>jsColorEngine int-wasm-scalar</strong> &mdash; same int math compiled to WebAssembly. ~1.4&times; over <code>int</code> on 3D, ~1.2&times; on 4D.</li>
         <li><strong>jsColorEngine int-wasm-simd</strong> &mdash; channel-parallel WASM SIMD. ~3.0&ndash;3.5&times; over <code>int</code> on 3D, ~2.1&ndash;2.6&times; on 4D. Falls back to scalar if your browser lacks WASM SIMD.</li>
-        <li><strong>lcms-wasm default</strong> &mdash; LittleCMS 2.16 compiled to wasm32, <code>flags = 0</code>. What every real-world lcms app uses &mdash; lcms picks the precalc LUT grid from the table below based on input channel count. Pinned heap buffers.</li>
-        <li><strong>lcms-wasm HIGHRES</strong> &mdash; same, with <code>cmsFLAGS_HIGHRESPRECALC</code>: 49-grid for RGB, 23-grid for CMYK. The accuracy ceiling of the LUT path.</li>
-        <li><strong>lcms-wasm NOOPT</strong> &mdash; same, with <code>cmsFLAGS_NOOPTIMIZE</code> so each call walks the full per-pixel pipeline. The lcms equivalent of jsce <code>no-LUT</code>, and the fair accuracy-vs-accuracy comparison.</li>
+        <li><strong>lcms-wasm default / HIGHRES / NOOPT (8-bit)</strong> &mdash; LittleCMS 2.16 with <code>TYPE_*_8</code> formats. Pinned heap buffers via <code>_cmsDoTransform</code>. <code>default</code>=<code>flags=0</code>; <code>HIGHRES</code>=<code>cmsFLAGS_HIGHRESPRECALC</code> (49 RGB / 23 CMYK grid &mdash; LUT-path accuracy ceiling); <code>NOOPT</code>=<code>cmsFLAGS_NOOPTIMIZE</code> (no LUT, full pipeline per pixel &mdash; lcms equivalent of jsce <code>no-LUT</code>).</li>
+        <li><strong>lcms-wasm default / HIGHRES / NOOPT (16-bit)</strong> &mdash; same three flag variants but with <code>TYPE_*_16</code> formats. The lcms <em>precalc-LUT grid</em> is identical to the corresponding 8-bit row (lcms picks grid by colourspace, not by I/O bit depth), but the format converters at the pipeline edges flip from u8 to u16. Headline MPx/s typically drops ~10&ndash;15% vs the 8-bit row purely from the wider buffers. This is the apples-to-apples row to read jsce <code>int16</code> against.</li>
     </ul>
 
     <h3>The four benchmark directions, and why RGB&rarr;RGB is

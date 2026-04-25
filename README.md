@@ -70,18 +70,25 @@ hardware, in the same session, with the same input bytes.
   comparison isn't a strawman. Enable the WASM SIMD default and we
   win all four by **2–5×**. Full measured table in
   [docs/Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
-- Bit-exact-or-within-1-LSB against the same LittleCMS reference on
-  98.5–100 % of samples on the four standard image workflows. See
+- **Faithful float-precision peer of LittleCMS.** jsCE's float
+  pipeline matches lcms2 native f64 to **≤ 0.06 ΔE76 (Lab) / ≤ 1.24
+  LSB (RGB) / ≤ 0.04 % ink (CMYK)** across 130 reference files and
+  ~580 k samples. The image-path LUT quantises that math to **≤ 1 LSB
+  on 98.5–100 % of samples** vs `lcms-wasm`. Both validation harnesses
+  ship in the repo. Methodology and the one documented outlier are
+  in [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md). See
   [Accuracy](#accuracy).
 - **No WASM required, no native bindings, no compile step.** The
   pure-JS kernels already beat `lcms-wasm` on every direction; WASM
   scalar and WASM SIMD modes are opt-in toppings that demote cleanly
   on hosts that don't support them.
-- **~2.5× smaller over the wire.** ~192 KB raw / ~52 KB gzip / ~41
+- **~1.9× smaller over the wire.** ~267 KB raw / ~68 KB gzip / ~53
   KB brotli in a single JS file, including virtual profiles,
-  spectral data, and the full ICC v2/v4 decoder. `lcms-wasm` ships a
-  41 KB JS shim plus a separate ~309 KB `.wasm` payload (~129 KB
-  gzip combined — two fetches, async init).
+  spectral data, the full ICC v2/v4 decoder, **and 8 inline base64
+  WASM modules (3D + 4D × scalar/SIMD × u8/u16) that load
+  synchronously with no fetch**. `lcms-wasm` ships a 41 KB JS shim
+  plus a separate ~309 KB `.wasm` payload (~129 KB gzip combined,
+  two fetches, async init).
 
 > The "pure JS beats native C" finding surprised us too. It's a
 > **specialisation story, not a language-speed story** — jsCE runs
@@ -362,29 +369,50 @@ More examples (canvas round-trip, custom pipeline stages) are in
 
 ### Kernel modes (`lutMode`)
 
-Five values shipped in v1.2. `'auto'` (the default) picks the best
-kernel for your `(dataFormat, buildLut)` combination automatically;
-the other four let you pin a specific kernel when you want
-determinism.
+Eight values, plus `'auto'` (the default) which picks the best
+kernel for your `(dataFormat, buildLut)` combination automatically.
+Pin a specific mode when you want determinism, or rely on `'auto'`
+and let `create()` resolve to the fastest kernel the host can run.
+
+**8-bit I/O — `dataFormat: 'int8'`** (Uint8 / Uint8Clamped buffers)
 
 | Mode | Kernel | Throughput vs `'int'` | When |
 |---|---|---|---|
-| `'auto'` | best available | up to **~3.5×** | **default** — `int8 + buildLut` → SIMD; else `'float'` |
 | `'float'` | f64 CLUT, JS | baseline | pin for bit-stable f64 LUT interp across releases |
 | `'int'` | u16 CLUT, JS int32 | baseline | pin when you want JS-only, no WASM |
 | `'int-wasm-scalar'` | u16 CLUT, WASM | **1.22–1.45×** | pin for WASM without SIMD (rare — benchmarking) |
-| `'int-wasm-simd'` | u16 CLUT, WASM v128 | **2.04–3.50×** | what `'auto'` picks on int8+LUT transforms; pin to fail loudly on non-SIMD hosts |
+| `'int-wasm-simd'` | u16 CLUT, WASM v128 | **2.04–3.50×** | what `'auto'` picks for int8+LUT; pin to fail loudly on non-SIMD hosts |
 
-Demotion is automatic: **SIMD → scalar WASM → JS `'int'`**. You can
-set `lutMode: 'int-wasm-simd'` globally and older hosts just fall
-through; `'auto'` does the same thing by default for int8+LUT
-transforms and resolves to `'float'` for anything else (which is
-what the engine would have used anyway — `lutMode` is ignored for
-non-int8 dataFormats). Inspect `xform.lutMode` after construction
-to see what will actually run.
+**16-bit I/O — `dataFormat: 'int16'`** (Uint16 buffers, full
+[0..65535] range, Q0.13 fractional weights — shipped in v1.3)
+
+| Mode | Kernel | Throughput vs `'int16'` | When |
+|---|---|---|---|
+| `'int16'` | u16 CLUT @ 65535, JS int32 | baseline | pin when you want JS-only, no WASM |
+| `'int16-wasm-scalar'` | u16 CLUT, WASM | **~1.3–1.4×** (3D) | pin for WASM without SIMD |
+| `'int16-wasm-simd'` | u16 CLUT, WASM v128 | **~2.0–2.6×** | what `'auto'` picks for int16+LUT |
+
+The three u16 kernels are **bit-exact against each other** across
+the full (mode × inCh × outCh) matrix. Browser-bench headline:
+`int16-wasm-simd` lands **3.9–4.9× over `lcms-wasm` 16-bit** on
+every workflow (158 MPx/s RGB→RGB, 149 RGB→CMYK, 90 CMYK→RGB,
+86 CMYK→CMYK on Chrome 147 / x86_64).
+
+Demotion is automatic in both ladders:
+
+- 8-bit: `'int-wasm-simd'` → `'int-wasm-scalar'` → `'int'`
+- 16-bit: `'int16-wasm-simd'` → `'int16-wasm-scalar'` → `'int16'`
+
+You can set the SIMD mode globally and older hosts just fall
+through; `'auto'` does the same thing by default for `int8+LUT`
+and `int16+LUT` transforms and resolves to `'float'` for anything
+else (which is what the engine would have used anyway — `lutMode`
+is ignored for non-int dataFormats). Inspect `xform.lutMode` after
+construction to see what will actually run.
 
 Details: [deep dive / LUT modes](./docs/deepdive/LutModes.md) ·
-[deep dive / WASM kernels](./docs/deepdive/WasmKernels.md).
+[deep dive / WASM kernels](./docs/deepdive/WasmKernels.md) ·
+[v1.3 16-bit kernel ladder in Roadmap](./docs/Roadmap.md#shipped-so-far).
 
 ### Colour conversion helpers (no profiles needed)
 
@@ -459,19 +487,54 @@ only pays decode cost — runtime is identical.
 
 ## Accuracy
 
-> **TL;DR:** output matches LittleCMS to **≤ 1 LSB on 98.5 – 100 % of
-> samples** across all four standard image workflows, with all named
+> **TL;DR:** the float pipeline matches LittleCMS to **≤ 0.06 ΔE76 on
+> Lab outputs, ≤ 1.24 LSB on 8-bit RGB, ≤ 0.04 % ink on CMYK** across
+> 130 reference files (~580 k in-gamut samples) measured against an
+> lcms2 2.16 full-f64 oracle. The image-path LUT quantises that math
+> to **≤ 1 LSB on 98.5 – 100 % of samples** vs lcms-wasm. All named
 > reference colours (white, black, primaries, mid-greys, skin tone,
-> paper white, rich black, etc.) matching exactly or within 1 LSB.
-> Residual drift is well below visible threshold and suitable for
-> soft-proofing, preview, image conversion, and any practical
-> workflow that isn't bit-exact audit reproduction.
+> paper white, rich black) match exactly or within 1 LSB. Residual
+> drift is well below visible threshold across both paths and the
+> remaining outliers are documented and explained — see
+> [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md) for the
+> full methodology, headline numbers, the one structural divergence
+> we found, and the philosophy that keeps jsColorEngine an
+> independent engine rather than an lcms reimplementation.
 
-Measured against LittleCMS via the `lcms-wasm` package (LittleCMS
-2.16 compiled to WASM), comparing outputs on a systematic 9^N grid
-through the input cube plus a set of named reference colours, with
-`cmsFLAGS_HIGHRESPRECALC` on the lcms side so both engines precalc
-LUTs at the same grid density.
+jsColorEngine has **two accuracy paths** and a separate validation
+harness for each:
+
+### 1. Float pipeline vs lcms native f64 (`bench/lcms_compat/`)
+
+The "is the underlying math right?" question. Measured against a
+committed reference oracle of 150 CGATS `.it8` files generated from
+LittleCMS 2.16's full f64 float pipeline (`TYPE_*_DBL`). 130 files
+pass, 20 SKIP (lcms-internal XYZ-identity working profiles —
+[v1.5 follow-up](./docs/Roadmap.md)), 0 ERROR. Worst-case in-gamut
+error per output type:
+
+| Output type   | Worst case | Unit       | Verdict |
+|---|---:|---|---|
+| Lab           | **0.06**   | ΔE76       | 16× below the ΔE 1.0 visibility threshold |
+| RGB → RGB     | **1.24**   | LSB at u8  | invisible at 8-bit display precision |
+| CMYK ink      | **0.04 %** | ink        | well below dot-gain measurement noise |
+| 2C spot       | **2.88e-4**| fraction   | noise floor — basically zero |
+
+`node bench/lcms_compat/run.js` reproduces this in ~1.3 s on a
+current laptop. Per-pixel triage for any divergence is in
+`bench/lcms_compat/probe-pixel.js`. Full writeup, including the one
+documented outlier (`* → ISOcoated_v2_grey1c_bas.ICC` Perceptual
+without BPC — a profile-table-interpretation difference, both
+readings spec-permissive) is in
+[`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md).
+
+### 2. Image-path LUT vs lcms-wasm (`bench/lcms-comparison/`)
+
+The "after the LUT quantises everything, do we still agree?"
+question. Measured against `lcms-wasm` (LittleCMS 2.16 compiled to
+WASM) on a systematic 9^N input grid plus named reference colours,
+with `cmsFLAGS_HIGHRESPRECALC` on the lcms side so both engines
+precalc LUTs at the same grid density.
 
 | Workflow | within 1 LSB | max Δ | mean Δ |
 |---|---|---|---|
@@ -480,19 +543,36 @@ LUTs at the same grid density.
 | CMYK → RGB  | 98.51 %      | 14 LSB\* | 0.073 LSB |
 | CMYK → CMYK | 98.83 %      | 4 LSB   | 0.141 LSB |
 
-`bench/lcms-comparison/accuracy.js` reproduces this on your hardware.
+`node bench/lcms-comparison/accuracy.js` reproduces this on your
+hardware.
 
 <small>\* The 14-LSB max on CMYK → RGB is confined to
 deep-cyan-saturated **out-of-gamut** inputs (e.g. `(192,0,64,32)`)
 whose Lab coordinate falls outside sRGB's gamut — both engines clip
 but at different stages, producing different bounded guesses. 98.5 %
-of even these OOG points still agree within 1 LSB. Working
-hypothesis and the planned opt-in lcms-compatibility mode are in
-[docs/Performance.md § 4](./docs/Performance.md#4-how-does-this-compare-to-littlecms-in-c).</small>
+of even these OOG points still agree within 1 LSB. The two engines
+have different OOG-clamping conventions (jsCE clamps to device
+range; lcms's float pipeline doesn't); see
+[Accuracy deepdive § Where jsColorEngine deliberately diverges](./docs/deepdive/Accuracy.md#where-jscolorengine-deliberately-diverges-from-lcms).</small>
 
 For ΔE-critical work (colour measurement, calibration QA), use
 `lutMode: 'float'` and skip the LUT entirely — see
 [Quick reference](./docs/Performance.md#7-quick-reference--when-to-enable-what).
+
+### 3. 16-bit kernel ladder (`dataFormat: 'int16'`, v1.3)
+
+For workflows that need extra headroom over the u8 ladder — TIFF
+processing, intermediate image stages, anything where 1 LSB at u8
+isn't quite tight enough — pass `dataFormat: 'int16'` and the
+engine routes through the v1.3 u16 kernel ladder. Pure-kernel
+quantisation noise (jsCE float-LUT vs jsCE int16-LUT) is **≤ 4 LSB
+u16 max, mean ≤ 0.48 LSB across all four image directions** —
+roughly 65× tighter than the u8 path because Q0.13 weights and the
+65535-scaled CLUT keep the rounding budget below the u16 LSB.
+The JS / WASM scalar / WASM SIMD u16 kernels are **bit-exact
+against each other** across the full coverage matrix; the identity
+gate at [`bench/int16_identity.js`](./bench/int16_identity.js)
+asserts kernels round at the u16 LSB on every release.
 
 ---
 
@@ -507,12 +587,27 @@ use `transformArray()`. Headline throughput on Node 20 / V8 / x64,
 GRACoL2006 CMYK profile, 65 K pixels per iter, median of 5 × 100
 iters:
 
+**8-bit I/O** (`dataFormat: 'int8'`)
+
 | Workflow | `'int'` (u16, JS) | `'int-wasm-scalar'` | `'int-wasm-simd'` | FPS @ 1080p (SIMD)† |
 |---|---|---|---|---|
 | RGB → RGB   (sRGB → AdobeRGB) | 72 MPx/s | ~101 MPx/s | **~234 MPx/s** | **113 fps** |
 | RGB → CMYK  (sRGB → GRACoL)   | 62 MPx/s | ~87 MPx/s  | **~210 MPx/s** | **101 fps** |
 | CMYK → RGB  (GRACoL → sRGB)   | 59 MPx/s | ~72 MPx/s  | **~125 MPx/s** | **60 fps** |
 | CMYK → CMYK (GRACoL → GRACoL) | 49 MPx/s | ~60 MPx/s  | **~125 MPx/s** | **60 fps** |
+
+**16-bit I/O** (`dataFormat: 'int16'`, v1.3 — Chrome 147 / x86_64,
+65 K pixels/iter, vs `lcms-wasm` 16-bit best for context)
+
+| Workflow | `'int16'` (JS) | `'int16-wasm-scalar'` | `'int16-wasm-simd'` | lcms-wasm 16-bit |
+|---|---|---|---|---|
+| RGB → RGB   (sRGB → AdobeRGB) | 66 MPx/s | 93 MPx/s  | **158 MPx/s** | 46 MPx/s |
+| RGB → CMYK  (sRGB → GRACoL)   | 56 MPx/s | 78 MPx/s  | **149 MPx/s** | 44 MPx/s |
+| CMYK → RGB  (GRACoL → sRGB)   | 42 MPx/s | 43 MPx/s  | **90 MPx/s**  | 24 MPx/s |
+| CMYK → CMYK (GRACoL → GRACoL) | 35 MPx/s | 37 MPx/s  | **86 MPx/s**  | 21 MPx/s |
+
+The three u16 kernels are bit-exact against each other; SIMD is
+~3.9–4.9× faster than `lcms-wasm` 16-bit on every workflow.
 
 <small>† FPS @ 1080p is 1920×1080 = 2.07 MPx/frame, single-threaded.
 Nobody's recommending CMYK video, and "frames per second" is a silly
@@ -679,7 +774,7 @@ everyday colour management. Things outside that scope:
 | **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide |
 | **[Deep dive](./docs/deepdive/)** | How it works, why it's fast — pipeline model, lutMode internals, JIT inspection, WASM kernel design |
 | **[Performance](./docs/Performance.md)** | Benchmark numbers, discoveries in the journey, lcms comparison |
-| **[Roadmap](./docs/Roadmap.md)** | What's coming next — single source of truth for v1.3+ plans |
+| **[Roadmap](./docs/Roadmap.md)** | What's coming next — single source of truth for v1.4+ plans (v1.4 ImageHelper + samples, v1.5 compiled pipeline) |
 | **[Examples](./docs/Examples.md)** | Canvas round-trip, custom pipeline stages, and other recipes beyond Quick start |
 | [API — Profile](./docs/Profile.md) | `Profile` class: loading, virtual profiles, tag access |
 | [API — Transform](./docs/Transform.md) | `Transform` class: constructor options, `create`, `createMultiStage`, `transform`, `transformArray` |

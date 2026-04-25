@@ -7,6 +7,122 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.3.0] — 2026-04-25
+
+### Added — 16-bit kernel ladder (`dataFormat: 'int16'`)
+
+Three new `lutMode` values flesh out the u16 I/O path so it has
+the same JS / WASM scalar / WASM SIMD ladder the v1.2 u8 path
+ships. All three siblings are **bit-exact against each other**
+across the full `(mode × inCh × outCh)` matrix; the headline
+gain over `lcms-wasm` 16-bit is **3.9–4.9× on every workflow**.
+
+- **`'int16'`** (JS) — `Uint16Array` CLUT scaled to the full
+  `[0..0xFFFF]` range with **Q0.13 fractional weights**. Q0.13 was
+  chosen as the precision sweet-spot that keeps every intermediate
+  inside the i32 envelope `Math.imul` and `i32.mul` share — so
+  JS ↔ WASM is bit-exact across browsers and OSes without runtime
+  checks. 4D paths use a two-rounding K-LERP for i32 safety with no
+  measurable accuracy cost.
+- **`'int16-wasm-scalar'`** — same Q0.13 contract compiled to
+  hand-written `.wat` (`src/wasm/tetra{3,4}d_nch_int16.wat`).
+  Bit-exact against the JS sibling, **0 LSB across the 6-config
+  matrix.** ~1.3–1.4× over JS `'int16'` on 3D, ~1.0–1.2× on 4D.
+- **`'int16-wasm-simd'`** — channel-parallel `v128`, Q0.13,
+  two-rounding K-LERP for 4D with the K0 intermediate carried in a
+  `v128` local across the K-plane loop back-edge (no scratch
+  memory). Bit-exact against both u16 siblings.
+  **~1.7–2.4× over `'int16-wasm-scalar'`, ~2.0–2.6× over JS
+  `'int16'`, ~3.9–4.9× over `lcms-wasm` 16-bit at every workflow.**
+
+Browser bench headline (Chrome 147, x86_64, GRACoL2006 + sRGB,
+65 K pixels/iter):
+
+| Direction      | jsce `int16` (JS u16) | `int16-wasm-scalar` | **`int16-wasm-simd`** | lcms 16-bit best |
+|----------------|------------------------|----------------------|-----------------------|------------------|
+| RGB → RGB      | 66 MPx/s               | 93 MPx/s             | **158 MPx/s**         | 46 MPx/s |
+| RGB → CMYK     | 56                     | 78                   | **149**               | 44 |
+| CMYK → RGB     | 42                     | 43                   | **90**                | 24 |
+| CMYK → CMYK    | 35                     | 37                   | **86**                | 21 |
+
+`'auto'` resolution for `dataFormat: 'int16'` follows the same
+demotion chain as the v1.2 u8 path: `'int16-wasm-simd'` →
+`'int16-wasm-scalar'` → `'int16'`.
+
+### Added — three accuracy gates for the u16 ladder
+
+- **[`bench/int16_identity.js`](./bench/int16_identity.js)** — synthetic
+  identity-CLUT round-trip. Kernels MUST round at the u16 LSB on
+  every release; this is a CI-grade hard gate.
+- **[`bench/int16_poc/accuracy_v1_7_self.js`](./bench/int16_poc/accuracy_v1_7_self.js)**
+  (filename retained as a development artifact) — jsCE float-LUT vs
+  jsCE int16-LUT. Pure kernel quantisation noise: **max 4 LSB u16
+  on every workflow, mean ≤ 0.48 LSB**.
+- **[`bench/lcms_compat/run.js`](./bench/lcms_compat/run.js)** —
+  jsCE float pipeline vs lcms2 2.16 float pipeline (`TYPE_*_DBL`)
+  across 150 CGATS `.it8` reference files / ~580 k samples.
+  130 pass, 20 SKIP, 0 ERROR. Worst-case ≤ 0.06 ΔE76 on Lab,
+  ≤ 1.24 LSB on RGB, ≤ 0.04 % ink on CMYK.
+
+### Changed — table-driven LUT kernel dispatcher
+
+[`src/lutKernelTable.js`](./src/lutKernelTable.js) now resolves
+`(lutMode, inCh, outCh)` against a pure-data table with per-entry
+gates and an explicit fallback chain. The runtime cost is a single
+table lookup at `create()` time and **one threshold compare + one
+indirect call per `transformArrayViaLUT()`** invocation; the
+maintainability win is "every new kernel is a row in a table",
+not "another `else if` in the dispatcher".
+
+The pre-v1.3 if/else cascade is preserved as
+`transformArrayViaLUT_legacy()` for one release as an escape
+hatch, gated by `__tests__/transform_lutKernelTable.tests.js`
+which asserts byte-identical output between the two dispatchers
+across the full coverage matrix.
+
+### Changed — browser benchmark wired up for the u16 ladder
+
+`bench/browser/` (and [`docs/Bench.md`](./docs/Bench.md)) now
+covers **8 jsColorEngine modes vs 6 lcms-wasm flag/width
+combinations across 4 directions (56 cells)**, with the new
+`'int16'`, `'int16-wasm-scalar'` and `'int16-wasm-simd'` modes
+wired into the dropdowns and the in-page essay. The UMD bundle
+(`browser/jsColorEngineWeb.js`) was rebuilt to include the new
+WASM module references.
+
+### What's deliberately NOT in v1.3
+
+Documented inline in [`docs/Roadmap.md`](./docs/Roadmap.md);
+short version:
+
+- **N-channel input kernels.** 3 / 4-channel CLUT inputs cover
+  every device class jsColorEngine targets at speed. 5 / 6 / 7 /
+  8-channel inputs (RISO MZ770, multi-spot press profiles) work
+  through the f64 pipeline today and don't have a real-world use
+  case for a fast int / WASM path. v1.5 adds them on the float
+  side only.
+- **`lutGridSize` option** and **`lcms_patch/` extraction** —
+  bumped to v1.5 alongside the larger compiled-pipeline work.
+
+### Documentation
+
+- New [Performance.md § v1.3 — 16-bit kernel ladder](./docs/Performance.md#v13--16-bit-kernel-ladder--shipped)
+  with the headless-bench numbers, design constraints (why Q0.13
+  specifically, why two-rounding for 4D), and the per-workflow
+  precision tables.
+- New [Accuracy.md § 16-bit kernel accuracy](./docs/deepdive/Accuracy.md#16-bit-kernel-accuracy-v13--near-perfect-no-corners-cut)
+  covering the three accuracy gates and the float-vs-int16
+  precision deltas.
+- README updated with the 16-bit kernel modes table, the v1.3
+  Speed table, and a new Accuracy subsection covering int16.
+- [Roadmap.md](./docs/Roadmap.md) restructured: v1.3 moved to
+  Shipped so far; v1.4 = ImageHelper + browser samples
+  (showcase release on the back of the v1.3 perf story);
+  v1.5 = N-channel float inputs + compiled non-LUT pipeline +
+  `toModule()` (the larger piece of post-v1.3 work).
+
+---
+
 ## [1.2.0] — 2026-04-24
 
 ### Added — `lutMode: 'int-wasm-scalar'` and `'int-wasm-simd'`
@@ -115,10 +231,24 @@ full guide.
 ## [Unreleased] — Roadmap
 
 See [docs/Roadmap.md](./docs/Roadmap.md) — single source of truth
-for forward-looking plans (v1.3 16-bit I/O, v1.4 non-LUT pipeline
-code generation + smarter `'auto'` via per-Transform microbench,
-v1.5 optional S15.16 lcms parity, v2 package split, browser
-samples, the "explicitly not doing" list).
+for forward-looking plans:
+
+- **v1.4 — ImageHelper + browser samples.** Showcase release on
+  the back of the v1.3 perf story. Small `ImageHelper` class
+  (`new ImageHelper({...}).toScreenRGBA()` /
+  `.toSoftproofRGBA()` / `.getChannel('C')`) plus ~6 zero-build
+  browser demos (CMYK separations, soft-proof, jsCE-vs-lcms diff
+  view, profile inspector, gamut viewer).
+- **v1.5 — N-channel float inputs + compiled non-LUT pipeline +
+  `toModule()`.** The larger piece of post-v1.3 work — could
+  meaningfully delay; v1.4 was reordered ahead of it so the
+  project keeps shipping visible progress on top of the v1.3
+  perf story even if v1.5 takes a while. Also rolls in the
+  `lutGridSize` accuracy lever and the `lcms_patch/` extraction.
+- **v1.6 (optional)** — `lutMode: 'int-pipeline'` / S15.16 for
+  lcms bit-for-bit parity, deferred unless demanded.
+- **v2** — package split (`@jscolorengine/interpolator`,
+  optional `@jscolorengine/pipeline-emitter`).
 
 This section stays short on purpose. Anything measured, specified,
 and scoped lives in Roadmap.md. When a version ships, its entry

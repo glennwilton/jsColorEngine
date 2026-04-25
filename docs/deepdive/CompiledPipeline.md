@@ -24,11 +24,13 @@
 > `src/Transform.js` (`Transform.compile()`) and `bench/compile_poc/`.
 > It currently handles the sRGB → CMYK chain end-to-end (6 of the 6
 > stages have JS emitters, including the two diagnostic markers) and
-> is the measurement vehicle for the larger v1.4 effort planned in
-> [Roadmap § v1.4 — Compiled non-LUT transforms + `toModule()` distribution](../Roadmap.md#v14--compiled-non-lut-transforms--tomodule-distribution).
+> is the measurement vehicle for the larger v1.5 effort planned in
+> [Roadmap § v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](../Roadmap.md#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule).
 > This page is the post-mortem from the POC: what the compile target
 > looks like, why we built it, what it taught us, and why it's
-> on hold while v1.3 (16-bit I/O + lcms compat) ships.
+> on hold while v1.3 (16-bit I/O + lcms compat) shipped and v1.4
+> (ImageHelper + browser samples) lands as the next showcase
+> release.
 >
 > **Why on hold, not abandoned.** The POC validated everything we
 > needed it to: the speedup (1.7× bit-exact, up to 5.4× with the
@@ -44,8 +46,10 @@
 > v1.3 (the 16-bit I/O work and the `.it8`-based lcms compat
 > harness) is a stricter dependency for the project's credibility
 > than another speed multiplier — and that work needs the engine
-> *as-is* as its baseline. We'll resume compile work as v1.4 once
-> v1.3 ships (see [Should we ship this as default?](#should-we-ship-this-as-default--honest-assessment)
+> *as-is* as its baseline. v1.3 has now shipped; compile work
+> resumes as **v1.5**, scheduled after the v1.4 ImageHelper +
+> browser samples showcase release (see
+> [Should we ship this as default?](#should-we-ship-this-as-default--honest-assessment)
 > below for the full assessment).
 
 ## TL;DR
@@ -74,7 +78,7 @@
   three more deliverables we haven't shipped yet: `getSource()` for
   build-time precompile (CSP-safe), `toModule({...})` for
   zero-runtime-dep standalone transforms, and the WASM emission
-  path covered in the v1.4 roadmap.
+  path covered in the v1.5 roadmap.
 
 ## What the compiler is actually doing
 
@@ -532,7 +536,7 @@ remains the default — `compile()` is opt-in and additive.
 
 ## Future use cases
 
-The roadmap covers the v1.4 plan in detail
+The roadmap covers the v1.5 plan in detail
 ([Roadmap § Inspection / distribution story](../Roadmap.md#non-lut-pipeline-code-generation-new-function--emitted-wasm)).
 The four use cases that fall out of having a single emitted function
 per transform are:
@@ -637,7 +641,7 @@ Engineering-wise the work to ship this is small (the function body
 is already in `compiled.source`; the store serialisation is a
 typed-array → `new Uint16Array([...])` template). The interesting
 design decisions are about **format**: CommonJS vs ESM, embedded
-binary vs base64, single file vs split bundle. v1.4 territory.
+binary vs base64, single file vs split bundle. v1.5 territory.
 
 ## Architectural notes for the next contributor
 
@@ -669,7 +673,7 @@ If you're picking this up, the things that surprised us:
     full float accuracy at the cost of ~12 multiply-adds vs the
     LUT's 1 load.
   - Neither has been benched yet; expected to land alongside the
-    v1.4 emitter expansion.
+    v1.5 emitter expansion.
 - **The diagnostic stages (`stage_history`, `stage_debug`) are
   already routed through a single emitter** (`emit_js_stage_debug`
   / `emit_js_stage_history`) that produces a clean source comment
@@ -684,8 +688,9 @@ If you're picking this up, the things that surprised us:
 
 ## Should we ship this as default? — honest assessment
 
-Captured during the v1.3 / v1.4 framing review (Apr 2026). Re-read
-this when picking compile work back up post-v1.3.
+Captured during the v1.3 / v1.5 framing review (Apr 2026). Re-read
+this when picking compile work back up as v1.5 (after the v1.4
+ImageHelper + samples showcase release).
 
 ### Where compile actually sits in the speed stack
 
@@ -713,7 +718,7 @@ lcms-wasm NOOPT              6.1 MPx/s   accuracy-tier (lcms equivalent)
 > browser bench, so the **ratios** are reproducible (they fall out
 > of the per-stage cost analysis) but the **absolute MPx/s** numbers
 > for the compile rows above are projections, accurate within ~±25 %.
-> Direct browser-bench rows for compile() will land alongside v1.4
+> Direct browser-bench rows for compile() will land alongside v1.5
 > when the API is stable.
 
 Three things to read off the corrected stack:
@@ -744,7 +749,7 @@ Three things to read off the corrected stack:
 
 The tier rewrite: compile is **not a LUT-killer**, but it is a
 **no-LUT-tier promotion** strong enough that "compile() ON" should
-become the default for the no-LUT path the moment v1.4 ships.
+become the default for the no-LUT path the moment v1.5 ships.
 People who deliberately picked the no-LUT pipeline get a free
 ~5× boot at lcms-equivalent precision (free in the sense lcms
 itself defaults to this trade-off); measurement work flips one
@@ -827,22 +832,30 @@ flag for full bit-exact `Math.pow`.
 The one positioning shift: `toModule()` reframes jsColorEngine as
 *also* a build-time tool, not just a runtime library. That's
 evolution, not contradiction — but the README will need a small
-update when v1.4 ships.
+update when v1.5 ships.
 
-### v1.3 / v1.4 split (decision)
+### v1.3 / v1.5 split (decision)
 
-- **v1.3 stays scoped:** 16-bit I/O, `.it8` lcms compat harness,
-  `lutGridSize`, plus `float-wasm-scalar` as the foundation for
-  the accuracy-tests-via-WASM path. **Compile is NOT pulled into
-  v1.3.** v1.3's compat harness needs the engine *as-is* as its
-  baseline; introducing a new code path mid-stream would muddle
-  the regression signal.
-- **v1.4 reframes:** flip the headline from "WASM emit + 200 MPx/s
+- **v1.3 stays scoped:** 16-bit I/O (`int16` JS kernels — landed,
+  WASM SIMD u16 still pending), `.it8` lcms compat harness,
+  `lutGridSize`. The float-WASM tier originally pencilled in here
+  has since been **dropped from the roadmap** — the v1.3 int16
+  measurements showed u16 LUT cells *are* the accuracy ceiling for
+  every shipping ICC v2/v4 profile, so an f32 wasm kernel would
+  not unlock a meaningful precision tier above u16. See the
+  [DROPPED block in Roadmap.md](../Roadmap.md#dropped--float-wasm-tier-was-float-wasm-scalar--f32-clut--float-wasm-simd)
+  for the full reasoning. **Compile is NOT pulled into v1.3.**
+  v1.3's compat harness needs the engine *as-is* as its baseline;
+  introducing a new code path mid-stream would muddle the
+  regression signal.
+- **v1.5 reframes:** flip the headline from "WASM emit + 200 MPx/s
   ceiling" to **"compile() stable + `toModule()` + coverage matrix"**.
-  Defer the WASM emit target to v1.5 or later — the JS-emit + LUT +
+  Defer the WASM emit target to a later release — the JS-emit + LUT +
   hot-loop combination already gets us to ~5× over runtime, and the
   bottleneck is `Math.pow`, which WASM doesn't make materially
-  faster (the LUT does).
+  faster (the LUT does). v1.4 (ImageHelper + samples) lands ahead
+  of this so the v1.3 perf story has runnable showcases by the time
+  the compile work resumes.
 - **`toModule()` is the marquee feature.** More important than the
   speedup. It's the one thing competitors can't match.
 
@@ -870,7 +883,8 @@ than the original framing suggested:
   work stays where it is. Compile doesn't compete with `int-wasm-simd`,
   it complements the accuracy tier nothing else accelerated.
 
-Direction for v1.4 (when we resume post-v1.3):
+Direction for v1.5 (when we resume after the v1.4 ImageHelper +
+samples showcase release):
 
 - Stage-emitter coverage to all ~25 stages (the real bill).
 - `compile()` becomes the **default for the no-LUT path** the
@@ -908,7 +922,7 @@ the bigger sample size for stable attribution.
 
 ## Related
 
-- [Roadmap § v1.4 — Compiled non-LUT transforms + `toModule()` distribution](../Roadmap.md#v14--compiled-non-lut-transforms--tomodule-distribution)
+- [Roadmap § v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](../Roadmap.md#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
   — the production plan this POC is informing
 - [Architecture](./Architecture.md) — pipeline model, runtime walker
 - [JIT inspection](./JitInspection.md) — TurboFan-emitted x64 for

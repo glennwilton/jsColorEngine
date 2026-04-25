@@ -26,6 +26,7 @@
     var convert = require('./convert');
     var defs = require('./def');
     var wasmLoader = require('./wasm/wasm_loader');
+    var lutKernelTable = require('./lutKernelTable');
 
     var eIntent = defs.eIntent;
     var eProfileType = defs.eProfileType;
@@ -268,10 +269,19 @@
      *      Clip RGB values to 0..1 inside the pipeline (useful when going
      *      through extreme abstract profiles).
      *
-     *  @param {('auto'|'float'|'int'|'int-wasm-scalar'|'int-wasm-simd')} [options.lutMode='auto']
+     *  @param {('auto'|'float'|'int'|'int16'|'int-wasm-scalar'|'int-wasm-simd'|'int16-wasm-scalar'|'int16-wasm-simd')} [options.lutMode='auto']
      *      LUT-based image hot-path kernel selector. Only meaningful when
-     *      `dataFormat: 'int8'` AND `buildLut: true`. Non-LUT (accuracy)
-     *      paths are unaffected — they always run the float code.
+     *      `dataFormat: 'int8'` or `'int16'` AND `buildLut: true`. Non-LUT
+     *      (accuracy) paths are unaffected — they always run the float
+     *      code.
+     *
+     *      'int16' is the u16 sibling of 'int' — same i32 ALU, same u16
+     *      CLUT (built once via buildIntLut), but with Uint16Array I/O
+     *      instead of Uint8ClampedArray. Output uses the canonical
+     *      [0, 65280] → [0, 65535] bit-trick `v + (v >>> 8)` that is
+     *      bit-exact for our cell scale (255 × 257 = 65535). Pairs
+     *      naturally with `dataFormat: 'int16'` — see the 'auto'
+     *      resolution rules below.
      *
      *      Modes (each one falls through to the previous if its kernel
      *      can't service the LUT shape or the host can't run it):
@@ -347,8 +357,52 @@
      *                               to 'int' if WebAssembly itself is
      *                               unavailable.
      *
+     *        - 'int16-wasm-scalar' — (v1.3, Q0.13) sibling of
+     *                               'int-wasm-scalar' for u16 I/O workloads.
+     *                               Reads u16 input, writes u16 output (no
+     *                               u8/u16 re-quantisation at the I/O
+     *                               boundary). Q0.13 fixed-point fractional
+     *                               weights (settled on Q0.13 after a brief
+     *                               internal Q0.12 iteration during v1.3
+     *                               development). Bit-exact against the JS
+     *                               'int16' kernel across the 6-config matrix
+     *                               (`bench/wasm_poc/tetra3d_int16_run.js`).
+     *                               1.07–1.38× over 'int16' on x64 for 3D
+     *                               tetrahedral; 1.96–2.53× over lcms-wasm
+     *                               u16; see docs/Performance.md
+     *                               "WASM int16 — measured" section.
+     *
+     *                               3D + 4D both ship (4D uses two-rounding
+     *                               K-LERP for i32 safety). On hosts that
+     *                               lack WebAssembly this demotes to 'int16'
+     *                               at `create()` time.
+     *
+     *        - 'int16-wasm-simd'  — (v1.3, Q0.13) channel-parallel
+     *                               WebAssembly SIMD kernel for u16 I/O.
+     *                               Bit-exact against both 'int16' and
+     *                               'int16-wasm-scalar' across the same
+     *                               6-config matrix. Mirrors the
+     *                               'int-wasm-simd' u8 design — vectorises
+     *                               the four output channels in i32x4
+     *                               lanes — but uses Q0.13 weights and
+     *                               i16x8.narrow_i32x4_u for the u16
+     *                               output store.
+     *
+     *                               Supports cMax ∈ {3, 4} only — other
+     *                               channel counts fall through to the
+     *                               scalar u16 WASM kernel, then to JS
+     *                               'int16'. The 4D SIMD u16 kernel keeps
+     *                               the K0 intermediate in a v128 local
+     *                               register and skips the scratch-memory
+     *                               round-trip the scalar 4D u16 kernel
+     *                               needs. On hosts that lack WebAssembly
+     *                               SIMD support this silently demotes to
+     *                               'int16-wasm-scalar' at `create()` time;
+     *                               demotes further to 'int16' if
+     *                               WebAssembly itself is unavailable.
+     *
      *      The 'auto' heuristic today is just "int8 + LUT → best WASM
-     *      kernel". Future releases may add per-Transform microbenchmarks
+     *      kernel" or "int16 + LUT → best WASM int16 kernel". Future releases may add per-Transform microbenchmarks
      *      (int JS can beat scalar WASM on older / weaker CPUs in some
      *      workloads) or host-capability heuristics. The public API is
      *      stable either way — 'auto' always means "pick the fastest
@@ -401,8 +455,11 @@
         switch(rawLutMode){
             case 'float':
             case 'int':
+            case 'int16':
             case 'int-wasm-scalar':
             case 'int-wasm-simd':
+            case 'int16-wasm-scalar':
+            case 'int16-wasm-simd':
                 this.lutMode = rawLutMode;
                 this.lutModeRequested = rawLutMode;
                 break;
@@ -411,29 +468,40 @@
                 // applicable to this Transform's (dataFormat, buildLut)
                 // combination. int8 + buildLut=true gets the full WASM
                 // SIMD hot path (with SIMD → scalar → int demotion at
-                // create() time for older hosts). Everything else runs
-                // the float kernel — which is what the engine would have
-                // used anyway, because lutMode is ignored for non-int8
-                // dataFormats. Resolving to 'float' here makes
+                // create() time for older hosts). int16 + buildLut=true
+                // resolves to the WASM int16 scalar kernel (with int16
+                // JS demotion when WASM is unavailable — see roadmap
+                // v1.3.x for the int16 SIMD ceiling lift). Everything
+                // else runs the float kernel — which is what the engine
+                // would have used anyway, because lutMode is ignored for
+                // non-LUT dataFormats. Resolving the mode here makes
                 // xform.lutMode self-documenting: it always reflects
                 // the kernel that will actually run.
-                this.lutMode = (options.dataFormat === 'int8' && this.builtLut)
-                    ? 'int-wasm-simd'
-                    : 'float';
+                if(options.dataFormat === 'int8' && this.builtLut){
+                    this.lutMode = 'int-wasm-simd';
+                } else if(options.dataFormat === 'int16' && this.builtLut){
+                    this.lutMode = 'int16-wasm-simd';
+                } else {
+                    this.lutMode = 'float';
+                }
                 this.lutModeRequested = 'auto';
                 break;
             default:
                 if(options.verbose === true){
-                    console.warn('Unknown lutMode "' + rawLutMode + '" — falling back to "auto". Valid values: auto, float, int, int-wasm-scalar, int-wasm-simd.');
+                    console.warn('Unknown lutMode "' + rawLutMode + '" — falling back to "auto". Valid values: auto, float, int, int16, int-wasm-scalar, int-wasm-simd, int16-wasm-scalar, int16-wasm-simd.');
                 }
                 // Forward-compat: unknown modes resolve as if user had
                 // said 'auto' — gets them the best-available kernel
                 // without crashing, better than the previous behaviour
                 // (silent demote to slowest) for someone writing against
                 // a future version that adds a new mode.
-                this.lutMode = (options.dataFormat === 'int8' && this.builtLut)
-                    ? 'int-wasm-simd'
-                    : 'float';
+                if(options.dataFormat === 'int8' && this.builtLut){
+                    this.lutMode = 'int-wasm-simd';
+                } else if(options.dataFormat === 'int16' && this.builtLut){
+                    this.lutMode = 'int16-wasm-simd';
+                } else {
+                    this.lutMode = 'float';
+                }
                 this.lutModeRequested = 'auto';
         }
 
@@ -443,7 +511,7 @@
         // eligible for this LUT shape"; the dispatcher falls back to the
         // JS 'int' kernel on null.
         //
-        // All four states can be present simultaneously when lutMode=
+        // All four u8 states can be present simultaneously when lutMode=
         // 'int-wasm-simd':
         //   - wasmTetra3DSimd : 3D SIMD, cMax ∈ {3, 4}
         //   - wasmTetra3D     : 3D scalar, every cMax (fallthrough)
@@ -453,14 +521,43 @@
         // is demoted to 'int-wasm-scalar' and both wasmTetra*Simd are
         // left null; the two scalar states stay loaded.
         //
+        // For lutMode='int16-wasm-scalar' (v1.3) the 3D u16 + 4D u16
+        // scalar states are loaded; both share one wasmCache bag and
+        // distinct module keys. The int16 SIMD ceiling lift is tracked
+        // under roadmap v1.3.x.
+        //
         // The optional shared-module cache is taken here so multiple
         // Transforms created from the same bag share compile work. Each
         // Transform still has its own linear-memory instance.
-        this.wasmCache       = options.wasmCache || null;
-        this.wasmTetra3D     = null;
-        this.wasmTetra3DSimd = null;
-        this.wasmTetra4D     = null;
-        this.wasmTetra4DSimd = null;
+        this.wasmCache             = options.wasmCache || null;
+        this.wasmTetra3D           = null;
+        this.wasmTetra3DSimd       = null;
+        this.wasmTetra3DInt16      = null;   // v1.3 — u16 I/O scalar 3D
+        this.wasmTetra3DInt16Simd  = null;   // v1.3 — u16 I/O SIMD 3D
+        this.wasmTetra4D           = null;
+        this.wasmTetra4DInt16      = null;   // v1.3 — u16 I/O scalar 4D
+        this.wasmTetra4DInt16Simd  = null;   // v1.3 — u16 I/O SIMD 4D
+        this.wasmTetra4DSimd       = null;
+
+        // v1.3 — table-driven LUT kernel dispatcher cache. Resolved once
+        // at the end of create() (after lutMode is settled and WASM
+        // states are loaded) by _resolveLutKernels(). The dispatcher
+        // (transformArrayViaLUT) selects between BIG and SMALL by
+        // comparing pixelCount against _lutKernelThreshold — one
+        // branch + one indirect call per array, no per-pixel cost.
+        // The pre-v1.3 if/else cascade lives in
+        // transformArrayViaLUT_legacy() for one release as an escape
+        // hatch (see kernel-table-swap removal note there).
+        //   _lutKernelBig       : run closure for pixelCount >= threshold
+        //   _lutKernelSmall     : run closure for pixelCount <  threshold
+        //   _lutKernelThreshold : minPx of the BIG entry, or 0 when both
+        //                         resolve to the same kernel (no WASM win)
+        // Single source of truth: src/lutKernelTable.js
+        this._lutKernelBig       = null;
+        this._lutKernelSmall     = null;
+        this._lutKernelThreshold = 0;
+        this._lutKernelBigKey    = null;  // diagnostic — which entry won
+        this._lutKernelSmallKey  = null;  // diagnostic — which entry won
 
         this.interpolation3D = options.interpolation3D ? options.interpolation3D.toLowerCase() : 'tetrahedral';
         this.interpolation4D = options.interpolation4D ? options.interpolation4D.toLowerCase() : 'tetrahedral';
@@ -930,21 +1027,25 @@
 
         this.pipelineCreated = true;
 
-        // INTEGER HOT PATH (lutMode is any of 'int', 'int-wasm-scalar',
-        // 'int-wasm-simd'): build the u16 mirror LUT once, after the
-        // optimiser has folded the device->int stage and `lut.outputScale`
-        // has been bumped from 1 to 255. Build is silent — if the LUT shape
-        // isn't supported (1D, 2D, or non-{3,4} output channels), intLut
-        // stays undefined and the dispatcher falls back to the float
-        // kernel automatically.
+        // INTEGER HOT PATH (lutMode is any of 'int', 'int16',
+        // 'int-wasm-scalar', 'int-wasm-simd'): build the u16 mirror LUT
+        // once, after the optimiser has folded the device->int stage
+        // and `lut.outputScale` has been bumped from 1 to 255 (or 65535
+        // for int16). Build is silent — if the LUT shape isn't supported
+        // (1D, 2D, or non-{3,4} output channels), intLut stays undefined
+        // and the dispatcher falls back to the float kernel automatically.
         //
-        // The WASM paths need the same mirror LUT as the 'int' path (same
-        // u16 CLUT, same gps, same stride metadata), so all modes run
-        // buildIntLut unconditionally.
+        // The WASM paths and 'int16' use the same mirror LUT shape as
+        // the 'int' path (same u16 CLUT in [0, 65280], same gps stride
+        // metadata) — only the gridPointsScale_fixed_u16 sibling field
+        // is used by the int16 kernels for the u16 input scale.
         if((this.lutMode === 'int'
+                || this.lutMode === 'int16'
                 || this.lutMode === 'int-wasm-scalar'
-                || this.lutMode === 'int-wasm-simd')
-            && this.lut && this.dataFormat === 'int8'){
+                || this.lutMode === 'int-wasm-simd'
+                || this.lutMode === 'int16-wasm-scalar'
+                || this.lutMode === 'int16-wasm-simd')
+            && this.lut && (this.dataFormat === 'int8' || this.dataFormat === 'int16')){
             this.buildIntLut(this.lut);
         }
 
@@ -1005,6 +1106,77 @@
             }
         }
 
+        // INT16 WASM SIMD (v1.3 — u16 I/O SIMD, 3D + 4D). Sibling of
+        // 'int-wasm-simd' for u16 image workloads. The SIMD 3D u16
+        // module determines lutMode demotion: if it fails to compile
+        // (host lacks WebAssembly SIMD) we demote to 'int16-wasm-scalar'
+        // and the block below picks up the scalar u16 modules instead.
+        // On success we ALSO load the scalar u16 3D module as a
+        // fallthrough for cMax ∉ {3, 4} cases the SIMD kernel doesn't
+        // cover (mirrors the u8 SIMD-block fallthrough convention),
+        // plus the SIMD u16 4D module (best-effort) and the scalar u16
+        // 4D module (fallthrough).
+        if(this.lutMode === 'int16-wasm-simd'){
+            var simd3DInt16State = wasmLoader.createTetra3DInt16SimdState({ wasmCache: this.wasmCache });
+            if(simd3DInt16State !== null){
+                this.wasmTetra3DInt16Simd = simd3DInt16State;
+                var scalar3DInt16State = wasmLoader.createTetra3DInt16State({ wasmCache: this.wasmCache });
+                if(scalar3DInt16State !== null){
+                    this.wasmTetra3DInt16 = scalar3DInt16State;
+                }
+                var simd4DInt16State = wasmLoader.createTetra4DInt16SimdState({ wasmCache: this.wasmCache });
+                if(simd4DInt16State !== null){
+                    this.wasmTetra4DInt16Simd = simd4DInt16State;
+                }
+                var scalar4DInt16State = wasmLoader.createTetra4DInt16State({ wasmCache: this.wasmCache });
+                if(scalar4DInt16State !== null){
+                    this.wasmTetra4DInt16 = scalar4DInt16State;
+                }
+                if(this.verbose){
+                    console.log('  lutMode=int16-wasm-simd: WebAssembly SIMD u16 kernels loaded'
+                        + ' (3D SIMD' + (scalar3DInt16State !== null ? ' + scalar fallthrough' : ' only')
+                        + ', 4D ' + (simd4DInt16State !== null ? 'SIMD' : 'no SIMD')
+                        + (scalar4DInt16State !== null ? ' + scalar fallthrough' : '')
+                        + ')');
+                }
+            } else {
+                if(this.verbose){
+                    console.warn('  lutMode=int16-wasm-simd: WebAssembly SIMD unavailable — demoting to "int16-wasm-scalar"');
+                }
+                this.lutMode = 'int16-wasm-scalar';
+            }
+        }
+
+        // INT16 WASM SCALAR (v1.3 — u16 I/O scalar, 3D + 4D). Sibling of
+        // 'int-wasm-scalar' for u16 image workloads. The 3D module
+        // determines lutMode demotion: if it fails to instantiate
+        // we drop to JS 'int16'. The 4D module is best-effort and
+        // mirrors the u8 4D-load policy (no demotion on 4D failure;
+        // 4D inputs fall through to the JS 'int16' kernel).
+        if(this.lutMode === 'int16-wasm-scalar'){
+            var wasmInt16State = wasmLoader.createTetra3DInt16State({ wasmCache: this.wasmCache });
+            if(wasmInt16State !== null){
+                this.wasmTetra3DInt16 = wasmInt16State;
+                if(this.verbose){
+                    console.log('  lutMode=int16-wasm-scalar: WebAssembly 3D int16 kernel loaded');
+                }
+                var wasm4DInt16State = wasmLoader.createTetra4DInt16State({ wasmCache: this.wasmCache });
+                if(wasm4DInt16State !== null){
+                    this.wasmTetra4DInt16 = wasm4DInt16State;
+                    if(this.verbose){
+                        console.log('  lutMode=int16-wasm-scalar: WebAssembly 4D int16 kernel loaded');
+                    }
+                } else if(this.verbose){
+                    console.warn('  lutMode=int16-wasm-scalar: WebAssembly 4D int16 kernel unavailable — 4D u16 inputs will use JS int16 fallback');
+                }
+            } else {
+                if(this.verbose){
+                    console.warn('  lutMode=int16-wasm-scalar: WebAssembly unavailable — demoting to "int16"');
+                }
+                this.lutMode = 'int16';
+            }
+        }
+
         // 4D WASM (CMYK input). Loaded alongside 3D any time lutMode is
         // still 'int-wasm-*' after the 3D blocks above ran. If the 3D
         // path just demoted to 'int' we don't try 4D either — there's
@@ -1043,6 +1215,16 @@
                 console.warn('  lutMode=' + this.lutMode + ': WebAssembly 4D scalar kernel unavailable — 4D inputs will use JS int fallback');
             }
         }
+
+        // v1.3 — resolve LUT dispatcher table refs ONCE per create().
+        // Walks the fallback chain in src/lutKernelTable.js for the
+        // current (lutMode, inputChannels, outputChannels) triple,
+        // caching one ref for big batches (WASM-eligible) and one for
+        // small batches (below memcpy break-even). Per-array dispatch
+        // is then a single threshold compare + indirect call. Safe
+        // no-op when this.lut is false (no LUT path) or inputChannels
+        // is gray/duotone (handled by separate kernels, not the table).
+        this._resolveLutKernels();
 
         if(this.verbose){
             if(this.optimise){
@@ -1217,13 +1399,18 @@
      */
     isIntLutCompatible(intLut){
         if(!intLut){ return false; }
-        // Current kernel contract (v1.1). When any of these change, bump
-        // intLut.version in buildIntLut() AND update the checks below.
+        // Current kernel contracts. When any combo here changes, update
+        // buildIntLut() AND the matching kernel(s) AND this check.
         if(intLut.version !== 1){ return false; }
         if(intLut.dataType !== 'u16'){ return false; }
-        if(intLut.scale !== 65280){ return false; }
-        if(intLut.gpsPrecisionBits !== 16){ return false; }
-        // accWidth varies (16 for 3D, 20 for 4D). Both are fine for v1.
+        // Two valid (scale, gpsPrecisionBits) pairs:
+        //   u8  modes : scale=65280, gpsPrecisionBits=16  (Q0.16, u8 weight)
+        //   u16 modes : scale=65535, gpsPrecisionBits=13  (Q0.13, u13 weight, v1.3+)
+        var u8Build  = (intLut.scale === 65280 && intLut.gpsPrecisionBits === 16);
+        var u16Build = (intLut.scale === 65535 && intLut.gpsPrecisionBits === 13);
+        if(!u8Build && !u16Build){ return false; }
+        // accWidth varies by dimension: 16 for 3D (both builds) and 4D u16
+        // (two-rounding); 20 for 4D u8 (Q16.4 single-rounding intermediate).
         if(intLut.accWidth !== 16 && intLut.accWidth !== 20){ return false; }
         return true;
     }
@@ -1258,19 +1445,44 @@
      *   - 5+ input channels             (no real-world ICC profiles)
      *   - Output channels not in {3,4}  (5+ ch hexachrome etc.)
      *
-     * The CLUT scaling (`* 65280`, i.e. 255*256) assumes 0..1 device-encoded
-     * LUT values, which is the contract createLut() establishes. The 65280
-     * scale (not 65535) is deliberate: it makes u16/256 = u8 exactly, which
-     * eliminates a systematic +0.4 % high bias in the final shift-to-u8.
-     * For any future LUT source where the [0,1] contract isn't true
-     * (e.g. raw Lab16 from ICC v4 mAB tags), this builder needs a separate
-     * rescale path — flagged as TODO.
+     * BUILD VARIANTS (chosen by this.lutMode):
      *
-     * The produced `intLut` carries a format tag (`version`, `encoding`,
-     * `scale`, `gpsPrecisionBits`, `accWidth`) — see the comment block at
-     * the intLut assembly site, and `isIntLutCompatible()` for the check
-     * any future deserialization / sharing path should run before handing
-     * a foreign intLut to the integer kernels.
+     *   u8 modes (lutMode in {int, int-wasm-scalar, int-wasm-simd}):
+     *     - CLUT scale  = 65280   (= 255*256, so u16/256 = u8 exact)
+     *     - gps         = Q0.16   (((g1-1) << 16) / 255)
+     *     - weight (rx) = u8      (top 8 bits of fractional)
+     *     - format tag  : scale=65280, gpsPrecisionBits=16
+     *     Designed so the final `(... + 0x80) >> 8` shift produces u8
+     *     output with zero bias. See INT HOT PATH header in this file.
+     *
+     *   u16 modes (lutMode in {int16, int16-wasm-scalar, int16-wasm-simd}):
+     *     - CLUT scale  = 65535   (full u16 range — c-corner at native LSB)
+     *     - gps         = Q0.13   (((g1-1) << 13) / 65535)
+     *     - weight (rx) = u13     (32× more weight precision than u8 modes)
+     *     - format tag  : scale=65535, gpsPrecisionBits=13
+     *     Designed so identity round-trips at ≤1 LSB tolerance for any
+     *     u16 input on any g1. See INT16 HOT PATH header for the bit
+     *     budget proof. v1.3 settled on Q0.13 after a brief internal
+     *     iteration through Q0.16 (≤17 LSB identity error, visible
+     *     banding) and Q0.12 (twice the quantization noise of Q0.13).
+     *     Q0.13 is the i32 ceiling: delta×rx max 65535×8191 ≈ 2^29.0,
+     *     sum-of-3 ≈ 2^30.6, JS Math.imul + WASM i32.mul both defined.
+     *     Bit-exact across JS and WASM.
+     *
+     * The two variants are NEVER mixed in one Transform — lutMode is
+     * fixed at create() time and the dispatcher routes to the matching
+     * kernels. The format tag (intLut.scale, intLut.gpsPrecisionBits)
+     * is the cross-check; consumers verify before reading.
+     *
+     * For any future LUT source where the [0,1] contract isn't true
+     * (e.g. raw Lab16 from ICC v4 mAB tags), this builder needs a
+     * separate rescale path — flagged as TODO.
+     *
+     * The produced `intLut` carries a format tag (`version`, `dataType`,
+     * `scale`, `gpsPrecisionBits`, `accWidth`) — see the comment block
+     * at the intLut assembly site, and `isIntLutCompatible()` for the
+     * check any future deserialization / sharing path should run before
+     * handing a foreign intLut to the integer kernels.
      *
      * @param {Object} lut - The float LUT to mirror. Mutated: gets a new
      *                       `intLut` field if shape is supported.
@@ -1292,58 +1504,84 @@
             return;
         }
 
-        // Build u16 mirror of the float CLUT.
+        // ---- Pick the build variant from lutMode --------------------
+        //
+        // u8 path  : scale 65280, Q0.16 gps, u8 weight  (kernels apply
+        //            (... + 0x80) >> 8 to land in u8)
+        // u16 path : scale 65535, Q0.13 gps, u13 weight (kernels apply
+        //            (... + 0x1000) >> 13 to land in u16, c-corner is
+        //            added at full u16 precision, no bit-stretch)
+        //
+        // The two are intentionally independent CLUT scales — sharing
+        // a single scale-65280 CLUT across both paths (an early v1.3
+        // u8-style approach) capped u16 output precision at u8-equivalent
+        // and produced visible banding. See bench/int16_identity.js for
+        // the proof.
+        var isU16Mode = (this.lutMode === 'int16'
+                      || this.lutMode === 'int16-wasm-scalar'
+                      || this.lutMode === 'int16-wasm-simd');
+
+        var scale = isU16Mode ? 65535 : 65280;
+        var gpsPrecisionBits = isU16Mode ? 13 : 16;
+
+        // Build u16 mirror of the float CLUT at the appropriate scale.
         // Float CLUT is in [0, 1] device encoding (createLut() contract).
         //
-        // IMPORTANT — scale factor is 255*256 = 65280, NOT 65535.
-        // The kernels get from u16 back to u8 via (u16 + 0x80) >> 8 (or
-        // the u20 equivalent (u20 + 0x800) >> 12), which is a divide
-        // by 256. If we scaled by 65535 here, the round-trip would be
-        // u8_out ≈ float * 65535 / 256 = float * 255.996, i.e. ~0.4 %
-        // systematic HIGH bias vs the float kernel (which does
-        // float * 255 directly). On profiles whose output lands on
-        // fractional u8 boundaries (e.g. CMYK→RGB via GRACoL→sRGB),
-        // this produced up to 75 % of channels off-by-1 with 100 %
-        // of the errors going int > float.
+        // u8 modes use scale 65280 (= 255*256): the kernels reach u8 via
+        // (u16 + 0x80) >> 8 = exact divide by 256. Scaling by 65535
+        // instead would give u8 ≈ float * 255.996, a +0.4 % HIGH bias
+        // that produced up to 75 % of channels off-by-1 vs the float
+        // kernel on CMYK→RGB profiles (see diag_cmyk_to_rgb.js).
         //
-        // By capping at 65280, u16/256 gives u8 exactly. Intermediate
-        // CLUT precision is effectively 15.994 bits instead of 16 —
-        // a 0.006-bit loss that is well below any accuracy we care
-        // about for u8 output. (When we add u16 *output* in v1.2 we
-        // can revisit this and either rebuild with a 65535 scale for
-        // that path, or accept the 0.4 % range loss.)
+        // u16 modes use scale 65535 (full range): the kernels add the
+        // c-corner at full u16 precision and quantize only the
+        // within-cell delta×rx contribution by `>> 13`. No bit-stretch
+        // is needed because the CLUT already covers [0, 65535]. This
+        // is the v1.3 fix for the 17-LSB identity error that showed up
+        // on a "scale 65280 + bit-stretch" u16 prototype.
         var src = lut.CLUT;
         var u16 = new Uint16Array(src.length);
         for(var i = 0; i < src.length; i++){
-            var v = src[i] * 65280;
+            var v = src[i] * scale;
             if(v < 0){ v = 0; }
-            else if(v > 65280){ v = 65280; }
+            else if(v > scale){ v = scale; }
             u16[i] = (v + 0.5) | 0; // round-to-nearest
         }
 
-        // gridPointsScale_fixed in Q0.16: input * gps gives a Q8.16
-        // value whose upper 8 bits are the grid index, bits 8..15 are
-        // the Q0.8 fractional weight. Q0.16 is needed (not Q0.8) so
-        // the true ratio (g1-1)/255 is represented with enough
-        // precision. For g1=33 the true ratio is 32/255 = 0.125490...
-        // which rounds to 0.12549 = gps=8224 in Q0.16.
+        // ---- Grid-points scale: Q-fixed, formula depends on input width ---
         //
-        // Earlier code used Q0.8 (gps=32) which truncates to 0.125
-        // exactly — that's ~0.1 % LOW per fractional weight. Because
-        // CMYK→RGB LUTs are monotonically DECREASING in CMY, a
-        // smaller rx weight means less of the negative (a-c0) delta
-        // gets applied, so the int result was systematically HIGHER
-        // than float (see diag_cmyk_to_rgb.js — 99.9 % of off-by-1
-        // errors went int>float). Q0.16 eliminates that asymmetry.
+        // u8 path:  gridPointsScale_fixed in Q0.16. input(u8) * gps gives
+        //           a Q8.16 value whose upper 8 bits are the grid index
+        //           and bits 8..15 are the Q0.8 fractional weight. Q0.16
+        //           (not Q0.8) is needed because the true ratio
+        //           (g1-1)/255 has more than 8 bits of meaning — for
+        //           g1=33 the ratio is 32/255 = 0.12549, which rounds
+        //           to gps=8224 in Q0.16. Earlier Q0.8 (gps=32) truncated
+        //           to 0.125 exactly — ~0.1 % LOW, asymmetric on
+        //           monotonically-decreasing CMY axes (see
+        //           diag_cmyk_to_rgb.js). Overflow: u8 * gps_Q16 ≤ 2^22.
         //
-        // Overflow check: input (u8, 0..255) * gps_Q16 (~8224 for
-        // g1=33, ~16448 for g1=65) fits well under 2^21, so plain
-        // Math.imul stays in i32 range.
-        var gps_fixed = Math.round(((g1 - 1) << 16) / 255);
+        // u16 path: gridPointsScale_fixed_u16 in Q0.13. input(u16) * gps
+        //           gives a value whose upper bits are the grid index
+        //           and bits 0..12 are the Q0.13 fractional weight.
+        //           Q0.13 is the i32 ceiling for u13 weight on a u16
+        //           CLUT (delta×rx max = 65535×8191 ≈ 2^29.0, sum of 3
+        //           axes ≈ 2^30.6, fits i32 with ~1.4 bits headroom).
+        //           u14/u15 weight overflows on adversarial CLUTs
+        //           (see v1.3 Q0.13 design notes). For g1=33: gps_u13 = 4.
+        //           Overflow: u16 * gps_u13 ≤ 2^20.
+        //           v1.3 settled at Q0.13 (over a brief Q0.12 iteration)
+        //           — halves quantization noise vs Q0.12, still well
+        //           under i32, bit-exact JS↔WASM.
+        var gps_fixed     = isU16Mode ? 0 : Math.round(((g1 - 1) << 16) / 255);
+        var gps_fixed_u16 = isU16Mode ? Math.round(((g1 - 1) << 13) / 65535) : 0;
 
         // Per-axis maxima for the input===255 boundary patch — see
         // bench/int_vs_float.js FINDING #2 for why this is non-optional.
         // The 4D K-axis (go3) needs the same treatment when present.
+        // Same maxX/Y/Z/K serve the u16 kernel (input===65535 boundary)
+        // since they are pure grid-index offsets, independent of input
+        // bit width.
         var maxX = (g1 - 1) * lut.go2;
         var maxY = (g1 - 1) * lut.go1;
         var maxZ = (g1 - 1) * lut.go0;
@@ -1371,29 +1609,44 @@
         //                   for a future WASM SIMD path, or 'f32' for
         //                   a half-precision path)
         //   - `scale`      (u16 value representing 1.0 in the CLUT —
-        //                   currently 65280 = 255*256 so u16/256 = u8
-        //                   exactly; could become 65535 for a u16-
-        //                   output-optimised build, or 32768 if we
-        //                   ever reserve a sign bit)
-        //   - `gpsPrecisionBits`  (Q0.N weight precision — currently
-        //                          16; was 8 pre-v1.1, caused
-        //                          systematic directional bias)
-        //   - `accWidth`   (accumulator width for 4D — currently 20,
-        //                   raising to 22+ would require wider LUT
-        //                   or re-proved overflow bounds)
+        //                   65280 for u8-target builds (=255*256, so
+        //                   u16/256 = u8 exactly), 65535 for u16-target
+        //                   builds (full range, no bit-stretch needed))
+        //   - `gpsPrecisionBits`  (Q0.N weight precision — 16 for u8
+        //                          modes, 13 for u16 modes (i32 limit
+        //                          on a u16 CLUT — see v1.3 Q0.13
+        //                          design; settled at 13 over a brief
+        //                          internal Q0.12 iteration during v1.3
+        //                          development))
+        //   - `accWidth`   (accumulator width for 4D — currently 20
+        //                   for u8 mode (Q16.4), raising to 22+ would
+        //                   require wider LUT or re-proved overflow
+        //                   bounds. u16 mode uses two-rounding 4D
+        //                   instead of a single-rounding intermediate)
         //
         // Never reuse a version number for a different encoding.
+        //
+        // SCALE/PRECISION COMBINATIONS THAT HAVE EVER SHIPPED:
+        //   v1.1+ : scale=65280, gpsPrecisionBits=16 — u8 modes
+        //   v1.3+ : scale=65535, gpsPrecisionBits=13 — u16 modes
+        //           (v1.3 settled at Q0.13 after a brief internal Q0.12
+        //           iteration during development — Q0.13 halves
+        //           quantization noise. Replaced an unshipped
+        //           scale=65280, gpsPrecisionBits=16 u16 build that had
+        //           ≤17 LSB identity error and visible banding — see
+        //           bench/int16_identity.js)
         lut.intLut = {
             // --- format tag ---
-            version: 1,              // v1.1 integer encoding
-            dataType: 'u16',         // Uint16Array CLUT (matches outer lut.dataType field)
-            scale: 65280,            // u16 value for 1.0 (= 255 * 256)
-            gpsPrecisionBits: 16,    // gridPointsScale_fixed is Q0.16
-            accWidth: supported4D ? 20 : 16,   // 4D uses u20 Q16.4 intermediate
+            version: 1,                       // v1.1 integer encoding (field set unchanged across u8/u16)
+            dataType: 'u16',                  // Uint16Array CLUT (matches outer lut.dataType field)
+            scale: scale,                     // 65280 for u8 modes, 65535 for u16 modes
+            gpsPrecisionBits: gpsPrecisionBits, // 16 for u8 modes, 13 for u16 modes (Q0.13)
+            accWidth: supported4D ? (isU16Mode ? 16 : 20) : 16,  // u8 4D uses u20 Q16.4; u16 4D uses two-rounding (no intermediate)
 
             // --- CLUT and indexing ---
             CLUT: u16,
-            gridPointsScale_fixed: gps_fixed,
+            gridPointsScale_fixed: gps_fixed,         // Q0.16, populated for u8 modes only (0 in u16 modes)
+            gridPointsScale_fixed_u16: gps_fixed_u16, // Q0.13, populated for u16 modes only (0 in u8 modes)
             maxX: maxX,
             maxY: maxY,
             maxZ: maxZ,
@@ -1412,10 +1665,14 @@
             var dimMaxes = supported4D
                 ? ('maxX/Y/Z/K=' + maxX + '/' + maxY + '/' + maxZ + '/' + maxK)
                 : ('maxX/Y/Z=' + maxX + '/' + maxY + '/' + maxZ);
-            console.log('  lutMode=int: built u16 mirror (' + dim + ') — ' +
+            var gpsLabel = isU16Mode
+                ? ('gps_u13=' + gps_fixed_u16 + ' (Q0.13)')
+                : ('gps_u16=' + gps_fixed     + ' (Q0.16)');
+            console.log('  lutMode=' + this.lutMode + ': built u16 mirror (' + dim +
+                ', scale=' + scale + ') — ' +
                 (u16.byteLength / 1024).toFixed(1) + ' KB (' +
                 (src.byteLength / 1024).toFixed(1) + ' KB float source), ' +
-                'gps_fixed=' + gps_fixed + ', ' + dimMaxes);
+                gpsLabel + ', ' + dimMaxes);
         }
     };
 
@@ -1688,7 +1945,24 @@
      * @throws {string} 'No LUT loaded' if the Transform was built without
      *                  buildLut: true.
      */
-    transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
+    /**
+     * LEGACY (pre-v1.3) — preserved for one release as the
+     * escape hatch behind the v1.3 table-driven dispatcher swap.
+     * Functionally identical to the public `transformArrayViaLUT()`
+     * (table dispatcher) — proven bit-exact across the full
+     * (mode × inCh × outCh) coverage matrix in
+     * __tests__/transform_lutKernelTable.tests.js. Will be removed
+     * after one ship cycle of coexistence.
+     *
+     * If you discover a divergence during the coexistence window:
+     *   1. Add a failing test to transform_lutKernelTable.tests.js
+     *      that calls `transformArrayViaLUT_legacy()` vs the public
+     *      `transformArrayViaLUT()`.
+     *   2. The bug is almost certainly in src/lutKernelTable.js
+     *      (gate predicate, run closure arg shape, or fallback link)
+     *      — fix it there, not by routing back to this legacy path.
+     */
+    transformArrayViaLUT_legacy(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
         var lut = this.lut;
         if(!lut){
             throw 'No LUT loaded';
@@ -1702,7 +1976,17 @@
         if(pixelCount === undefined){
             pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
         }
-        var outputArray = new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
+        // Output buffer allocation matches the kernel family that will
+        // run. lutMode='int16' / 'int16-wasm-scalar' / 'int16-wasm-simd'
+        // use Uint16Array end-to-end (kernels write u16 values via the
+        // [0, 65280] → [0, 65535] bit-trick); every other path (float,
+        // int, int-wasm-*) writes u8 into a clamped Uint8ClampedArray.
+        // Alpha cell follows the same width.
+        var outputArray = (this.lutMode === 'int16'
+                || this.lutMode === 'int16-wasm-scalar'
+                || this.lutMode === 'int16-wasm-simd')
+            ? new Uint16Array(pixelCount * outputBytesPerPixel)
+            : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
         var inputChannels = lut.inputChannels;
         var outputChannels = lut.outputChannels;
 
@@ -1736,8 +2020,11 @@
         // pre-built intLut you got from somewhere else, this is the
         // guardrail.
         if((this.lutMode === 'int'
+                || this.lutMode === 'int16'
                 || this.lutMode === 'int-wasm-scalar'
-                || this.lutMode === 'int-wasm-simd')
+                || this.lutMode === 'int-wasm-simd'
+                || this.lutMode === 'int16-wasm-scalar'
+                || this.lutMode === 'int16-wasm-simd')
             && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
             throw new Error(
                 'jsColorEngine: intLut format tag incompatible with this version. ' +
@@ -1824,6 +2111,71 @@
                         pixelCount, lut.intLut, outputChannels,
                         inputHasAlpha, outputHasAlpha, preserveAlpha
                     );
+                    break;
+                }
+
+                // INT16 WASM SCALAR FAST PATH ('int16-wasm-scalar', v1.3).
+                // Bit-exact against the JS 'int16' kernel; ~1.37× faster
+                // on x64 (range 1.31–1.44× across the 6-config matrix —
+                // see bench/wasm_poc/tetra3d_int16_run.js).
+                //
+                // Gates mirror the u8 'int-wasm-scalar' path:
+                //   - 3D LUT only (4D u16 WASM not yet ported, falls
+                //     through to JS 'int16' — wasmTetra3DInt16 is set
+                //     only for 3D-eligible Transforms below)
+                //   - intLut built (always true when lutMode is set)
+                //   - pixelCount >= WASM_DISPATCH_MIN_PIXELS so the
+                //     copy-in / copy-out overhead doesn't dominate
+                //
+                // outputChannels constraint: the kernel handles cMax 1+
+                // (channel loop is rolled), so no cMax cap. Falls
+                // through to JS 'int16' on any gate miss — no visible
+                // behaviour change, no error.
+                // The legacy (pre-v1.3) dispatcher routes 'int16-wasm-simd'
+                // through the SCALAR u16 WASM kernel (no SIMD branch
+                // here — that's the v1.3 table dispatcher's job).
+                // SIMD u16 is bit-exact with scalar u16, so this is
+                // a correctness-preserving collapse: the legacy path
+                // still produces the right answer, just without the
+                // SIMD speed lift. The v1.3 table dispatcher is the
+                // public path; legacy is kept one release for the
+                // bit-exact equivalence gate.
+                if((this.lutMode === 'int16-wasm-scalar' || this.lutMode === 'int16-wasm-simd')
+                    && this.wasmTetra3DInt16 !== null
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPP16  = (inputHasAlpha  ? 4 : 3) * 2;
+                    var outBPP16 = (outputHasAlpha ? outputChannels + 1 : outputChannels) * 2;
+                    this.wasmTetra3DInt16.bind(lut.intLut, pixelCount, outputChannels, inBPP16, outBPP16);
+                    this.wasmTetra3DInt16.runTetra3D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
+                // INT16 FAST PATH (lutMode==='int16' OR int16-wasm-*
+                // gate-miss / 4D fallthrough): u16 input → u16 output via
+                // the same i32 ALU as the 'int' kernel, re-scaled at the
+                // I/O boundaries. Same intLut shape; no second LUT is
+                // built. See INTEGER HOT PATH header and
+                // bench/int16_poc/RESULTS.md for the design notes
+                // (Q0.13 frac, [0, 65535] CLUT, identity v + 0).
+                if((this.lutMode === 'int16'
+                        || this.lutMode === 'int16-wasm-scalar'
+                        || this.lutMode === 'int16-wasm-simd') && lut.intLut){
+                    switch(outputChannels){
+                        case 3:
+                            this.tetrahedralInterp3DArray_3Ch_intLut16_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                        case 4:
+                            this.tetrahedralInterp3DArray_4Ch_intLut16_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                        default:
+                            this.tetrahedralInterp3DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                    }
                     break;
                 }
 
@@ -1939,6 +2291,65 @@
                     break;
                 }
 
+                // INT16 WASM SCALAR FAST PATH for 4D LUTs (CMYK input,
+                // v1.3). Sibling of the 3D int16 WASM path above; same
+                // bind+run lifecycle, KCMY input expected as Uint16Array.
+                // Bit-exact against the JS int16 4D kernel — see
+                // bench/wasm_poc/tetra4d_int16_run.js. Soft fallthrough
+                // to JS int16 if:
+                //   - wasmTetra4DInt16 is null (4D module failed to load
+                //     while the 3D one succeeded), OR
+                //   - pixelCount is below the WASM_DISPATCH_MIN_PIXELS
+                //     break-even threshold (memcpy overhead dominates
+                //     the kernel speedup for tiny batches).
+                //
+                // Gating fires for both lutMode='int16-wasm-scalar' and
+                // 'int16-wasm-simd' — the legacy dispatcher routes both
+                // through the SCALAR 4D u16 WASM kernel (SIMD u16 4D is
+                // bit-exact with scalar). The v1.3 table dispatcher is
+                // the path that actually exercises the SIMD u16 4D
+                // kernel; legacy stays one release for the bit-exact
+                // equivalence gate.
+                if((this.lutMode === 'int16-wasm-scalar' || this.lutMode === 'int16-wasm-simd')
+                    && this.wasmTetra4DInt16 !== null
+                    && lut.intLut
+                    && pixelCount >= Transform.WASM_DISPATCH_MIN_PIXELS){
+                    var inBPP4DInt16  = inputHasAlpha  ? 10 : 8;             // (4 or 5) × u16
+                    var outBPP4DInt16 = outputHasAlpha ? (outputChannels + 1) * 2 : outputChannels * 2;
+                    this.wasmTetra4DInt16.bind(lut.intLut, pixelCount, outputChannels, inBPP4DInt16, outBPP4DInt16);
+                    this.wasmTetra4DInt16.runTetra4D(
+                        inputArray, 0, outputArray, 0,
+                        pixelCount, lut.intLut, outputChannels,
+                        inputHasAlpha, outputHasAlpha, preserveAlpha
+                    );
+                    break;
+                }
+
+                // INT16 FAST PATH for 4D LUTs (CMYK input). u16 I/O,
+                // Q0.13 weights, two-rounding K-LERP for i32 safety —
+                // see INTEGER HOT PATH header above. Output write is
+                // identity (u16 = c + ((sum + 0x1000) >> 13)).
+                //
+                // Also catches the 4D fallthrough from 'int16-wasm-*'
+                // when the 4D WASM module didn't load or pixelCount is
+                // below the dispatch threshold.
+                if((this.lutMode === 'int16'
+                        || this.lutMode === 'int16-wasm-scalar'
+                        || this.lutMode === 'int16-wasm-simd') && lut.intLut){
+                    switch(outputChannels){
+                        case 3:
+                            this.tetrahedralInterp4DArray_3Ch_intLut16_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                        case 4:
+                            this.tetrahedralInterp4DArray_4Ch_intLut16_loop(inputArray, 0, outputArray, 0, pixelCount, lut.intLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                        default:
+                            this.tetrahedralInterp4DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                            break;
+                    }
+                    break;
+                }
+
                 // INT FAST PATH for 4D LUTs (CMYK input). Same gating as 3D
                 // above: requires lutMode='int' (or 'int-wasm-*' that fell
                 // through from the WASM fast path above — small pixelCount,
@@ -1979,6 +2390,333 @@
             default:
                 throw 'Invalid inputChannels ' + inputChannels;
         }
+
+        return outputArray;
+    }
+
+    // =====================================================================
+    // v1.3 — TABLE-DRIVEN LUT KERNEL DISPATCHER (public path)
+    // =====================================================================
+    //
+    // _resolveLutKernels()         — called once at end of create(), walks
+    //                                 src/lutKernelTable.js fallback chain
+    //                                 and caches BIG/SMALL run closures
+    //                                 for the (lutMode, inCh, outCh) of
+    //                                 this Transform's LUT.
+    //
+    // transformArrayViaLUT()       — the public IMAGE FAST PATH. Same
+    //                                 signature as the v1.3 dispatcher
+    //                                 (which is preserved as
+    //                                 transformArrayViaLUT_legacy above
+    //                                 for one release). All routing
+    //                                 decisions are pre-resolved into
+    //                                 _lutKernelBig / _lutKernelSmall;
+    //                                 per-call cost is one threshold
+    //                                 compare + one indirect call.
+    //
+    // The legacy path will be removed after one ship cycle of
+    // coexistence (kernel-table-swap todo). The bit-exact equivalence
+    // tests in __tests__/transform_lutKernelTable.tests.js gate that
+    // removal — if anything diverges during coexistence, fix it in
+    // src/lutKernelTable.js, not by reverting the swap.
+    // =====================================================================
+
+    /**
+     * Resolve the LUT kernel dispatcher cache for this Transform.
+     *
+     * Walks the fallback chain in src/lutKernelTable.js for the current
+     * (lutMode, inputChannels, outputChannels) triple TWICE:
+     *   • once with pixelCountFloor=Infinity → 'big batch' kernel
+     *     (WASM-eligible if loaded; this is the entry that wins for
+     *     pixelCount >= WASM_DISPATCH_MIN_PIXELS)
+     *   • once with pixelCountFloor=0        → 'small batch' kernel
+     *     (skips minPx-gated entries; the JS fallback when batches
+     *     are too small to amortise WASM memcpy overhead)
+     *
+     * If both passes resolve to the same entry (e.g. WASM unavailable
+     * → both fall to JS), threshold is set to 0 and the dispatcher
+     * always uses BIG. Otherwise threshold = bigEntry.minPx.
+     *
+     * Safe no-op for inputChannels ∈ {1, 2} (gray, duotone — handled
+     * by separate non-table kernels), for the no-LUT path
+     * (this.lut === false), and for unknown lutMode strings.
+     *
+     * ─────────────────────────────────────────────────────────────────
+     * TODO (v1.5 — auto-bench kernel selection)
+     * ─────────────────────────────────────────────────────────────────
+     * The fallback chain doesn't have to be picked on intuition
+     * (SIMD > scalar > JS > float). Now that every entry on the chain
+     * is a uniform-signature run closure sitting right there, we can
+     * MEASURE instead of GUESS at create() time:
+     *
+     *   1. Walk the chain via lutKernelTable.resolveLutKernel() with
+     *      different floors (Infinity, threshold, 0) to enumerate
+     *      every gate-passing kernel for the current
+     *      (lutMode, inCh, outCh, host, lut.gridSize) tuple.
+     *
+     *   2. Synthesise a small probe buffer (e.g. 16 KPx of LCG noise
+     *      sized to inCh * bytesPerSample) and a matching output
+     *      buffer.
+     *
+     *   3. For each candidate, do a 3-iteration warm-up + N-iteration
+     *      timed run via performance.now() and keep the median MPx/s.
+     *
+     *   4. Cache _lutKernelBig := winner.run, _lutKernelSmall :=
+     *      winner-on-small-batch.run, with the chosen keys exposed
+     *      via _lutKernelBigKey for diagnostics.
+     *
+     *   5. Stash the (modeShort, inCh, outCh, gridSize, hostFingerprint)
+     *      → winnerKey result in wasmCache (or a sibling bag) so the
+     *      bench cost amortises across many Transforms in the same
+     *      session — same pattern as the WASM Module cache.
+     *
+     * Why this is exciting:
+     *   - Catches the cases where intuition is wrong: SIMD-on-cMax=3
+     *     unexpectedly losing to scalar because the LUT fits L1 and
+     *     the SIMD bind/unbind dominates; WASM losing to JS on Bun
+     *     where the bridge is slow; one specific Adobe profile that
+     *     pathologically thrashes the SIMD lane swizzle. We ship the
+     *     intuition as the *default* fallback graph, but let the
+     *     host's actual numbers override it on demand.
+     *
+     *   - Opt-in via `new Transform({ autoBenchKernel: true })` so
+     *     the create() cost penalty (~5-20ms per chain length) only
+     *     hits workloads big enough to amortise it. Workloads that
+     *     create-and-throw can stay on the static graph.
+     *
+     *   - Bench runs ONCE at create() and the winner is cached in
+     *     _lutKernelBig / _lutKernelSmall — the per-call hot path
+     *     stays exactly as fast as v1.3 (one threshold compare +
+     *     one indirect call). The bench cost is amortised across
+     *     every subsequent transformArrayViaLUT() invocation on
+     *     this Transform, and across sibling Transforms via the
+     *     shared wasmCache.
+     *
+     *   - Knob it: `new Transform({ autoBenchKernel: true,
+     *     autoBenchPixels: 65536, autoBenchIterations: 5 })` for
+     *     callers who want more aggressive measurement (e.g. CI
+     *     perf gates, server-side workloads where create() cost
+     *     is irrelevant against many-MPx batches). Defaults
+     *     (16k pixels × 3 iterations median) are chosen to keep
+     *     the create() penalty below 20ms on typical hosts.
+     *
+     *   - Falls naturally out of the v1.3 refactor — no new kernel
+     *     wiring, no new gate predicates, no new fallback graph. We
+     *     just call run closures we already have, time them, pick a
+     *     winner. Pure additive.
+     *
+     * Tracked as roadmap "auto-bench kernel selection" — flag in the
+     * lutKernelTable header if the data shape (entry.run signature
+     * uniformity) ever changes, because this TODO assumes it.
+     */
+    _resolveLutKernels(){
+        this._lutKernelBig       = null;
+        this._lutKernelSmall     = null;
+        this._lutKernelThreshold = 0;
+        this._lutKernelBigKey    = null;
+        this._lutKernelSmallKey  = null;
+
+        var lut = this.lut;
+        if(!lut){
+            return;
+        }
+        var inCh  = lut.inputChannels;
+        var outCh = lut.outputChannels;
+
+        // Table only covers 3D (RGB) and 4D (CMYK) inputs. Gray/duotone
+        // dispatch through linearInterp1DArray_NCh_loop /
+        // bilinearInterp2DArray_NCh_loop directly in transformArrayViaLUT.
+        if(inCh !== 3 && inCh !== 4){
+            return;
+        }
+
+        var modeShort = lutKernelTable.LUT_MODE_SHORT[this.lutMode];
+        if(modeShort === undefined){
+            return;
+        }
+
+        var startKey = lutKernelTable.makeKey(modeShort, inCh, outCh);
+        var bigRes   = lutKernelTable.resolveLutKernel(this, lut, startKey, Infinity);
+        var smallRes = lutKernelTable.resolveLutKernel(this, lut, startKey, 0);
+
+        this._lutKernelBig       = bigRes.entry.run;
+        this._lutKernelSmall     = smallRes.entry.run;
+        this._lutKernelBigKey    = bigRes.key;
+        this._lutKernelSmallKey  = smallRes.key;
+        // Threshold for choosing BIG vs SMALL at call time:
+        //
+        //   collapsed (BIG === SMALL) → 0 — no WASM-eligible win was
+        //     found anywhere in the chain (e.g. 'float'/'int'/'int16'
+        //     without WASM). Setting threshold=0 saves a per-call
+        //     comparison branch in this common case.
+        //
+        //   distinct (BIG ≠ SMALL)    → Transform.WASM_DISPATCH_MIN_PIXELS
+        //     The table's `entry.minPx` is the static default baked in
+        //     at table load (kept in sync with the class static); for
+        //     the cached threshold we read the current value of the
+        //     static so callers can override it BEFORE create() to
+        //     stress-test / profile WASM at smaller batch sizes
+        //     without monkey-patching the dispatcher (contract
+        //     covered by transform_lutMode_wasm.tests.js).
+        this._lutKernelThreshold = (bigRes.entry === smallRes.entry) ? 0 : Transform.WASM_DISPATCH_MIN_PIXELS;
+
+        if(this.verbose){
+            console.log('  lutKernelTable: ' + startKey
+                + ' → big=' + this._lutKernelBigKey
+                + ' small=' + this._lutKernelSmallKey
+                + ' threshold=' + this._lutKernelThreshold);
+        }
+    }
+
+    /**
+     * IMAGE FAST PATH. Pre-built LUT → buffered pixel transform.
+     * v1.3 table-driven dispatcher. Same external contract as the
+     * pre-v1.3 implementation (preserved as `transformArrayViaLUT_legacy`
+     * for one release as an escape hatch).
+     *
+     * The 3D / 4D dispatch — previously a 200-line if/else cascade with
+     * inline WASM bind/run calls — now collapses to:
+     *
+     *     run = (pixelCount >= threshold) ? big : small;
+     *     run(this, in, out, px, lut, ia, oa, pa);
+     *
+     * because all the gating (WASM state availability, intLut presence,
+     * cMax bucketing, fallback degradation) is resolved ONCE at
+     * create() time and cached on the Transform via _lutKernelBig /
+     * _lutKernelSmall / _lutKernelThreshold. Per-array overhead vs
+     * the legacy cascade: one less conditional pyramid, one extra
+     * indirect call. Net ~zero on hot paths, massively cleaner to
+     * read and extend.
+     *
+     *  ROUTING TABLE (single source of truth — src/lutKernelTable.js)
+     *
+     *      input → output channels       resolved key (sample for lutMode='float')
+     *      ───────────────────────       ──────────────────────────────────────────
+     *      1     → N                     (gray bypass — linearInterp1DArray_NCh_loop)
+     *      2     → N                     (duotone bypass — bilinearInterp2DArray_NCh_loop)
+     *      3     → 3   (RGB→RGB,  Lab)   fl_3_3   → tetrahedralInterp3DArray_3Ch_loop
+     *      3     → 4   (RGB→CMYK)        fl_3_4   → tetrahedralInterp3DArray_4Ch_loop
+     *      3     → N   (RGB→6+ch)        fl_3_n   → tetrahedralInterp3DArray_NCh_loop
+     *      4     → 3   (CMYK→RGB, Lab)   fl_4_3   → tetrahedralInterp4DArray_3Ch_loop
+     *      4     → 4   (CMYK→CMYK)       fl_4_4   → tetrahedralInterp4DArray_4Ch_loop
+     *      4     → N                     fl_4_n   → tetrahedralInterp4DArray_NCh_loop
+     *
+     * For other lutModes (int / int16 / int-wasm-* / int16-wasm-*)
+     * the resolver walks the same matrix with the appropriate
+     * `<modeShort>_<inCh>_<outCh>` start key, falling through the
+     * sibling chain on any per-host miss (no WASM, no intLut, batch
+     * below threshold).
+     *
+     *  INPUT CONTRACT — NOT validated in the per-pixel inner loop
+     *
+     *   - inputArray must be Uint8ClampedArray (int8 modes), Uint16Array
+     *     (int16 modes), or numeric Array.
+     *   - Length must equal pixelCount * inputBytesPerPixel.
+     *   - The Transform must have been created with `buildLut: true`.
+     *
+     *  ALPHA HANDLING
+     *
+     *   - inputHasAlpha:  if true, every (channels+1)th byte/word is
+     *                     treated as alpha and skipped (or copied — see
+     *                     preserveAlpha).
+     *   - outputHasAlpha: if true, the output is written with an alpha
+     *                     slot after each pixel.
+     *   - preserveAlpha:  if true, copy alpha from input to output
+     *                     (requires both the above to be true). If
+     *                     undefined, defaults to
+     *                     `outputHasAlpha && inputHasAlpha`.
+     *
+     * @param  {Uint8ClampedArray|Uint16Array|Float64Array|Array} inputArray
+     * @param  {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
+     * @param  {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
+     * @param  {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
+     *                                   to (outputHasAlpha && inputHasAlpha).
+     * @param  {number}  [pixelCount]    Pixels to convert. Defaults to
+     *                                   Math.floor(inputArray.length / inputBPP).
+     * @return {Uint8ClampedArray|Uint16Array} A new typed array of length
+     *                                   pixelCount * outputBytesPerPixel.
+     *                                   Type matches the lutMode family
+     *                                   (u16 for int16-* modes, u8 otherwise).
+     * @throws {string} 'No LUT loaded' if the Transform was built without
+     *                  buildLut: true.
+     * @throws {Error}  on intLut format-tag mismatch (rebuild via create()
+     *                  or set lutMode:'float').
+     */
+    transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
+        var lut = this.lut;
+        if(!lut){
+            throw 'No LUT loaded';
+        }
+
+        if(preserveAlpha === undefined){
+            preserveAlpha = outputHasAlpha && inputHasAlpha;
+        }
+        var inputBytesPerPixel  = (inputHasAlpha)  ? lut.inputChannels  + 1 : lut.inputChannels;
+        var outputBytesPerPixel = (outputHasAlpha) ? lut.outputChannels + 1 : lut.outputChannels;
+        if(pixelCount === undefined){
+            pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
+        }
+        // Output buffer type matches the kernel family: u16 modes write
+        // Uint16Array, everything else writes Uint8ClampedArray. Same
+        // policy as the legacy dispatcher (kept identical for bit-exact
+        // equivalence in tests).
+        var outputArray = (this.lutMode === 'int16' || this.lutMode === 'int16-wasm-scalar' || this.lutMode === 'int16-wasm-simd')
+            ? new Uint16Array(pixelCount * outputBytesPerPixel)
+            : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
+        var inputChannels = lut.inputChannels;
+
+        // Same intLut compatibility guard as legacy — runs once per
+        // array call, amortised to zero against the hot loop. See
+        // legacy transformArrayViaLUT for the full rationale.
+        if((this.lutMode === 'int'
+                || this.lutMode === 'int16'
+                || this.lutMode === 'int-wasm-scalar'
+                || this.lutMode === 'int-wasm-simd'
+                || this.lutMode === 'int16-wasm-scalar'
+                || this.lutMode === 'int16-wasm-simd')
+            && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
+            throw new Error(
+                'jsColorEngine: intLut format tag incompatible with this version. ' +
+                'Got {version:' + lut.intLut.version +
+                ', dataType:' + JSON.stringify(lut.intLut.dataType) +
+                ', scale:' + lut.intLut.scale +
+                ', gpsPrecisionBits:' + lut.intLut.gpsPrecisionBits +
+                ', accWidth:' + lut.intLut.accWidth + '}. ' +
+                'Rebuild the Transform via create() or set lutMode:"float".'
+            );
+        }
+
+        // Gray and duotone bypass the table — they're handled by
+        // dedicated kernels with no fallback chain to express.
+        if(inputChannels === 1){
+            this.linearInterp1DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+            return outputArray;
+        }
+        if(inputChannels === 2){
+            this.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+            return outputArray;
+        }
+        if(inputChannels !== 3 && inputChannels !== 4){
+            throw 'Invalid inputChannels ' + inputChannels;
+        }
+
+        // Lazy resolve safety net — _resolveLutKernels normally fires
+        // at the end of create(). The only way to reach here with null
+        // refs is calling this method on a Transform whose LUT was
+        // attached out-of-band after create(). Still cheap (~10ns).
+        if(this._lutKernelBig === null){
+            this._resolveLutKernels();
+            if(this._lutKernelBig === null){
+                throw 'lutKernelTable: failed to resolve dispatcher for inputChannels=' + inputChannels
+                    + ', outputChannels=' + lut.outputChannels + ', lutMode=' + this.lutMode;
+            }
+        }
+
+        // The whole point of the refactor: one branch, one call.
+        var run = (pixelCount >= this._lutKernelThreshold)
+            ? this._lutKernelBig
+            : this._lutKernelSmall;
+        run(this, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
 
         return outputArray;
     }
@@ -2040,7 +2778,7 @@
             throw 'No Pipeline';
         }
 
-        if(this.dataFormat === 'int8' && this.lut !== false){
+        if((this.dataFormat === 'int8' || this.dataFormat === 'int16') && this.lut !== false){
             return this.transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount);
         }
 
@@ -11172,6 +11910,913 @@ trilinearInterp3D_NCh(input, lut){
                 if(inputHasAlpha)  { inputPos++;  }
                 if(outputHasAlpha) {
                     output[outputPos++] = 255;
+                }
+            }
+        }
+    };
+
+    /* ====================================================================
+     * INTEGER HOT PATH KERNELS — lutMode='int16' (u16 I/O, v1.3 / Q0.13)
+     * --------------------------------------------------------------------
+     * Opted into via `lutMode: 'int16'` (auto-resolved from
+     * `dataFormat: 'int16' + buildLut: true`).
+     *
+     * v1.3 DESIGN — TRUE 16-BIT PRECISION (Q0.13)
+     * --------------------------------------------------------------------
+     * An earlier "minimal u8 port" prototype (never shipped) reused the
+     * u8 CLUT (scale 65280, top 255 storage values dead), used 8-bit
+     * weight precision (Q0.8 → 8-bit rx), and bit-stretched the
+     * [0, 65280] output to [0, 65535] at the end. That cost up to 17
+     * LSB (g1=17) of identity error and produced VISIBLE BANDING — a
+     * smooth u16 gradient like 12340..12349 collapsed to a single
+     * output value because the 8-bit weight quantized 16 input units to
+     * 1 weight step. See bench/int16_identity.js for the regression
+     * demo.
+     *
+     * v1.3 fixes both losses with three changes (Q0.13 was reached
+     * after a brief internal Q0.12 iteration during v1.3 development —
+     * Q0.13 halves the Q0.12 quantization floor while still fitting
+     * inside i32):
+     *
+     *   1. CLUT SCALE = 65535 (not 65280)
+     *      Built fresh by buildIntLut() when lutMode is u16. Every
+     *      Uint16Array slot is used. The corner value `c` enters the
+     *      output addition `v = c + offset` at full u16 precision —
+     *      no bit-stretch, no scale-mismatch rounding.
+     *
+     *   2. WEIGHT PRECISION = u13 (Q0.13 — was Q0.8 in the prototype)
+     *      gridPointsScale_fixed_u16 is Q0.13. Per axis: rx =
+     *      (input × gps) & 0x1FFF, range [0, 8191]. Bit budget proof
+     *      for 3D: delta×rx max = 65535×8191 ≈ 2^29.0, sum of 3 axes
+     *      ≈ 2^30.6, fits i32 with ~1.4 bits headroom. u14 rejected
+     *      (sum-of-3 ≈ 2^31.6 — overflows i32 on adversarial CLUTs
+     *      in WASM `i32.mul` AND in JS `Math.imul`, breaking the
+     *      JS↔WASM bit-exactness contract). We are NOT an lcms clone
+     *      — for true Q0.16 weight precision use lutMode='float'.
+     *
+     *   3. OUTPUT WRITE = `c + ((sum + 0x1000) >> 13)`
+     *      Q0.13 round-to-nearest. NO bit-stretch — the CLUT already
+     *      covers full u16 range, so the c-add produces u16 directly.
+     *
+     * Accuracy gates (run before shipping any change to these kernels):
+     *
+     *   1. bench/int16_identity.js — synthetic identity round-trip.
+     *      g1 ∈ {17, 33, 65}: worst |in - out| ≤ 1 LSB on every axis,
+     *      all grid-aligned inputs round-trip exactly. No banding.
+     *      THIS IS THE GATE for kernel correctness.
+     *
+     *   2. bench/int16_poc/accuracy_v1_7_self.js — float-LUT-vs-int16-LUT
+     *      self-delta on real ICC profiles (sRGB / GRACoL2006). Holds
+     *      everything constant EXCEPT the kernel; the delta IS the
+     *      Q0.13 quantization error.
+     *      Result on v1.3: max 4 LSB u16 (0.006 % of range), mean
+     *      ≤ 0.48 LSB u16 (≤ 0.0008 % of range), ≥ 97.7 % of channels
+     *      within 1 LSB on every workflow (RGB→Lab, RGB→CMYK,
+     *      CMYK→RGB, CMYK→CMYK). The filename retains its
+     *      development-artifact prefix (accuracy_v1_7_self.js).
+     *
+     *   3. bench/int16_poc/accuracy_v1_6_vs_lcms.js — sanity check vs
+     *      lcms-wasm. NOT a precision reference (the source ICC builds
+     *      to different float LUTs in jsCE vs lcms), but useful for
+     *      "are we in the same league?" — yes, ≥ 98 % within 256 LSB
+     *      (1 LSB u8 equivalence) on every workflow.
+     *
+     * 4D NOTES
+     * --------------------------------------------------------------------
+     * The 4D u8 kernel uses a Q16.4 single-rounding intermediate
+     * `o = (c << 4) + ((sum_xyz + 0x8) >> 4)` so the K-LERP can do one
+     * final `>> 20`. With u13 weight on a u16 CLUT, the K-LERP term
+     * `(K1 - o) × rk_u13` is s23 × u13 = s36 — overflows i32. So 4D
+     * u16 uses TWO ROUNDINGS: XYZ → u16, then K-LERP `>> 13`. Worst
+     * case ≤1 LSB error (vs ≤0.5 for single-rounding) — still 17×
+     * better than the u8-port prototype and identity-near-exact.
+     *
+     * SHARED ACROSS ALL KERNELS HERE
+     * --------------------------------------------------------------------
+     *   - intLut.scale === 65535 (verified by isIntLutCompatible)
+     *   - intLut.gridPointsScale_fixed_u16 is Q0.13
+     *   - input boundary patch: input === 65535 → r* = 0, X0 = X1 = max*
+     *   - Alpha: opaque marker is 0xFFFF (matches PNG-16, TIFF-16, PSD)
+     *   - JS↔WASM bit-exact on synthetic inputs (asserts pass on every
+     *     machine running the same JS engine; the WASM scalar + SIMD
+     *     u16 kernels produce identical bytes).
+     *
+     * ⚠ DO NOT EDIT WITHOUT RUNNING bench/int16_identity.js — that
+     *   gate is the v1.3 (Q0.13) contract. Other tests
+     *   (transform_lutMode_*) verify dispatcher integration and
+     *   end-to-end ICC pipelines.
+     * ==================================================================== */
+
+    /**
+     * INT16 HOT PATH (v1.3, Q0.13). 3D LUT, 3-channel input → 3-channel output.
+     * Typical use: u16 RGB→RGB / RGB→Lab image conversion (PNG-16,
+     * TIFF-16). See the INT16 HOT PATH header above for the design
+     * overview. Mirror structure of tetrahedralInterp3DArray_3Ch_intLut_loop
+     * (the u8 sibling) — same 6 tetra cases, same boundary patch, same
+     * Math.imul style. Differences from the u8 sibling, reading
+     * outwards from the inner loop:
+     *
+     *   - rx/ry/rz extracted as u13 (`px & 0x1FFF`) — the bottom 13
+     *     bits of the Q0.13 grid coordinate (was `(px >>> 8) & 0xFF`
+     *     in u8). Boundary check `=== 65535` (was 255).
+     *   - X0 derived from `px >>> 13` (was `>>> 16`).
+     *   - Per-output-channel: `v = c + ((sum + 0x1000) >> 13)` (was
+     *     `(... + 0x80) >> 8`). NO `v + (v >>> 8)` bit-stretch — the
+     *     u16 CLUT already covers [0, 65535].
+     *   - Degenerate fallback: writes `c0`/`c1`/`c2` directly (was
+     *     `c0 + (c0 >>> 8)` bit-stretch).
+     */
+    tetrahedralInterp3DArray_3Ch_intLut16_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){
+        var rx = 0|0, ry = 0|0, rz = 0|0;
+        var X0 = 0|0, X1 = 0|0, Y0 = 0|0, Y1 = 0|0, Z0 = 0|0, Z1 = 0|0;
+        var px = 0|0, py = 0|0, pz = 0|0;
+        var input0 = 0|0, input1 = 0|0, input2 = 0|0;
+        var base1 = 0|0, base2 = 0|0, base3 = 0|0, base4 = 0|0;
+        var c0 = 0|0, c1 = 0|0, c2 = 0|0, a = 0|0, b = 0|0;
+        var v = 0|0;
+
+        var gps  = intLut.gridPointsScale_fixed_u16 | 0;   // Q0.13 (v1.3)
+        var CLUT = intLut.CLUT;                             // u16 CLUT @ scale 65535 (v1.3)
+        var go0  = intLut.go0 | 0;
+        var go1  = intLut.go1 | 0;
+        var go2  = intLut.go2 | 0;
+        var maxX = intLut.maxX | 0;
+        var maxY = intLut.maxY | 0;
+        var maxZ = intLut.maxZ | 0;
+
+        for(var p = 0; p < length; p++) {
+            input0 = input[inputPos++];
+            input1 = input[inputPos++];
+            input2 = input[inputPos++];
+
+            px = Math.imul(input0, gps);   // u16 * Q0.13 ≤ 2^20, well under i32
+            py = Math.imul(input1, gps);
+            pz = Math.imul(input2, gps);
+
+            // Per-axis input===65535 boundary patch (u16 sibling of the
+            // u8 input===255 patch — see bench/int_vs_float.js FINDING #2).
+            // Same maxX/Y/Z grid-index offsets as u8 path (bit-width
+            // independent).
+            if (input0 === 65535) { X0 = maxX; X1 = maxX; rx = 0; }
+            else { X0 = px >>> 13; rx = px & 0x1FFF; X0 = Math.imul(X0, go2); X1 = X0 + go2; }
+
+            if (input1 === 65535) { Y0 = maxY; Y1 = maxY; ry = 0; }
+            else { Y0 = py >>> 13; ry = py & 0x1FFF; Y0 = Math.imul(Y0, go1); Y1 = Y0 + go1; }
+
+            if (input2 === 65535) { Z0 = maxZ; Z1 = maxZ; rz = 0; }
+            else { Z0 = pz >>> 13; rz = pz & 0x1FFF; Z0 = Math.imul(Z0, go0); Z1 = Z0 + go0; }
+
+            base1 = X0 + Y0 + Z0;
+            c0 = CLUT[base1++];
+            c1 = CLUT[base1++];
+            c2 = CLUT[base1];
+
+            // Output write: c + ((delta-sum + 0x1000) >> 13). The c-corner
+            // enters at full u16 precision; the >> 13 only quantizes the
+            // small within-cell linear correction (max ~1 cell-step ≈
+            // 2048 LSB out of 65535). No bit-stretch.
+            if (rx >= ry && ry >= rz) {
+                base1 = X1 + Y0 + Z0;
+                base2 = X1 + Y1 + Z0;
+                base4 = X1 + Y1 + Z1;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c0 + ((Math.imul(a - c0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c1 + ((Math.imul(a - c1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                output[outputPos++] = c2 + ((Math.imul(a - c2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+            } else if (rx >= rz && rz >= ry) {
+                base1 = X1 + Y0 + Z0;
+                base2 = X1 + Y1 + Z1;
+                base3 = X1 + Y0 + Z1;
+                a = CLUT[base3++]; b = CLUT[base1++];
+                output[outputPos++] = c0 + ((Math.imul(b - c0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                output[outputPos++] = c1 + ((Math.imul(b - c1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3];   b = CLUT[base1];
+                output[outputPos++] = c2 + ((Math.imul(b - c2, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+            } else if (rx >= ry && rz >= rx) {
+                base1 = X1 + Y0 + Z1;
+                base2 = X0 + Y0 + Z1;
+                base3 = X1 + Y1 + Z1;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                output[outputPos++] = c2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+            } else if (ry >= rx && rx >= rz) {
+                base1 = X1 + Y1 + Z0;
+                base2 = X0 + Y1 + Z0;
+                base4 = X1 + Y1 + Z1;
+                a = CLUT[base2++]; b = CLUT[base1++];
+                output[outputPos++] = c0 + ((Math.imul(b - a, rx) + Math.imul(a - c0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                output[outputPos++] = c1 + ((Math.imul(b - a, rx) + Math.imul(a - c1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base1];
+                output[outputPos++] = c2 + ((Math.imul(b - a, rx) + Math.imul(a - c2, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+            } else if (ry >= rz && rz >= rx) {
+                base1 = X1 + Y1 + Z1;
+                base2 = X0 + Y1 + Z1;
+                base3 = X0 + Y1 + Z0;
+                a = CLUT[base2++]; b = CLUT[base3++];
+                output[outputPos++] = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                output[outputPos++] = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base3];
+                output[outputPos++] = c2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - c2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+            } else if (rz >= ry && ry >= rx) {
+                base1 = X1 + Y1 + Z1;
+                base2 = X0 + Y1 + Z1;
+                base4 = X0 + Y0 + Z1;
+                a = CLUT[base2++]; b = CLUT[base4++];
+                output[outputPos++] = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                output[outputPos++] = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base4];
+                output[outputPos++] = c2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+            } else {
+                // Degenerate (shouldn't trigger after the 6 cases — kept
+                // for safety, mirrors the u8 sibling). c-corner pass-through
+                // at full u16 precision (no bit-stretch needed).
+                output[outputPos++] = c0;
+                output[outputPos++] = c1;
+                output[outputPos++] = c2;
+            }
+
+            if(preserveAlpha) {
+                output[outputPos++] = input[inputPos++];
+            } else {
+                if(inputHasAlpha)  { inputPos++;  }
+                if(outputHasAlpha) {
+                    output[outputPos++] = 0xFFFF;
+                }
+            }
+        }
+    };
+
+    /**
+     * INT16 HOT PATH (v1.3, Q0.13). 3D LUT, 3-channel input → 4-channel output.
+     * Typical use: u16 RGB→CMYK image conversion (16-bit print
+     * separations). Mirror of tetrahedralInterp3DArray_4Ch_intLut_loop;
+     * 4-channel sibling of tetrahedralInterp3DArray_3Ch_intLut16_loop
+     * — same per-channel `c + ((sum + 0x1000) >> 13)` math, just one
+     * extra channel per tetra case. See INT16 HOT PATH header for the
+     * v1.3 (Q0.13) design overview.
+     */
+    tetrahedralInterp3DArray_4Ch_intLut16_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){
+        var rx = 0|0, ry = 0|0, rz = 0|0;
+        var X0 = 0|0, X1 = 0|0, Y0 = 0|0, Y1 = 0|0, Z0 = 0|0, Z1 = 0|0;
+        var px = 0|0, py = 0|0, pz = 0|0;
+        var input0 = 0|0, input1 = 0|0, input2 = 0|0;
+        var base1 = 0|0, base2 = 0|0, base3 = 0|0, base4 = 0|0;
+        var c0 = 0|0, c1 = 0|0, c2 = 0|0, c3 = 0|0, a = 0|0, b = 0|0;
+        var v = 0|0;
+
+        var gps  = intLut.gridPointsScale_fixed_u16 | 0;   // Q0.13 (v1.3)
+        var CLUT = intLut.CLUT;                             // u16 CLUT @ scale 65535 (v1.3)
+        var go0  = intLut.go0 | 0;
+        var go1  = intLut.go1 | 0;
+        var go2  = intLut.go2 | 0;
+        var maxX = intLut.maxX | 0;
+        var maxY = intLut.maxY | 0;
+        var maxZ = intLut.maxZ | 0;
+
+        for(var p = 0; p < length; p++) {
+            input0 = input[inputPos++];
+            input1 = input[inputPos++];
+            input2 = input[inputPos++];
+
+            px = Math.imul(input0, gps);
+            py = Math.imul(input1, gps);
+            pz = Math.imul(input2, gps);
+
+            if (input0 === 65535) { X0 = maxX; X1 = maxX; rx = 0; }
+            else { X0 = px >>> 13; rx = px & 0x1FFF; X0 = Math.imul(X0, go2); X1 = X0 + go2; }
+
+            if (input1 === 65535) { Y0 = maxY; Y1 = maxY; ry = 0; }
+            else { Y0 = py >>> 13; ry = py & 0x1FFF; Y0 = Math.imul(Y0, go1); Y1 = Y0 + go1; }
+
+            if (input2 === 65535) { Z0 = maxZ; Z1 = maxZ; rz = 0; }
+            else { Z0 = pz >>> 13; rz = pz & 0x1FFF; Z0 = Math.imul(Z0, go0); Z1 = Z0 + go0; }
+
+            base1 = X0 + Y0 + Z0;
+            c0 = CLUT[base1++];
+            c1 = CLUT[base1++];
+            c2 = CLUT[base1++];
+            c3 = CLUT[base1];
+
+            if (rx >= ry && ry >= rz) {
+                base1 = X1 + Y0 + Z0;
+                base2 = X1 + Y1 + Z0;
+                base4 = X1 + Y1 + Z1;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c0 + ((Math.imul(a - c0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c1 + ((Math.imul(a - c1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c2 + ((Math.imul(a - c2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                output[outputPos++] = c3 + ((Math.imul(a - c3, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+            } else if (rx >= rz && rz >= ry) {
+                base1 = X1 + Y0 + Z0;
+                base2 = X1 + Y1 + Z1;
+                base3 = X1 + Y0 + Z1;
+                a = CLUT[base3++]; b = CLUT[base1++];
+                output[outputPos++] = c0 + ((Math.imul(b - c0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                output[outputPos++] = c1 + ((Math.imul(b - c1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                output[outputPos++] = c2 + ((Math.imul(b - c2, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3];   b = CLUT[base1];
+                output[outputPos++] = c3 + ((Math.imul(b - c3, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+            } else if (rx >= ry && rz >= rx) {
+                base1 = X1 + Y0 + Z1;
+                base2 = X0 + Y0 + Z1;
+                base3 = X1 + Y1 + Z1;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                output[outputPos++] = c2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                output[outputPos++] = c3 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - c3, rz) + 0x1000) >> 13);
+            } else if (ry >= rx && rx >= rz) {
+                base1 = X1 + Y1 + Z0;
+                base2 = X0 + Y1 + Z0;
+                base4 = X1 + Y1 + Z1;
+                a = CLUT[base2++]; b = CLUT[base1++];
+                output[outputPos++] = c0 + ((Math.imul(b - a, rx) + Math.imul(a - c0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                output[outputPos++] = c1 + ((Math.imul(b - a, rx) + Math.imul(a - c1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                output[outputPos++] = c2 + ((Math.imul(b - a, rx) + Math.imul(a - c2, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base1];
+                output[outputPos++] = c3 + ((Math.imul(b - a, rx) + Math.imul(a - c3, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+            } else if (ry >= rz && rz >= rx) {
+                base1 = X1 + Y1 + Z1;
+                base2 = X0 + Y1 + Z1;
+                base3 = X0 + Y1 + Z0;
+                a = CLUT[base2++]; b = CLUT[base3++];
+                output[outputPos++] = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                output[outputPos++] = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                output[outputPos++] = c2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base3];
+                output[outputPos++] = c3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - c3, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+            } else if (rz >= ry && ry >= rx) {
+                base1 = X1 + Y1 + Z1;
+                base2 = X0 + Y1 + Z1;
+                base4 = X0 + Y0 + Z1;
+                a = CLUT[base2++]; b = CLUT[base4++];
+                output[outputPos++] = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                output[outputPos++] = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                output[outputPos++] = c2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base4];
+                output[outputPos++] = c3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c3, rz) + 0x1000) >> 13);
+            } else {
+                output[outputPos++] = c0;
+                output[outputPos++] = c1;
+                output[outputPos++] = c2;
+                output[outputPos++] = c3;
+            }
+
+            if(preserveAlpha) {
+                output[outputPos++] = input[inputPos++];
+            } else {
+                if(inputHasAlpha)  { inputPos++;  }
+                if(outputHasAlpha) {
+                    output[outputPos++] = 0xFFFF;
+                }
+            }
+        }
+    };
+
+    /**
+     * INT16 HOT PATH (v1.3, Q0.13). 4D LUT, 4-channel input → 3-channel output.
+     * Typical use: u16 CMYK→RGB / CMYK→Lab analysis pipelines and
+     * 16-bit soft-proof previews. Mirror of
+     * tetrahedralInterp4DArray_3Ch_intLut_loop, redesigned for true
+     * 16-bit precision per the v1.3 (Q0.13) contract.
+     *
+     * v1.3 design — TWO-ROUNDING (XYZ → u16, then K-LERP → u16):
+     *   1. Tetra-interpolate XYZ at K0 plane → o = c + ((sum + 0x1000) >> 13)
+     *      yielding a u16 result. Single rounding from u13 weights.
+     *   2. If interpK, tetra-interpolate XYZ at K1 plane the same way → v
+     *      yielding a second u16 result.
+     *   3. Linear-interpolate o↔v over K with `o + ((imul(v - o, rk) + 0x1000) >> 13)`.
+     *      Single rounding from u13 weight rk.
+     *
+     * Why two roundings instead of u8's one (Q16.4 u20 intermediate)?
+     *   With u13 weights `imul(corner_u17, w_u13)` already eats ~30 bits of
+     *   i32 headroom; carrying a u20 XYZ result into a `(o << 8) + ...`
+     *   K-LERP would overflow i32 (30 + sign + outer add > 31). The two-
+     *   rounding path keeps every accumulator ≤ 2^30.6, fits in i32 with
+     *   ~1.4 bits headroom, and has worst-case error ≤ 1 LSB (u16) — same
+     *   spec as the 3D kernels, accepted in lieu of the u8 mode's exact
+     *   single-rounding because u16 outputs already absorb the noise.
+     *
+     * Per-axis bit budget (matches 3D, see tetrahedralInterp3DArray_3Ch_intLut16_loop):
+     *   delta = corner_u16 - c_u16 → s17.  imul(delta, weight_u13) → s30.
+     *   sum of 3 terms: s30.6. + 0x1000 (s30.6) → s30.6. >> 13 → s17.6,
+     *   ∈ [-8, 65543]. c_u16 + that → u16 (clamped by data invariants).
+     */
+    tetrahedralInterp4DArray_3Ch_intLut16_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){
+        var X0 = 0|0, X1 = 0|0, Y0 = 0|0, Y1 = 0|0, Z0 = 0|0, Z1 = 0|0, K0 = 0|0;
+        var rx = 0|0, ry = 0|0, rz = 0|0, rk = 0|0;
+        var px = 0|0, py = 0|0, pz = 0|0, pk = 0|0;
+        var input0 = 0|0, input1 = 0|0, input2 = 0|0, inputK = 0|0;
+        var base1 = 0|0, base2 = 0|0, base3 = 0|0, base4 = 0|0;
+        var c0 = 0|0, c1 = 0|0, c2 = 0|0;
+        var d0 = 0|0, d1 = 0|0, d2 = 0|0;
+        var o0 = 0|0, o1 = 0|0, o2 = 0|0;
+        var a = 0|0, b = 0|0;
+        var v = 0|0;
+        var interpK = false;
+
+        var gps  = intLut.gridPointsScale_fixed_u16 | 0;   // Q0.13 (v1.3)
+        var CLUT = intLut.CLUT;                             // u16 CLUT @ scale 65535 (v1.3)
+        var go0  = intLut.go0 | 0;
+        var go1  = intLut.go1 | 0;
+        var go2  = intLut.go2 | 0;
+        var go3  = intLut.go3 | 0;
+        var maxX = intLut.maxX | 0;
+        var maxY = intLut.maxY | 0;
+        var maxZ = intLut.maxZ | 0;
+        var maxK = intLut.maxK | 0;
+        var kOffset = (go3 - intLut.outputChannels + 1) | 0;
+
+        for(var p = 0; p < length; p++) {
+            inputK = input[inputPos++];
+            input0 = input[inputPos++];
+            input1 = input[inputPos++];
+            input2 = input[inputPos++];
+
+            pk = Math.imul(inputK, gps);
+            if (inputK === 65535) { K0 = maxK; rk = 0; }
+            else { K0 = pk >>> 13; rk = pk & 0x1FFF; K0 = Math.imul(K0, go3); }
+
+            px = Math.imul(input0, gps);
+            if (input0 === 65535) { X0 = maxX; X1 = maxX; rx = 0; }
+            else { X0 = px >>> 13; rx = px & 0x1FFF; X0 = Math.imul(X0, go2); X1 = X0 + go2; }
+
+            py = Math.imul(input1, gps);
+            if (input1 === 65535) { Y0 = maxY; Y1 = maxY; ry = 0; }
+            else { Y0 = py >>> 13; ry = py & 0x1FFF; Y0 = Math.imul(Y0, go1); Y1 = Y0 + go1; }
+
+            pz = Math.imul(input2, gps);
+            if (input2 === 65535) { Z0 = maxZ; Z1 = maxZ; rz = 0; }
+            else { Z0 = pz >>> 13; rz = pz & 0x1FFF; Z0 = Math.imul(Z0, go0); Z1 = Z0 + go0; }
+
+            base1 = X0 + Y0 + Z0 + K0;
+            c0 = CLUT[base1++]; c1 = CLUT[base1++]; c2 = CLUT[base1];
+
+            if (inputK === 65535 || rk === 0) {
+                interpK = false;
+            } else {
+                base1 += kOffset;
+                d0 = CLUT[base1++]; d1 = CLUT[base1++]; d2 = CLUT[base1];
+                interpK = true;
+            }
+
+            if (rx >= ry && ry >= rz) {
+                base1 = X1 + Y0 + Z0 + K0; base2 = X1 + Y1 + Z0 + K0; base4 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o0 = c0 + ((Math.imul(a - c0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o1 = c1 + ((Math.imul(a - c1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                o2 = c2 + ((Math.imul(a - c2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = d0 + ((Math.imul(a - d0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = d1 + ((Math.imul(a - d1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base1];   b = CLUT[base2];
+                    v = d2 + ((Math.imul(a - d2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else if (rx >= rz && rz >= ry) {
+                base1 = X1 + Y0 + Z0 + K0; base2 = X1 + Y1 + Z1 + K0; base3 = X1 + Y0 + Z1 + K0;
+                a = CLUT[base3++]; b = CLUT[base1++];
+                o0 = c0 + ((Math.imul(b - c0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                o1 = c1 + ((Math.imul(b - c1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3];   b = CLUT[base1];
+                o2 = c2 + ((Math.imul(b - c2, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base3 += kOffset; base1 += kOffset; base2 += kOffset;
+                    a = CLUT[base3++]; b = CLUT[base1++];
+                    v = d0 + ((Math.imul(b - d0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base3++]; b = CLUT[base1++];
+                    v = d1 + ((Math.imul(b - d1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base3];   b = CLUT[base1];
+                    v = d2 + ((Math.imul(b - d2, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else if (rx >= ry && rz >= rx) {
+                base1 = X1 + Y0 + Z1 + K0; base2 = X0 + Y0 + Z1 + K0; base3 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o0 = c0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o1 = c1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                o2 = c2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base3 += kOffset;
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = d0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - d0, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = d1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - d1, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base1];   b = CLUT[base2];
+                    v = d2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - d2, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else if (ry >= rx && rx >= rz) {
+                base1 = X1 + Y1 + Z0 + K0; base2 = X0 + Y1 + Z0 + K0; base4 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base2++]; b = CLUT[base1++];
+                o0 = c0 + ((Math.imul(b - a, rx) + Math.imul(a - c0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                o1 = c1 + ((Math.imul(b - a, rx) + Math.imul(a - c1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base1];
+                o2 = c2 + ((Math.imul(b - a, rx) + Math.imul(a - c2, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base1++];
+                    v = d0 + ((Math.imul(b - a, rx) + Math.imul(a - d0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base1++];
+                    v = d1 + ((Math.imul(b - a, rx) + Math.imul(a - d1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base1];
+                    v = d2 + ((Math.imul(b - a, rx) + Math.imul(a - d2, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else if (ry >= rz && rz >= rx) {
+                base1 = X1 + Y1 + Z1 + K0; base2 = X0 + Y1 + Z1 + K0; base3 = X0 + Y1 + Z0 + K0;
+                a = CLUT[base2++]; b = CLUT[base3++];
+                o0 = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                o1 = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base3];
+                o2 = c2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - c2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base3 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base3++];
+                    v = d0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - d0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base3++];
+                    v = d1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - d1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base3];
+                    v = d2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - d2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else if (rz >= ry && ry >= rx) {
+                base1 = X1 + Y1 + Z1 + K0; base2 = X0 + Y1 + Z1 + K0; base4 = X0 + Y0 + Z1 + K0;
+                a = CLUT[base2++]; b = CLUT[base4++];
+                o0 = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                o1 = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base4];
+                o2 = c2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base4++];
+                    v = d0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - d0, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base4++];
+                    v = d1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - d1, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base4];
+                    v = d2 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - d2, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                }
+            } else {
+                if (interpK) {
+                    output[outputPos++] = c0 + ((Math.imul(d0 - c0, rk) + 0x1000) >> 13);
+                    output[outputPos++] = c1 + ((Math.imul(d1 - c1, rk) + 0x1000) >> 13);
+                    output[outputPos++] = c2 + ((Math.imul(d2 - c2, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = c0;
+                    output[outputPos++] = c1;
+                    output[outputPos++] = c2;
+                }
+            }
+
+            if(preserveAlpha) {
+                output[outputPos++] = input[inputPos++];
+            } else {
+                if(inputHasAlpha)  { inputPos++;  }
+                if(outputHasAlpha) {
+                    output[outputPos++] = 0xFFFF;
+                }
+            }
+        }
+    };
+
+    /**
+     * INT16 HOT PATH (v1.3, Q0.13). 4D LUT, 4-channel input → 4-channel output.
+     * Typical use: u16 CMYK→CMYK profile-to-profile re-purposing
+     * (16-bit SWOP → GRACoL etc). 4-channel sibling of
+     * tetrahedralInterp4DArray_3Ch_intLut16_loop — same TWO-ROUNDING
+     * (XYZ→u16, then K-LERP→u16) design and bit-budget; see that
+     * function's header for the v1.3 (Q0.13) contract and i32 overflow
+     * analysis. Only difference is one extra channel per tetra case.
+     */
+    tetrahedralInterp4DArray_4Ch_intLut16_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){
+        var X0 = 0|0, X1 = 0|0, Y0 = 0|0, Y1 = 0|0, Z0 = 0|0, Z1 = 0|0, K0 = 0|0;
+        var rx = 0|0, ry = 0|0, rz = 0|0, rk = 0|0;
+        var px = 0|0, py = 0|0, pz = 0|0, pk = 0|0;
+        var input0 = 0|0, input1 = 0|0, input2 = 0|0, inputK = 0|0;
+        var base1 = 0|0, base2 = 0|0, base3 = 0|0, base4 = 0|0;
+        var c0 = 0|0, c1 = 0|0, c2 = 0|0, c3 = 0|0;
+        var k0 = 0|0, k1 = 0|0, k2 = 0|0, k3 = 0|0;
+        var o0 = 0|0, o1 = 0|0, o2 = 0|0, o3 = 0|0;
+        var a = 0|0, b = 0|0;
+        var v = 0|0;
+        var interpK = false;
+
+        var gps  = intLut.gridPointsScale_fixed_u16 | 0;   // Q0.13 (v1.3)
+        var CLUT = intLut.CLUT;                             // u16 CLUT @ scale 65535 (v1.3)
+        var go0  = intLut.go0 | 0;
+        var go1  = intLut.go1 | 0;
+        var go2  = intLut.go2 | 0;
+        var go3  = intLut.go3 | 0;
+        var maxX = intLut.maxX | 0;
+        var maxY = intLut.maxY | 0;
+        var maxZ = intLut.maxZ | 0;
+        var maxK = intLut.maxK | 0;
+        var kOffset = (go3 - intLut.outputChannels + 1) | 0;
+
+        for(var p = 0; p < length; p++) {
+            inputK = input[inputPos++];
+            input0 = input[inputPos++];
+            input1 = input[inputPos++];
+            input2 = input[inputPos++];
+
+            pk = Math.imul(inputK, gps);
+            if (inputK === 65535) { K0 = maxK; rk = 0; }
+            else { K0 = pk >>> 13; rk = pk & 0x1FFF; K0 = Math.imul(K0, go3); }
+
+            px = Math.imul(input0, gps);
+            if (input0 === 65535) { X0 = maxX; X1 = maxX; rx = 0; }
+            else { X0 = px >>> 13; rx = px & 0x1FFF; X0 = Math.imul(X0, go2); X1 = X0 + go2; }
+
+            py = Math.imul(input1, gps);
+            if (input1 === 65535) { Y0 = maxY; Y1 = maxY; ry = 0; }
+            else { Y0 = py >>> 13; ry = py & 0x1FFF; Y0 = Math.imul(Y0, go1); Y1 = Y0 + go1; }
+
+            pz = Math.imul(input2, gps);
+            if (input2 === 65535) { Z0 = maxZ; Z1 = maxZ; rz = 0; }
+            else { Z0 = pz >>> 13; rz = pz & 0x1FFF; Z0 = Math.imul(Z0, go0); Z1 = Z0 + go0; }
+
+            base1 = X0 + Y0 + Z0 + K0;
+            c0 = CLUT[base1++]; c1 = CLUT[base1++]; c2 = CLUT[base1++]; c3 = CLUT[base1];
+
+            if (inputK === 65535 || rk === 0) {
+                interpK = false;
+            } else {
+                base1 += kOffset;
+                k0 = CLUT[base1++]; k1 = CLUT[base1++]; k2 = CLUT[base1++]; k3 = CLUT[base1];
+                interpK = true;
+            }
+
+            if (rx >= ry && ry >= rz) {
+                base1 = X1 + Y0 + Z0 + K0; base2 = X1 + Y1 + Z0 + K0; base4 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o0 = c0 + ((Math.imul(a - c0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o1 = c1 + ((Math.imul(a - c1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o2 = c2 + ((Math.imul(a - c2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                o3 = c3 + ((Math.imul(a - c3, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k0 + ((Math.imul(a - k0, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k1 + ((Math.imul(a - k1, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k2 + ((Math.imul(a - k2, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base1];   b = CLUT[base2];
+                    v = k3 + ((Math.imul(a - k3, rx) + Math.imul(b - a, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else if (rx >= rz && rz >= ry) {
+                base1 = X1 + Y0 + Z0 + K0; base2 = X1 + Y1 + Z1 + K0; base3 = X1 + Y0 + Z1 + K0;
+                a = CLUT[base3++]; b = CLUT[base1++];
+                o0 = c0 + ((Math.imul(b - c0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                o1 = c1 + ((Math.imul(b - c1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3++]; b = CLUT[base1++];
+                o2 = c2 + ((Math.imul(b - c2, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base3];   b = CLUT[base1];
+                o3 = c3 + ((Math.imul(b - c3, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base3 += kOffset; base1 += kOffset; base2 += kOffset;
+                    a = CLUT[base3++]; b = CLUT[base1++];
+                    v = k0 + ((Math.imul(b - k0, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base3++]; b = CLUT[base1++];
+                    v = k1 + ((Math.imul(b - k1, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base3++]; b = CLUT[base1++];
+                    v = k2 + ((Math.imul(b - k2, rx) + Math.imul(CLUT[base2++] - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base3];   b = CLUT[base1];
+                    v = k3 + ((Math.imul(b - k3, rx) + Math.imul(CLUT[base2]   - a, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else if (rx >= ry && rz >= rx) {
+                base1 = X1 + Y0 + Z1 + K0; base2 = X0 + Y0 + Z1 + K0; base3 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o0 = c0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o1 = c1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base1++]; b = CLUT[base2++];
+                o2 = c2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                a = CLUT[base1];   b = CLUT[base2];
+                o3 = c3 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - c3, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base3 += kOffset;
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k0 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - k0, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k1 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - k1, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base1++]; b = CLUT[base2++];
+                    v = k2 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3++] - a, ry) + Math.imul(b - k2, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base1];   b = CLUT[base2];
+                    v = k3 + ((Math.imul(a - b, rx) + Math.imul(CLUT[base3]   - a, ry) + Math.imul(b - k3, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else if (ry >= rx && rx >= rz) {
+                base1 = X1 + Y1 + Z0 + K0; base2 = X0 + Y1 + Z0 + K0; base4 = X1 + Y1 + Z1 + K0;
+                a = CLUT[base2++]; b = CLUT[base1++];
+                o0 = c0 + ((Math.imul(b - a, rx) + Math.imul(a - c0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                o1 = c1 + ((Math.imul(b - a, rx) + Math.imul(a - c1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base1++];
+                o2 = c2 + ((Math.imul(b - a, rx) + Math.imul(a - c2, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base1];
+                o3 = c3 + ((Math.imul(b - a, rx) + Math.imul(a - c3, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base1++];
+                    v = k0 + ((Math.imul(b - a, rx) + Math.imul(a - k0, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base1++];
+                    v = k1 + ((Math.imul(b - a, rx) + Math.imul(a - k1, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base1++];
+                    v = k2 + ((Math.imul(b - a, rx) + Math.imul(a - k2, ry) + Math.imul(CLUT[base4++] - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base1];
+                    v = k3 + ((Math.imul(b - a, rx) + Math.imul(a - k3, ry) + Math.imul(CLUT[base4]   - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else if (ry >= rz && rz >= rx) {
+                base1 = X1 + Y1 + Z1 + K0; base2 = X0 + Y1 + Z1 + K0; base3 = X0 + Y1 + Z0 + K0;
+                a = CLUT[base2++]; b = CLUT[base3++];
+                o0 = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                o1 = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base3++];
+                o2 = c2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - c2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base3];
+                o3 = c3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - c3, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base3 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base3++];
+                    v = k0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - k0, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base3++];
+                    v = k1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - k1, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base3++];
+                    v = k2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(b - k2, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base3];
+                    v = k3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(b - k3, ry) + Math.imul(a - b, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else if (rz >= ry && ry >= rx) {
+                base1 = X1 + Y1 + Z1 + K0; base2 = X0 + Y1 + Z1 + K0; base4 = X0 + Y0 + Z1 + K0;
+                a = CLUT[base2++]; b = CLUT[base4++];
+                o0 = c0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c0, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                o1 = c1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c1, rz) + 0x1000) >> 13);
+                a = CLUT[base2++]; b = CLUT[base4++];
+                o2 = c2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c2, rz) + 0x1000) >> 13);
+                a = CLUT[base2];   b = CLUT[base4];
+                o3 = c3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - c3, rz) + 0x1000) >> 13);
+                if (interpK) {
+                    base1 += kOffset; base2 += kOffset; base4 += kOffset;
+                    a = CLUT[base2++]; b = CLUT[base4++];
+                    v = k0 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - k0, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o0 + ((Math.imul(v - o0, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base4++];
+                    v = k1 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - k1, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o1 + ((Math.imul(v - o1, rk) + 0x1000) >> 13);
+                    a = CLUT[base2++]; b = CLUT[base4++];
+                    v = k2 + ((Math.imul(CLUT[base1++] - a, rx) + Math.imul(a - b, ry) + Math.imul(b - k2, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o2 + ((Math.imul(v - o2, rk) + 0x1000) >> 13);
+                    a = CLUT[base2];   b = CLUT[base4];
+                    v = k3 + ((Math.imul(CLUT[base1]   - a, rx) + Math.imul(a - b, ry) + Math.imul(b - k3, rz) + 0x1000) >> 13);
+                    output[outputPos++] = o3 + ((Math.imul(v - o3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = o0;
+                    output[outputPos++] = o1;
+                    output[outputPos++] = o2;
+                    output[outputPos++] = o3;
+                }
+            } else {
+                if (interpK) {
+                    output[outputPos++] = c0 + ((Math.imul(k0 - c0, rk) + 0x1000) >> 13);
+                    output[outputPos++] = c1 + ((Math.imul(k1 - c1, rk) + 0x1000) >> 13);
+                    output[outputPos++] = c2 + ((Math.imul(k2 - c2, rk) + 0x1000) >> 13);
+                    output[outputPos++] = c3 + ((Math.imul(k3 - c3, rk) + 0x1000) >> 13);
+                } else {
+                    output[outputPos++] = c0;
+                    output[outputPos++] = c1;
+                    output[outputPos++] = c2;
+                    output[outputPos++] = c3;
+                }
+            }
+
+            if(preserveAlpha) {
+                output[outputPos++] = input[inputPos++];
+            } else {
+                if(inputHasAlpha)  { inputPos++;  }
+                if(outputHasAlpha) {
+                    output[outputPos++] = 0xFFFF;
                 }
             }
         }

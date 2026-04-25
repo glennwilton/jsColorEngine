@@ -1,15 +1,21 @@
 # `lcms_compat` — jsColorEngine ↔ LittleCMS compatibility harness
 
-**Status:** **runner shipped, oracle regenerator in v1.3.** The
-endpoint-diff runner (`run.js`) is live and passes 130/150 reference
-files in ~1.3 s on a current laptop. The lcms instrumentation patch
-(`lcms_patch/`) and the matching `transicc4batch` regenerator land
-in v1.3 — see
+**Status:** **runner + per-pixel triage shipped, oracle regenerator
+in v1.3.** The endpoint-diff runner (`run.js`) and the per-pixel
+stage-by-stage diff tool (`probe-pixel.js`) are live and pass 130/150
+reference files in ~1.3 s on a current laptop. The lcms instrumentation
+patch (`lcms_patch/`) and the matching `transicc4batch` regenerator
+land in v1.3 — see
 [docs/Roadmap.md § v1.3 Compat harness](../../docs/Roadmap.md#compat-harness--benchlcms_compat).
 
 This directory is jsColorEngine's long-term **compatibility and
 accuracy regression suite**, measured against LittleCMS 2.16 as the
 de-facto reference implementation.
+
+**Read first if you want the writeup:**
+[`docs/deepdive/Accuracy.md`](../../docs/deepdive/Accuracy.md) — full
+methodology, headline numbers, and the design philosophy that keeps
+jsCE an independent engine rather than an lcms port.
 
 ## Conclusion — jsColorEngine is a faithful float-precision peer of lcms
 
@@ -43,18 +49,23 @@ wall-clock total. See `last-run.md` for the per-file detail.
 | CMYK ink     | 0.013   | 0.039   | % ink | **well below dot-gain measurement precision** |
 | 2C spot      | 8.85e-5 | 2.88e-4 | fraction (0..1) | **noise floor — basically zero** |
 
-Two real algorithmic divergences worth flagging:
+Two real algorithmic divergences, both fully diagnosed using
+`probe-pixel.js` (see
+[Accuracy deepdive § Outliers](../../docs/deepdive/Accuracy.md#outliers--what-we-found)):
 
-- `* → ISOcoated_v2_grey1c_bas.ICC Perceptual` (no BPC) shows ~17–19
-  LSB drift on ~75 % of samples. Goes back to <0.01 LSB the moment
-  BPC is enabled, or with the Relative intent. So lcms's Perceptual
-  rendering on a 1C grey output without BPC bakes in something jsCE
-  doesn't (probably a BPC-ish black-point lift baked into lcms's
-  perceptual table for grey). v1.3 follow-up to investigate.
+- `* → ISOcoated_v2_grey1c_bas.ICC` Perceptual (no BPC) shows ~17–19
+  LSB drift, monotonically biggest in the shadows (8 LSB at sRGB=25
+  → 0.9 LSB at sRGB=230). Goes back to <0.01 LSB the moment BPC is
+  enabled or the intent switches to Relative. `probe-pixel`
+  localises it to one stage: lcms's perceptual A2B0 table for this
+  profile hard-pins shadows below sRGB ~25 to 0 % ink (paper
+  white); jsCE uses the inverse Gray TRC curve directly, which
+  preserves the linear extension. **Both readings are spec-permissive.**
+  Parked as a documented profile-table-interpretation difference.
 - `srgb → AdobeRGB1998.icc` (matrix→matrix) shows max 1.24 LSB on
-  125/8820 samples. Tiny matrix-multiplication-order or
-  whitepoint-adaptation residual. Below visibility but worth a stage
-  trace once `lcms_patch/` lands.
+  125/8820 samples. f64 round-off in the matrix multiplication
+  step, accumulated across the matrix→matrix chain. Below visibility,
+  unfixable without adopting lcms's exact instruction sequence.
 
 **Skipped:** 20 reference files for `D50_XYZ.icc` / `D65_XYZ.icc`.
 These are lcms-generated XYZ-identity working-space profiles
@@ -116,7 +127,7 @@ comparison, not as silent data churn.
 
 ### Trade-off this doesn't resolve: math truth vs ground truth
 
-Open design question (future v1.5 work): **do we preserve
+Open design question (future v1.6 work): **do we preserve
 jsColorEngine's full f64 pipeline and accept the small ΔE deltas
 against lcms, or add an opt-in `lutMode: 'int-pipeline'` that matches
 lcms bit-for-bit by adopting their Q15.16 rounding and 0..2 PCS
@@ -135,9 +146,9 @@ scaling?**
 
 The compat harness naturally supports both: run the endpoint-diff
 with the float pipeline to measure "are we close enough?", and (in
-v1.5) run a separate suite against `'int-pipeline'` to assert
+v1.6) run a separate suite against `'int-pipeline'` to assert
 "bit-exact where it matters." See
-[Roadmap § v1.5](../../docs/Roadmap.md#v15-optional--lutmode-int-pipeline--s1516-for-lcms-parity).
+[Roadmap § v1.6](../../docs/Roadmap.md#v16-optional--lutmode-int-pipeline--s1516-for-lcms-parity).
 
 ## Reference-set coverage
 
@@ -234,18 +245,29 @@ reference channel falls outside the device's native range and reports
 the OOG count alongside the in-gamut numbers. Lab is conceptually
 unbounded so it's never filtered.
 
-### Stage-level diff (planned, v1.3)
+### Stage-level diff (`probe-pixel.js`, shipped)
 
 ```bash
-# (Diagnostic, v1.3) Stage-level trace diff for a divergent (profile, intent, sample):
-node bench/lcms_compat/diff-stages.js \
-     --profile USSheetfedCoated.icc --intent Relative --sample 1234
+# Stage-level trace diff for a single pixel through any (src, dst, intent):
+node bench/lcms_compat/probe-pixel.js \
+     --src "*sRGB" --dst CoatedGRACoL2006.icc \
+     --intent Relative --in 128,2,99
 
-# → runs the same input through both engines with stage-debug on
-# → aligns lcms's -v3 stage trace (from lcms_patch tool) with
-#   jsColorEngine's debugInfo() output
-# → pinpoints which stage diverged, by how much
+# → drives the patched transicc.exe via piped stdin (no recompile —
+#   transicc's prompts are guarded by xisatty(stdin), so any pipe
+#   bypasses them and scanf consumes whitespace tokens)
+# → runs the same pixel through jsCE with pipelineDebug:true
+# → parses both -v3 / historyInfo() traces, filters BPC probe cycles,
+#   decodes lcms's PCS-LabV2 endpoint encoding, aligns by output-shape
+#   signature
+# → prints aligned per-stage Δ and endpoint metric in destination
+#   native units
 ```
+
+The grey-1c divergence in the table above was diagnosed end-to-end
+this way — see
+[Accuracy deepdive § probe-pixel.js](../../docs/deepdive/Accuracy.md#how-probe-pixeljs-works-the-deep-dive)
+for the worked example and parser quirks.
 
 ## Regenerating the oracle (v1.3)
 

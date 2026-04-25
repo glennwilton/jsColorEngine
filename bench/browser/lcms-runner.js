@@ -92,6 +92,14 @@ export async function loadLcms() {
         TYPE_RGB_8:                   mod.TYPE_RGB_8,
         TYPE_CMYK_8:                  mod.TYPE_CMYK_8,
         TYPE_Lab_8:                   mod.TYPE_Lab_8,
+        // 16-bit formats (added in v1.3 for the int16 path comparison).
+        // lcms's u16 Lab uses the canonical ICC v2/v4 encoding:
+        //   L : [0..0xFFFF] -> [0..100]
+        //   a : [0..0xFFFF] -> [-128..+128]   (offset binary)
+        //   b : [0..0xFFFF] -> [-128..+128]
+        TYPE_RGB_16:                  mod.TYPE_RGB_16,
+        TYPE_CMYK_16:                 mod.TYPE_CMYK_16,
+        TYPE_Lab_16:                  mod.TYPE_Lab_16,
         INTENT_RELATIVE_COLORIMETRIC: mod.INTENT_RELATIVE_COLORIMETRIC,
         cmsFLAGS_HIGHRESPRECALC:      mod.cmsFLAGS_HIGHRESPRECALC,
         cmsFLAGS_LOWRESPRECALC:       mod.cmsFLAGS_LOWRESPRECALC,
@@ -164,19 +172,27 @@ export function freeProfiles(lcms, profiles) {
  * cmsTransform handle. Matches the shape returned by makeJsceRunner()
  * in main.js so the timing harness is identical for both.
  *
- * @param  {object}     lcms        instantiated lcms-wasm runtime
- * @param  {object}     consts      named constants from loadLcms()
- * @param  {object}     wf          { pIn, fIn, pOut, fOut, inCh, outCh }
- * @param  {number}     flags       lcms flag mask (e.g. HIGHRESPRECALC | NOOPTIMIZE)
- * @param  {Uint8Array} input       pixel buffer (length = pixels * inCh)
- * @param  {number}     pixelCount  number of pixels to transform per call
+ * @param  {object}              lcms        instantiated lcms-wasm runtime
+ * @param  {object}              consts      named constants from loadLcms()
+ * @param  {object}              wf          { pIn, fIn, pOut, fOut, inCh, outCh, outBytesPerChannel? }
+ * @param  {number}              flags       lcms flag mask (e.g. HIGHRESPRECALC | NOOPTIMIZE)
+ * @param  {Uint8Array|Uint16Array} input    pixel buffer (length = pixels * inCh).
+ *                                           u8 -> 8-bit lcms TYPE_*_8 path,
+ *                                           u16 -> 16-bit lcms TYPE_*_16 path.
+ *                                           Bytes-per-channel for the input is
+ *                                           taken from input.BYTES_PER_ELEMENT.
+ * @param  {number}              pixelCount  number of pixels to transform per call
+ *
+ * For asymmetric workflows (u16 input -> u16 output, but caller passes a u8
+ * input array somehow) wf.outBytesPerChannel can override the output stride.
+ * Default behaviour: output stride matches input stride.
  *
  * Returns:
  *   {
  *     run:         () => void          // hot-path: single _cmsDoTransform call
  *     free:        () => void          // free heap buffers + transform handle
  *     lutBuildMs:  number              // wall-clock of cmsCreateTransform
- *     output:      Uint8Array          // result buffer (heap-backed view)
+ *     outputBytes: () => Uint8Array    // result buffer (raw bytes, heap-backed)
  *   }
  *
  * If cmsCreateTransform fails (e.g. unsupported flag combo on this profile),
@@ -184,8 +200,10 @@ export function freeProfiles(lcms, profiles) {
  * and continues with the next config.
  */
 export function makeLcmsRunner(lcms, consts, wf, flags, input, pixelCount) {
-    const inBytes  = pixelCount * wf.inCh;
-    const outBytes = pixelCount * wf.outCh;
+    const inBpC  = input.BYTES_PER_ELEMENT || 1;
+    const outBpC = wf.outBytesPerChannel || inBpC;
+    const inBytes  = pixelCount * wf.inCh  * inBpC;
+    const outBytes = pixelCount * wf.outCh * outBpC;
 
     const inPtr  = lcms._malloc(inBytes);
     const outPtr = lcms._malloc(outBytes);
@@ -194,7 +212,16 @@ export function makeLcmsRunner(lcms, consts, wf, flags, input, pixelCount) {
         if (outPtr) lcms._free(outPtr);
         throw new Error('lcms-wasm: _malloc failed for ' + (inBytes + outBytes) + ' bytes');
     }
-    lcms.HEAPU8.set(input.subarray(0, inBytes), inPtr);
+    // Copy input into the wasm heap. For u8 we treat it as a byte stream;
+    // for u16 we use the heap's u16 view aligned at the same pointer so
+    // endianness matches lcms (both are little-endian on every supported
+    // host).
+    if (inBpC === 2) {
+        new Uint16Array(lcms.HEAPU8.buffer, inPtr, pixelCount * wf.inCh)
+            .set(input.subarray(0, pixelCount * wf.inCh));
+    } else {
+        lcms.HEAPU8.set(input.subarray(0, inBytes), inPtr);
+    }
 
     // ---- LUT build time: cmsCreateTransform is the lcms equivalent of
     // jsColorEngine's "Transform.create(...)" + buildIntLut. With

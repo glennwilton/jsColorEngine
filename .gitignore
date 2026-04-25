@@ -35,5 +35,6 @@ speed_tests/
 
 # Scratch / work-in-progress instrumented lcms2 tree — will be
 # distilled down to a patch file under bench/lcms_compat/lcms_patch/
-# during v1.3 kick-off, at which point this whole folder goes away.
+# in v1.5 (deferred from v1.3 to keep the release scoped), at which
+# point this whole folder goes away.
 /bench/lcms_exposed/

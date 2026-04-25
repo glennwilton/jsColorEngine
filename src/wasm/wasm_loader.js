@@ -95,15 +95,23 @@
 
 'use strict';
 
-var tetra3dNchBytes  = require('./tetra3d_nch.wasm.js');
-var tetra3dSimdBytes = require('./tetra3d_simd.wasm.js');
-var tetra4dNchBytes  = require('./tetra4d_nch.wasm.js');
-var tetra4dSimdBytes = require('./tetra4d_simd.wasm.js');
+var tetra3dNchBytes         = require('./tetra3d_nch.wasm.js');
+var tetra3dNchInt16Bytes    = require('./tetra3d_nch_int16.wasm.js');
+var tetra3dSimdBytes        = require('./tetra3d_simd.wasm.js');
+var tetra3dSimdInt16Bytes   = require('./tetra3d_simd_int16.wasm.js');
+var tetra4dNchBytes         = require('./tetra4d_nch.wasm.js');
+var tetra4dNchInt16Bytes    = require('./tetra4d_nch_int16.wasm.js');
+var tetra4dSimdBytes        = require('./tetra4d_simd.wasm.js');
+var tetra4dSimdInt16Bytes   = require('./tetra4d_simd_int16.wasm.js');
 
-var SCALAR_CACHE_KEY   = '__jsColorEngine_tetra3d_nch_module__';
-var SIMD_CACHE_KEY     = '__jsColorEngine_tetra3d_simd_module__';
-var SCALAR4D_CACHE_KEY = '__jsColorEngine_tetra4d_nch_module__';
-var SIMD4D_CACHE_KEY   = '__jsColorEngine_tetra4d_simd_module__';
+var SCALAR_CACHE_KEY         = '__jsColorEngine_tetra3d_nch_module__';
+var SCALAR_INT16_CACHE_KEY   = '__jsColorEngine_tetra3d_nch_int16_module__';
+var SIMD_CACHE_KEY           = '__jsColorEngine_tetra3d_simd_module__';
+var SIMD_INT16_CACHE_KEY     = '__jsColorEngine_tetra3d_simd_int16_module__';
+var SCALAR4D_CACHE_KEY       = '__jsColorEngine_tetra4d_nch_module__';
+var SCALAR4D_INT16_CACHE_KEY = '__jsColorEngine_tetra4d_nch_int16_module__';
+var SIMD4D_CACHE_KEY         = '__jsColorEngine_tetra4d_simd_module__';
+var SIMD4D_INT16_CACHE_KEY   = '__jsColorEngine_tetra4d_simd_int16_module__';
 
 function hasWebAssembly() {
     return typeof WebAssembly !== 'undefined'
@@ -152,6 +160,92 @@ function createTetra3DState(options) {
         return null;
     }
     return new Tetra3DState(exports, exports.interp_tetra3d_nCh, false);
+}
+
+/**
+ * Create per-Transform scalar WASM state for the **u16 I/O** 3D
+ * tetrahedral kernel (`tetra3d_nch_int16.wat`). Returns null on
+ * unsupported / failed instantiation — callers should then demote
+ * to the JS `int16` kernel.
+ *
+ * The kernel reads u16 input + writes u16 output, but uses the same
+ * intLut.CLUT (u16 store at scale=65280) as the u8 kernel — only
+ * `intLut.gridPointsScale_fixed_u16` is passed for the input scale.
+ *
+ * Identical interface as Tetra3DState — `bind()` + `runTetra3D()`.
+ * The state class (Tetra3DInt16State) parameterises bytes-per-
+ * channel = 2 throughout, including the alpha tail.
+ *
+ * Sibling of createTetra3DState (u8 I/O); both can coexist and share
+ * a single `wasmCache` bag — distinct cache keys.
+ *
+ * @param {Object} [options]
+ * @param {Object} [options.wasmCache]  Optional shared cache bag.
+ * @returns {Tetra3DInt16State|null}
+ */
+function createTetra3DInt16State(options) {
+    if (!hasWebAssembly()) {
+        return null;
+    }
+    var cache = options && options.wasmCache;
+    var mod, instance, exports;
+    try {
+        mod = getCompiledModule(cache, SCALAR_INT16_CACHE_KEY, tetra3dNchInt16Bytes);
+        instance = new WebAssembly.Instance(mod, {});
+        exports = instance.exports;
+    } catch (e) {
+        return null;
+    }
+    if (typeof exports.interp_tetra3d_nCh_int16 !== 'function' || !exports.memory) {
+        return null;
+    }
+    return new Tetra3DInt16State(exports, exports.interp_tetra3d_nCh_int16, false);
+}
+
+/**
+ * Create per-Transform SIMD WASM state for the **u16 I/O** 3D
+ * tetrahedral kernel (`tetra3d_simd_int16.wat`). Returns null when
+ * WebAssembly SIMD isn't supported by the host (module compile throws —
+ * same detect path as createTetra3DSimdState) or instantiation
+ * otherwise fails. Callers should then demote lutMode from
+ * 'int16-wasm-simd' to 'int16-wasm-scalar' and try
+ * createTetra3DInt16State() instead.
+ *
+ * Only supports cMax ∈ {3, 4}. Callers with cMax outside that range
+ * should route through the scalar u16 state; see
+ * createTetra3DInt16State().
+ *
+ * Bit-exact with the scalar u16 3D kernel (Q0.13, no precision
+ * trade-off vs scalar — SIMD is a pure speed lift). Same wrapper
+ * class as scalar (Tetra3DInt16State) parameterised by isSimd=true,
+ * which adds 4 bytes of output-tail slack in bind() to absorb the
+ * v128.store64_lane overrun on cMax=3.
+ *
+ * @param {Object} [options]
+ * @param {Object} [options.wasmCache]  Optional shared cache bag.
+ *          Uses a different key from the scalar u16 kernel so all
+ *          eight modules (3D scalar/SIMD u8/u16, 4D scalar/SIMD
+ *          u8/u16) coexist in the same bag.
+ *
+ * @returns {Tetra3DInt16State|null}
+ */
+function createTetra3DInt16SimdState(options) {
+    if (!hasWebAssembly()) {
+        return null;
+    }
+    var cache = options && options.wasmCache;
+    var mod, instance, exports;
+    try {
+        mod = getCompiledModule(cache, SIMD_INT16_CACHE_KEY, tetra3dSimdInt16Bytes);
+        instance = new WebAssembly.Instance(mod, {});
+        exports = instance.exports;
+    } catch (e) {
+        return null;
+    }
+    if (typeof exports.interp_tetra3d_simd_int16 !== 'function' || !exports.memory) {
+        return null;
+    }
+    return new Tetra3DInt16State(exports, exports.interp_tetra3d_simd_int16, true);
 }
 
 /**
@@ -228,6 +322,89 @@ function createTetra4DState(options) {
         return null;
     }
     return new Tetra4DState(exports, exports.interp_tetra4d_nCh, false);
+}
+
+/**
+ * Create per-Transform scalar WASM state for the **u16 I/O** 4D
+ * (CMYK input) tetrahedral kernel (`tetra4d_nch_int16.wat`). Returns
+ * null on unsupported / failed instantiation — callers should then
+ * demote to the JS `int16` kernel for 4D inputs.
+ *
+ * Sibling of createTetra4DState (u8 I/O) and createTetra3DInt16State
+ * (3D u16). All three coexist in the same wasmCache bag — distinct
+ * cache keys.
+ *
+ * Same intLut.CLUT (u16 store at scale=65280) as the u8 4D kernel —
+ * only `intLut.gridPointsScale_fixed_u16` is passed for the input
+ * scale. The state class (Tetra4DInt16State) parameterises bytes-
+ * per-channel = 2 throughout, including the alpha tail.
+ *
+ * @param {Object} [options]
+ * @param {Object} [options.wasmCache]  Optional shared cache bag.
+ * @returns {Tetra4DInt16State|null}
+ */
+function createTetra4DInt16State(options) {
+    if (!hasWebAssembly()) {
+        return null;
+    }
+    var cache = options && options.wasmCache;
+    var mod, instance, exports;
+    try {
+        mod = getCompiledModule(cache, SCALAR4D_INT16_CACHE_KEY, tetra4dNchInt16Bytes);
+        instance = new WebAssembly.Instance(mod, {});
+        exports = instance.exports;
+    } catch (e) {
+        return null;
+    }
+    if (typeof exports.interp_tetra4d_nCh_int16 !== 'function' || !exports.memory) {
+        return null;
+    }
+    return new Tetra4DInt16State(exports, exports.interp_tetra4d_nCh_int16, false);
+}
+
+/**
+ * Create per-Transform SIMD WASM state for the **u16 I/O** 4D
+ * (CMYK input) tetrahedral kernel (`tetra4d_simd_int16.wat`).
+ * Returns null when WebAssembly SIMD isn't supported by the host
+ * (module compile throws — same detect path as createTetra4DSimdState)
+ * or instantiation otherwise fails. Callers should then demote
+ * lutMode from 'int16-wasm-simd' to 'int16-wasm-scalar' and try
+ * createTetra4DInt16State() instead.
+ *
+ * Only supports cMax ∈ {3, 4}. Same isSimd=true wrapper as the 3D
+ * sibling — bind() adds 4 bytes output-tail slack to absorb the
+ * v128.store64_lane overrun on cMax=3.
+ *
+ * Bit-exact with the scalar u16 4D kernel (Q0.13 + two-rounding K-LERP).
+ * Crucially, the SIMD kernel keeps the K0 intermediate in a v128
+ * local register and ignores $scratchPtr — no scratch round-trip
+ * through linear memory like the scalar 4D u16 kernel needs.
+ *
+ * @param {Object} [options]
+ * @param {Object} [options.wasmCache]  Optional shared cache bag.
+ *          Uses a different key from the other seven kernel modules
+ *          so all eight (3D scalar/SIMD u8/u16, 4D scalar/SIMD u8/u16)
+ *          coexist in the same bag.
+ *
+ * @returns {Tetra4DInt16State|null}
+ */
+function createTetra4DInt16SimdState(options) {
+    if (!hasWebAssembly()) {
+        return null;
+    }
+    var cache = options && options.wasmCache;
+    var mod, instance, exports;
+    try {
+        mod = getCompiledModule(cache, SIMD4D_INT16_CACHE_KEY, tetra4dSimdInt16Bytes);
+        instance = new WebAssembly.Instance(mod, {});
+        exports = instance.exports;
+    } catch (e) {
+        return null;
+    }
+    if (typeof exports.interp_tetra4d_simd_int16 !== 'function' || !exports.memory) {
+        return null;
+    }
+    return new Tetra4DInt16State(exports, exports.interp_tetra4d_simd_int16, true);
 }
 
 /**
@@ -436,6 +613,148 @@ Tetra3DState.prototype.runTetra3D = function (
 };
 
 // ---------------------------------------------------------------------------
+// Tetra3DInt16State — per-instance state for the u16-I/O 3D scalar kernel
+// ---------------------------------------------------------------------------
+//
+// Identical layout / lifecycle to Tetra3DState; differences are only at
+// the I/O width:
+//
+//   - bytes per channel = 2 (u16) on BOTH input and output, including
+//     the alpha tail
+//   - input  copy uses Uint16Array view of memory.buffer
+//   - output copy uses Uint16Array view of memory.buffer
+//   - kernel takes intLut.gridPointsScale_fixed_u16 (NOT *_fixed) — the
+//     dispatcher is responsible for passing the right field
+//
+// The state class is a separate clone (not a parameterised Tetra3DState)
+// to keep the u8 hot path completely unchanged — zero risk of perf
+// regression on the v1.2 default kernel from this v1.3 work.
+
+function Tetra3DInt16State(exports, kernel, isSimd) {
+    this.exports       = exports;
+    this.memory        = exports.memory;
+    this.kernel        = kernel;
+    this.isSimd        = !!isSimd;
+    this.lutPtr        = 0;
+    this.inputPtr      = 0;
+    this.outputPtr     = 0;
+    this.lutBytes      = 0;
+    this.boundIntLut   = null;
+    this.reservedCap   = 0;
+    this.dispatchCount = 0;
+}
+
+/**
+ * inBPP / outBPP defaults assume no alpha — 6 bytes (3 × u16) input
+ * and `cMax * 2` bytes output. Pass 8 / (cMax+1)*2 when alpha is
+ * present on either side.
+ */
+Tetra3DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
+    if (inBPP  === undefined) inBPP  = 6;             // 3 u16 channels
+    if (outBPP === undefined) outBPP = cMax * 2;       // cMax u16 channels
+    var lutBytes    = intLut.CLUT.byteLength;
+    var inputBytes  = pixelCount * inBPP;
+    var outputBytes = pixelCount * outBPP;
+
+    // SIMD u16 kernel stores 8 bytes per pixel via v128.store64_lane
+    // (4 lanes of u16). For cMax=3 without alpha (outBPP=6), the last
+    // pixel writes 2 junk bytes past the nominal end of the output
+    // region. Pad by 4 bytes defensively (mirrors the u8 SIMD slack
+    // pattern in Tetra3DState.prototype.bind, where it's 4 bytes for
+    // store32_lane / 1 junk byte). Trivial cost, avoids conditionally
+    // branching here on (cMax, outBPP).
+    var outputTail = this.isSimd ? 4 : 0;
+
+    var lutPtr      = 0;
+    var lutAligned  = (lutBytes + 7) & ~7;
+    var inputPtr    = lutPtr + lutAligned;
+    var inputEnd    = inputPtr + ((inputBytes + 7) & ~7);
+    var outputPtr   = inputEnd;
+    var totalBytes  = outputPtr + outputBytes + outputTail;
+
+    var pagesNeeded = Math.ceil(totalBytes / 65536);
+    var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+    if (pagesHave < pagesNeeded) {
+        this.memory.grow(pagesNeeded - pagesHave);
+    }
+
+    if (this.boundIntLut !== intLut || this.lutBytes !== lutBytes) {
+        var memU16 = new Uint16Array(this.memory.buffer);
+        memU16.set(intLut.CLUT, lutPtr >> 1);
+        this.boundIntLut = intLut;
+        this.lutBytes    = lutBytes;
+    }
+
+    this.lutPtr      = lutPtr;
+    this.inputPtr    = inputPtr;
+    this.outputPtr   = outputPtr;
+    this.reservedCap = inputBytes + outputBytes;
+};
+
+/**
+ * Run the 3D u16 tetrahedral kernel. bind() must have been called
+ * first with matching (intLut, pixelCount, cMax, inBPP, outBPP).
+ *
+ * Alpha handling matches the u8 state exactly (three modes), with
+ * one difference: alpha samples are u16 (2 bytes), so $inAlphaSkip
+ * is 0 or 1 *samples* and the kernel internally shifts by 1 to get
+ * bytes.
+ */
+Tetra3DInt16State.prototype.runTetra3D = function (
+    input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+    inputHasAlpha, outputHasAlpha, preserveAlpha
+) {
+    var inAlphaSkip  = inputHasAlpha ? 1 : 0;
+    var outAlphaMode = 0;
+    if (preserveAlpha) {
+        outAlphaMode = 2;
+    } else if (outputHasAlpha) {
+        outAlphaMode = 1;
+    }
+
+    var inSamples   = inputHasAlpha  ? 4 : 3;
+    var outSamples  = outputHasAlpha ? cMax + 1 : cMax;
+    var inputBytes  = pixelCount * inSamples  * 2;
+    var outputBytes = pixelCount * outSamples * 2;
+    var buf         = this.memory.buffer;
+
+    // -- Copy input into WASM linear memory (u16 view) ---------------------
+    if (input instanceof Uint16Array) {
+        var memU16In = new Uint16Array(buf);
+        memU16In.set(input.subarray(inputPos, inputPos + pixelCount * inSamples), this.inputPtr >> 1);
+    } else {
+        // Fallback: arbitrary array-like → scalar u16 store loop.
+        var memU8 = new Uint8Array(buf);
+        for (var i = 0; i < pixelCount * inSamples; i++) {
+            var v = input[inputPos + i] & 0xFFFF;
+            memU8[this.inputPtr + i * 2    ] =  v        & 0xFF;
+            memU8[this.inputPtr + i * 2 + 1] = (v >>> 8) & 0xFF;
+        }
+    }
+
+    // -- Call kernel -------------------------------------------------------
+    this.kernel(
+        this.inputPtr, this.outputPtr, this.lutPtr,
+        pixelCount, cMax,
+        intLut.go0, intLut.go1, intLut.go2,
+        intLut.gridPointsScale_fixed_u16,
+        intLut.maxX, intLut.maxY, intLut.maxZ,
+        inAlphaSkip, outAlphaMode
+    );
+    this.dispatchCount++;
+
+    // -- Copy output out of WASM linear memory (u16 view) ------------------
+    var outView = new Uint16Array(this.memory.buffer, this.outputPtr, pixelCount * outSamples);
+    if (output instanceof Uint16Array) {
+        output.set(outView, outputPos);
+    } else {
+        for (var j = 0; j < pixelCount * outSamples; j++) {
+            output[outputPos + j] = outView[j];
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Tetra4DState — per-instance memory layout + kernel call wrapper (4D)
 // ---------------------------------------------------------------------------
 //
@@ -581,10 +900,158 @@ Tetra4DState.prototype.runTetra4D = function (
     }
 };
 
+// ---------------------------------------------------------------------------
+// Tetra4DInt16State — per-instance state for the u16-I/O 4D scalar kernel
+// ---------------------------------------------------------------------------
+//
+// Hybrid of Tetra4DState (4D-ness: scratchPtr, go3, maxK) and
+// Tetra3DInt16State (u16 I/O: 2-byte channels, Uint16Array memcpy,
+// gridPointsScale_fixed_u16). Same lifecycle (bind() then runTetra4D())
+// and same alpha contract.
+//
+// The state class is a separate clone (not a parameterised Tetra4DState)
+// to keep the u8 4D hot path completely unchanged.
+
+function Tetra4DInt16State(exports, kernel, isSimd) {
+    this.exports       = exports;
+    this.memory        = exports.memory;
+    this.kernel        = kernel;
+    this.isSimd        = !!isSimd;
+    this.lutPtr        = 0;
+    this.inputPtr      = 0;
+    this.outputPtr     = 0;
+    this.scratchPtr    = 0;
+    this.lutBytes      = 0;
+    this.boundIntLut   = null;
+    this.reservedCap   = 0;
+    this.dispatchCount = 0;
+}
+
+// Scratch region size in bytes (scalar 4D u16 K0-plane intermediate
+// buffer, see tetra4d_nch_int16.wat). The SIMD 4D u16 kernel keeps
+// the K0 intermediate in a v128 local register and ignores
+// $scratchPtr — but we still allocate the region so the same bind()
+// layout works for both scalar and SIMD without a branch on isSimd
+// here.
+Tetra4DInt16State.SCRATCH_BYTES = 64;
+
+/**
+ * inBPP / outBPP defaults assume no alpha — 8 bytes (4 × u16) input
+ * and `cMax * 2` bytes output. Pass 10 / (cMax+1)*2 when alpha is
+ * present on either side.
+ */
+Tetra4DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
+    if (inBPP  === undefined) inBPP  = 8;             // 4 u16 channels (KCMY)
+    if (outBPP === undefined) outBPP = cMax * 2;       // cMax u16 channels
+    var lutBytes     = intLut.CLUT.byteLength;
+    var inputBytes   = pixelCount * inBPP;
+    var outputBytes  = pixelCount * outBPP;
+    var scratchBytes = Tetra4DInt16State.SCRATCH_BYTES;
+
+    // SIMD u16 kernel stores 8 bytes per pixel via v128.store64_lane
+    // (4 lanes of u16). For cMax=3 without alpha (outBPP=6), the
+    // last pixel writes 2 junk bytes past the nominal output end;
+    // pad by 4 defensively (mirrors Tetra3DInt16State / Tetra4DState
+    // SIMD slack convention).
+    var outputTail   = this.isSimd ? 4 : 0;
+
+    var lutPtr      = 0;
+    var lutAligned  = (lutBytes + 7) & ~7;
+    var inputPtr    = lutPtr + lutAligned;
+    var inputEnd    = inputPtr + ((inputBytes + 7) & ~7);
+    var outputPtr   = inputEnd;
+    var outputEnd   = outputPtr + ((outputBytes + outputTail + 3) & ~3);
+    var scratchPtr  = outputEnd;
+    var totalBytes  = scratchPtr + scratchBytes;
+
+    var pagesNeeded = Math.ceil(totalBytes / 65536);
+    var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+    if (pagesHave < pagesNeeded) {
+        this.memory.grow(pagesNeeded - pagesHave);
+    }
+
+    if (this.boundIntLut !== intLut || this.lutBytes !== lutBytes) {
+        var memU16 = new Uint16Array(this.memory.buffer);
+        memU16.set(intLut.CLUT, lutPtr >> 1);
+        this.boundIntLut = intLut;
+        this.lutBytes    = lutBytes;
+    }
+
+    this.lutPtr      = lutPtr;
+    this.inputPtr    = inputPtr;
+    this.outputPtr   = outputPtr;
+    this.scratchPtr  = scratchPtr;
+    this.reservedCap = inputBytes + outputBytes;
+};
+
+/**
+ * Run the 4D u16 tetrahedral kernel. bind() must have been called
+ * first with matching (intLut, pixelCount, cMax, inBPP, outBPP).
+ *
+ * Alpha handling matches the u8 4D state exactly (three modes), with
+ * one difference: alpha samples are u16 (2 bytes), so $inAlphaSkip
+ * is 0 or 1 *samples* and the kernel internally shifts by 1 to get
+ * bytes.
+ */
+Tetra4DInt16State.prototype.runTetra4D = function (
+    input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+    inputHasAlpha, outputHasAlpha, preserveAlpha
+) {
+    var inAlphaSkip  = inputHasAlpha ? 1 : 0;
+    var outAlphaMode = 0;
+    if (preserveAlpha) {
+        outAlphaMode = 2;
+    } else if (outputHasAlpha) {
+        outAlphaMode = 1;
+    }
+
+    var inSamples   = inputHasAlpha  ? 5 : 4;     // KCMY [+A]
+    var outSamples  = outputHasAlpha ? cMax + 1 : cMax;
+    var inputBytes  = pixelCount * inSamples  * 2;
+    var outputBytes = pixelCount * outSamples * 2;
+    var buf         = this.memory.buffer;
+
+    if (input instanceof Uint16Array) {
+        var memU16In = new Uint16Array(buf);
+        memU16In.set(input.subarray(inputPos, inputPos + pixelCount * inSamples), this.inputPtr >> 1);
+    } else {
+        var memU8 = new Uint8Array(buf);
+        for (var i = 0; i < pixelCount * inSamples; i++) {
+            var v = input[inputPos + i] & 0xFFFF;
+            memU8[this.inputPtr + i * 2    ] =  v        & 0xFF;
+            memU8[this.inputPtr + i * 2 + 1] = (v >>> 8) & 0xFF;
+        }
+    }
+
+    this.kernel(
+        this.inputPtr, this.outputPtr, this.lutPtr,
+        pixelCount, cMax,
+        intLut.go0, intLut.go1, intLut.go2, intLut.go3,
+        intLut.gridPointsScale_fixed_u16,
+        intLut.maxX, intLut.maxY, intLut.maxZ, intLut.maxK,
+        this.scratchPtr,
+        inAlphaSkip, outAlphaMode
+    );
+    this.dispatchCount++;
+
+    var outView = new Uint16Array(this.memory.buffer, this.outputPtr, pixelCount * outSamples);
+    if (output instanceof Uint16Array) {
+        output.set(outView, outputPos);
+    } else {
+        for (var j = 0; j < pixelCount * outSamples; j++) {
+            output[outputPos + j] = outView[j];
+        }
+    }
+};
+
 module.exports = {
     hasWebAssembly: hasWebAssembly,
     createTetra3DState: createTetra3DState,
+    createTetra3DInt16State: createTetra3DInt16State,
     createTetra3DSimdState: createTetra3DSimdState,
+    createTetra3DInt16SimdState: createTetra3DInt16SimdState,
     createTetra4DState: createTetra4DState,
+    createTetra4DInt16State: createTetra4DInt16State,
     createTetra4DSimdState: createTetra4DSimdState,
+    createTetra4DInt16SimdState: createTetra4DInt16SimdState,
 };

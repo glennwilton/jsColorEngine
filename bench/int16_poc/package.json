@@ -1,0 +1,18 @@
+{
+  "name": "int16-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "POC: jsColorEngine 16-bit JS hot kernel vs lcms-wasm TYPE_*_16",
+  "main": "bench_int16_vs_lcmswasm.js",
+  "scripts": {
+    "bench": "node bench_int16_vs_lcmswasm.js",
+    "bench:engine": "node bench_engine_int16.js",
+    "bench:simd": "node bench_int16_simd_vs_scalar.js",
+    "accuracy:v1_6": "node accuracy_v1_6_vs_lcms.js",
+    "accuracy:v1_7": "node accuracy_v1_7_self.js"
+  },
+  "dependencies": {
+    "lcms-wasm": "^1.0.5"
+  }
+}

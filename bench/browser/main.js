@@ -106,6 +106,22 @@ function buildInput(channels, pixelCount) {
 }
 
 /**
+ * 16-bit input (full u16 range, not just u8 expanded). Same PRNG shape as
+ * buildInput so the byte stream is correlated across calls of the same
+ * seed - lets jsce u16 and lcms u16 see the same pixels and keeps cache
+ * behaviour like-for-like with the u8 path.
+ */
+function buildInputU16(channels, pixelCount) {
+    const arr = new Uint16Array(pixelCount * channels);
+    let seed = 0x13579bdf;
+    for (let i = 0; i < arr.length; i++) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        arr[i] = seed & 0xffff;
+    }
+    return arr;
+}
+
+/**
  * Detect WebAssembly SIMD support. Validates a minimal module:
  *   (module (func (result v128) v128.const i32x4 0 0 0 0))
  *
@@ -157,6 +173,11 @@ async function detectWasmSimd() {
  *   - shortLabel : table cell label
  */
 function directionConfigs(jsGracol) {
+    // Each direction carries BOTH 8-bit and 16-bit lcms format names. The
+    // 16-bit ones (fIn16/fOut16) are what we feed when the bench mode is
+    // a TYPE_*_16 lcms variant - same profile handles, different format
+    // tag. The lcms transform is recreated per cell anyway (cmsCreateTransform
+    // bakes the precalc LUT against the chosen format), so this is free.
     return [
         {
             id: 'rgb-rgb',
@@ -166,28 +187,28 @@ function directionConfigs(jsGracol) {
             // pOut: 'adobe' (NOT 'srgb') to force a real matrix+curves conversion.
             // With pOut: 'srgb' lcms detects the identity at transform-create time
             // and collapses the hot path to a memcpy - bogus ~30% speedup.
-            lcms: { pIn: 'srgb', fIn: 'TYPE_RGB_8',  pOut: 'adobe', fOut: 'TYPE_RGB_8',  inCh: 3, outCh: 3 },
+            lcms: { pIn: 'srgb', fIn: 'TYPE_RGB_8',  fIn16: 'TYPE_RGB_16',  pOut: 'adobe', fOut: 'TYPE_RGB_8',  fOut16: 'TYPE_RGB_16',  inCh: 3, outCh: 3 },
         },
         {
             id: 'rgb-cmyk',
             shortLabel: 'RGB &rarr; CMYK',
             longLabel:  'RGB to CMYK (sRGB to GRACoL)',
             js:   { src: '*srgb',     dst: jsGracol,        inCh: 3, outCh: 4 },
-            lcms: { pIn: 'srgb', fIn: 'TYPE_RGB_8',  pOut: 'cmyk', fOut: 'TYPE_CMYK_8', inCh: 3, outCh: 4 },
+            lcms: { pIn: 'srgb', fIn: 'TYPE_RGB_8',  fIn16: 'TYPE_RGB_16',  pOut: 'cmyk', fOut: 'TYPE_CMYK_8', fOut16: 'TYPE_CMYK_16', inCh: 3, outCh: 4 },
         },
         {
             id: 'cmyk-rgb',
             shortLabel: 'CMYK &rarr; RGB',
             longLabel:  'CMYK to RGB (GRACoL to sRGB)',
             js:   { src: jsGracol,    dst: '*srgb',         inCh: 4, outCh: 3 },
-            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', pOut: 'srgb', fOut: 'TYPE_RGB_8',  inCh: 4, outCh: 3 },
+            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', fIn16: 'TYPE_CMYK_16', pOut: 'srgb', fOut: 'TYPE_RGB_8',  fOut16: 'TYPE_RGB_16',  inCh: 4, outCh: 3 },
         },
         {
             id: 'cmyk-cmyk',
             shortLabel: 'CMYK &rarr; CMYK',
             longLabel:  'CMYK to CMYK (GRACoL to GRACoL)',
             js:   { src: jsGracol,    dst: jsGracol,        inCh: 4, outCh: 4 },
-            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', pOut: 'cmyk', fOut: 'TYPE_CMYK_8', inCh: 4, outCh: 4 },
+            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', fIn16: 'TYPE_CMYK_16', pOut: 'cmyk', fOut: 'TYPE_CMYK_8', fOut16: 'TYPE_CMYK_16', inCh: 4, outCh: 4 },
         },
     ];
 }
@@ -241,12 +262,27 @@ function lcmsReasonableGrid(inCh, flags, consts) {
 // pixel" accuracy path (buildLut: false) - same kernel family as lcms
 // NOOPTIMIZE, answer to "how fast is jsce when you tell it to prioritise
 // math fidelity over throughput".
+//
+// `int16` is the v1.3 16-bit-I/O path: same Q0.16 u16 LUT cells as `int`,
+// but the kernel reads u16 input and writes u16 output (Uint16Array both
+// directions). Slotted in right after `int` so the speed comparison is
+// adjacent. See bench/int16_poc/RESULTS.md and Transform.js
+// `tetrahedralInterp*Array_*Ch_intLut16_loop` for the implementation.
+//
+// `int16-wasm-scalar` and `int16-wasm-simd` (v1.3) are the WASM siblings
+// of `int16`. Same Q0.13-weight u16 CLUT, same arithmetic as the JS u16
+// kernel — bit-exact, just compiled to wasm32 (scalar) and v128 SIMD.
+// All three int16-* rows share one intLut. Slotted next to `int16` so
+// the JS/scalar/SIMD speed step is visible in adjacent rows.
 const JSCE_MODES = [
-    { id: 'no-lut',          label: 'jsce no-LUT (f64)',     badge: 'b-nolut', isLut: false },
-    { id: 'float',           label: 'jsce float',            badge: 'b-float', isLut: true  },
-    { id: 'int',             label: 'jsce int',              badge: 'b-int',   isLut: true  },
-    { id: 'int-wasm-scalar', label: 'jsce int-wasm-scalar',  badge: 'b-wasm',  isLut: true  },
-    { id: 'int-wasm-simd',   label: 'jsce int-wasm-simd',    badge: 'b-simd',  isLut: true  },
+    { id: 'no-lut',            label: 'jsce no-LUT (f64)',          badge: 'b-nolut',    isLut: false, dataFormat: 'int8'  },
+    { id: 'float',             label: 'jsce float',                 badge: 'b-float',    isLut: true,  dataFormat: 'int8'  },
+    { id: 'int',               label: 'jsce int',                   badge: 'b-int',      isLut: true,  dataFormat: 'int8'  },
+    { id: 'int16',             label: 'jsce int16 (u16 I/O)',       badge: 'b-int16',    isLut: true,  dataFormat: 'int16' },
+    { id: 'int16-wasm-scalar', label: 'jsce int16-wasm-scalar',     badge: 'b-int16ws',  isLut: true,  dataFormat: 'int16' },
+    { id: 'int16-wasm-simd',   label: 'jsce int16-wasm-simd',       badge: 'b-int16wsi', isLut: true,  dataFormat: 'int16' },
+    { id: 'int-wasm-scalar',   label: 'jsce int-wasm-scalar',       badge: 'b-wasm',     isLut: true,  dataFormat: 'int8'  },
+    { id: 'int-wasm-simd',     label: 'jsce int-wasm-simd',         badge: 'b-simd',     isLut: true,  dataFormat: 'int8'  },
 ];
 
 // ============================================================ INIT / BOOT
@@ -269,7 +305,7 @@ async function init() {
         // The package.json version is what we care about; the engine doesn't
         // expose it as a runtime constant (yet), so we mark it as "see footer"
         // and the user can cross-check against package.json.
-        $('#info-version').textContent = '1.2 (target)';
+        $('#info-version').textContent = '1.3 (target)';
 
         // ---- 2. host capabilities ----
         $('#info-wasm').textContent = (typeof WebAssembly !== 'undefined') ? 'available' : 'NOT AVAILABLE';
@@ -399,14 +435,42 @@ async function init() {
 function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
     const jsce = state.jsce;
     const wf = dir.js;
-    const input = buildInput(wf.inCh, pixelCount);
 
     const isNoLut = (modeId === 'no-lut');
+    // Any mode whose id starts with 'int16' uses u16 typed I/O. That
+    // covers the JS u16 path (`int16`) AND the two WASM siblings
+    // (`int16-wasm-scalar` / `int16-wasm-simd`) — they all consume the
+    // same Uint16Array and produce the same Uint16Array, only the
+    // kernel changes.
+    const isInt16Family = (modeId === 'int16' || modeId.indexOf('int16-') === 0);
+
+    // Input typed-array width follows dataFormat, NOT lutMode:
+    //   - int16-family : Uint16Array (full u16 range)
+    //   - everything else (int / float / int-wasm-* / no-LUT): Uint8ClampedArray
+    const input = isInt16Family
+        ? buildInputU16(wf.inCh, pixelCount)
+        : buildInput(wf.inCh, pixelCount);
 
     const t0 = nowMs();
-    const opts = isNoLut
-        ? { dataFormat: 'int8', buildLut: false }
-        : { dataFormat: 'int8', buildLut: true, lutMode: modeId, wasmCache: sharedWasmCache };
+    let opts;
+    if (isNoLut) {
+        opts = { dataFormat: 'int8', buildLut: false };
+    } else if (modeId === 'int16') {
+        // dataFormat: 'int16' + buildLut: true with no explicit lutMode lets
+        // the auto-resolver pick the best int16-family kernel for the host
+        // (currently demoting through int16-wasm-simd -> int16-wasm-scalar
+        // -> int16). For the bench we want to PIN this row to the JS u16
+        // kernel so the comparison vs the wasm rows is honest, so force it.
+        opts = { dataFormat: 'int16', buildLut: true, lutMode: 'int16' };
+    } else if (modeId === 'int16-wasm-scalar' || modeId === 'int16-wasm-simd') {
+        // u16 + explicit wasm lutMode. The shared wasm cache means
+        // int16-wasm-scalar + int16-wasm-simd in the same run share the
+        // module-compile cost; each Transform still gets its own
+        // linear-memory instance.
+        opts = { dataFormat: 'int16', buildLut: true, lutMode: modeId, wasmCache: sharedWasmCache };
+    } else {
+        opts = { dataFormat: 'int8', buildLut: true, lutMode: modeId, wasmCache: sharedWasmCache };
+    }
     const xform = new jsce.Transform(opts);
     xform.create(wf.src, wf.dst, jsce.eIntent.relative);
     const lutBuildMs = nowMs() - t0;
@@ -437,7 +501,10 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
         // Build e.g. "33x33x33" / "33x33x33x33"
         const axes = new Array(inCh).fill(g1).join('\u00d7'); // x
         const storage = (modeId === 'float') ? 'f64' : 'u16';
-        lutDesc = axes + ' ' + storage;
+        // Tag the I/O width when it diverges from the default u8 path so the
+        // reader can see "same LUT, different surface" at a glance.
+        const ioTag = isInt16Family ? ' (u16 I/O)' : '';
+        lutDesc = axes + ' ' + storage + ioTag;
     } else {
         lutDesc = '-';
     }
@@ -508,11 +575,14 @@ async function measureRunner(runner, pixelCount, warmupIters, hotItersPerBatch) 
 // ============================================================ FULL COMPARISON
 
 function badgeForMode(modeId) {
-    if (modeId === 'no-lut')          return 'b-nolut';
-    if (modeId === 'float')           return 'b-float';
-    if (modeId === 'int')             return 'b-int';
-    if (modeId === 'int-wasm-scalar') return 'b-wasm';
-    if (modeId === 'int-wasm-simd')   return 'b-simd';
+    if (modeId === 'no-lut')            return 'b-nolut';
+    if (modeId === 'float')             return 'b-float';
+    if (modeId === 'int')               return 'b-int';
+    if (modeId === 'int16')             return 'b-int16';
+    if (modeId === 'int16-wasm-scalar') return 'b-int16ws';
+    if (modeId === 'int16-wasm-simd')   return 'b-int16wsi';
+    if (modeId === 'int-wasm-scalar')   return 'b-wasm';
+    if (modeId === 'int-wasm-simd')     return 'b-simd';
     return 'b-lcms';
 }
 
@@ -563,14 +633,28 @@ async function runFullComparison() {
             // (cmspcs.c :: _cmsReasonableGridpointsByColorspace), so we can
             // reconstruct the grid size exactly. Storage is u16 - lcms's
             // precalc LUT for 8-bit input profiles is always Uint16.
-            const mkLcmsLutDesc = (flags, inCh) => {
+            const mkLcmsLutDesc = (flags, inCh, bit) => {
                 const g = lcmsReasonableGrid(inCh, flags, state.lcmsConsts);
-                if (g === 0) return 'no LUT (pipeline)';
-                return new Array(inCh).fill(g).join('\u00d7') + ' u16';
+                if (g === 0) return 'no LUT (pipeline, ' + bit + '-bit I/O)';
+                // lcms's precalc LUT cells are always Uint16 internally,
+                // regardless of the I/O bit depth - what changes between
+                // 8-bit and 16-bit modes is the format converter at the
+                // pipeline edges, not the LUT shape. Tag the I/O width so
+                // the comparison vs jsce 'int' / 'int16' is unambiguous.
+                return new Array(inCh).fill(g).join('\u00d7') + ' u16 (' + bit + '-bit I/O)';
             };
-            configs.push({ kind: 'lcms', dir, lcmsFlags: 0,                                        label: 'lcms-wasm default',      badge: 'b-lcms', isLut: true,  lutDesc: mkLcmsLutDesc(0, dir.lcms.inCh) });
-            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, label: 'lcms-wasm HIGHRES',      badge: 'b-lcms', isLut: true,  lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, dir.lcms.inCh) });
-            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_NOOPTIMIZE,     label: 'lcms-wasm NOOPT',        badge: 'b-lcms', isLut: false, lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_NOOPTIMIZE, dir.lcms.inCh) });
+            // 8-bit (TYPE_*_8) variants - paired with jsce int / float / int-wasm-*
+            configs.push({ kind: 'lcms', dir, lcmsFlags: 0,                                        label: 'lcms-wasm default',      badge: 'b-lcms', isLut: true,  bitDepth: 8,  lutDesc: mkLcmsLutDesc(0, dir.lcms.inCh, 8) });
+            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, label: 'lcms-wasm HIGHRES',      badge: 'b-lcms', isLut: true,  bitDepth: 8,  lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, dir.lcms.inCh, 8) });
+            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_NOOPTIMIZE,     label: 'lcms-wasm NOOPT',        badge: 'b-lcms', isLut: false, bitDepth: 8,  lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_NOOPTIMIZE, dir.lcms.inCh, 8) });
+            // 16-bit (TYPE_*_16) variants - paired with jsce int16. The lcms
+            // precalc-LUT GRID is the same as the 8-bit row (lcms picks grid
+            // by colourspace + flags, not by I/O bit depth), but the format
+            // converters at the pipeline edges flip from u8 to u16 - which is
+            // why headline MPx/s typically drops ~10-15% vs the 8-bit row.
+            configs.push({ kind: 'lcms', dir, lcmsFlags: 0,                                        label: 'lcms-wasm default 16',   badge: 'b-lcms', isLut: true,  bitDepth: 16, lutDesc: mkLcmsLutDesc(0, dir.lcms.inCh, 16) });
+            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, label: 'lcms-wasm HIGHRES 16',   badge: 'b-lcms', isLut: true,  bitDepth: 16, lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, dir.lcms.inCh, 16) });
+            configs.push({ kind: 'lcms', dir, lcmsFlags: state.lcmsConsts.cmsFLAGS_NOOPTIMIZE,     label: 'lcms-wasm NOOPT 16',     badge: 'b-lcms', isLut: false, bitDepth: 16, lutDesc: mkLcmsLutDesc(state.lcmsConsts.cmsFLAGS_NOOPTIMIZE, dir.lcms.inCh, 16) });
         }
     }
 
@@ -617,16 +701,21 @@ async function runFullComparison() {
                 }
                 runner.free();
             } else {
-                // lcms
+                // lcms - flip format tag + input width by bitDepth (8 or 16).
                 const wf = cfg.dir.lcms;
-                const input = buildInput(wf.inCh, pixelCount);
+                const is16  = (cfg.bitDepth === 16);
+                const fIn   = is16 ? state.lcmsConsts[wf.fIn16]  : state.lcmsConsts[wf.fIn];
+                const fOut  = is16 ? state.lcmsConsts[wf.fOut16] : state.lcmsConsts[wf.fOut];
+                const input = is16
+                    ? buildInputU16(wf.inCh, pixelCount)
+                    : buildInput(wf.inCh, pixelCount);
                 const runner = makeLcmsRunner(
                     state.lcms, state.lcmsConsts,
                     {
                         pIn:  state.lcmsProfiles[wf.pIn],
-                        fIn:  state.lcmsConsts[wf.fIn],
+                        fIn:  fIn,
                         pOut: state.lcmsProfiles[wf.pOut],
-                        fOut: state.lcmsConsts[wf.fOut],
+                        fOut: fOut,
                         inCh: wf.inCh, outCh: wf.outCh,
                     },
                     cfg.lcmsFlags, input, pixelCount
@@ -1268,6 +1357,48 @@ function copyAccuracyMarkdown() {
 
 // ============================================================ JIT WARMUP CURVE
 
+/**
+ * Resolve a `lcms-*` mode id from the warmup / pixel-sweep dropdowns into a
+ * fully wired makeLcmsRunner. Handles both 8-bit and 16-bit variants:
+ *
+ *   lcms-highres     -> TYPE_*_8  + HIGHRESPRECALC
+ *   lcms-noopt       -> TYPE_*_8  + NOOPTIMIZE
+ *   lcms-default-16  -> TYPE_*_16 + flags=0
+ *   lcms-highres-16  -> TYPE_*_16 + HIGHRESPRECALC
+ *   lcms-noopt-16    -> TYPE_*_16 + NOOPTIMIZE
+ *
+ * Returns the same {run, free, lutBuildMs, ...} shape as makeJsceRunner so
+ * the timing harness is identical.
+ */
+function makeLcmsWarmupRunner(dir, modeId, pixelCount) {
+    const wf = dir.lcms;
+    const is16 = modeId.endsWith('-16');
+    let flags;
+    if (modeId === 'lcms-highres' || modeId === 'lcms-highres-16') {
+        flags = state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC;
+    } else if (modeId === 'lcms-noopt' || modeId === 'lcms-noopt-16') {
+        flags = state.lcmsConsts.cmsFLAGS_NOOPTIMIZE;
+    } else {
+        flags = 0;
+    }
+    const fIn  = is16 ? state.lcmsConsts[wf.fIn16]  : state.lcmsConsts[wf.fIn];
+    const fOut = is16 ? state.lcmsConsts[wf.fOut16] : state.lcmsConsts[wf.fOut];
+    const input = is16
+        ? buildInputU16(wf.inCh, pixelCount)
+        : buildInput(wf.inCh, pixelCount);
+    return makeLcmsRunner(
+        state.lcms, state.lcmsConsts,
+        {
+            pIn:  state.lcmsProfiles[wf.pIn],
+            fIn:  fIn,
+            pOut: state.lcmsProfiles[wf.pOut],
+            fOut: fOut,
+            inCh: wf.inCh, outCh: wf.outCh,
+        },
+        flags, input, pixelCount
+    );
+}
+
 async function runWarmupCurve() {
     await init();
     const dirId      = $('#dir-warmup').value;
@@ -1286,22 +1417,7 @@ async function runWarmupCurve() {
     try {
         if (modeId.startsWith('lcms-')) {
             if (!state.lcmsAvailable) throw new Error('lcms-wasm not loaded');
-            const wf = dir.lcms;
-            const input = buildInput(wf.inCh, pixelCount);
-            const flags = (modeId === 'lcms-highres')
-                ? state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC
-                : state.lcmsConsts.cmsFLAGS_NOOPTIMIZE;
-            runner = makeLcmsRunner(
-                state.lcms, state.lcmsConsts,
-                {
-                    pIn:  state.lcmsProfiles[wf.pIn],
-                    fIn:  state.lcmsConsts[wf.fIn],
-                    pOut: state.lcmsProfiles[wf.pOut],
-                    fOut: state.lcmsConsts[wf.fOut],
-                    inCh: wf.inCh, outCh: wf.outCh,
-                },
-                flags, input, pixelCount
-            );
+            runner = makeLcmsWarmupRunner(dir, modeId, pixelCount);
         } else {
             runner = makeJsceRunner(dir, modeId, pixelCount, {});
         }
@@ -1389,12 +1505,19 @@ function drawWarmupChart(samples, pixelCount, modeId) {
 
     // Scatter points (small alpha so density is visible)
     const colorByMode = {
-        'float':           '#c084fc',
-        'int':             '#38bdf8',
-        'int-wasm-scalar': '#a3e635',
-        'int-wasm-simd':   '#4ade80',
-        'lcms-highres':    '#fb7185',
-        'lcms-noopt':      '#fbbf24',
+        'no-lut':              '#94a3b8',
+        'float':               '#c084fc',
+        'int':                 '#38bdf8',
+        'int16':               '#22d3ee',
+        'int16-wasm-scalar':   '#2dd4bf',
+        'int16-wasm-simd':     '#14b8a6',
+        'int-wasm-scalar':     '#a3e635',
+        'int-wasm-simd':       '#4ade80',
+        'lcms-highres':        '#fb7185',
+        'lcms-noopt':          '#fbbf24',
+        'lcms-default-16':     '#f472b6',
+        'lcms-highres-16':     '#f43f5e',
+        'lcms-noopt-16':       '#f59e0b',
     };
     ctx.fillStyle = colorByMode[modeId] || '#a3e635';
     ctx.globalAlpha = 0.5;
@@ -1478,19 +1601,12 @@ async function runPixelSweep() {
         try {
             if (modeId.startsWith('lcms-')) {
                 if (!state.lcmsAvailable) throw new Error('lcms-wasm not loaded');
-                const wf = dir.lcms;
-                const input = buildInput(wf.inCh, px);
-                runner = makeLcmsRunner(
-                    state.lcms, state.lcmsConsts,
-                    {
-                        pIn:  state.lcmsProfiles[wf.pIn],
-                        fIn:  state.lcmsConsts[wf.fIn],
-                        pOut: state.lcmsProfiles[wf.pOut],
-                        fOut: state.lcmsConsts[wf.fOut],
-                        inCh: wf.inCh, outCh: wf.outCh,
-                    },
-                    state.lcmsConsts.cmsFLAGS_HIGHRESPRECALC, input, px
-                );
+                // Pixel-sweep tab fixes the lcms variant to HIGHRESPRECALC -
+                // the pixel-count question is "does the SAME kernel scale?",
+                // not "which lcms flag is fastest?", so we don't need three
+                // flag rows here. The 16-bit path is selected by the
+                // 'lcms-highres-16' mode id.
+                runner = makeLcmsWarmupRunner(dir, modeId, px);
             } else {
                 runner = makeJsceRunner(dir, modeId, px, {});
             }

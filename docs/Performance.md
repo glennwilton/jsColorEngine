@@ -16,10 +16,11 @@ This document captures the performance findings from the v1.1 work
 (`lutMode: 'int'` integer hot path), the v1.2 WASM LUT kernel
 additions (`'int-wasm-scalar'` + `'int-wasm-simd'`, 3D **and** 4D
 both shipped and bit-exact across the 12-config matrix, plus
-`lutMode: 'auto'` as the new default — all three items complete),
-how jsColorEngine compares to the industry-standard C implementations
-(LittleCMS, babl), and the planned v1.3 / v1.4 / v1.5 / v2 future
-work.
+`lutMode: 'auto'` as the new default), the v1.3 16-bit kernel ladder
+(`'int16'` JS + `'int16-wasm-scalar'` + `'int16-wasm-simd'`, all
+bit-exact siblings on the same Q0.13 contract), how jsColorEngine
+compares to the industry-standard C implementations (LittleCMS,
+babl), and the planned v1.4 / v1.5 / v2 future work.
 
 It's intentionally a "lab notebook" — the numbers are real, the
 explanations are blunt, and the conclusions feed directly into the
@@ -65,11 +66,12 @@ roadmap at the bottom.
     - [v1.1 — 4D integer kernels (CMYK input) + u20 refactor  ✅ SHIPPED](#v11--4d-integer-kernels-cmyk-input--u20-refactor---shipped)
     - [Design constraint — float OR u16 only](#design-constraint--float-or-u16-only)
     - [v1.2 — WASM LUT kernels (3D + 4D, scalar + SIMD) and `lutMode: 'auto'`](#v12--wasm-lut-kernels-3d--4d-scalar--simd-and-lutmode-auto)
-    - [Historical record: original v1.3 / v1.4 analysis (1D WASM POC)](#historical-record-original-v13--v14-analysis-1d-wasm-poc)
-    - [v1.3+ — see Roadmap.md](#v13-and-beyond--see-roadmapmd)
+    - [v1.3 — 16-bit kernel ladder ✅ SHIPPED](#v13--16-bit-kernel-ladder--shipped)
+    - [v1.4+ — see Roadmap.md](#v14-and-beyond--see-roadmapmd)
+    - [Historical record: original v1.3 / v1.5 analysis (1D WASM POC)](#historical-record-original-v13--v15-analysis-1d-wasm-poc)
 - [6. What's not on the roadmap](#6-whats-not-on-the-roadmap)
 - [7. Choosing a configuration](#7-choosing-a-configuration)
-    - [The five tiers — accuracy vs speed](#the-five-tiers--accuracy-vs-speed)
+    - [The four tiers — accuracy vs speed](#the-four-tiers--accuracy-vs-speed)
     - [Quick reference — when to enable what](#quick-reference--when-to-enable-what)
 
 ---
@@ -566,8 +568,8 @@ planning.
 The 1D POC's other three findings (WASM scalar 1.84× on gather-heavy
 work, `Math.imul` no longer worth specialising, 67.7× WASM SIMD
 ceiling on pure-math non-gather kernels) all still hold and are what
-drove the v1.4 pipeline code-generation plan. Full POC findings
-preserved in §5's "Historical record: original v1.3 / v1.4 analysis".
+drove the v1.5 pipeline code-generation plan. Full POC findings
+preserved in §5's "Historical record: original v1.3 / v1.5 analysis".
 
 **→ See [deep-dive / WASM kernels — SIMD 3D](./deepdive/WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)**
 for the detailed inversion story.
@@ -870,7 +872,7 @@ Three things fall out of the measured table above:
    landing at ~210 MPx/s — past the vanilla lcms2 band (both
    measured and estimated) and into the lcms2 `fast-float` plugin's
    estimated 150-500 MPx/s range. This was *not* predicted at the
-   time the 1D POC was run (see v1.4 Historical record for the
+   time the 1D POC was run (see v1.5 Historical record for the
    0.89× across-pixel SIMD result that suggested LUT SIMD wouldn't
    work); it became possible once we inverted the vectorisation
    axis. Importantly, `fast-float` is **SSE2-only (128-bit)**, the
@@ -935,8 +937,9 @@ Three things worth flagging:
    not implemented in any shipping engine as of this writing.
    When it ships, we'd expect roughly 1.8–2.0× from widening the
    existing SIMD kernels (memory bandwidth and load-ports cap the
-   speedup below the theoretical 2× / 4×). That's a **v1.4+**
-   question — see [Roadmap.md](./Roadmap.md).
+   speedup below the theoretical 2× / 4×). That's a **post-v1.5**
+   question (waiting on browser engines to ship the proposal) — see
+   [Roadmap.md](./Roadmap.md).
 
 So: the "faster than native C lcms2" claim doesn't assume we're
 competing against a hypothetical AVX-512-tuned colour library that
@@ -971,12 +974,12 @@ it wouldn't be in C.
 
 ---
 
-## 5. What shipped in v1.1 and v1.2
+## 5. What shipped in v1.1, v1.2 and v1.3
 
-> Forward-looking plans (v1.3 onward) live in
+> Forward-looking plans (v1.4 onward) live in
 > [Roadmap.md](./Roadmap.md) — single source of truth for what's
-> coming next. This section covers what already landed in v1.1 and
-> v1.2 and the measurement / design notes that go with it.
+> coming next. This section covers what already landed in v1.1, v1.2
+> and v1.3 and the measurement / design notes that go with it.
 
 ### v1.1 — 4D integer kernels (CMYK input) + u20 refactor  ✅ SHIPPED
 
@@ -1050,15 +1053,24 @@ runs whichever of today's kernels fits best.
 > earlier and faster than this roadmap originally predicted, so the
 > remaining stages have been re-planned. Headline change: v1.2 now
 > covers **all** WASM LUT work (was split across v1.2-v1.4), pulling
-> `'auto'` mode up from v1.4. 16-bit moves to v1.3. v1.4 pivots from
-> "matrix-shaper SIMD" to a bigger idea — code generation for the
-> non-LUT pipeline. v1.5 is a new placeholder for an optional
-> S15.16 internal pipeline for lcms parity, deferred unless demanded.
-> The v2 package-split target is unchanged.
+> `'auto'` mode up. 16-bit (originally v1.4) shipped as v1.3.
+>
+> **Second reframe, late Apr 2026 (post-v1.3).** With the v1.3 kernel
+> ladder banked and a real performance story to show, **v1.4 was
+> swapped to ImageHelper + browser samples** (showcase release on
+> the back of the v1.3 numbers). The compiled non-LUT pipeline +
+> `toModule()` work, plus N-channel float input kernels and the
+> `lutGridSize` accuracy lever, are all bundled into v1.5 — the
+> larger piece of post-v1.3 work, slotted after the showcase release
+> so the project keeps shipping visible progress even if v1.5 takes
+> a while. v1.6 is the optional S15.16 internal-pipeline placeholder
+> for lcms parity, deferred unless demanded. The v2 package-split
+> target is unchanged.
 >
 > The historical sections below (v1.3 original 1D POC analysis and
-> v1.4 original matrix-shaper-only plan) are preserved under the new
-> v1.4 heading because their findings still drive design.
+> v1.5 original matrix-shaper-only plan) are preserved because their
+> findings still drive design — especially the 67.7× SIMD-ceiling
+> number that anchors the v1.5 compiled-pipeline targets.
 
 ### v1.2 — WASM LUT kernels (3D + 4D, scalar + SIMD) and `lutMode: 'auto'`
 
@@ -1107,7 +1119,7 @@ a new `lutMode` value never crashes — it auto-resolves to the best
 applicable existing kernel.
 
 Per-Transform microbenchmarking (a true "measure every kernel once,
-pick the fastest" dispatcher) is a v1.4 item — see §5 below. In
+pick the fastest" dispatcher) is a v1.5 item — see §5 below. In
 practice `'int' > 'int-wasm-scalar'` shows up on weaker CPUs for
 small 3D LUTs, and a one-shot microbench at `create()` would let
 `'auto'` make that call — but it's not worth the complexity until
@@ -1190,26 +1202,146 @@ Transform, with a measured 2-3.5× over JS int across the 12-config
 matrix." Of the 12 matrix cells, all 12 are now shipped; the only
 remaining work is the `'auto'` dispatcher + bench aggregation.
 
-### v1.3 and beyond — see [Roadmap.md](./Roadmap.md)
+### v1.3 — 16-bit kernel ladder ✅ SHIPPED
 
-Forward-looking plans (v1.3 16-bit, v1.4 non-LUT code generation +
-smarter `'auto'` via per-Transform microbench, v1.5 optional S15.16
-lcms parity, v2 package split) are the single source of truth in
-[Roadmap.md](./Roadmap.md). This page stays retrospective — what
-shipped, what we measured, what we learned while doing it. The
-"historical record" subsection below is the one exception: its
-numbers still inform current kernel design, and the 67.7 × ceiling
-is the baseline for v1.4 code-generation targets, so it's cross-
-posted in both places.
+v1.3 closed the 16-bit input/output gap that had quietly
+round-tripped through u8 ever since the v1.1 LUT path landed.
+Same kernel shape as v1.1 (tetrahedral, channel-parallel for SIMD,
+hoisted prologue + flag-gated K-plane loop for 4D), retuned for
+u16 I/O and re-derived for an arithmetic envelope that keeps
+JS ↔ WASM bit-exact across browsers and operating systems with no
+runtime checks.
 
-### Historical record: original v1.3 / v1.4 analysis (1D WASM POC)
+**The kernel ladder shipped in three siblings, all bit-exact:**
 
-The two analyses below drove the original v1.3 / v1.4 split. Both
+- **`lutMode: 'int16'`** — pure-JS u16 kernel. `Uint16Array` CLUT
+  scaled to the full [0..0xFFFF] range with **Q0.13 fractional
+  weights**. The 4D path uses two-rounding K-LERP (rounded once at
+  K0/K1 and again at the final blend) so every intermediate stays
+  inside the i32 envelope without an i64 detour.
+- **`lutMode: 'int16-wasm-scalar'`** — same Q0.13 contract compiled
+  to hand-written `.wat`. Bit-exact against the JS sibling on the
+  whole 6-config matrix (0 LSB, every cell). ~1.3–1.4× over JS
+  `int16` on 3D, ~1.0–1.2× on 4D.
+- **`lutMode: 'int16-wasm-simd'`** — channel-parallel `v128`,
+  Q0.13, two-rounding K-LERP for 4D. The K0 intermediate lives in
+  a single `v128` local across the K-plane loop back-edge, so all
+  3–4 channels travel together in one register — same architectural
+  win the v1.2 SIMD 4D kernel got over scalar 4D, ported to u16.
+  Bit-exact against both u16 siblings.
+
+**Headless bench (Node 20 / V8, 65 K pixels/iter, GRACoL2006 +
+sRGB, `bench/int16_poc/bench_int16_simd_vs_scalar.js`):**
+
+| Workflow                       | jsCE `int16` | `int16-wasm-scalar` | **`int16-wasm-simd`** | lcms-wasm best | SIMD vs scalar | SIMD vs lcms |
+|--------------------------------|-------------:|--------------------:|----------------------:|---------------:|---------------:|-------------:|
+| RGB → Lab    (sRGB → LabD50)   | 67 MPx/s     | 124 MPx/s           | **209 MPx/s**         | 53 MPx/s       | 1.68×          | 3.93×        |
+| RGB → CMYK   (sRGB → GRACoL)   | 64           | 117                 | **191**               | 47             | 1.63×          | 4.06×        |
+| CMYK → RGB   (GRACoL → LabD50) | 50           | 56                  | **129**               | 26             | 2.30×          | 4.89×        |
+| CMYK → CMYK  (GRACoL → GRACoL) | 41           | 49                  | **117**               | 24             | 2.40×          | 4.84×        |
+
+The browser numbers (Chrome 147, x86_64, [`bench/browser/`](./Bench.md))
+land in the same band — see the roadmap retrospective for the
+side-by-side jsCE / lcms-wasm / lcms-wasm-16 table. The point is
+the same in either harness: the SIMD u16 kernel wins on every
+workflow against every comparison row, with bit-exactness against
+its slower siblings, and a ~4× lift over the closest `lcms-wasm`
+16-bit configuration.
+
+**Two design choices deserve callouts.**
+
+1. **Q0.13 weights, not Q0.16.** The standard fixed-point precision
+   for u16 LUT kernels is Q0.16 (lcms uses this). We picked Q0.13
+   because at Q0.16 the inner-loop accumulator
+   `delta × weight × 3 axes` exceeds the i32 envelope for an
+   adversarial CLUT (max u16 × u16 = 2³², three-axis sum overflows
+   signed i32). lcms handles this with i64 (slower) or
+   `CMS_NO_SANITIZE` ("trust the profile"); we picked the option
+   that runs as i32 throughout with no runtime guards and stays
+   defined on every platform's integer wrapping spec. Q0.13 is the
+   widest precision that fits — and the
+   [accuracy bench](./deepdive/Accuracy.md#16-bit-kernel-accuracy-v13--near-perfect-no-corners-cut)
+   confirms the kernel is rounding-bounded long before it's
+   weight-bounded, so the lost three bits of weight precision are
+   academic. Worst case is **4 LSB at u16** (0.006 % of u16 range),
+   mean ≤ 0.0008 %. Round any of these outputs to u8 and the int16
+   path is bit-identical to the float path.
+2. **Two-rounding for 4D, not single-step.** The 4D K-LERP at full
+   u16 precision overflows i32 in a single `(K1 - K0) * rk` step.
+   The v1.2 u8 kernel got around this by carrying the intermediate
+   at u20 Q16.4 and rounding once at the very end (single-step).
+   That trick doesn't work at u16 output because the intermediate
+   would have to be u24, which overflows the multiply. Solution:
+   round at u16 inside the K0/K1 plane interp, then linear-
+   interpolate the two u16 plane outputs along K with a separate
+   round. The cost is a fraction of an LSB of accumulated rounding
+   noise; the benefit is the entire kernel runs as i32 with no
+   widening. The SIMD variant gets this for free because the
+   intermediate sits in a `v128` local (no scratch memory round-trip
+   that the scalar variant needs).
+
+**Three accuracy gates ship with the kernels** — none is optional;
+all three pass at every release of the engine:
+
+- [`bench/int16_identity.js`](../bench/int16_identity.js) — synthetic
+  identity-CLUT round-trip. Asserts every kernel rounds at the u16
+  LSB and never wider. Exits non-zero on failure; safe to wire into
+  CI or a pre-commit hook.
+- [`bench/int16_poc/accuracy_v1_7_self.js`](../bench/int16_poc/accuracy_v1_7_self.js)
+  — jsCE float-LUT vs jsCE int16-LUT, same source profile, kernel
+  is the only variable. **Pure kernel quantisation noise** measured
+  in u16 LSB. Headline numbers in
+  [Accuracy.md § 16-bit kernel accuracy](./deepdive/Accuracy.md#16-bit-kernel-accuracy-v13--near-perfect-no-corners-cut).
+- [`bench/lcms_compat/run.js`](../bench/lcms_compat/run.js) — jsCE
+  float pipeline vs lcms2 2.16 float pipeline across a 130-file
+  reference oracle. Confirms the math underneath the kernels is
+  correct (any int16 quantisation lands on top of an already-correct
+  float baseline, not on top of a divergence).
+
+The dispatcher behind all this is
+[`src/lutKernelTable.js`](../src/lutKernelTable.js), which resolves
+`(lutMode, inCh, outCh)` against a pure-data table with per-entry
+gates and an explicit fallback chain. Adding a kernel is a row
+in a table, not another `else if` in `transformArrayViaLUT`. The
+WASM-state caching that the v1.2 kernels used (single shared
+`wasmCache` across Transforms) extends directly to the new u16
+states — `wasmTetra3DInt16` / `wasmTetra4DInt16` / their SIMD
+siblings, all loaded lazily, all idempotent across Transforms
+sharing the same cache.
+
+What v1.3 deliberately *doesn't* ship:
+
+- **N-channel input kernels (5 / 6 / 7 / 8-ch input device profiles).**
+  Slated for v1.5 on the float path only — see Roadmap. There's no
+  fast-path workload that exercises N-channel inputs.
+- **`lutGridSize` option.** Bumped to v1.5 alongside the larger
+  compiled-pipeline work. Independent of the kernel ladder, lands
+  cleanly on top.
+- **`lcms_patch/` extraction.** The patched `transicc.exe` is
+  vendored in the repo and the harness works against it; the open
+  piece is shipping it as a regen-able diff against stock lcms 2.16.
+
+### v1.4 and beyond — see [Roadmap.md](./Roadmap.md)
+
+Forward-looking plans (v1.4 ImageHelper + browser samples
+[showcase release on the back of v1.3], v1.5 N-channel float
+inputs + `lutGridSize` + non-LUT code generation + `toModule()`,
+v1.6 optional S15.16 lcms parity, v2 package split) are the
+single source of truth in [Roadmap.md](./Roadmap.md). This page
+stays retrospective — what shipped, what we measured, what we
+learned while doing it. The "historical record" subsection below
+is the one exception: its numbers still inform current kernel
+design, and the 67.7 × ceiling is the baseline for v1.5 code-
+generation targets, so it's cross-posted in both places.
+
+### Historical record: original v1.3 / v1.5 analysis (1D WASM POC)
+
+The two analyses below drove the original v1.3 / v1.5 split. Both
 have since been superseded — v1.3 (WASM scalar) landed in v1.2,
-and v1.4's matrix-shaper-only plan was subsumed by the v1.4 code-
+and v1.5's matrix-shaper-only plan was subsumed by the v1.5 code-
 generation target. The numbers and findings are preserved because
 they still inform design decisions (especially the SIMD ceiling
-number for v1.4 emission, and the "LUT gather ≠ vectorise across
+number for v1.5 emission, and the "LUT gather ≠ vectorise across
 pixels" rule that's easy to forget).
 
 **Where the WASM scalar win actually came from** (1D POC, v1.3
@@ -1252,7 +1384,7 @@ pixels. See `bench/wasm_poc/README.md` for the full analysis.
    LUTs" story is §3.3.
 3. **WASM SIMD pure math IS 67.7× faster** on no-gather math.
    This is the ceiling for emitted non-LUT pipelines — drives
-   v1.4 code-generation target. Matrix-shaper, gamma polynomial,
+   v1.5 code-generation target. Matrix-shaper, gamma polynomial,
    RGB↔YUV, channel reordering all live here.
 4. **`Math.imul` is no longer worth using as a perf optimisation**
    in modern V8. Still useful as insurance against accidental
@@ -1275,23 +1407,22 @@ Two lenses for picking a mode — the **tier table** (what's each
 mode actually for?) and the **scenario quick reference** (I have
 workload X, what do I pass?).
 
-### The five tiers — accuracy vs speed
+### The four tiers — accuracy vs speed
 
-jsColorEngine spans five operating points, each with a distinct
+jsColorEngine spans four operating points, each with a distinct
 accuracy / speed / memory profile. Pick by use case:
 
 | Tier | Mode (options) | Best for | Numeric precision | LUT grid | Per-pixel cost | Status |
 |---|---|---|---|---|---|---|
 | **1. Accuracy** | `buildLut: false` | Research, measurement, ΔE validation, single colours | f64 (JS double), full pipeline evaluated per pixel | n/a (no LUT) | Highest — every stage, every pixel | Shipped v1.0 |
 | **2. Balanced** | `buildLut: true, lutMode: 'float'` (or `'auto'` on non-int8 inputs) | High-accuracy batch transforms, measurement against target | f64 CLUT, specialised JS kernel per channel count | 17³–65³ (tunable, see below) | Mid — tetrahedral interp + weight eval | Shipped v1.0 (grid override: v1.3) |
-| **3. Float image** | `buildLut: true, dataFormat: 'f32', lutMode: 'float-wasm-simd'` | HDR, scene-linear, float pixel arrays, measurement pipelines at speed | f32 CLUT + `f32x4` SIMD (~6e-8 rel. error — orders of magnitude below ΔE) | 17³–33³ | Low — 4-lane WASM SIMD | Planned v1.4 |
-| **4. 16-bit image** | `buildLut: true, dataFormat: 'int16'` | Lab workflows, TIFF, ICC v4 PCS native, prepress | Q0.16 fixed-point (1 LSB = 1.5e-5 in `[0, 1]`) | 17³–33³ | Low — scalar WASM | Planned v1.3 |
-| **5. 8-bit image** | `buildLut: true, dataFormat: 'int8'` (current default via `'auto'`) | Photo, web, canvas, 8-bit image pipelines | Q0.8 via u16 CLUT (≤ 1 LSB drift @ 8-bit — visually invisible) | 17³–33³ | Lowest — 4-lane WASM SIMD on 8-bit lanes | Shipped v1.2 |
+| **3. 16-bit image** | `buildLut: true, dataFormat: 'int16'` | Lab workflows, 16-bit TIFF, ICC v4 PCS native, prepress, HDR | Q0.16 fixed-point on the same u16 CLUT cells real ICC profiles store (1 LSB ≈ 1.5e-5 — ~0.007 ΔE76 worst case in Lab) | 17³–33³ | Low — JS/WASM u16 kernel | JS shipped v1.3; WASM u16 SIMD pending |
+| **4. 8-bit image** | `buildLut: true, dataFormat: 'int8'` (current default via `'auto'`) | Photo, web, canvas, 8-bit image pipelines | Q0.8 via u16 CLUT (≤ 1 LSB drift @ 8-bit — visually invisible) | 17³–33³ | Lowest — 4-lane WASM SIMD on 8-bit lanes | Shipped v1.2 |
 
 **How to read the table.** Tiers 1–2 are the *accuracy family*
-(f64 throughout). Tiers 3–5 are the *image family* (native
+(f64 throughout). Tiers 3–4 are the *image family* (native
 bit-depth in, native bit-depth out, LUT grade speed). The default
-`'auto'` picks tier 5 when it detects `int8 + buildLut: true`, and
+`'auto'` picks tier 4 when it detects `int8 + buildLut: true`, and
 tier 2 otherwise — so naïve users get image-grade speed on image
 data and full accuracy on everything else.
 
@@ -1302,13 +1433,25 @@ via a `lutGridSize` option. 33³ costs 143 KB at f64, 65³ costs
 anyone willing to pay the memory. 4D LUTs (CMYK input) realistically
 cap at 17–25; 33⁴ breaks cache.
 
-**Why five and not fewer?** Each tier exists because a real user
-needs something the others can't deliver:
+**Why four and not five?** An earlier draft had a "float image"
+tier 3 (`dataFormat: 'f32'`, `lutMode: 'float-wasm-simd'`) sitting
+between the f64 accuracy family and the integer image family.
+That tier is **dropped** post v1.3-int16 measurement: every
+shipping ICC v2/v4 profile stores its CLUT cells as u16, so an
+f32 kernel against u16 cells doesn't unlock a meaningful precision
+tier above the int16 path — the cells set the ceiling, not the
+math. Workloads that genuinely need above-u16 precision (CAM,
+spectral, BPC validation) are served by tier 1 / 2 (f64 throughout)
+or by `compile()` (also f64). See
+[Roadmap.md § DROPPED — float-WASM tier](./Roadmap.md#dropped--float-wasm-tier-was-float-wasm-scalar--f32-clut--float-wasm-simd)
+for the full reasoning.
+
+**Why these four exist.** Each tier covers a workload the others
+can't deliver:
 - ΔE validators need tier 1 (no LUT quantisation at all)
-- Batch colour-chart ops need tier 2 (LUT speed, f64 accuracy)
-- Scene-linear HDR pipelines need tier 3 (float pixels + speed)
-- Prepress / 16-bit TIFF needs tier 4 (no 8-bit round-trip)
-- Everyone else needs tier 5 (canvas, web, images)
+- Batch colour-chart ops + measurement need tier 2 (LUT speed, f64 accuracy)
+- Prepress, 16-bit TIFF, ICC v4 Lab PCS native, HDR int → need tier 3 (no 8-bit round-trip, profile-native cell precision)
+- Everyone else (canvas, web, photo, video) needs tier 4
 
 ### Quick reference — when to enable what
 

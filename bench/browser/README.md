@@ -46,6 +46,32 @@ Full description of each tab, the modes compared, the methodology,
 and the submission template live in
 [`../../docs/Bench.md`](../../docs/Bench.md).
 
+## Modes covered (current)
+
+The full-comparison table runs **every direction × every mode** below:
+
+| Mode (jsCE)                  | I/O width | LUT cells | Notes                                                                                                              |
+| ---------------------------- | --------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| `no-LUT (f64)`               | u8        | —         | Per-pixel f64 pipeline. Accuracy ceiling for jsCE.                                                                 |
+| `float`                      | u8        | f64       | Float64 CLUT + f64 tetra interp.                                                                                   |
+| `int`                        | u8        | u16       | Q0.16 weighted CLUT, int32 tetra via `Math.imul`. v1.1 baseline.                                                   |
+| **`int16` (u16 I/O)**        | **u16**   | **u16**   | **v1.3.** u16-scaled CLUT (Q0.13 weights), JS u16 kernel. Bit-exact identity round-trip (≤1 LSB). For HDR / 16-bit TIFF / measurement workflows. |
+| **`int16-wasm-scalar`**      | **u16**   | **u16**   | **v1.3.** WASM port of `int16`. Bit-exact with JS u16 (0 LSB delta). ~1.4× over `int16` on 3D.                    |
+| **`int16-wasm-simd`**        | **u16**   | **u16**   | **v1.3.** WASM SIMD u16 kernel (channel-parallel `v128`, Q0.13). Bit-exact with both `int16` and `int16-wasm-scalar`. ~1.7–2.4× over `int16-wasm-scalar`, ~3.9–4.9× over `lcms 16-bit` best. Falls back to scalar on hosts without WASM SIMD. |
+| `int-wasm-scalar`            | u8        | u16       | Same int math compiled to WebAssembly.                                                                             |
+| `int-wasm-simd`              | u8        | u16       | Channel-parallel WASM SIMD (v128). Fastest mode on a SIMD-capable host.                                            |
+
+| Mode (lcms-wasm)             | I/O width | Flags                          | Notes                                                                          |
+| ---------------------------- | --------- | ------------------------------ | ------------------------------------------------------------------------------ |
+| `lcms default`               | u8        | `0`                            | Default real-app config. Pinned heap buffers via `_cmsDoTransform`.            |
+| `lcms HIGHRES`               | u8        | `cmsFLAGS_HIGHRESPRECALC`      | Big precalc LUT (49 RGB / 23 CMYK).                                            |
+| `lcms NOOPT`                 | u8        | `cmsFLAGS_NOOPTIMIZE`          | No precalc LUT — full pipeline per pixel. Accuracy comparison vs jsCE no-LUT.  |
+| **`lcms default 16`**        | **u16**   | `0`                            | **v1.3.** Same precalc grid as the 8-bit row, but u16 I/O. Compare vs jsce `int16`. |
+| **`lcms HIGHRES 16`**        | **u16**   | `cmsFLAGS_HIGHRESPRECALC`      | **v1.3.** 16-bit + max grid.                                                   |
+| **`lcms NOOPT 16`**          | **u16**   | `cmsFLAGS_NOOPTIMIZE`          | **v1.3.** 16-bit pipeline accuracy comparison.                                 |
+
+Full table = 4 directions × (8 jsCE modes + 6 lcms-wasm flag/width combos) = **56 cells**.
+
 ## Stopping the server
 
 `Ctrl+C` in the terminal running `node bench/browser/serve.js`.
