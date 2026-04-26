@@ -31,7 +31,7 @@ future-facing only.
 ## Table of contents
 
 - [Shipped so far](#shipped-so-far)
-- [v1.4 — Image helper + browser samples](#v14--image-helper--browser-samples)
+- [v1.4 — Image helper + browser samples (shipped)](#v14--image-helper--browser-samples)
     - [Browser samples](#browser-samples)
 - [v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
     - [N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)](#n-channel-float-inputs-5--6--7--8-channel-input-profiles)
@@ -94,6 +94,42 @@ bit-exactness across all three siblings. Kernels are
 **feature-complete** for the workloads jsColorEngine is targeted
 at (3-channel and 4-channel input device profiles, 3- and 4-channel
 output, both u8 and u16 I/O).
+
+**v1.4** — showcase release + license change. Puts the v1.3 perf
+story in front of users with runnable browser demos, a small
+`ICCImage` helper that makes image workflows trivial, and baked
+gamut-mapping in the LUT. License changed from GPL-3.0 to MPL-2.0
+(file-level copyleft — the library can now be combined with
+proprietary code in a Larger Work). Two planned samples
+(`colour-calculator.html`, `profile-inspector.html`) are still WIP
+and will land iteratively.
+
+- **`ICCImage` helper** (`samples/iccimage.js`) — small immutable
+  image wrapper (MIT-licensed) that owns the "I have an image, I
+  want to proof / inspect it" workflow. Immutable, always
+  profile-tagged, lazy + cached transforms. Full API reference:
+  [`samples/ICCImage.md`](../samples/ICCImage.md).
+- **Baked gamut-mapping LUT** — new `lutGamutMode` option
+  (`'none'` / `'color'` / `'map'` / `'colorMap'`) bakes gamut
+  visualisation into the LUT at build time. Zero per-pixel cost.
+  Powers the live-video demo's real-time gamut warnings.
+- **Browser samples** — three shipped demos plus a landing page:
+  [`live-video-softproof.html`](../samples/live-video-softproof.html)
+  (real-time video soft-proofing at 40+ fps, the headline demo),
+  [`softproof.html`](../samples/softproof.html) (image soft-proof +
+  plate previews + colour picker),
+  [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html)
+  (pixel-level accuracy comparison with lcms-wasm),
+  [`index.html`](../samples/index.html) (landing page).
+- **License: GPL-3.0 → MPL-2.0.** File-level copyleft removes the
+  main adoption blocker GPL posed for commercial embedders.
+- **Sample infrastructure** — `samples/serve.js` dev server,
+  `samples/styles.css`, bundled CMYK ICC profiles.
+- **Docs** — [`docs/Samples.md`](./Samples.md) live demo index,
+  [`samples/ICCImage.md`](../samples/ICCImage.md) API reference.
+- **Tests** — `__tests__/transform_lut_gamut.tests.js` covering
+  all four gamut modes, threshold behaviour, and custom ΔE
+  functions.
 
 - **JS u16 kernel** (`lutMode: 'int16'`) — `Uint16Array` CLUT
   scaled to the full [0..0xFFFF] range with **Q0.13 fractional
@@ -189,140 +225,182 @@ compiled-pipeline work (next-but-one section).
 
 ---
 
-## v1.4 — Image helper + browser samples
+## v1.4 — Image helper + browser samples — shipped 2026-04-26
 
 A small, single-purpose helper class that owns the "I have an image,
 I want to display / proof / inspect it" workflow. **Not a general
-image library** — no resize, no filter, no composite, no format
-encode/decode. Strictly "move bytes around the colour transform,
-visualise what's there."
+image library** — no filters, no composite, no format encode/decode.
+Strictly "move bytes around the colour transform, visualise what's
+there", with two amenities — bilinear downscale and bit-depth
+conversion — that earn their place as defensive guards against huge
+browser uploads and dtype mismatches.
 
 > **Why this is v1.4 and not v1.5.** The v1.3 kernel ladder banked
 > a real performance story (158 MPx/s `int16-wasm-simd`, 4-5× over
 > lcms-wasm 16-bit). The fastest way to convert that into adoption
 > is concrete, runnable samples — not another perf release. v1.4 is
-> the **showcase release**: a small helper class + half a dozen
+> the **showcase release**: a small helper class + a handful of
 > browser samples that put the v1.3 numbers in front of users on
 > their own machines. The larger v1.5 compiled-pipeline + N-channel
 > work below is high-value but high-effort and could delay; landing
 > the sample suite first means even if v1.5 slips, the project keeps
 > growing visible surface area on the back of v1.3's perf story.
 
-Lives as a separate class (probably `src/ImageHelper.js`, exported
-as `new ImageHelper({...})`). Used by the browser samples below as
-both a demo vehicle *and* as living documentation of how to drive
-the core engine on real image data.
+Lives in [`samples/iccimage.js`](../samples/iccimage.js), exported
+as `ICCImage`. Lives in `samples/` (not `src/`) deliberately — it's
+**helper-grade**, MIT-licensed (separate from the engine's MPL-2.0
+— see [`samples/LICENSE`](../samples/LICENSE)), and double-billed
+as living documentation of how to drive the core engine on real
+image data. Full API reference: [`samples/ICCImage.md`](../samples/ICCImage.md).
+
+### Status
+
+**Shipped (v1.4.0).** Helper, gamut-mapping LUT, three demos, and
+the license change all landed. Two planned samples
+(`colour-calculator.html`, `profile-inspector.html`) are still WIP
+— see *Browser samples* below.
+
+### Design tenets
+
+| Tenet | What it means |
+|---|---|
+| **Immutable** | Every `toSRGB` / `toProof` / `toSeparation` / `toBitDepth` / `resizeTo` returns a *new* `ICCImage`. The source is never mutated. No "wait, which image am I looking at" bugs in demos. |
+| **Always profile-tagged** | The internal `ICCImageData` carries the `Profile` AND the full lineage chain (`[Profile, intent, Profile, intent, ...]`, same shape as `Transform.chain`). There is no such thing as an untagged `ICCImage`. |
+| **Lazy + cached** | `Transform`s are built on first use and stored in a `TransformCache` keyed by `chain + BPC + dataFormat + buildLut`. Derived images share their parent's cache, so chained ops compound the cache hit rate. |
+| **Two paths** | Bulk image work uses `dataFormat: 'int8'` + `buildLut: true` (the engine's fast LUT path). Single-pixel `pixel(x, y)` work uses `dataFormat: 'object'` with no LUT (the accuracy path). |
 
 ### API shape
 
 ```js
-var img = new ImageHelper({
-    width: 1024,
-    height: 768,
-    data: pixels,              // Uint8Array | Uint16Array | Float32Array
-    deviceProfile: cmykProfile, // what this image IS
-    proofProfile: null,         // optional: what to simulate through
-                                // (e.g. for softproof: source is sRGB,
-                                // proofProfile is the press profile,
-                                // rendered as sRGB → press → sRGB)
-    alpha: false                // or 'straight' | 'premultiplied'
-});
+import { ICCImage } from './samples/iccimage.js';
+const { Profile, eIntent } = window.jsColorEngine;  // UMD bundle global
+
+const cmyk = new Profile();
+await cmyk.loadPromise('GRACoL2006_Coated1v2.icc');
+
+// Construct from an HTMLImageElement / HTMLCanvasElement / ImageBitmap.
+// `maxPixels` is a defensive bilinear-downscale cap — drop a 30 MP image
+// in the browser and it'll arrive as ~4 MP, no special-casing required.
+const src = await ICCImage.fromHTMLImage(myImg, { maxPixels: 4_000_000 });
+
+// Each conversion returns a new ICCImage. Source is never touched.
+const proof = await src.toProof(cmyk, { intent: eIntent.perceptual, BPC: true });
+const sep   = await src.toSeparation(cmyk);
+
+await src.toCanvas(canvas1);                       // sRGB blit
+await proof.toCanvas(canvas2);                     // soft-proofed sRGB blit
+await sep.renderChannelAs('C').toCanvas(canvas3);  // tinted cyan plate
+
+const px = src.pixel(120, 200);
+// → { lab: {L,a,b}, srgb: {R,G,B,hex}, device: [0..1, ...], space: 'RGB' }
 ```
 
-The helper **assumes the display is sRGB** (safe default, overridable
-via a `displayProfile` option if someone cares). It builds its own
-`Transform` objects on construction based on what the image is and
-what the user asks to see:
+### What it does
 
-```js
-img.toScreenRGBA()             // device → sRGB, returns ImageData
-img.toSoftproofRGBA()           // device → proof → device → sRGB
-                                //   (if proofProfile is set)
-img.getChannel('C')             // single-channel Greyscale ImageHelper
-                                //   (in device space)
-img.renderChannelAs('C', '#00AEEF')  // channel greyscale tinted for display,
-                                     //   returns ImageData
-img.pixel(x, y)                 // single-pixel colour object in device space
-                                //   (uses f64 pipeline — accurate)
-```
+| Method | What it returns | Notes |
+|---|---|---|
+| `ICCImage.fromHTMLImage(src, { profile?, maxPixels? })` | new `ICCImage` | Always 8-bit RGBA (canvas API ceiling). |
+| `ICCImage.fromImageData(imageData, profile?, { maxPixels? })` | new `ICCImage` | Wrap existing `ImageData`. |
+| `new ICCImage({ width, height, data, profile, ... })` | new `ICCImage` | Direct construction from a typed array. For decoded 16-bit sources etc. |
+| `await img.toSRGB({ intent?, BPC? })` | new `ICCImage` (sRGB) | No-op fast path if already sRGB. |
+| `await img.toProof(proofProfile, { intent?, BPC? })` | new `ICCImage` (sRGB) | Soft-proof: src → proof → \*sRGB. `intent` / `BPC` accept arrays for per-leg control. |
+| `await img.toSeparation(proofProfile, { intent?, BPC? })` | new `ICCImage` (proof space) | The actual ink separation. `toCanvas()` on this builds an on-the-fly display transform. |
+| `img.toBitDepth(8 \| 16 \| 'float32')` | new `ICCImage` | Element-wise dtype conversion; profile + chain unchanged. |
+| `img.resizeTo({ maxPixels? \| width? \| height? })` | new `ICCImage` | Bilinear downscale (all dtypes). Up-sampling is rejected. |
+| `await img.toCanvas(canvas)` | the canvas | Auto-resizes the canvas. Direct blit if the terminal profile is sRGB; otherwise builds + caches `[terminal, *sRGB]`. |
+| `img.renderChannelAs(ref, tint?)` | new `ICCImage` (sRGB tinted) | Single-channel preview as a tinted RGBA image. |
+| `img.pixel(x, y)` | `{ lab, srgb, device, space }` | Accuracy path (no LUT). Lazily builds `src→*Lab` and `src→*sRGB` no-LUT transforms cached on the instance. |
+| `img.info` | summary object | Includes the human-readable lineage chain. |
+| `img.disposeRaw() / dispose()` | — | Drop raw buffer / drop everything. |
 
 ### Why this shape
 
-- **Transforms are hidden inside.** User says "I want to see this on
-  screen" / "I want to softproof this", the helper wires up the
-  correct `Transform` internally. Beginners don't need to know what a
-  PCS is.
-- **deviceProfile + proofProfile covers 80% of real image workflows.**
-  Image editing, softproofing, ink-channel inspection, press preview
-  — all of it.
-- **Channel extraction is where the helper earns its keep.** Canvas
-  alone cannot give you "the C channel of this CMYK image as a
-  coloured greyscale". It needs the full CMYK → single-channel
-  projection + RGB remapping that the engine already does.
-- **Immutable operations.** `getChannel()` returns a new helper. No
-  "wait which image am I looking at" bugs in demos.
+- **Immutable + chain on `ICCImageData`.** The lineage chain reads
+  left-to-right as the data's history. The terminal profile alone
+  tells you how the data is currently encoded. No "did `proofProfile`
+  get pinned at construction or not?" — every transform is in the
+  chain or it isn't.
+- **Two cache surfaces, one design rule.** The shared `TransformCache`
+  is tuned for `buildLut: true` bulk pipelines (where derived images
+  reuse the same LUTs as their parent). The per-instance `pixel()`
+  cache holds the no-LUT accuracy-path Transforms separately, because
+  mixing keying conventions across the two would muddy both.
+- **`pixel()` returns three answers at once.** Lab + sRGB + device-space
+  is what every UI colour-picker actually wants. Single Lab transform
+  cached on first call, single sRGB transform cached on first call,
+  device readout is a buffer slice. Subsequent picks are near-instant.
+- **`renderChannelAs` returns an `ICCImage`, not a buffer.** Same
+  drawing API as everything else (`.toCanvas()`), composes with
+  immutable ops, no special "channel buffer" type to learn.
 
-### Design decisions pinned
+### Pinned design decisions
 
-1. **Buffer ownership:** retain by reference on construction, copy on
-   any op that changes dimensions / format. Keeps the fast path fast.
-2. **No re-transforms:** once built, the internal `Transform` objects
-   stick. Changing `proofProfile` after construction throws; users
-   build a new helper. Demo code reads cleaner that way.
-3. **Rendering target always RGBA Uint8Clamped for `toXxxRGBA()`.**
-   Canvas-ready. Float output is a different method
-   (`.toFloat32(colourSpace)`) if someone wants raw data.
+1. **`getChannel('C')` deliberately omitted.** A 1D extracted channel
+   has no valid profile to tag it with — it would violate the "always
+   profile-tagged" tenet. Use `renderChannelAs` for previews; if you
+   want raw channel pixels, read them out of the `ICCImageData` buffer
+   directly via `img.raw`.
+2. **`fromBuffer(arrayBuffer, mimeType)` deferred.** Format decode
+   (JPEG / TIFF / PNG) belongs in a pluggable layer that doesn't ship
+   yet. For now, demos construct `ICCImage`s from `HTMLImageElement`s
+   (canvas-decoded, 8-bit RGBA) or from typed arrays directly.
+3. **`resizeTo` rejects upscaling.** KISS — the helper exists to be
+   defensive against huge uploads, not to grow images. Real
+   resampling belongs in a real image library.
+4. **`toCanvas` doesn't take a colour space option.** Canvas is sRGB
+   by spec; offering anything else would be lying.
+5. **Engine wiring is lazy.** `ICCImage` reads `globalThis.jsColorEngine`
+   on first use (the UMD bundle global). For ESM environments,
+   `ICCImage.init({ engine })` injects the engine explicitly.
 
 ### Non-goals
 
-- Resize, filter, blur, composite, blend modes → use a real image
-  library (ImagiK, libvips, pillow via wasm, etc) *before* jsCE.
-- Format encode/decode (PNG, JPEG, TIFF) → out of scope. Accept
-  ImageData / typed arrays in, emit ImageData / typed arrays out.
+- Filters, blur, sharpen, composite, blend modes → use a real image
+  library (ImageMagick, libvips, pillow via wasm, etc) *before* jsCE.
+- Format encode/decode (PNG, JPEG, TIFF) → out of scope for now.
+  Accept `ImageData` / typed arrays in, emit `ImageData` / typed
+  arrays out. Pluggable decoders may land later.
+- Upscaling. `resizeTo` rejects it.
 - Video. Not a streaming API.
 
 ### When it ships
 
-**v1.4**, immediately after the v1.3 int16 ladder. This is a
-features-and-samples release, not a performance one — slotting it
-in before v1.5 means we can show off the current feature set and
-the performance gains banked in v1.2 / v1.3 in the browser samples,
-on real images, on the user's own machine. v1.5 is a much larger
-piece of work (compiled non-LUT pipelines + N-channel float input
-kernels) and could be a long delay; landing the sample suite first
-gives a more immediate payoff for anyone who's been following along
-for the journey so far, and means even if v1.5 slips the project
-keeps growing visible surface area.
+**Shipped (v1.4.0).** `samples/iccimage.js`, the gamut-mapping LUT,
+and three demos (`softproof.html`, `softproof-vs-lcms.html`,
+`live-video-softproof.html`) all landed. The remaining two demos
+(`colour-calculator.html`, `profile-inspector.html`) land
+iteratively — none of them blocks v1.5 work.
 
 ### Browser samples
 
 Dev-adoption angle: most colour libraries are judged in 30 seconds by
 whether there's a working demo someone can click. jsColorEngine has
 the [browser benchmark](./Bench.md) shipped in v1.2 but needs product
-samples as well. The ImageHelper above is the glue that makes the
-image-centric demos short enough to read as documentation.
+samples as well. The `ICCImage` helper above is the glue that makes
+the image-centric demos short enough to read as documentation. See
+[Samples.md](./Samples.md) for the live index; the entries below are
+the design notes / briefs.
 
 Target samples (all zero-build, reference `browser/jsColorEngineWeb.js`
 via `<script>`, work from `file://` so devs can just download + open):
 
-- **`rgb-to-cmyk-separations.html`** — image input (drag-drop or file
-  picker) → five side-by-side canvases: composite CMYK→RGB preview +
-  individual C, M, Y, K separations rendered as greyscale with the
-  channel colour as a tint overlay. Demonstrates the image hot path
-  at glance-able speed. Add an FPS counter for the "yes this really
-  is 60+ MPx/s" moment. Primary ImageHelper showcase.
-- **`colour-calculator.html`** — interactive converter between
-  RGB / Lab / XYZ / LCH / CMYK with live round-trip display. Shows
-  the accuracy path (`transform()` on single colours), the helper
-  functions in `convert.js`, and how virtual profiles work without
-  the user needing an ICC file. UI: a row of sliders per colour
-  space, ΔE readout between source and round-tripped destination.
-- **`soft-proof-image.html`** — upload image, pick a press profile
-  from a dropdown of virtual profiles (or drop in your own ICC),
-  side-by-side "on screen" vs "what it'll print". Classic use case,
-  covers the full pipeline, looks impressive. `img.toSoftproofRGBA()`
-  is literally one call.
-- **`softproof-vs-lcms.html`** — **the proof-of-accuracy demo.**
+- **`softproof.html`** ✅ *shipped v1.4* — combined showcase: soft-proof
+  through a CMYK profile (`toProof`) plus the four C/M/Y/K plate
+  previews driven off the actual `toSeparation` output via
+  `renderChannelAs`. One `ICCImage` source feeds three derived images
+  through the shared `TransformCache`, so changing the profile back
+  to one we've used before is ~0 ms on the second look. Replaces the
+  originally-separate `rgb-to-cmyk-separations.html` and
+  `soft-proof-image.html` briefs — they were splitting one workflow
+  in half. Live: [`samples/softproof.html`](../samples/softproof.html).
+- **`colour-calculator.html`** 🔧 *WIP* — interactive converter between
+  RGB / Lab / XYZ / LCH / CMYK with live round-trip display. Primary
+  showcase for `ICCImage.pixel(x, y)` (the no-LUT accuracy path) plus
+  the `convert.js` helpers and virtual-profile shortcuts. UI: a row
+  of sliders per colour space, ΔE readout between source and
+  round-tripped destination, optional "load image, pick a pixel" mode
+  that pipes the image through `pixel()` directly.
+- **`softproof-vs-lcms.html`** ✅ *shipped v1.4* — **the proof-of-accuracy demo.**
   Load an image, pick a press profile, run the same softproof
   through both `jsColorEngine` and `lcms-wasm`, show three panels:
 
@@ -379,27 +457,16 @@ via `<script>`, work from `file://` so devs can just download + open):
       forcing function as the `.it8` harness gives us internally,
       just in public.
 
-  ImageHelper shines here: the jsCE side is literally
-  `new ImageHelper({...}).toSoftproofRGBA()` — the whole sample is
-  mostly the lcms-wasm wiring + diff calculation + UI, which
-  highlights how much glue the helper saves. ~250 lines total.
-- **`profile-inspector.html`** — load any ICC file, dump tag table,
+  `ICCImage` shines here: the jsCE side is literally
+  `await (await ICCImage.fromHTMLImage(img)).toProof(cmyk).toCanvas(cv)`
+  — the whole sample is mostly the lcms-wasm wiring + diff
+  calculation + UI, which highlights how much glue the helper saves.
+  ~250 lines total.
+- **`profile-inspector.html`** 🔧 *WIP* — load any ICC file, dump tag table,
   show TRC curves, render the gamut shell in 3D. Genuinely useful
   tool on its own; doubles as a demo of the `Profile` class API
   surface.
-- **`gamut-viewer.html`** — relicensed + simplified version of the
-  existing `profileViewer.js` (O2 Creative). Three.js-based,
-  vertex-coloured gamut mesh, side-by-side profile comparison with
-  ∆E³ volume readout, add/remove profiles, opacity sliders,
-  wire/solid/trans view modes, mouse-drag rotation + wheel zoom.
-  Already has `addLabPoints` / `addCMYKPoints` / `addRGBPoints`
-  helpers — can plug an image → point-cloud demo on top (drop an
-  image, see the image's pixel distribution as a coloured cloud
-  inside the gamut shell). Before shipping: relicense to match
-  engine, drop jQuery dependency, swap `require` for UMD /
-  `<script>` usage, Three.js via CDN.
-- **`live-video-softproof.html`** — *(late-night brain-dump, capture
-  for later.)* Side-by-side `<video>` elements, HD (720p probably —
+- **`live-video-softproof.html`** ✅ *shipped v1.4* — Side-by-side `<video>` elements, HD (720p probably —
   lots of other overhead on the page, and 30 fps is already the
   "oh wow" threshold; don't need 60). Left = original sRGB, right =
   live CMYK softproof with gamut warnings, profile swappable from a
@@ -436,9 +503,10 @@ via `<script>`, work from `file://` so devs can just download + open):
   tear).
 
   Video → canvas pipeline: `ctx.drawImage(videoElement, ...)` on a
-  hidden 2D canvas, `getImageData()` for the pixel buffer, feed to
-  `ImageHelper.toSoftproofRGBA()`, `putImageData()` to the visible
-  canvas. Modern browsers also expose `VideoFrame` (WebCodecs) +
+  hidden 2D canvas, `getImageData()` → `ICCImage.fromImageData()` →
+  `await img.toProof(cmyk).toCanvas(visibleCanvas)` per frame
+  (the per-frame `TransformCache` hit means the proof transform is
+  built exactly once across the whole playback). Modern browsers also expose `VideoFrame` (WebCodecs) +
   `OffscreenCanvas` + `requestVideoFrameCallback()` which skips a
   CPU copy and lines up with the decoder cadence — worth using if
   available, fallback to the `drawImage` path otherwise.
@@ -505,7 +573,7 @@ a code block in the guide, checked for drift by a tiny sync script.
 > **Scope reframe (Apr 2026).** v1.5 was originally "compiled
 > non-LUT transforms + `toModule()` distribution". After the v1.3
 > close-out two smaller items got slotted in at the front of its
-> queue, and the ImageHelper + samples work was promoted to v1.4
+> queue, and the ICCImage helper + samples work was promoted to v1.4
 > (its own showcase release on the back of the v1.3 perf story).
 > v1.5 now bundles:
 >
@@ -522,10 +590,10 @@ a code block in the guide, checked for drift by a tiny sync script.
 >
 > The compiled non-LUT pipeline + `toModule()` work is still the
 > centrepiece of v1.5 — those land after the warm-up items above.
-> This is **the largest single piece of post-v1.3 work** and could
-> meaningfully delay the release; v1.4's sample suite was reordered
-> ahead of it precisely so the project keeps shipping visible
-> progress on top of the v1.3 perf story even if v1.5 takes a while.
+> This is **the largest single piece of post-v1.4 work** and could
+> meaningfully delay the release; v1.4's sample suite shipped ahead
+> of it precisely so the project kept shipping visible progress on
+> top of the v1.3 perf story.
 
 ### N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)
 

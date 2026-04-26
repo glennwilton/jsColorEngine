@@ -32,6 +32,7 @@ colours / pixels as you like.
 * [Multi-stage transforms](#multi-stage-transforms)
 * [Custom pipeline stages](#custom-pipeline-stages)
 * [Constructor options](#constructor-options)
+* [Gamut warning modes](#gamut-warning-modes)
 * [Methods](#methods)
 * [Properties](#properties)
 * [Notes about prebuilt LUT size](#notes-about-prebuilt-lut-size)
@@ -205,6 +206,45 @@ new Transform(options)
 | `clipRGBinPipeline` | Boolean | `false` | Clip RGB values to 0..1 inside the pipeline (useful for extreme abstract profiles). |
 | `verbose` | Boolean | `false` | Log pipeline construction info to console. |
 | `verboseTiming` | Boolean | `false` | Log build timings to console. |
+| `lutGamutMode` | String | `'none'` | Baked gamut check during LUT build. See [Gamut warning modes](#gamut-warning-modes) below. |
+| `lutGamutLimit` | Number | `5` | ΔE threshold for `'color'` mode. |
+| `lutGamutMapScale` | Number | `25.5` | ΔE that maps to 1.0 in `'map'` and `'colorMap'` modes. |
+| `lutGamutColor` | Object | `Lab(0,127,127)` | Warning colour (Lab) for `'color'` and `'colorMap'` modes. |
+| `gamutDeFn` | Function | `convert.deltaE1976` | Colour-difference function `(labA, labB) => number`. Swap in `deltaE2000`, `deltaCMC`, etc. |
+| `bakeLutGamut` | Boolean | `false` | Legacy shorthand. `true` = `lutGamutMode:'color'`. |
+
+---
+
+## Gamut warning modes
+
+When building a LUT (`buildLut: true`), you can bake a gamut check
+into the LUT itself — **zero cost at transform time**. The check
+compares source and destination Lab at each LUT grid point and acts
+on the ΔE.
+
+```js
+new Transform({
+    buildLut: true,
+    dataFormat: 'int8',
+    lutGamutMode: 'colorMap',    // visual heatmap
+    lutGamutMapScale: 25.5,      // ΔE 25.5 = full warning colour
+}).create('*srgb', cmykProfile, eIntent.perceptual);
+```
+
+| Mode | Output | Use case |
+|---|---|---|
+| `'none'` | Normal conversion | Default — no gamut check |
+| `'color'` | Hard replace above `lutGamutLimit` ΔE with `lutGamutColor` | Binary in/out flag overlay |
+| `'colorMap'` | Lerp from paper white → `lutGamutColor` by ΔE | Visual heatmap on white background |
+| `'map'` | Raw `min(ΔE/lutGamutMapScale, 1.0)` in every output channel | Analysis — extract via `renderChannelAs` |
+
+The gamut colour and paper white are converted to the output device
+space once at LUT-build time. The gamut check transforms (src→Lab,
+dest→Lab) are disposed after the LUT is built.
+
+LUT tags `gamutMode`, `gamutLimit`, `gamutMapScale` are stamped on
+both the float LUT and the int LUT mirror so downstream code can
+inspect what was baked in.
 
 ---
 

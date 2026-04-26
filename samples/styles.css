@@ -1,0 +1,328 @@
+/* ==========================================================================
+   samples/styles.css
+   Shared stylesheet for the jsColorEngine sample / demo pages.
+   Palette + tokens match bench/browser/styles.css so the whole site reads
+   as one product.
+   ========================================================================== */
+
+:root {
+    --bg:           #0f1419;
+    --bg-card:      #161b22;
+    --bg-card-2:    #1c232c;
+    --border:       #2a323d;
+    --border-soft:  #1f2630;
+    --text:         #e6edf3;
+    --text-dim:     #8b95a4;
+    --text-muted:   #5c6675;
+    --accent:       #a3e635;     /* lime-400 */
+    --accent-2:     #4ade80;     /* green-400 */
+    --warn:         #fbbf24;
+    --error:        #f87171;
+    --shadow:       0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.15);
+
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    color: var(--text);
+    background: var(--bg-card-2);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    border: 1px solid var(--border-soft);
+}
+
+main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 24px 48px;
+}
+
+/* ============================================================ TOPBAR + NAV */
+
+.topbar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px 0;
+    margin-bottom: 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: var(--shadow);
+}
+
+.brand {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.brand-mark {
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--accent);
+    letter-spacing: -0.01em;
+}
+.brand-tag {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.nav {
+    display: flex;
+    gap: 4px;
+    margin-left: -8px;
+}
+.nav a {
+    background: transparent;
+    color: var(--text-dim);
+    padding: 10px 16px;
+    font-size: 13px;
+    border-bottom: 2px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease;
+    border-radius: 4px 4px 0 0;
+    text-decoration: none;
+}
+.nav a:hover { color: var(--text); text-decoration: none; }
+.nav a.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* ============================================================ CARD / PANEL */
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow);
+}
+
+.card h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.005em;
+}
+.card h3 {
+    margin: 18px 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.lead {
+    color: var(--text-dim);
+    margin: 8px 0 16px;
+    max-width: 90ch;
+}
+
+.muted { color: var(--text-muted); font-size: 12px; }
+
+/* ============================================================ INFO GRID    */
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--border-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.info-cell {
+    background: var(--bg-card-2);
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 50px;
+}
+.info-cell .lbl {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.info-cell .val {
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    word-break: break-word;
+}
+
+/* ============================================================ CONTROLS BAR */
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: flex-end;
+    padding: 14px 16px;
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    margin: 12px 0;
+}
+
+.controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.controls select,
+.controls input[type=number] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 13px;
+    min-width: 130px;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.controls select:focus,
+.controls input[type=number]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 7px 16px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+button:not(:disabled):hover { border-color: var(--accent); }
+
+.btn-primary {
+    background: var(--accent);
+    color: #0a0e12;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.btn-primary:not(:disabled):hover {
+    background: var(--accent-2);
+    border-color: var(--accent-2);
+}
+
+/* ============================================================ DEMO GRID    */
+
+.demo-grid {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: 1fr;
+}
+@media (min-width: 760px) { .demo-grid { grid-template-columns: 1fr 1fr; } }
+
+.demo-grid canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+}
+
+/* Channel separation plates — 4-up grid */
+.channels-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+.channels-grid canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+    background: #fff;
+    border: 1px solid var(--border-soft);
+}
+
+/* ============================================================ SWATCH       */
+
+.swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    vertical-align: -1px;
+    margin-right: 6px;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ============================================================ TIMING BADGE */
+
+.timing {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent-2);
+}
+.timing.is-busy { color: var(--accent); }
+
+/* ============================================================ FOOTER       */
+
+.footer {
+    max-width: 1240px;
+    margin: 24px auto 18px;
+    padding: 16px 24px;
+    color: var(--text-muted);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-top: 1px solid var(--border-soft);
+    font-family: var(--mono);
+}
+
+/* ============================================================ RESPONSIVE   */
+
+@media (max-width: 720px) {
+    main { padding: 0 12px 24px; }
+    .topbar { padding: 10px 12px 0; }
+    .card { padding: 16px; }
+    .controls { padding: 12px; gap: 8px 10px; }
+    .controls select { min-width: 110px; }
+    .info-grid { grid-template-columns: 1fr 1fr; }
+    .channels-grid { grid-template-columns: 1fr 1fr; }
+}

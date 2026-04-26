@@ -1,0 +1,562 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Soft Proof Demo</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    /* ── Floating colour-picker tooltip ─────────────────────────────── */
+    #pickerTooltip {
+        position: fixed;
+        z-index: 100;
+        pointer-events: none;
+        display: none;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.45;
+        padding: 0;
+        overflow: hidden;
+        min-width: 210px;
+    }
+    #pickerTooltip.is-visible { display: block; }
+
+    .tip-swatches {
+        display: flex;
+        height: 28px;
+        border-radius: 7px 7px 0 0;
+        overflow: hidden;
+    }
+    .tip-sw-left, .tip-sw-right { flex: 1; }
+
+    .tip-body {
+        padding: 8px 10px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px 10px;
+    }
+    .tip-lbl {
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-size: 9px;
+        letter-spacing: 0.06em;
+        align-self: center;
+    }
+    .tip-val {
+        color: var(--text);
+        white-space: nowrap;
+    }
+    .tip-val.de-ok    { color: var(--accent-2); }
+    .tip-val.de-warn  { color: var(--warn); }
+    .tip-val.de-bad   { color: var(--error); }
+    .tip-sep {
+        grid-column: 1 / -1;
+        border-top: 1px solid var(--border-soft);
+        margin: 3px 0;
+    }
+
+    canvas.hoverable { cursor: crosshair; }
+
+    .timing-inline {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--accent-2);
+        padding-bottom: 8px;
+        white-space: nowrap;
+    }
+    .timing-inline.is-busy { color: var(--accent); }
+</style>
+<script src="/browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">jsColorEngine</span>
+        <span class="brand-tag">samples</span>
+    </div>
+    <nav class="nav">
+        <a href="index.html">Home</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html" class="is-active">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="/bench/browser/">Bench</a>
+    </nav>
+</header>
+
+<main>
+
+<!-- INTRO CARD ============================================================ -->
+<section class="card">
+    <h2>Soft proof + CMYK separations</h2>
+    <p class="lead">
+        Load an image, pick a press profile and rendering intent, see the
+        simulated print output alongside the four
+        C&thinsp;/&thinsp;M&thinsp;/&thinsp;Y&thinsp;/&thinsp;K ink plates.
+        Hover any canvas for a floating colour picker with source sRGB, absolute
+        Lab, CMYK ink percentages, CMYK round-trip Lab, and both
+        &Delta;E&thinsp;00 (perceptual) and &Delta;E&thinsp;76 (geometric).
+        The split swatch at the top shows source RGB (left) vs soft-proof
+        RGB (right) so you can see the gamut compression at a glance.
+    </p>
+    <p class="muted">
+        Source: <a href="iccimage.js"><code>iccimage.js</code></a>
+        &middot; API reference: <a href="ICCImage.md"><code>ICCImage.md</code></a>
+        &middot; License: MIT
+        &middot; Lab uses relative colorimetric (D50-adapted)
+    </p>
+</section>
+
+<!-- CONTROLS ============================================================== -->
+<section class="card">
+    <div class="controls">
+        <label>
+            CMYK Profile
+            <select id="profileSelect">
+                <option value="profiles/CoatedGRACoL2006.icc" selected>GRACoL 2006 Coated (US)</option>
+                <option value="profiles/ISOcoated_v2_eci.icc">ISO Coated v2 (ECI)</option>
+                <option value="profiles/eciCMYK_v2.icc">eciCMYK v2 (Generic Exchange)</option>
+            </select>
+        </label>
+        <label>
+            Intent + BPC
+            <select id="intentSelect">
+                <option value="perceptual"     selected>Perceptual</option>
+                <option value="perceptual-bpc">Perceptual + BPC</option>
+                <option value="relative">Relative</option>
+                <option value="relative-bpc">Relative + BPC</option>
+                <option value="saturation">Saturation</option>
+                <option value="saturation-bpc">Saturation + BPC</option>
+                <option value="absolute">Absolute</option>
+            </select>
+        </label>
+        <label>
+            Source Image
+            <select id="imageSelect">
+                <option value="https://picsum.photos/id/1015/1200/800">Mountain lake (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1043/1200/800">Portrait (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1069/1200/800">Forest (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1025/800/1200">Dog portrait (800&times;1200)</option>
+                <option value="https://picsum.photos/id/1074/800/1200">Person portrait (800&times;1200)</option>
+                <option value="https://picsum.photos/id/1035/800/1200">Misty forest (800&times;1200)</option>
+            </select>
+        </label>
+        <label>
+            Gamut warning
+            <select id="gamutSelect">
+                <option value="none" selected>Off</option>
+                <option value="color-2">Colour &Delta;E 2 (tight)</option>
+                <option value="color-5">Colour &Delta;E 5 (typical)</option>
+                <option value="color-10">Colour &Delta;E 10 (loose)</option>
+                <option value="colorMap">Colour heatmap</option>
+                <option value="map">Raw &Delta;E map</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="runBtn">Run soft proof</button>
+        <span class="timing-inline" id="timingInline"></span>
+    </div>
+</section>
+
+<!-- SCREEN vs PROOF ======================================================= -->
+<section class="card">
+    <h2>Original vs soft proof</h2>
+    <div class="demo-grid">
+        <div>
+            <h3>Original (sRGB)</h3>
+            <canvas id="screenCanvas" class="hoverable"></canvas>
+            <div class="info-grid" id="screenInfo" style="margin-top:10px"></div>
+        </div>
+        <div>
+            <h3>Soft proof <span class="muted">&mdash; simulated press output</span></h3>
+            <canvas id="proofCanvas" class="hoverable"></canvas>
+            <div class="info-grid" id="proofInfo" style="margin-top:10px"></div>
+        </div>
+    </div>
+</section>
+
+<!-- SEPARATIONS =========================================================== -->
+<section class="card">
+    <h2>CMYK separations</h2>
+    <p class="lead">
+        Each plate below is the actual ink-channel data from the
+        <code>toSeparation()</code> output, rendered via
+        <code>renderChannelAs()</code>.
+    </p>
+    <div class="channels-grid" id="channelContainer"></div>
+</section>
+
+<!-- TIMING BREAKDOWN ====================================================== -->
+<section class="card">
+    <h2>Performance breakdown</h2>
+    <div class="info-grid">
+        <div class="info-cell"><span class="lbl">Profile load</span><span class="val" id="t-profile">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Image pixels</span><span class="val" id="t-pixels">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Cache</span><span class="val" id="t-cache">&mdash;</span></div>
+    </div>
+
+    <h3 style="margin:16px 0 6px; font-size:13px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.06em">
+        Cold run <span style="text-transform:none; letter-spacing:0">(LUT build + transform)</span>
+    </h3>
+    <div class="info-grid">
+        <div class="info-cell"><span class="lbl">Proof (src&rarr;cmyk&rarr;sRGB)</span><span class="val" id="tc-proof">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Separation (src&rarr;cmyk)</span><span class="val" id="tc-sep">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Canvas render</span><span class="val" id="tc-render">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Total</span><span class="val" id="tc-total">&mdash;</span></div>
+    </div>
+
+    <h3 style="margin:16px 0 6px; font-size:13px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.06em">
+        Warm run <span style="text-transform:none; letter-spacing:0">(cached LUT, transform only)</span>
+    </h3>
+    <div class="info-grid">
+        <div class="info-cell"><span class="lbl">Proof</span><span class="val" id="tw-proof">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Proof MPx/s</span><span class="val" id="tw-proof-mpx">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Separation</span><span class="val" id="tw-sep">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Sep MPx/s</span><span class="val" id="tw-sep-mpx">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Canvas render</span><span class="val" id="tw-render">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Total</span><span class="val" id="tw-total">&mdash;</span></div>
+    </div>
+
+    <p class="muted" style="margin-top:10px">
+        Cold = first run (LUT build + transform). Warm = second run
+        (cached LUT, transform only). Transform and canvas render are
+        timed separately. MPx/s is for the warm transform pass only.
+    </p>
+</section>
+
+</main>
+
+<!-- FLOATING TOOLTIP ====================================================== -->
+<div id="pickerTooltip">
+    <div class="tip-swatches">
+        <div class="tip-sw-left" id="tipSwatchRGB"></div>
+        <div class="tip-sw-right" id="tipSwatchCMYK"></div>
+    </div>
+    <div class="tip-body" id="tipBody"></div>
+</div>
+
+<footer class="footer">
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>
+        <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+        &middot;
+        <a href="/bench/browser/">Bench</a>
+    </span>
+</footer>
+
+<script type="module">
+    import { ICCImage, ChannelSets } from './iccimage.js';
+
+    const { Profile, eIntent, convert } = window.jsColorEngine;
+
+    const imgEl       = document.createElement('img');
+    imgEl.crossOrigin = 'anonymous';
+    const runBtn      = document.getElementById('runBtn');
+    const profileSel  = document.getElementById('profileSelect');
+    const intentSel   = document.getElementById('intentSelect');
+    const imageSel    = document.getElementById('imageSelect');
+    const gamutSel    = document.getElementById('gamutSelect');
+    const screenCv    = document.getElementById('screenCanvas');
+    const proofCv     = document.getElementById('proofCanvas');
+    const screenInfo  = document.getElementById('screenInfo');
+    const proofInfo   = document.getElementById('proofInfo');
+    const channelHost = document.getElementById('channelContainer');
+    const timingInline = document.getElementById('timingInline');
+
+    const tooltip      = document.getElementById('pickerTooltip');
+    const tipSwatchRGB  = document.getElementById('tipSwatchRGB');
+    const tipSwatchCMYK = document.getElementById('tipSwatchCMYK');
+    const tipBody      = document.getElementById('tipBody');
+
+    let src = null;
+    let sep = null;
+    let proof = null;
+    const profileCache = new Map();
+
+    // ── Intent + BPC parsing ──────────────────────────────────────────────
+
+    function parseIntent() {
+        const v = intentSel.value;
+        const bpc = v.endsWith('-bpc');
+        const base = v.replace('-bpc', '');
+        const intent = eIntent[base] ?? eIntent.perceptual;
+        return { intent, bpc };
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    async function loadProfile(name) {
+        if (profileCache.has(name)) return { profile: profileCache.get(name), ms: 0 };
+        const t0 = performance.now();
+        const p = new Profile();
+        await p.loadPromise(name);
+        const ms = performance.now() - t0;
+        profileCache.set(name, p);
+        return { profile: p, ms };
+    }
+
+    function dumpInfo(host, img) {
+        const i = img.info;
+        host.innerHTML = `
+            <div class="info-cell"><span class="lbl">Size</span><span class="val">${i.width}\u00d7${i.height}</span></div>
+            <div class="info-cell"><span class="lbl">Colour space</span><span class="val">${i.colorSpace} ${i.bitDepth}-bit</span></div>
+            <div class="info-cell"><span class="lbl">Profile</span><span class="val">${i.profile}</span></div>
+            <div class="info-cell"><span class="lbl">Chain</span><span class="val">${i.chain}</span></div>
+        `;
+    }
+
+    function fmtMs(ms) { return ms < 1 ? '<1 ms' : ms.toFixed(0) + ' ms'; }
+    function fmtMpx(pixels, ms) { return ((pixels / (ms / 1000)) / 1e6).toFixed(1); }
+    function $(id) { return document.getElementById(id); }
+
+    async function loadImage(url) {
+        return new Promise((resolve, reject) => {
+            imgEl.onload  = () => resolve(imgEl);
+            imgEl.onerror = () => reject(new Error('Failed to load image: ' + url));
+            imgEl.src = url;
+        });
+    }
+
+    // ── Run pass ──────────────────────────────────────────────────────────
+
+    function parseGamut() {
+        const v = gamutSel.value;
+        if (v === 'none')     return {};
+        if (v === 'map')      return { lutGamutMode: 'map' };
+        if (v === 'colorMap') return { lutGamutMode: 'colorMap' };
+        const limit = parseInt(v.split('-')[1], 10);
+        return { lutGamutMode: 'color', lutGamutLimit: limit };
+    }
+
+    async function runPass(proofProfile) {
+        const { intent, bpc } = parseIntent();
+        const gamutOpts = parseGamut();
+        const t = {};
+
+        let t0 = performance.now();
+        const localProof = await src.toProof(proofProfile, {
+            intent: [intent, eIntent.relative],
+            BPC:    [bpc, false],
+            ...gamutOpts,
+        });
+        t.proofMs = performance.now() - t0;
+
+        t0 = performance.now();
+        const localSep = await src.toSeparation(proofProfile, {
+            intent, BPC: bpc,
+        });
+        t.sepMs = performance.now() - t0;
+
+        t0 = performance.now();
+        await src.toCanvas(screenCv);
+        await localProof.toCanvas(proofCv);
+        dumpInfo(screenInfo, src);
+        dumpInfo(proofInfo, localProof);
+
+        channelHost.innerHTML = '';
+        for (const def of ChannelSets.CMYK) {
+            const cv = document.createElement('canvas');
+            cv.className = 'hoverable';
+            const tinted = localSep.renderChannelAs(def.short);
+            await tinted.toCanvas(cv);
+
+            const wrapper = document.createElement('div');
+            const swatch = `<span class="swatch" style="background:rgb(${def.tint.join(',')})"></span>`;
+            wrapper.innerHTML = `<h3>${swatch}${def.name} (${def.short})</h3>`;
+            wrapper.appendChild(cv);
+            channelHost.appendChild(wrapper);
+        }
+        t.renderMs = performance.now() - t0;
+        t.totalMs = t.proofMs + t.sepMs + t.renderMs;
+
+        return { t, proof: localProof, sep: localSep };
+    }
+
+    // ── Build ─────────────────────────────────────────────────────────────
+
+    async function build() {
+        runBtn.disabled = true;
+        runBtn.textContent = 'Working\u2026';
+        timingInline.textContent = '';
+        timingInline.className = 'timing-inline is-busy';
+
+        try {
+            if (!src) {
+                await loadImage(imageSel.value);
+                src = await ICCImage.fromHTMLImage(imgEl, { maxPixels: 4_000_000 });
+            }
+
+            const pixels = src.info.width * src.info.height;
+            $('t-pixels').textContent = (pixels / 1e6).toFixed(2) + ' MP';
+
+            const { profile: proofProfile, ms: profileMs } = await loadProfile(profileSel.value);
+            $('t-profile').textContent = profileMs > 0 ? fmtMs(profileMs) : 'cached';
+
+            // Cold run
+            const cold = await runPass(proofProfile);
+            sep   = cold.sep;
+            proof = cold.proof;
+            $('tc-proof').textContent  = fmtMs(cold.t.proofMs);
+            $('tc-sep').textContent    = fmtMs(cold.t.sepMs);
+            $('tc-render').textContent = fmtMs(cold.t.renderMs);
+            $('tc-total').textContent  = fmtMs(cold.t.totalMs);
+            $('t-cache').textContent   = src.info.cacheSize + ' transforms';
+
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+            // Warm run
+            const warm = await runPass(proofProfile);
+            sep   = warm.sep;
+            proof = warm.proof;
+            $('tw-proof').textContent     = fmtMs(warm.t.proofMs);
+            $('tw-proof-mpx').textContent = fmtMpx(pixels, warm.t.proofMs) + ' MPx/s';
+            $('tw-sep').textContent       = fmtMs(warm.t.sepMs);
+            $('tw-sep-mpx').textContent   = fmtMpx(pixels, warm.t.sepMs) + ' MPx/s';
+            $('tw-render').textContent    = fmtMs(warm.t.renderMs);
+            $('tw-total').textContent     = fmtMs(warm.t.totalMs);
+
+            // Inline summary next to button
+            const avgMs = ((warm.t.proofMs + warm.t.sepMs) / 2);
+            const avgMpx = fmtMpx(pixels, avgMs);
+            timingInline.textContent = `${fmtMs(warm.t.proofMs + warm.t.sepMs)} \u00b7 ~${avgMpx} MPx/s avg`;
+            timingInline.className = 'timing-inline';
+
+        } catch (e) {
+            console.error(e);
+            $('tc-proof').textContent = 'error: ' + e.message;
+            timingInline.textContent = 'error';
+            timingInline.className = 'timing-inline';
+        } finally {
+            runBtn.disabled = false;
+            runBtn.textContent = 'Run soft proof';
+        }
+    }
+
+    // ── Colour picker (floating tooltip) ──────────────────────────────────
+
+    function canvasToImageXY(canvas, e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) * (canvas.width  / rect.width));
+        const y = Math.floor((e.clientY - rect.top)  * (canvas.height / rect.height));
+        return { x, y };
+    }
+
+    function readCMYK(x, y) {
+        if (!sep || !sep.raw) return null;
+        const r = sep.raw;
+        if (x < 0 || x >= r.width || y < 0 || y >= r.height) return null;
+        const stride = r.bytesPerPixel;
+        const idx = (y * r.width + x) * stride;
+        const d = r.data;
+        const norm = r.bitDepth === 8 ? 1 / 255 : r.bitDepth === 16 ? 1 / 65535 : 1;
+        return {
+            C: d[idx]     * norm * 100,
+            M: d[idx + 1] * norm * 100,
+            Y: d[idx + 2] * norm * 100,
+            K: d[idx + 3] * norm * 100,
+        };
+    }
+
+    function proofRGB(x, y) {
+        if (!proof || !proof.raw) return null;
+        const r = proof.raw;
+        if (x < 0 || x >= r.width || y < 0 || y >= r.height) return null;
+        const stride = r.bytesPerPixel;
+        const idx = (y * r.width + x) * stride;
+        const d = r.data;
+        return `rgb(${d[idx]},${d[idx + 1]},${d[idx + 2]})`;
+    }
+
+    function deClass(de) {
+        if (de < 1)  return 'de-ok';
+        if (de < 3)  return 'de-warn';
+        return 'de-bad';
+    }
+
+    function showTooltip(e, x, y) {
+        if (!src || !src.raw) return;
+        const r = src.raw;
+        if (x < 0 || x >= r.width || y < 0 || y >= r.height) { hideTooltip(); return; }
+
+        const px   = src.pixel(x, y);
+        const cmyk = readCMYK(x, y);
+
+        let cmykLab = null;
+        let dE = null;
+        if (sep && sep.raw && x < sep.raw.width && y < sep.raw.height) {
+            cmykLab = sep.pixel(x, y).lab;
+            dE = convert.deltaE2000(px.lab, cmykLab);
+        }
+
+        const { R, G, B, hex } = px.srgb;
+        const { L, a, b } = px.lab;
+
+        // Split swatch: source RGB left, soft-proof RGB right
+        tipSwatchRGB.style.background  = hex;
+        tipSwatchCMYK.style.background = proofRGB(x, y) || hex;
+
+        let rows = `
+            <span class="tip-lbl">XY</span>    <span class="tip-val">${x}, ${y}</span>
+            <span class="tip-lbl">sRGB</span>  <span class="tip-val">${R} ${G} ${B}  ${hex}</span>
+            <span class="tip-lbl">Lab</span>   <span class="tip-val">${L.toFixed(1)} ${a.toFixed(1)} ${b.toFixed(1)}</span>`;
+
+        if (cmyk) {
+            rows += `
+            <div class="tip-sep"></div>
+            <span class="tip-lbl">CMYK</span>  <span class="tip-val">${cmyk.C.toFixed(1)}  ${cmyk.M.toFixed(1)}  ${cmyk.Y.toFixed(1)}  ${cmyk.K.toFixed(1)}</span>`;
+        }
+        if (cmykLab) {
+            rows += `
+            <span class="tip-lbl">CMYK Lab</span> <span class="tip-val">${cmykLab.L.toFixed(1)} ${cmykLab.a.toFixed(1)} ${cmykLab.b.toFixed(1)}</span>`;
+        }
+        if (dE !== null) {
+            const dE76 = convert.deltaE1976(px.lab, cmykLab);
+            rows += `
+            <span class="tip-lbl">&Delta;E 00</span> <span class="tip-val ${deClass(dE)}">${dE.toFixed(2)}</span>
+            <span class="tip-lbl">&Delta;E 76</span> <span class="tip-val ${deClass(dE76)}">${dE76.toFixed(2)}</span>`;
+        }
+
+        tipBody.innerHTML = rows;
+
+        const pad = 16;
+        let tx = e.clientX + pad;
+        let ty = e.clientY + pad;
+        const tw = tooltip.offsetWidth  || 220;
+        const th = tooltip.offsetHeight || 160;
+        if (tx + tw > window.innerWidth  - 8) tx = e.clientX - tw - pad;
+        if (ty + th > window.innerHeight - 8) ty = e.clientY - th - pad;
+        tooltip.style.left = tx + 'px';
+        tooltip.style.top  = ty + 'px';
+        tooltip.classList.add('is-visible');
+    }
+
+    function hideTooltip() {
+        tooltip.classList.remove('is-visible');
+    }
+
+    document.addEventListener('mousemove', (e) => {
+        const cv = e.target.closest('canvas.hoverable');
+        if (!cv || !src) { hideTooltip(); return; }
+        const { x, y } = canvasToImageXY(cv, e);
+        showTooltip(e, x, y);
+    });
+
+    // ── Wiring ────────────────────────────────────────────────────────────
+
+    runBtn.addEventListener('click', build);
+    profileSel.addEventListener('change', build);
+    intentSel.addEventListener('change', build);
+    gamutSel.addEventListener('change', build);
+    imageSel.addEventListener('change', () => { src = null; sep = null; proof = null; build(); });
+
+    build();
+</script>
+</body>
+</html>

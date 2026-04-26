@@ -229,7 +229,7 @@ It validates the core v1.1 story (see
 
 ## License
 
-The benchmark script is part of jsColorEngine (GPL-3.0). lcms-wasm is
+The benchmark script is part of jsColorEngine (MPL-2.0). lcms-wasm is
 MIT-licensed by Matt DesLauriers (wrapping the MIT-licensed Little-CMS).
 This folder only invokes lcms-wasm at benchmark time; it is not
 redistributed or statically linked. Installing lcms-wasm via `npm install`

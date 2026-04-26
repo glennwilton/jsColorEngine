@@ -1,0 +1,755 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; jsCE vs lcms-wasm</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    .three-panel { display: grid; gap: 18px; grid-template-columns: 1fr; }
+    @media (min-width: 960px) { .three-panel { grid-template-columns: 1fr 1fr 1fr; } }
+    .three-panel canvas {
+        display: block; width: 100%; height: auto;
+        border-radius: 6px; background: var(--bg-card-2); border: 1px solid var(--border-soft);
+    }
+    .panel-head {
+        display: flex; align-items: baseline; gap: 10px;
+        margin-bottom: 6px; font-size: 13px;
+    }
+    .panel-head .engine-name { font-weight: 600; }
+    .panel-head .panel-timing {
+        font-family: var(--mono); font-size: 12px; color: var(--accent-2);
+    }
+    .panel-timing-block {
+        font-family: var(--mono); font-size: 11px; color: var(--accent-2);
+        line-height: 1.5; margin-top: 6px;
+    }
+    .panel-timing-block .t-lbl {
+        color: var(--text-muted); font-size: 10px; text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .diff-controls {
+        display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+        margin: 10px 0 6px; font-size: 12px; color: var(--text-dim);
+    }
+    .diff-controls input[type=range] { width: 160px; accent-color: var(--accent); }
+    .diff-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .stats-strip {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 1px; background: var(--border-soft);
+        border: 1px solid var(--border-soft); border-radius: 6px;
+        overflow: hidden; margin-top: 12px;
+    }
+    .stat-cell {
+        background: var(--bg-card-2); padding: 8px 12px;
+        display: flex; flex-direction: column; gap: 2px;
+    }
+    .stat-cell .lbl {
+        color: var(--text-muted); font-size: 10px;
+        text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .stat-cell .val {
+        color: var(--text); font-family: var(--mono); font-size: 13px;
+    }
+    .stat-cell .val.is-ok   { color: var(--accent-2); }
+    .stat-cell .val.is-warn { color: var(--warn); }
+    .timing-inline {
+        font-family: var(--mono); font-size: 12px; color: var(--accent-2);
+        padding-bottom: 8px; white-space: nowrap;
+    }
+    .timing-inline.is-busy { color: var(--accent); }
+
+    /* ── Floating colour-picker tooltip ─────────────────────────────── */
+    #pickerTooltip {
+        position: fixed; z-index: 100; pointer-events: none; display: none;
+        background: var(--bg-card); border: 1px solid var(--border);
+        border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        font-family: var(--mono); font-size: 11px; line-height: 1.45;
+        padding: 0; overflow: hidden; min-width: 230px;
+    }
+    #pickerTooltip.is-visible { display: block; }
+
+    .tip-swatches { display: flex; height: 28px; border-radius: 7px 7px 0 0; overflow: hidden; }
+    .tip-sw-left, .tip-sw-right { flex: 1; }
+
+    .tip-body {
+        padding: 8px 10px; display: grid;
+        grid-template-columns: auto 1fr; gap: 2px 10px;
+    }
+    .tip-lbl {
+        color: var(--text-muted); text-transform: uppercase;
+        font-size: 9px; letter-spacing: 0.06em; align-self: center;
+    }
+    .tip-val { color: var(--text); white-space: nowrap; }
+    .tip-val.de-ok   { color: var(--accent-2); }
+    .tip-val.de-warn { color: var(--warn); }
+    .tip-val.de-bad  { color: var(--error); }
+    .tip-sep { grid-column: 1 / -1; border-top: 1px solid var(--border-soft); margin: 3px 0; }
+
+    canvas.hoverable { cursor: crosshair; }
+</style>
+<script src="/browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">jsColorEngine</span>
+        <span class="brand-tag">samples</span>
+    </div>
+    <nav class="nav">
+        <a href="index.html">Home</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html" class="is-active">jsCE vs lcms</a>
+        <a href="/bench/browser/">Bench</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="card">
+    <h2>Soft proof &mdash; jsColorEngine vs lcms-wasm</h2>
+    <p class="lead">
+        Same image, same ICC profile, same
+        sRGB&thinsp;&rarr;&thinsp;CMYK conversion and same
+        sRGB&thinsp;&rarr;&thinsp;CMYK&thinsp;&rarr;&thinsp;sRGB soft-proof
+        pipeline, two engines side-by-side. The centre panel shows the
+        pixel-by-pixel difference with an amplification slider (up to
+        128&times;). Three conclusions in ~15&thinsp;seconds:
+        <strong>accuracy</strong> (visually identical),
+        <strong>speed</strong> (inline timing), and
+        <strong>simplicity</strong> (JS-only vs +340&thinsp;KB WASM).
+    </p>
+    <p class="muted">
+        jsCE uses <code>ICCImage.toProof()</code> &middot;
+        lcms-wasm uses <code>cmsCreateTransform</code> +
+        <code>cmsDoTransform</code> &middot;
+        Max diffs are typically at the gamut boundary where each CMS
+        clips/compresses slightly differently &mdash; use the gain slider
+        and hover picker to compare.
+    </p>
+</section>
+
+<section class="card">
+    <div class="controls">
+        <label>
+            CMYK Profile
+            <select id="profileSelect">
+                <option value="profiles/CoatedGRACoL2006.icc" selected>GRACoL 2006 Coated (US)</option>
+                <option value="profiles/ISOcoated_v2_eci.icc">ISO Coated v2 (ECI)</option>
+                <option value="profiles/eciCMYK_v2.icc">eciCMYK v2 (Generic Exchange)</option>
+            </select>
+        </label>
+        <label>
+            Intent + BPC
+            <select id="intentSelect">
+                <option value="perceptual">Perceptual</option>
+<!--                <option value="perceptual-bpc">Perceptual + BPC</option>-->
+                <option value="relative" selected>Relative</option>
+                <option value="relative-bpc">Relative + BPC</option>
+                <option value="saturation">Saturation</option>
+                <option value="saturation-bpc">Saturation + BPC</option>
+                <option value="absolute">Absolute</option>
+            </select>
+        </label>
+        <label>
+            Source Image
+            <select id="imageSelect">
+                <option value="https://picsum.photos/id/1015/1200/800">Mountain lake (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1043/1200/800">Portrait (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1069/1200/800">Forest (1200&times;800)</option>
+                <option value="https://picsum.photos/id/1025/800/1200">Dog portrait (800&times;1200)</option>
+                <option value="https://picsum.photos/id/1074/800/1200">Person portrait (800&times;1200)</option>
+                <option value="https://picsum.photos/id/1035/800/1200">Misty forest (800&times;1200)</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="runBtn">Run comparison</button>
+        <button id="swapBtn" title="Swap sides">&#x21c4; Swap sides</button>
+        <span class="timing-inline" id="timingInline"></span>
+    </div>
+</section>
+
+<!-- THREE PANELS ========================================================== -->
+<section class="card">
+    <div class="three-panel" id="panelContainer">
+        <div id="panelLeft">
+            <div class="panel-head">
+                <span class="engine-name" id="leftLabel">jsColorEngine</span>
+            </div>
+            <canvas id="leftCanvas"></canvas>
+            <div class="panel-timing-block" id="leftTiming"></div>
+        </div>
+        <div>
+            <div class="panel-head">
+                <span class="engine-name">Pixel diff</span>
+                <span class="panel-timing">use slider to amplify invisible differences</span>
+            </div>
+            <canvas id="diffCanvas"></canvas>
+            <div class="diff-controls">
+                <label>Gain: <span id="gainLabel">1&times;</span>
+                    <input type="range" id="gainSlider" min="0" max="7" step="0.1" value="0">
+                </label>
+                <label><input type="checkbox" id="signedToggle"> Signed RGB</label>
+            </div>
+        </div>
+        <div id="panelRight">
+            <div class="panel-head">
+                <span class="engine-name" id="rightLabel">lcms-wasm</span>
+            </div>
+            <canvas id="rightCanvas"></canvas>
+            <div class="panel-timing-block" id="rightTiming"></div>
+        </div>
+    </div>
+</section>
+
+<!-- STATS ================================================================= -->
+<section class="card">
+    <h2>Accuracy stats</h2>
+    <div class="stats-strip" id="statsStrip">
+        <div class="stat-cell"><span class="lbl">Max CMYK diff</span><span class="val" id="s-max-cmyk">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">Mean CMYK diff</span><span class="val" id="s-mean-cmyk">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">Max RGB diff</span><span class="val" id="s-max">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">Mean RGB diff</span><span class="val" id="s-mean">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">Exact match</span><span class="val" id="s-exact">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">&le; 1 LSB</span><span class="val" id="s-1lsb">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">&le; 2 LSB</span><span class="val" id="s-2lsb">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">jsCE time</span><span class="val" id="s-jsce-ms">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">lcms time</span><span class="val" id="s-lcms-ms">&mdash;</span></div>
+        <div class="stat-cell"><span class="lbl">Speed ratio</span><span class="val" id="s-ratio">&mdash;</span></div>
+    </div>
+</section>
+
+<!-- FLOATING TOOLTIP ====================================================== -->
+<div id="pickerTooltip">
+    <div class="tip-swatches">
+        <div class="tip-sw-left" id="tipSwJsce"></div>
+        <div class="tip-sw-right" id="tipSwLcms"></div>
+    </div>
+    <div class="tip-body" id="tipBody"></div>
+</div>
+
+</main>
+
+<footer class="footer">
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>
+        <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+        &middot;
+        <a href="/bench/browser/">Bench</a>
+    </span>
+</footer>
+
+<script type="module">
+    import { ICCImage } from './iccimage.js';
+
+    const LCMS_DIST = '/samples/lcms-wasm-dist/';
+    const { Profile, eIntent, convert } = window.jsColorEngine;
+
+    const runBtn       = document.getElementById('runBtn');
+    const swapBtn      = document.getElementById('swapBtn');
+    const profileSel   = document.getElementById('profileSelect');
+    const intentSel    = document.getElementById('intentSelect');
+    const imageSel     = document.getElementById('imageSelect');
+    const timingInline = document.getElementById('timingInline');
+    const leftCanvas   = document.getElementById('leftCanvas');
+    const rightCanvas  = document.getElementById('rightCanvas');
+    const diffCanvas   = document.getElementById('diffCanvas');
+    const leftLabel    = document.getElementById('leftLabel');
+    const rightLabel   = document.getElementById('rightLabel');
+    const leftTiming   = document.getElementById('leftTiming');
+    const rightTiming  = document.getElementById('rightTiming');
+    const gainSlider   = document.getElementById('gainSlider');
+    const gainLabel    = document.getElementById('gainLabel');
+    const signedToggle = document.getElementById('signedToggle');
+    const tooltip      = document.getElementById('pickerTooltip');
+    const tipSwJsce    = document.getElementById('tipSwJsce');
+    const tipSwLcms    = document.getElementById('tipSwLcms');
+    const tipBody      = document.getElementById('tipBody');
+
+    let swapped = false;
+    let jsceRGBA = null;
+    let lcmsRGBA = null;
+    let jsceCMYK = null;   // Uint8Array, 4 channels, 0-255
+    let lcmsCMYK = null;   // Uint8Array, 4 channels, 0-255
+    let imgWidth = 0, imgHeight = 0;
+
+    function $(id) { return document.getElementById(id); }
+
+    // ── lcms-wasm loader ──────────────────────────────────────────────────
+
+    let lcms = null, lcmsConsts = null;
+
+    function parseIntent() {
+        const v = intentSel.value;
+        const bpc = v.endsWith('-bpc');
+        const base = v.replace('-bpc', '');
+        const intent = eIntent[base] ?? eIntent.relative;
+        return { intent, bpc };
+    }
+
+    async function initLcms() {
+        if (lcms) return;
+        const mod = await import(LCMS_DIST + 'lcms.js');
+        lcms = await mod.instantiate({ locateFile: (n) => LCMS_DIST + n });
+        lcmsConsts = {
+            TYPE_RGB_8:  mod.TYPE_RGB_8,
+            TYPE_CMYK_8: mod.TYPE_CMYK_8,
+            INTENT_PERCEPTUAL:            mod.INTENT_PERCEPTUAL,
+            INTENT_RELATIVE_COLORIMETRIC: mod.INTENT_RELATIVE_COLORIMETRIC,
+            INTENT_SATURATION:            mod.INTENT_SATURATION,
+            INTENT_ABSOLUTE_COLORIMETRIC: mod.INTENT_ABSOLUTE_COLORIMETRIC,
+            cmsFLAGS_HIGHRESPRECALC:      mod.cmsFLAGS_HIGHRESPRECALC,
+            cmsFLAGS_BLACKPOINTCOMPENSATION: mod.cmsFLAGS_BLACKPOINTCOMPENSATION,
+        };
+    }
+
+    async function fetchProfileBytes(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('Failed to fetch profile: ' + url);
+        return new Uint8Array(await r.arrayBuffer());
+    }
+
+    const LCMS_INTENT_MAP = [
+        'INTENT_PERCEPTUAL',
+        'INTENT_RELATIVE_COLORIMETRIC',
+        'INTENT_SATURATION',
+        'INTENT_ABSOLUTE_COLORIMETRIC',
+    ];
+
+    function lcmsSoftproof(srgbPixelsRGB, w, h, profileBytes, jsceIntent, bpc) {
+        const srgb = lcms.cmsCreate_sRGBProfile();
+        const cmyk = lcms.cmsOpenProfileFromMem(profileBytes, profileBytes.byteLength);
+        if (!srgb || !cmyk) throw new Error('lcms: profile open failed');
+
+        const n = w * h;
+        const lcmsIntent = lcmsConsts[LCMS_INTENT_MAP[jsceIntent]] ?? lcmsConsts.INTENT_RELATIVE_COLORIMETRIC;
+        let flags = lcmsConsts.cmsFLAGS_HIGHRESPRECALC;
+        if (bpc) flags |= lcmsConsts.cmsFLAGS_BLACKPOINTCOMPENSATION;
+
+        const xf1 = lcms.cmsCreateTransform(
+            srgb, lcmsConsts.TYPE_RGB_8,
+            cmyk, lcmsConsts.TYPE_CMYK_8,
+            lcmsIntent, flags
+        );
+        const xf2 = lcms.cmsCreateTransform(
+            cmyk, lcmsConsts.TYPE_CMYK_8,
+            srgb, lcmsConsts.TYPE_RGB_8,
+            lcmsIntent, flags
+        );
+
+        const inPtr   = lcms._malloc(n * 3);
+        const cmykPtr = lcms._malloc(n * 4);
+        const outPtr  = lcms._malloc(n * 3);
+
+        const inView = new Uint8Array(lcms.HEAPU8.buffer, inPtr, n * 3);
+        for (let i = 0, j = 0; i < n; i++) {
+            inView[j++] = srgbPixelsRGB[i * 3];
+            inView[j++] = srgbPixelsRGB[i * 3 + 1];
+            inView[j++] = srgbPixelsRGB[i * 3 + 2];
+        }
+
+        const t0sep = performance.now();
+        lcms._cmsDoTransform(xf1, inPtr, cmykPtr, n);
+        const sepMs = performance.now() - t0sep;
+
+        const t0proof = performance.now();
+        lcms._cmsDoTransform(xf2, cmykPtr, outPtr, n);
+        const proofMs = performance.now() - t0proof;
+
+        const ms = sepMs + proofMs;
+
+        const cmykOut = new Uint8Array(lcms.HEAPU8.buffer, cmykPtr, n * 4).slice();
+        const outRGB = new Uint8Array(lcms.HEAPU8.buffer, outPtr, n * 3).slice();
+
+        lcms.cmsDeleteTransform(xf1);
+        lcms.cmsDeleteTransform(xf2);
+        lcms._free(inPtr);
+        lcms._free(cmykPtr);
+        lcms._free(outPtr);
+        lcms.cmsCloseProfile(srgb);
+        lcms.cmsCloseProfile(cmyk);
+
+        const rgba = new Uint8ClampedArray(n * 4);
+        for (let i = 0, j = 0, k = 0; i < n; i++) {
+            rgba[k++] = outRGB[j++];
+            rgba[k++] = outRGB[j++];
+            rgba[k++] = outRGB[j++];
+            rgba[k++] = 255;
+        }
+        return { rgba, cmyk: cmykOut, ms, sepMs, proofMs };
+    }
+
+    // ── Diff computation ──────────────────────────────────────────────────
+
+    function computeStats(a, b, w, h) {
+        const n = w * h;
+        let maxDiff = 0, sumDiff = 0, exact = 0, within1 = 0, within2 = 0;
+        let maxR = 0, maxG = 0, maxB = 0;
+        for (let i = 0; i < n; i++) {
+            const idx = i * 4;
+            const dr = Math.abs(a[idx]     - b[idx]);
+            const dg = Math.abs(a[idx + 1] - b[idx + 1]);
+            const db = Math.abs(a[idx + 2] - b[idx + 2]);
+            const mx = Math.max(dr, dg, db);
+            sumDiff += (dr + dg + db) / 3;
+            if (mx > maxDiff) maxDiff = mx;
+            if (dr > maxR) maxR = dr;
+            if (dg > maxG) maxG = dg;
+            if (db > maxB) maxB = db;
+            if (mx === 0) exact++;
+            if (mx <= 1) within1++;
+            if (mx <= 2) within2++;
+        }
+        return {
+            maxDiff, maxR, maxG, maxB,
+            meanDiff: sumDiff / n,
+            exactPct: (exact / n) * 100,
+            within1Pct: (within1 / n) * 100,
+            within2Pct: (within2 / n) * 100,
+        };
+    }
+
+    function computeCmykStats(a, b, n) {
+        let maxC = 0, maxM = 0, maxY = 0, maxK = 0, sum = 0;
+        let exact = 0, within1 = 0;
+        for (let i = 0; i < n; i++) {
+            const idx = i * 4;
+            const dc = Math.abs(a[idx]     - b[idx]);
+            const dm = Math.abs(a[idx + 1] - b[idx + 1]);
+            const dy = Math.abs(a[idx + 2] - b[idx + 2]);
+            const dk = Math.abs(a[idx + 3] - b[idx + 3]);
+            const mx = Math.max(dc, dm, dy, dk);
+            sum += (dc + dm + dy + dk) / 4;
+            if (dc > maxC) maxC = dc;
+            if (dm > maxM) maxM = dm;
+            if (dy > maxY) maxY = dy;
+            if (dk > maxK) maxK = dk;
+            if (mx === 0) exact++;
+            if (mx <= 1) within1++;
+        }
+        return {
+            maxDiff: Math.max(maxC, maxM, maxY, maxK),
+            maxC, maxM, maxY, maxK,
+            meanDiff: sum / n,
+            exactPct: (exact / n) * 100,
+            within1Pct: (within1 / n) * 100,
+        };
+    }
+
+    function renderDiff(a, b, w, h) {
+        const gain = Math.pow(2, parseFloat(gainSlider.value));
+        const signed = signedToggle.checked;
+        const n = w * h;
+        const out = new Uint8ClampedArray(n * 4);
+        for (let i = 0; i < n; i++) {
+            const idx = i * 4;
+            const dr = a[idx]     - b[idx];
+            const dg = a[idx + 1] - b[idx + 1];
+            const db = a[idx + 2] - b[idx + 2];
+            if (signed) {
+                out[idx]     = 128 + dr * gain;
+                out[idx + 1] = 128 + dg * gain;
+                out[idx + 2] = 128 + db * gain;
+            } else {
+                const v = (Math.abs(dr) + Math.abs(dg) + Math.abs(db)) / 3 * gain;
+                out[idx] = out[idx + 1] = out[idx + 2] = v;
+            }
+            out[idx + 3] = 255;
+        }
+        diffCanvas.width = w;
+        diffCanvas.height = h;
+        diffCanvas.getContext('2d').putImageData(new ImageData(out, w, h), 0, 0);
+    }
+
+    function blitRGBA(canvas, rgba, w, h) {
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+    }
+
+    // ── Main build ────────────────────────────────────────────────────────
+
+    async function build() {
+        runBtn.disabled = true;
+        swapBtn.disabled = true;
+        runBtn.textContent = 'Working\u2026';
+        timingInline.textContent = 'loading lcms-wasm\u2026';
+        timingInline.className = 'timing-inline is-busy';
+
+        try {
+            await initLcms();
+
+            const imgEl = document.createElement('img');
+            imgEl.crossOrigin = 'anonymous';
+            await new Promise((res, rej) => {
+                imgEl.onload = res; imgEl.onerror = rej;
+                imgEl.src = imageSel.value;
+            });
+
+            timingInline.textContent = 'running jsCE\u2026';
+
+            const src = await ICCImage.fromHTMLImage(imgEl, { maxPixels: 4_000_000 });
+            imgWidth  = src.raw.width;
+            imgHeight = src.raw.height;
+            const pixels = imgWidth * imgHeight;
+
+            const cmykProfile = new Profile();
+            await cmykProfile.loadPromise(profileSel.value);
+
+            const { intent, bpc } = parseIntent();
+
+            // jsCE: separation (sRGB→CMYK) + proof (sRGB→CMYK→sRGB) — warm both
+            await src.toSeparation(cmykProfile, { intent, BPC: bpc });
+            await src.toProof(cmykProfile, { intent, BPC: bpc });
+
+            const t0sep = performance.now();
+            const jsceSep = await src.toSeparation(cmykProfile, { intent, BPC: bpc });
+            const jsceSepMs = performance.now() - t0sep;
+
+            const t0proof = performance.now();
+            const jsceProof = await src.toProof(cmykProfile, { intent, BPC: bpc });
+            const jsceProofMs = performance.now() - t0proof;
+
+            const jsceMs = jsceSepMs + jsceProofMs;
+
+            // jsCE CMYK buffer (0-255)
+            jsceCMYK = jsceSep.raw.data;
+
+            const jsceCv = document.createElement('canvas');
+            await jsceProof.toCanvas(jsceCv);
+            jsceRGBA = jsceCv.getContext('2d').getImageData(0, 0, imgWidth, imgHeight).data;
+
+            // lcms-wasm softproof
+            timingInline.textContent = 'running lcms-wasm\u2026';
+            const profileBytes = await fetchProfileBytes(profileSel.value);
+
+            const srcData = src.raw.data;
+            const srcRGB = new Uint8Array(pixels * 3);
+            for (let i = 0, j = 0, k = 0; i < pixels; i++) {
+                srcRGB[j++] = srcData[k++];
+                srcRGB[j++] = srcData[k++];
+                srcRGB[j++] = srcData[k++];
+                k++;
+            }
+
+            // Warm
+            lcmsSoftproof(srcRGB, imgWidth, imgHeight, profileBytes, intent, bpc);
+            const lcmsResult = lcmsSoftproof(srcRGB, imgWidth, imgHeight, profileBytes, intent, bpc);
+            const lcmsMs = lcmsResult.ms;
+            lcmsRGBA = lcmsResult.rgba;
+            lcmsCMYK = lcmsResult.cmyk;
+
+            // Display
+            function timingHTML(sepMs, proofMs, px) {
+                const sepMpx = ((px / (sepMs / 1000)) / 1e6).toFixed(1);
+                const proofMpx = ((px / (proofMs / 1000)) / 1e6).toFixed(1);
+                return `<span class="t-lbl">RGB\u2192CMYK</span> ${sepMs.toFixed(0)} ms \u00b7 ${sepMpx} MPx/s<br>`
+                     + `<span class="t-lbl">CMYK\u2192RGB</span> ${proofMs.toFixed(0)} ms \u00b7 ${proofMpx} MPx/s`;
+            }
+            const jsceTimingHTML = timingHTML(jsceSepMs, jsceProofMs, pixels);
+            const lcmsTimingHTML = timingHTML(lcmsResult.sepMs, lcmsResult.proofMs, pixels);
+
+            showPanels(jsceTimingHTML, lcmsTimingHTML);
+
+            const stats = computeStats(jsceRGBA, lcmsRGBA, imgWidth, imgHeight);
+            const cmykStats = computeCmykStats(jsceCMYK, lcmsCMYK, pixels);
+            renderDiff(jsceRGBA, lcmsRGBA, imgWidth, imgHeight);
+
+            $('s-max-cmyk').textContent = `${cmykStats.maxDiff} (C:${cmykStats.maxC} M:${cmykStats.maxM} Y:${cmykStats.maxY} K:${cmykStats.maxK})`;
+            $('s-max-cmyk').className   = 'val' + (cmykStats.maxDiff <= 1 ? ' is-ok' : cmykStats.maxDiff <= 3 ? '' : ' is-warn');
+            $('s-mean-cmyk').textContent = cmykStats.meanDiff.toFixed(3);
+            $('s-mean-cmyk').className   = 'val' + (cmykStats.meanDiff < 1 ? ' is-ok' : ' is-warn');
+            $('s-max').textContent   = `${stats.maxDiff} (R:${stats.maxR} G:${stats.maxG} B:${stats.maxB})`;
+            $('s-mean').textContent  = stats.meanDiff.toFixed(3);
+            $('s-mean').className    = 'val' + (stats.meanDiff < 1 ? ' is-ok' : ' is-warn');
+            $('s-exact').textContent = stats.exactPct.toFixed(1) + '%';
+            $('s-1lsb').textContent  = stats.within1Pct.toFixed(1) + '%';
+            $('s-2lsb').textContent  = stats.within2Pct.toFixed(1) + '%';
+            $('s-jsce-ms').textContent = jsceMs.toFixed(0) + ' ms';
+            $('s-lcms-ms').textContent = lcmsMs.toFixed(0) + ' ms';
+
+            const ratio = lcmsMs / jsceMs;
+            $('s-ratio').textContent = ratio.toFixed(2) + '\u00d7';
+            $('s-ratio').className   = 'val' + (ratio > 1 ? ' is-ok' : ' is-warn');
+
+            timingInline.textContent = `jsCE ${jsceMs.toFixed(0)} ms vs lcms ${lcmsMs.toFixed(0)} ms (${ratio.toFixed(1)}\u00d7)`;
+            timingInline.className = 'timing-inline';
+
+            // Mark canvases hoverable
+            leftCanvas.classList.add('hoverable');
+            rightCanvas.classList.add('hoverable');
+            diffCanvas.classList.add('hoverable');
+
+        } catch (e) {
+            console.error(e);
+            timingInline.textContent = 'error: ' + e.message;
+            timingInline.className = 'timing-inline';
+        } finally {
+            runBtn.disabled = false;
+            swapBtn.disabled = false;
+            runBtn.textContent = 'Run comparison';
+        }
+    }
+
+    function showPanels(jsceTimingHTML, lcmsTimingHTML) {
+        if (!swapped) {
+            blitRGBA(leftCanvas, new Uint8ClampedArray(jsceRGBA), imgWidth, imgHeight);
+            blitRGBA(rightCanvas, lcmsRGBA, imgWidth, imgHeight);
+            leftLabel.textContent  = 'jsColorEngine';
+            rightLabel.textContent = 'lcms-wasm';
+            leftTiming.innerHTML   = jsceTimingHTML;
+            rightTiming.innerHTML  = lcmsTimingHTML;
+        } else {
+            blitRGBA(leftCanvas, lcmsRGBA, imgWidth, imgHeight);
+            blitRGBA(rightCanvas, new Uint8ClampedArray(jsceRGBA), imgWidth, imgHeight);
+            leftLabel.textContent  = 'lcms-wasm';
+            rightLabel.textContent = 'jsColorEngine';
+            leftTiming.innerHTML   = lcmsTimingHTML;
+            rightTiming.innerHTML  = jsceTimingHTML;
+        }
+    }
+
+    // ── Diff re-render on slider/toggle change ────────────────────────────
+
+    function updateDiff() {
+        if (!jsceRGBA || !lcmsRGBA) return;
+        const gain = Math.pow(2, parseFloat(gainSlider.value));
+        gainLabel.textContent = (gain < 10 ? gain.toFixed(1) : Math.round(gain)) + '\u00d7';
+        renderDiff(jsceRGBA, lcmsRGBA, imgWidth, imgHeight);
+    }
+
+    gainSlider.addEventListener('input', updateDiff);
+    signedToggle.addEventListener('change', updateDiff);
+
+    // ── Swap sides ────────────────────────────────────────────────────────
+
+    swapBtn.addEventListener('click', () => {
+        swapped = !swapped;
+        if (!jsceRGBA || !lcmsRGBA) return;
+        const leftData  = swapped ? lcmsRGBA : new Uint8ClampedArray(jsceRGBA);
+        const rightData = swapped ? new Uint8ClampedArray(jsceRGBA) : lcmsRGBA;
+        blitRGBA(leftCanvas, leftData, imgWidth, imgHeight);
+        blitRGBA(rightCanvas, rightData, imgWidth, imgHeight);
+        leftLabel.textContent  = swapped ? 'lcms-wasm' : 'jsColorEngine';
+        rightLabel.textContent = swapped ? 'jsColorEngine' : 'lcms-wasm';
+        const lt = leftTiming.innerHTML;
+        leftTiming.innerHTML = rightTiming.innerHTML;
+        rightTiming.innerHTML = lt;
+    });
+
+    // ── Floating colour picker ────────────────────────────────────────────
+
+    function canvasToImageXY(canvas, e) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = canvas.width  / rect.width;
+        const sy = canvas.height / rect.height;
+        const x = Math.floor((e.clientX - rect.left) * sx);
+        const y = Math.floor((e.clientY - rect.top)  * sy);
+        if (x < 0 || y < 0 || x >= imgWidth || y >= imgHeight) return null;
+        return { x, y };
+    }
+
+    function readRGBA(buf, x, y) {
+        const i = (y * imgWidth + x) * 4;
+        return [buf[i], buf[i + 1], buf[i + 2]];
+    }
+
+    function readCMYK4(buf, x, y) {
+        const i = (y * imgWidth + x) * 4;
+        return [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+    }
+
+    function deClass(v) { return v < 1 ? 'de-ok' : v < 3 ? 'de-warn' : 'de-bad'; }
+    function hex(r, g, b) { return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join(''); }
+    function pct(v) { return (v / 255 * 100).toFixed(1); }
+
+    function showTooltip(e, canvas) {
+        if (!jsceRGBA || !lcmsRGBA || !jsceCMYK || !lcmsCMYK) return;
+        const pt = canvasToImageXY(canvas, e);
+        if (!pt) { tooltip.classList.remove('is-visible'); return; }
+
+        const { x, y } = pt;
+        const jsceRGB  = readRGBA(jsceRGBA, x, y);
+        const lcmsRGB  = readRGBA(lcmsRGBA, x, y);
+        const jsceCmyk = readCMYK4(jsceCMYK, x, y);
+        const lcmsCmyk = readCMYK4(lcmsCMYK, x, y);
+
+        // Per-channel abs diff on CMYK
+        const dc = Math.abs(jsceCmyk[0] - lcmsCmyk[0]);
+        const dm = Math.abs(jsceCmyk[1] - lcmsCmyk[1]);
+        const dy = Math.abs(jsceCmyk[2] - lcmsCmyk[2]);
+        const dk = Math.abs(jsceCmyk[3] - lcmsCmyk[3]);
+        const maxChDiff = Math.max(dc, dm, dy, dk);
+
+        // RGB diff
+        const dr = Math.abs(jsceRGB[0] - lcmsRGB[0]);
+        const dg = Math.abs(jsceRGB[1] - lcmsRGB[1]);
+        const db = Math.abs(jsceRGB[2] - lcmsRGB[2]);
+        const maxRGBDiff = Math.max(dr, dg, db);
+
+        // Swatches: jsCE on left, lcms on right
+        tipSwJsce.style.background = `rgb(${jsceRGB[0]},${jsceRGB[1]},${jsceRGB[2]})`;
+        tipSwLcms.style.background = `rgb(${lcmsRGB[0]},${lcmsRGB[1]},${lcmsRGB[2]})`;
+
+        const cmykDiffClass = maxChDiff <= 1 ? 'de-ok' : maxChDiff <= 3 ? 'de-warn' : 'de-bad';
+        const rgbDiffClass  = maxRGBDiff <= 1 ? 'de-ok' : maxRGBDiff <= 3 ? 'de-warn' : 'de-bad';
+
+        tipBody.innerHTML = `
+            <span class="tip-lbl">XY</span>
+            <span class="tip-val">${x}, ${y}</span>
+
+            <div class="tip-sep"></div>
+
+            <span class="tip-lbl">jsCE RGB</span>
+            <span class="tip-val">${jsceRGB.join(' ')} ${hex(...jsceRGB)}</span>
+
+            <span class="tip-lbl">lcms RGB</span>
+            <span class="tip-val">${lcmsRGB.join(' ')} ${hex(...lcmsRGB)}</span>
+
+            <span class="tip-lbl">\u0394 RGB</span>
+            <span class="tip-val ${rgbDiffClass}">${dr} ${dg} ${db} (max ${maxRGBDiff})</span>
+
+            <div class="tip-sep"></div>
+
+            <span class="tip-lbl">jsCE CMYK</span>
+            <span class="tip-val">${pct(jsceCmyk[0])} ${pct(jsceCmyk[1])} ${pct(jsceCmyk[2])} ${pct(jsceCmyk[3])}</span>
+
+            <span class="tip-lbl">lcms CMYK</span>
+            <span class="tip-val">${pct(lcmsCmyk[0])} ${pct(lcmsCmyk[1])} ${pct(lcmsCmyk[2])} ${pct(lcmsCmyk[3])}</span>
+
+            <span class="tip-lbl">\u0394 CMYK</span>
+            <span class="tip-val ${cmykDiffClass}">${dc} ${dm} ${dy} ${dk} (max ${maxChDiff})</span>
+        `;
+
+        tooltip.classList.add('is-visible');
+        const tx = e.clientX + 16;
+        const ty = e.clientY + 16;
+        const tr = tooltip.getBoundingClientRect();
+        tooltip.style.left = (tx + tr.width > window.innerWidth ? e.clientX - tr.width - 10 : tx) + 'px';
+        tooltip.style.top  = (ty + tr.height > window.innerHeight ? e.clientY - tr.height - 10 : ty) + 'px';
+    }
+
+    document.addEventListener('mousemove', (e) => {
+        const cv = e.target.closest('canvas.hoverable');
+        if (cv) { showTooltip(e, cv); return; }
+        tooltip.classList.remove('is-visible');
+    });
+    document.addEventListener('mouseleave', () => tooltip.classList.remove('is-visible'));
+
+    // ── Wiring ────────────────────────────────────────────────────────────
+
+    runBtn.addEventListener('click', build);
+    profileSel.addEventListener('change', build);
+    intentSel.addEventListener('change', build);
+    imageSel.addEventListener('change', build);
+
+    build();
+</script>
+</body>
+</html>

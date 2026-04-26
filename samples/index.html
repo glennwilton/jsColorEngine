@@ -1,0 +1,139 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Samples</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">jsColorEngine</span>
+        <span class="brand-tag">samples</span>
+    </div>
+    <nav class="nav">
+        <a href="index.html" class="is-active">Home</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="/bench/browser/">Bench</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="card">
+    <h2>jsColorEngine &mdash; browser samples</h2>
+    <p class="lead">
+        Runnable demos of the <a href="https://github.com/glennwilton/jsColorEngine">jsColorEngine</a>
+        ICC colour management library. Every demo is zero-build vanilla JS
+        driven by the small
+        <a href="ICCImage.md"><code>ICCImage</code></a> helper module.
+    </p>
+    <p class="muted">
+        Engine: MPL-2.0 &middot; Samples: MIT
+        (<a href="LICENSE">LICENSE</a>) &middot;
+        Live: <a href="https://www.o2creative.co.nz/jscolorengine/samples/">o2creative.co.nz/jscolorengine</a> &middot;
+        Source: <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+    </p>
+</section>
+
+<section class="card">
+    <h2>Demos</h2>
+    <div class="info-grid" style="margin-top:12px">
+        <a href="live-video-softproof.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">Ready</span>
+            <span class="val" style="color:var(--accent)">Live Video Soft Proof</span>
+            <span class="muted" style="margin-top:4px">
+                Real-time video colour management. Every frame decoded and
+                soft-proofed through a pre-built 3D CLUT &mdash; pure JS,
+                no WASM, no workers. 40+ fps on 720p. The &ldquo;you
+                can&rsquo;t do that in JS&rdquo; demo.
+            </span>
+        </a>
+        <a href="softproof.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">Ready</span>
+            <span class="val" style="color:var(--accent)">Soft Proof</span>
+            <span class="muted" style="margin-top:4px">
+                sRGB &rarr; CMYK soft proof + C/M/Y/K plate previews.
+                Uses <code>toProof</code>, <code>toSeparation</code>,
+                <code>renderChannelAs</code>.
+            </span>
+        </a>
+        <a href="softproof-vs-lcms.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">Ready</span>
+            <span class="val" style="color:var(--accent)">jsCE vs lcms</span>
+            <span class="muted" style="margin-top:4px">
+                Pixel-diff comparison between jsColorEngine and lcms-wasm.
+                Accuracy + speed in one view, with amplified diff slider.
+            </span>
+        </a>
+        <div class="info-cell">
+            <span class="lbl">Planned</span>
+            <span class="val" style="color:var(--text-muted)">Colour Calculator</span>
+            <span class="muted" style="margin-top:4px">
+                Per-pixel readout via <code>pixel(x, y)</code> &mdash;
+                Lab + sRGB + device values. No-LUT accuracy path.
+            </span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Planned</span>
+            <span class="val" style="color:var(--text-muted)">Intent Comparison</span>
+            <span class="muted" style="margin-top:4px">
+                Side-by-side perceptual / relative / saturation / absolute
+                through the same proof profile.
+            </span>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <h2>Running locally</h2>
+    <p class="lead">
+        The engine ships a UMD bundle at
+        <code>browser/jsColorEngineWeb.js</code>. Build it once, then
+        start the dev server:
+    </p>
+    <pre><code>npm run browser          # build the UMD bundle
+npm run samples:browser  # start dev server on :8080</code></pre>
+    <p class="lead" style="margin-top:12px">
+        Then open
+        <a href="http://localhost:8080/samples/">http://localhost:8080/samples/</a>.
+        The bench is at
+        <a href="http://localhost:8080/bench/browser/">/bench/browser/</a>.
+    </p>
+</section>
+
+<section class="card">
+    <h2>ICCImage helper</h2>
+    <p class="lead">
+        All demos share a small immutable image wrapper:
+        <a href="iccimage.js"><code>iccimage.js</code></a>.
+        It handles the &ldquo;load image &rarr; transform &rarr; display&rdquo;
+        plumbing so each demo stays under ~100 lines.
+    </p>
+    <p class="lead">
+        Full API reference:
+        <a href="ICCImage.md"><code>ICCImage.md</code></a>
+    </p>
+</section>
+
+</main>
+
+<footer class="footer">
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>
+        <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+        &middot;
+        <a href="/bench/browser/">Bench</a>
+    </span>
+</footer>
+
+</body>
+</html>

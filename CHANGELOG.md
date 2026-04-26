@@ -7,6 +7,129 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.4.0] — 2026-04-26
+
+The showcase release. v1.3 banked the performance story (158 MPx/s
+WASM SIMD, 4–5× over lcms-wasm 16-bit); v1.4 puts it in front of
+users with runnable browser demos, a small image helper that makes
+those demos trivial to write, baked gamut-mapping in the LUT, and a
+license change from GPL-3.0 to MPL-2.0.
+
+### Changed — License: GPL-3.0 → MPL-2.0
+
+The engine license has been changed from
+[GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html) to
+[MPL-2.0](https://mozilla.org/MPL/2.0/). MPL-2.0 is file-level
+copyleft: modifications to engine source files must remain open, but
+the library can be freely combined with proprietary code in a Larger
+Work without license infection. This makes jsColorEngine practical
+to embed in commercial web apps, Electron tools, and SaaS pipelines
+— the main adoption blocker GPL posed. The `samples/` directory
+remains MIT-licensed.
+
+### Added — `ICCImage` helper (`samples/iccimage.js`)
+
+Small immutable image wrapper that owns the "I have an image, I want
+to display / proof / inspect it" workflow on top of jsColorEngine.
+Not a general image library — strictly "move bytes around the colour
+transform, visualise what's there". Lives in `samples/` (not `src/`)
+deliberately: it's **helper-grade**, MIT-licensed, and doubles as
+living documentation of how to drive the core engine on real image
+data.
+
+- **Immutable.** Every `toSRGB` / `toProof` / `toSeparation` /
+  `toBitDepth` / `resizeTo` returns a *new* `ICCImage`. The source
+  is never mutated.
+- **Always profile-tagged.** The internal `ICCImageData` carries the
+  `Profile` and the full lineage chain.
+- **Lazy + cached.** `Transform`s are built on first use and stored
+  in a `TransformCache` keyed by chain + BPC + dataFormat + buildLut.
+  Derived images share their parent's cache.
+- **Two paths.** Bulk image work uses `dataFormat: 'int8'` + LUT
+  (fast path). Single-pixel `pixel(x, y)` uses `dataFormat: 'object'`
+  with no LUT (accuracy path).
+
+Key methods: `ICCImage.fromHTMLImage()`, `toProof()`,
+`toSeparation()`, `renderChannelAs()`, `toCanvas()`, `pixel(x, y)`,
+`toBitDepth()`, `resizeTo()`. Full API reference:
+[`samples/ICCImage.md`](./samples/ICCImage.md).
+
+### Added — baked gamut-mapping LUT (`lutGamutMode`)
+
+New `Transform` constructor options for baking gamut visualisation
+directly into the LUT at build time — zero per-pixel cost at
+transform time:
+
+- **`lutGamutMode`** — `'none'` (default), `'color'` (hard replace
+  out-of-gamut cells), `'map'` (write scaled ΔE into every output
+  channel), or `'colorMap'` (blend original → gamut colour
+  proportional to ΔE).
+- **`lutGamutLimit`** — ΔE76 threshold for `'color'` mode (default 5).
+- **`lutGamutMapScale`** — ΔE that maps to 1.0 in `'map'` mode
+  (default 25.5).
+- **`lutGamutColor`** — Lab colour for out-of-gamut replacement
+  (default bright pink).
+- **`gamutDeFn`** — colour-difference function (default `deltaE1976`;
+  swap in `deltaE2000`, `deltaCMC`, or a custom function).
+- **`bakeLutGamut`** — legacy shorthand; `true` ≡
+  `lutGamutMode: 'color'`.
+
+The gamut check runs once during `buildLut` (the per-grid-point Lab
+round-trip ΔE is computed and cells are tagged/replaced/blended
+according to the mode). The resulting LUT feeds through the same
+WASM SIMD kernel as any other — the gamut overlay is free at
+runtime. Used by the live-video soft-proof demo to render real-time
+gamut warnings at 30+ fps with zero hot-path cost.
+
+### Added — browser samples
+
+Runnable HTML demos of jsColorEngine, hosted at
+<https://www.o2creative.co.nz/jscolorengine/samples/>.
+
+- **[`live-video-softproof.html`](./samples/live-video-softproof.html)**
+  — real-time video colour management. Every frame decoded and
+  soft-proofed through a full ICC sRGB → CMYK → sRGB pipeline via a
+  pre-built 3D CLUT. Pure JS, no WebGL, no workers. 40+ fps on 720p.
+  The headline demo for the v1.3 WASM SIMD performance story.
+- **[`softproof.html`](./samples/softproof.html)** — sRGB → CMYK
+  soft proof + C/M/Y/K plate previews with floating colour picker
+  (Lab, sRGB, CMYK, ΔE 2000, ΔE 76). Showcases `toProof`,
+  `toSeparation`, `renderChannelAs`, `pixel()`, intent + BPC
+  controls.
+- **[`softproof-vs-lcms.html`](./samples/softproof-vs-lcms.html)**
+  — side-by-side jsColorEngine vs lcms-wasm pixel-by-pixel accuracy
+  comparison with amplified diff slider (up to 128×), signed RGB
+  mode, CMYK + RGB stats, speed ratio. The proof-of-accuracy demo.
+- **[`index.html`](./samples/index.html)** — landing page with demo
+  index and setup instructions.
+
+Still planned: `colour-calculator.html` (interactive colour space
+converter) and `profile-inspector.html` (ICC tag/TRC/gamut viewer).
+
+### Added — sample infrastructure
+
+- **`samples/serve.js`** — zero-dependency static HTTP server for
+  local development (`npm run samples:browser` → `:8080`).
+- **`samples/styles.css`** — shared stylesheet across all demos.
+- **`samples/profiles/`** — bundled CMYK ICC profiles for the demos
+  (CoatedGRACoL2006, ISOcoated_v2_eci, eciCMYK_v2).
+
+### Documentation
+
+- New **[docs/Samples.md](./docs/Samples.md)** — live demo index,
+  setup instructions, helper overview.
+- New **[samples/ICCImage.md](./samples/ICCImage.md)** — full API
+  reference for the `ICCImage` helper.
+
+### Tests
+
+- New **`__tests__/transform_lut_gamut.tests.js`** — gamut-mapping
+  LUT tests covering `lutGamutMode` `'none'` / `'color'` / `'map'`
+  / `'colorMap'`, threshold behaviour, custom ΔE functions, and the
+  `bakeLutGamut` legacy shorthand.
+
+---
+
 ## [1.3.0] — 2026-04-25
 
 ### Added — 16-bit kernel ladder (`dataFormat: 'int16'`)
@@ -116,7 +239,7 @@ short version:
 - README updated with the 16-bit kernel modes table, the v1.3
   Speed table, and a new Accuracy subsection covering int16.
 - [Roadmap.md](./docs/Roadmap.md) restructured: v1.3 moved to
-  Shipped so far; v1.4 = ImageHelper + browser samples
+  Shipped so far; v1.4 = `ICCImage` helper + browser samples
   (showcase release on the back of the v1.3 perf story);
   v1.5 = N-channel float inputs + compiled non-LUT pipeline +
   `toModule()` (the larger piece of post-v1.3 work).
@@ -233,18 +356,13 @@ full guide.
 See [docs/Roadmap.md](./docs/Roadmap.md) — single source of truth
 for forward-looking plans:
 
-- **v1.4 — ImageHelper + browser samples.** Showcase release on
-  the back of the v1.3 perf story. Small `ImageHelper` class
-  (`new ImageHelper({...}).toScreenRGBA()` /
-  `.toSoftproofRGBA()` / `.getChannel('C')`) plus ~6 zero-build
-  browser demos (CMYK separations, soft-proof, jsCE-vs-lcms diff
-  view, profile inspector, gamut viewer).
+- **v1.4 remaining samples** — `colour-calculator.html` (interactive
+  colour space converter) and `profile-inspector.html` (ICC tag/TRC/
+  gamut viewer) are still WIP. They'll land iteratively; none blocks
+  v1.5 work.
 - **v1.5 — N-channel float inputs + compiled non-LUT pipeline +
-  `toModule()`.** The larger piece of post-v1.3 work — could
-  meaningfully delay; v1.4 was reordered ahead of it so the
-  project keeps shipping visible progress on top of the v1.3
-  perf story even if v1.5 takes a while. Also rolls in the
-  `lutGridSize` accuracy lever and the `lcms_patch/` extraction.
+  `toModule()`.** The larger piece of post-v1.4 work. Also rolls in
+  the `lutGridSize` accuracy lever and the `lcms_patch/` extraction.
 - **v1.6 (optional)** — `lutMode: 'int-pipeline'` / S15.16 for
   lcms bit-for-bit parity, deferred unless demanded.
 - **v2** — package split (`@jscolorengine/interpolator`,

@@ -11,6 +11,8 @@ speed_tests/
 # Not needed by library consumers — keep them in git but out of the tarball.
 __tests__/
 bench/
+docs/
+samples/
 http/
 .gitignore
 .github/

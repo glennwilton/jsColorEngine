@@ -1,6 +1,6 @@
 {
   "name": "jscolorengine",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "src/main.js",
@@ -16,7 +16,7 @@
     "color analysis",
     "color engine"
   ],
-  "license": "gpl-3.0",
+  "license": "mpl-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glennwilton/jsColorEngine.git"
@@ -30,7 +30,8 @@
     "browser-watch": "webpack --mode=development  --watch --env TARGET_WEB=true",
     "test": "jest --verbose",
     "speedtests": "webpack --mode=development  --watch --config speed_tests/tests.webpack.config.js",
-    "bench:browser": "node bench/browser/serve.js"
+    "bench:browser": "node bench/browser/serve.js",
+    "samples:browser": "node samples/serve.js"
   },
   "type": "commonjs",
   "devDependencies": {

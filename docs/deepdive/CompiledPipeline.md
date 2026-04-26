@@ -29,7 +29,7 @@
 > This page is the post-mortem from the POC: what the compile target
 > looks like, why we built it, what it taught us, and why it's
 > on hold while v1.3 (16-bit I/O + lcms compat) shipped and v1.4
-> (ImageHelper + browser samples) lands as the next showcase
+> (`ICCImage` helper + browser samples) lands as the next showcase
 > release.
 >
 > **Why on hold, not abandoned.** The POC validated everything we
@@ -47,7 +47,7 @@
 > harness) is a stricter dependency for the project's credibility
 > than another speed multiplier — and that work needs the engine
 > *as-is* as its baseline. v1.3 has now shipped; compile work
-> resumes as **v1.5**, scheduled after the v1.4 ImageHelper +
+> resumes as **v1.5**, scheduled after the v1.4 `ICCImage` helper +
 > browser samples showcase release (see
 > [Should we ship this as default?](#should-we-ship-this-as-default--honest-assessment)
 > below for the full assessment).
@@ -690,7 +690,7 @@ If you're picking this up, the things that surprised us:
 
 Captured during the v1.3 / v1.5 framing review (Apr 2026). Re-read
 this when picking compile work back up as v1.5 (after the v1.4
-ImageHelper + samples showcase release).
+`ICCImage` helper + samples showcase release).
 
 ### Where compile actually sits in the speed stack
 
@@ -853,7 +853,7 @@ update when v1.5 ships.
   Defer the WASM emit target to a later release — the JS-emit + LUT +
   hot-loop combination already gets us to ~5× over runtime, and the
   bottleneck is `Math.pow`, which WASM doesn't make materially
-  faster (the LUT does). v1.4 (ImageHelper + samples) lands ahead
+  faster (the LUT does). v1.4 (`ICCImage` helper + samples) lands ahead
   of this so the v1.3 perf story has runnable showcases by the time
   the compile work resumes.
 - **`toModule()` is the marquee feature.** More important than the
@@ -883,7 +883,7 @@ than the original framing suggested:
   work stays where it is. Compile doesn't compete with `int-wasm-simd`,
   it complements the accuracy tier nothing else accelerated.
 
-Direction for v1.5 (when we resume after the v1.4 ImageHelper +
+Direction for v1.5 (when we resume after the v1.4 `ICCImage` helper +
 samples showcase release):
 
 - Stage-emitter coverage to all ~25 stages (the real bill).

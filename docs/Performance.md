@@ -1057,7 +1057,7 @@ runs whichever of today's kernels fits best.
 >
 > **Second reframe, late Apr 2026 (post-v1.3).** With the v1.3 kernel
 > ladder banked and a real performance story to show, **v1.4 was
-> swapped to ImageHelper + browser samples** (showcase release on
+> swapped to the `ICCImage` helper + browser samples** (showcase release on
 > the back of the v1.3 numbers). The compiled non-LUT pipeline +
 > `toModule()` work, plus N-channel float input kernels and the
 > `lutGridSize` accuracy lever, are all bundled into v1.5 — the
@@ -1323,7 +1323,7 @@ What v1.3 deliberately *doesn't* ship:
 
 ### v1.4 and beyond — see [Roadmap.md](./Roadmap.md)
 
-Forward-looking plans (v1.4 ImageHelper + browser samples
+Forward-looking plans (v1.4 `ICCImage` helper + browser samples
 [showcase release on the back of v1.3], v1.5 N-channel float
 inputs + `lutGridSize` + non-LUT code generation + `toModule()`,
 v1.6 optional S15.16 lcms parity, v2 package split) are the

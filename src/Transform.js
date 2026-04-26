@@ -1,21 +1,14 @@
 /*************************************************************************
  *  @license
  *
- *  Copyright © 2019, 2024 Glenn Wilton
+ *  Copyright © 2019, 2026 Glenn Wilton
  *  O2 Creative Limited
  *  www.o2creative.co.nz
  *  support@o2creative.co.nz
  *
- * jsColorEngine is free software: you can redistribute it and/or modify it under the terms of the
- * GNU General Public License as published by the Free Software Foundation, either version 3 of the License,
- * or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along with this program.
- * If not, see <https://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *
 */
 
@@ -194,6 +187,42 @@
      *      pipeline because of LUT quantisation, but typically invisible to
      *      the eye and 20–30x faster on image data.
      *      (Note: legacy spelling `builtLut` is also accepted.)
+     *
+     *  @param {string}             [options.lutGamutMode='none']
+     *      Baked gamut check during LUT build. Zero cost at transform time.
+     *        - `'none'`     — no gamut check (default).
+     *        - `'color'`    — hard replace above `lutGamutLimit` with
+     *                         `lutGamutColor`.
+     *        - `'map'`      — write scaled ΔE into every output channel
+     *                         (0 = in-gamut, 1.0 = `lutGamutMapScale` ΔE).
+     *                         For analysis — output is raw ΔE data.
+     *        - `'colorMap'` — blend original colour → `lutGamutColor`
+     *                         proportional to ΔE / `lutGamutMapScale`.
+     *                         Visual heat-map overlay on the image.
+     *
+     *  @param {boolean}            [options.bakeLutGamut=false]
+     *      Legacy shorthand. `true` is equivalent to `lutGamutMode:'color'`.
+     *      `lutGamutMode` takes precedence when both are set.
+     *
+     *  @param {number}             [options.lutGamutLimit=5]
+     *      ΔE76 threshold for `'color'` mode. Grid points whose ΔE76
+     *      exceeds this value are replaced with `lutGamutColor`.
+     *      Ignored in `'map'` mode (map is continuous, not thresholded).
+     *
+     *  @param {number}             [options.lutGamutMapScale=25.5]
+     *      ΔE that maps to 1.0 in `'map'` mode. In int8 output a channel
+     *      value of 255 = this many ΔE units. Default 25.5 gives 0.1 ΔE
+     *      resolution per int8 LSB.
+     *
+     *  @param {object}             [options.lutGamutColor={L:0, a:127, b:127}]
+     *      Lab colour used for out-of-gamut replacement cells in `'color'`
+     *      mode. Converted to the output device space once at LUT-build
+     *      time. Default is a vivid pink/magenta.
+     *
+     *  @param {function}           [options.gamutDeFn=convert.deltaE1976]
+     *      Colour-difference function `(labA, labB) => number` used by the
+     *      gamut check. Swap in `convert.deltaE2000`, `convert.deltaCMC`,
+     *      or a custom function.
      *
      *  @param {number}             [options.lutGridPoints3D=33]
      *      Grid points per axis for 3D LUTs. 17 / 33 / 65 are typical. Above
@@ -443,6 +472,28 @@
         // "precompute and store a LUT for the fast image path". Internally we
         // normalise to `this.builtLut` to keep all downstream code untouched.
         this.builtLut = (options.builtLut === true) || (options.buildLut === true);
+
+        // Gamut mode: 'none', 'color', 'map'. bakeLutGamut:true is legacy for 'color'.
+        if (options.lutGamutMode && options.lutGamutMode !== 'none') {
+            this.lutGamutMode = options.lutGamutMode;
+        } else {
+            this.lutGamutMode = (options.bakeLutGamut === true) ? 'color' : 'none';
+        }
+        this.lutGamutLimit = options.lutGamutLimit || 5;
+        this.lutGamutMapScale = options.lutGamutMapScale || 25.5;
+
+        // default is cmsLab(0, 127, 127) which is a bright pink that stands out in most gamuts
+        this.lutGamutColor = options.lutGamutColor || this.Lab(0, 127, 127);
+        this.gamutDeFn = options.gamutDeFn || convert.deltaE1976;
+
+        // TODO: accept options.lutGamutColorMap as an array of device colours
+        //       for multi-stop heatmaps (e.g. white → yellow → red → black).
+        //       gamutCheck would then pick the stop pair based on the scaled ΔE.
+
+        this.gamutTransforms = {};
+        this.gamutColorDevice = [];
+        this.gamutWhiteDevice = [];
+
         this.lutGridPoints3D = (isNaN(Number(options.lutGridPoints3D))) ? 33 : Number(options.lutGridPoints3D);
         this.lutGridPoints4D = (isNaN(Number(options.lutGridPoints4D))) ? 17 : Number(options.lutGridPoints4D);
 
@@ -1049,6 +1100,13 @@
             this.buildIntLut(this.lut);
         }
 
+        // Gamut check transforms are only needed during LUT build.
+        // Release them now to free the extra profiles and pipelines.
+        if(this.lutGamutMode !== 'none'){
+            this.gamutTransforms = {};
+            this.gamutColorDevice = [];
+        }
+
         // WASM KERNEL INIT (lutMode begins with 'int-wasm-'): try to
         // compile and instantiate the tetrahedral WASM kernel(s) once,
         // at create() time. On any failure (no WebAssembly global, SIMD
@@ -1235,12 +1293,119 @@
         }
     };
 
+    gamutCheck(inDevice, outDevice, outputChannels){
+        let labIn  = this.gamutTransforms.src2Lab.transform(this._gamutDeviceToObj(inDevice, true));
+        let labOut = this.gamutTransforms.dest2Lab.transform(this._gamutDeviceToObj(outDevice, false));
+        let de = this.gamutDeFn(labIn, labOut);
+
+        if (this.lutGamutMode === 'map') {
+            let scaled = Math.min(de / this.lutGamutMapScale, 1.0);
+            let result = new Array(outputChannels);
+            for (let i = 0; i < outputChannels; i++) result[i] = scaled;
+            return result;
+        }
+        if (this.lutGamutMode === 'colorMap') {
+            let t = Math.min(de / this.lutGamutMapScale, 1.0);
+            let w  = this.gamutWhiteDevice;
+            let gc = this.gamutColorDevice;
+            let result = new Array(outputChannels);
+            for (let i = 0; i < outputChannels; i++) {
+                result[i] = w[i] * (1 - t) + gc[i] * t;
+            }
+            return result;
+        }
+        // 'color' mode
+        return (de > this.lutGamutLimit) ? this.gamutColorDevice : outDevice;
+    }
+
+    _gamutDeviceToObj(device, isInput) {
+        let profile = isInput ? this.inputProfile : this.outputProfile;
+        if (profile.type === eProfileType.Lab) {
+            return { type: eColourType.Lab, L: device[0] * 100, a: device[1] * 255 - 128, b: device[2] * 255 - 128, whitePoint: illuminant.d50 };
+        }
+        if (profile.type === eProfileType.CMYK) {
+            return { type: eColourType.CMYK, C: device[0] * 100, M: device[1] * 100, Y: device[2] * 100, K: device[3] * 100 };
+        }
+        if (profile.type === eProfileType.Gray) {
+            return { type: eColourType.Gray, G: device[0] * 255 };
+        }
+        return { type: eColourType.RGB, R: device[0] * 255, G: device[1] * 255, B: device[2] * 255 };
+    }
+
+    createGamutTransforms(){
+
+        if(!this.inputProfile || !this.outputProfile){
+            return false;
+        }
+
+        let srcProfile  = this.inputProfile;
+        let destProfile = this.outputProfile;
+
+        if(!srcProfile.loaded || !destProfile.loaded){
+            return false;
+        }
+
+        let src2Lab = new Transform({ dataFormat: 'object' });
+        src2Lab.create(srcProfile, '*lab', eIntent.relative);
+
+        let dest2Lab = new Transform({ dataFormat: 'object' });
+        dest2Lab.create(destProfile, '*lab', eIntent.relative);
+
+        this.gamutTransforms = {
+            src2Lab,
+            dest2Lab,
+        };
+
+        // 'color' and 'colorMap' modes need the warning colour in device space
+        if (this.lutGamutMode === 'color' || this.lutGamutMode === 'colorMap') {
+            let lab2Dest = new Transform({ dataFormat: 'object' });
+            lab2Dest.create('*lab', destProfile, eIntent.relative);
+            let gcResult = lab2Dest.transform(this.lutGamutColor);
+
+            let outCh = this.getProfileChannels(destProfile);
+            if (outCh === 4) {
+                this.gamutColorDevice = [gcResult.C / 100, gcResult.M / 100, gcResult.Y / 100, gcResult.K / 100];
+            } else if (outCh === 3) {
+                this.gamutColorDevice = [gcResult.R / 255, gcResult.G / 255, gcResult.B / 255];
+            } else {
+                this.gamutColorDevice = [gcResult.G / 255];
+            }
+
+            // 'colorMap' also needs paper white in device space
+            if (this.lutGamutMode === 'colorMap') {
+                let white = this.Lab(100, 0, 0);
+                let whResult = lab2Dest.transform(white);
+                if (outCh === 4) {
+                    this.gamutWhiteDevice = [whResult.C / 100, whResult.M / 100, whResult.Y / 100, whResult.K / 100];
+                } else if (outCh === 3) {
+                    this.gamutWhiteDevice = [whResult.R / 255, whResult.G / 255, whResult.B / 255];
+                } else {
+                    this.gamutWhiteDevice = [whResult.G / 255];
+                }
+            }
+        }
+
+        return true;
+    }
+
+
     /**
      * Creates a prebuilt LUT from the current pipeline. This LUT is compatible with ICCProfile
      * LUT structure, and so can be used in the same trilinear/tetrahedral stages
      *
      */
     createLut(){
+
+        if(this.lutGamutMode !== 'none'){
+            if(this.verboseTiming){
+                console.time('create Gamut Check Transforms');
+            }
+            this.createGamutTransforms();
+            if(this.verboseTiming){
+                console.timeEnd('create Gamut Check Transforms');
+            }
+        }
+
         if(this.verboseTiming){
             console.time('create Prebuilt Lut');
         }
@@ -1353,6 +1518,10 @@
             precision: null, // Only required for PCS converisons;
             outputScale: 1, // output is already pre-scaled
             inputScale: 1, // input is already pre-scaled
+
+            gamutMode:     this.lutGamutMode,
+            gamutLimit:    this.lutGamutMode === 'color' ? this.lutGamutLimit : 0,
+            gamutMapScale: (this.lutGamutMode === 'map' || this.lutGamutMode === 'colorMap') ? this.lutGamutMapScale : 0,
         }
 
         /**
@@ -1657,7 +1826,11 @@
             go0: lut.go0,
             go1: lut.go1,
             go2: lut.go2,
-            go3: supported4D ? lut.go3 : 0
+            go3: supported4D ? lut.go3 : 0,
+
+            gamutMode:     lut.gamutMode     || 'none',
+            gamutLimit:    lut.gamutLimit    || 0,
+            gamutMapScale: lut.gamutMapScale || 0,
         };
 
         if(this.verboseTiming){
@@ -1717,6 +1890,11 @@
             for(b = 0; b < gridPoints; b++) {
                 // input is already scaled to 0.0 to 1.0 as we are using device encoding
                 var device = this.forward([av, b * step]);
+
+                if(this.lutGamutMode !== 'none'){
+                    device = this.gamutCheck([av, b * step], device, outputChannels);
+                }
+
                 for(o = 0; o < outputChannels; o++){
                     CLUT[position++] = device[o];
                 }
@@ -1732,6 +1910,7 @@
      * @returns {Float32Array}
      */
     create3DDeviceLUT(outputChannels, gridPoints){
+
         var lutsize = gridPoints * gridPoints * gridPoints;
         var CLUT = new Float64Array(this.outputProfile.outputChannels * lutsize);
 
@@ -1746,7 +1925,13 @@
                 gv = g * step;
                 for( b = 0; b < gridPoints; b++){
                     // input is already scaled to 0.0 to 1.0 as we are using device encoding
-                    var device = this.forward([rv, gv, b * step]);
+                    let src = [rv, gv, b * step]
+                    var device = this.forward(src);
+
+                    if(this.lutGamutMode !== 'none'){
+                        device = this.gamutCheck(src, device, outputChannels);
+                    }
+
                     for(o = 0; o < outputChannels; o++){
                         CLUT[position++] = device[o];
                     }
@@ -1778,7 +1963,8 @@
         var i;
         var pipeline = this.pipeline;
         var len = pipeline.length;
-        var result = [0,0,0,0];
+        var device = [0,0,0,0];
+
         for(c = 0; c < gridPoints; c++){
             cv = c * step;
             for(m = 0; m < gridPoints; m++){
@@ -1788,12 +1974,17 @@
                     for( k = 0; k < gridPoints; k++){
                         // input is already scaled to 0.0 to 1.0 as we are using device encoding
 
-                        result = [cv, mv, yv, k * step];
+                        let src = [cv, mv, yv, k * step];
                         for(i = 0; i < len; i++){
-                            result = pipeline[i].funct.call(this, result, pipeline[i].stageData, pipeline[i]);
+                            device = pipeline[i].funct.call(this, src, pipeline[i].stageData, pipeline[i]);
                         }
+
+                        if(this.lutGamutMode !== 'none'){
+                            device = this.gamutCheck(src, device, outputChannels);
+                        }
+
                         for(o = 0; o < outputChannels; o++){
-                            CLUT[position++] = result[o];
+                            CLUT[position++] = device[o];
                         }
                         count++;
                     }

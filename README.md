@@ -103,8 +103,9 @@ hardware, in the same session, with the same input bytes.
 
 Every MPx/s number in this README and in
 [docs/Performance.md](./docs/Performance.md) was measured with
-the in-browser bench at [`bench/browser/`](./bench/browser/). It runs
-every `lutMode` against the real `lcms-wasm` library, on *your*
+the in-browser bench at [`bench/browser/`](./bench/browser/)
+([live](https://www.o2creative.co.nz/jscolorengine/bench/browser/)).
+It runs every `lutMode` against the real `lcms-wasm` library, on *your*
 hardware, in *your* browser — zero upload, zero telemetry, everything
 runs locally.
 
@@ -366,6 +367,12 @@ More examples (canvas round-trip, custom pipeline stages) are in
   any other named location) and it bakes into the precomputed LUT
 - Chromatic adaptation for abstract Lab profiles
 - Full debug mode showing values at every stage
+- **Baked gamut warnings & maps** — embed out-of-gamut detection
+  directly into the LUT at build time (zero per-pixel cost). Four
+  modes: hard-threshold colour replace, continuous ΔE heatmap
+  (white → warning colour), raw ΔE map for analysis, or off.
+  Pluggable ΔE function (`deltaE1976` default, swap in `deltaE2000`
+  etc.). See [Transform docs](./docs/Transform.md#gamut-warning-modes).
 
 ### Kernel modes (`lutMode`)
 
@@ -716,7 +723,24 @@ More recipes, including the canvas read-modify-write pattern and
 custom pipeline stages at PCS, are in
 **[docs/Examples.md](./docs/Examples.md)**.
 
-A full folder of self-contained HTML demos is planned for `samples/`.
+### Live demos
+
+Self-contained HTML demos ship in `samples/` and are hosted at
+**<https://www.o2creative.co.nz/jscolorengine/samples/>**:
+
+- **[Live Video Soft Proof](https://www.o2creative.co.nz/jscolorengine/samples/live-video-softproof.html)**
+  — real-time video colour management. Every frame decoded and soft-proofed
+  through a pre-built 3D CLUT — pure JS, no WASM, no workers. 40+ fps on
+  720p.
+- **[Soft Proof](https://www.o2creative.co.nz/jscolorengine/samples/softproof.html)**
+  — sRGB → CMYK soft proof + C/M/Y/K plate previews with floating colour
+  picker (Lab, sRGB, CMYK, ΔE 2000, ΔE 76).
+- **[jsCE vs lcms-wasm](https://www.o2creative.co.nz/jscolorengine/samples/softproof-vs-lcms.html)**
+  — pixel-by-pixel accuracy comparison with amplified diff slider (up to
+  128×), CMYK + RGB stats, speed ratio.
+
+Run locally with `npm run samples:browser` — see
+[docs/Samples.md](./docs/Samples.md) for setup.
 
 ---
 
@@ -771,10 +795,11 @@ everyday colour management. Things outside that scope:
 
 | Page | What it covers |
 |---|---|
-| **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide |
+| **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide ([live](https://www.o2creative.co.nz/jscolorengine/bench/browser/)) |
 | **[Deep dive](./docs/deepdive/)** | How it works, why it's fast — pipeline model, lutMode internals, JIT inspection, WASM kernel design |
 | **[Performance](./docs/Performance.md)** | Benchmark numbers, discoveries in the journey, lcms comparison |
-| **[Roadmap](./docs/Roadmap.md)** | What's coming next — single source of truth for v1.4+ plans (v1.4 ImageHelper + samples, v1.5 compiled pipeline) |
+| **[Samples](./docs/Samples.md)** | Live demos — video soft-proof, image soft-proof, jsCE vs lcms-wasm comparison ([live](https://www.o2creative.co.nz/jscolorengine/samples/)) |
+| **[Roadmap](./docs/Roadmap.md)** | What's coming next — single source of truth for v1.4+ plans (v1.4 `ICCImage` helper + browser samples, v1.5 compiled pipeline) |
 | **[Examples](./docs/Examples.md)** | Canvas round-trip, custom pipeline stages, and other recipes beyond Quick start |
 | [API — Profile](./docs/Profile.md) | `Profile` class: loading, virtual profiles, tag access |
 | [API — Transform](./docs/Transform.md) | `Transform` class: constructor options, `create`, `createMultiStage`, `transform`, `transformArray` |
@@ -820,20 +845,11 @@ than brag on borrowed numbers.
 
 ## License
 
-GPLv3.
+[MPL-2.0](https://mozilla.org/MPL/2.0/).
 
-jsColorEngine is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or (at
-your option) any later version.
-
-This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at <https://mozilla.org/MPL/2.0/>.
 
 ### Credits & influences
 

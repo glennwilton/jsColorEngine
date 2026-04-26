@@ -1,0 +1,487 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Real-Time Video Soft Proof</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    .video-grid {
+        display: grid; gap: 18px;
+        grid-template-columns: 1fr 1fr;
+    }
+    @media (max-width: 820px) { .video-grid { grid-template-columns: 1fr; } }
+
+    .video-grid video, .video-grid canvas {
+        display: block; width: 100%; height: auto;
+        border-radius: 6px; background: #111;
+        border: 1px solid var(--border-soft);
+    }
+    .panel-head {
+        display: flex; align-items: baseline; gap: 10px;
+        margin-bottom: 6px; font-size: 13px;
+    }
+    .panel-head .engine-name { font-weight: 600; }
+    .panel-timing-block {
+        font-family: var(--mono); font-size: 11px; color: var(--accent-2);
+        line-height: 1.5; margin-top: 6px;
+    }
+    .panel-timing-block .t-lbl {
+        color: var(--text-muted); font-size: 10px; text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .fps-badge {
+        display: inline-block;
+        font-family: var(--mono); font-size: 13px; font-weight: 700;
+        color: var(--accent); background: rgba(0,0,0,0.4);
+        padding: 2px 8px; border-radius: 4px; margin-left: 8px;
+    }
+    .fps-badge.is-good { color: var(--accent-2); }
+    .fps-badge.is-ok   { color: var(--warn); }
+    .fps-badge.is-bad  { color: var(--error); }
+    .cheeky {
+        font-style: italic; color: var(--text-dim); font-size: 12px;
+        margin-top: 6px;
+    }
+</style>
+<script src="/browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">jsColorEngine</span>
+        <span class="brand-tag">samples</span>
+    </div>
+    <nav class="nav">
+        <a href="index.html">Home</a>
+        <a href="live-video-softproof.html" class="is-active">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="/bench/browser/">Bench</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="card">
+    <h1 style="font-size:22px; line-height:1.35; margin:0 0 8px;">
+        The world&rsquo;s first &mdash; and, frankly, most unnecessary
+        &mdash; real-time video soft-proofing engine.
+    </h1>
+    <p class="lead" style="font-size:13px;">
+        Because somewhere, someone needs to know whether their cat video is
+        CMYK-safe for GRACoL 2006 Coated. That person is probably not you. But the
+        proof is right there that jsColorEngine is fast enough to do real time video.
+    </p>
+    <p class="lead" style="margin-top:10px;">
+        Left: original sRGB video. Right: every frame decoded, run through
+        a full ICC soft-proof pipeline (sRGB&thinsp;&rarr;&thinsp;CMYK&thinsp;&rarr;&thinsp;sRGB) via a pre-built 3D CLUT,
+        and blitted to canvas &mdash; <em>in real time</em> in Javascript wasm.
+        no WebGL, no workers. Just Single thread JavaScript and a lookup table.
+    </p>
+    <details style="margin-top:10px;">
+        <summary class="muted" style="cursor:pointer;">Why?</summary>
+        <p class="lead" style="margin-top:8px;">
+            The headline is <strong>zero hot-path cost.</strong> The
+            tetrahedral interpolator doesn&rsquo;t know or care whether a
+            LUT cell carries a soft-proof RGB or a warning-stamped one
+            &mdash; it just blends 8 corners. All the profile maths
+            amortises into a one-time ~50&ndash;100&thinsp;ms LUT bake.
+        </p>
+        <p class="lead">
+            Budget: 720&times;1280 @ 30&thinsp;fps =
+            27.6&thinsp;MPx/s. The 3D int8 path already sits at
+            60&ndash;200&thinsp;MPx/s &mdash; plenty of slack even after
+            <code>drawImage</code> round-trip overhead.
+        </p>
+        <p class="lead">
+            Demo value: <em>&ldquo;here&rsquo;s what you video would look like printed
+            frame by frame on a press, right now.&rdquo;</em>
+            The Profile-swap dropdown makes the
+            difference between GRACoL and ISO&thinsp;Coated visible in
+            real-time &mdash; which is a thing colour-managed workflows
+            normally can only show on stills, and only after a render-wait.
+        </p>
+        <p class="lead">
+            And this quietly demonstrates that the engine
+            is fast enough to do a genuinely silly thing at 40+ fps,
+            which is the actual sales pitch proven.
+        </p>
+    </details>
+    <p class="muted" style="margin-top:8px;">
+        Video by Norberto Navarro Valiente from Pixabay &middot; 720&times;1280
+    </p>
+</section>
+
+<section class="card">
+    <div class="controls">
+        <label>
+            CMYK Profile
+            <select id="profileSelect">
+                <option value="profiles/CoatedGRACoL2006.icc" selected>GRACoL 2006 Coated (US)</option>
+                <option value="profiles/ISOcoated_v2_eci.icc">ISO Coated v2 (ECI)</option>
+                <option value="profiles/eciCMYK_v2.icc">eciCMYK v2 (Generic Exchange)</option>
+            </select>
+        </label>
+        <label>
+            Intent
+            <select id="intentSelect">
+                <option value="perceptual" selected>Perceptual</option>
+                <option value="relative">Relative</option>
+                <option value="saturation">Saturation</option>
+                <option value="absolute">Absolute</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="playBtn">&#9654; Play</button>
+        <!-- Lock 30fps via requestVideoFrameCallback — disabled for now,
+             causes stutter due to rVFC timing vs frame budget overlap.
+             Left in code for future revisit with double-buffering. -->
+        <input type="checkbox" id="lockFps" style="display:none">
+        <span id="statusText" class="timing-inline"></span>
+    </div>
+</section>
+
+<section class="card">
+    <div class="video-grid">
+        <div>
+            <div class="panel-head">
+                <span class="engine-name">Original sRGB</span>
+            </div>
+            <video id="srcVideo" muted loop playsinline preload="auto">
+                <source src="video/sample.mp4" type="video/mp4">
+            </video>
+        </div>
+        <div>
+            <div class="panel-head">
+                <span class="engine-name">Soft proof</span>
+                <span class="fps-badge" id="fpsBadge">&mdash;</span>
+            </div>
+            <canvas id="proofCanvas"></canvas>
+            <div class="panel-timing-block" id="proofTiming"></div>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <h2>System</h2>
+    <div class="info-grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+        <div class="info-cell">
+            <span class="lbl">WASM</span>
+            <span class="val" id="sysWasm">&mdash;</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">WASM SIMD</span>
+            <span class="val" id="sysSimd">&mdash;</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">LUT kernel</span>
+            <span class="val" id="sysKernel">&mdash;</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Video frame API</span>
+            <span class="val" id="sysVfc">&mdash;</span>
+        </div>
+    </div>
+    <p class="muted" style="margin-top:10px;">
+        Requires a modern browser with WebAssembly SIMD support
+        (Chrome&thinsp;91+, Firefox&thinsp;89+, Safari&thinsp;16.4+,
+        Edge&thinsp;91+) for full performance. Without SIMD the engine
+        falls back to scalar WASM or pure JS &mdash; still works, but
+        frame rate will drop.
+    </p>
+</section>
+
+<section class="card">
+    <h2>How it works</h2>
+    <div class="info-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+        <div class="info-cell">
+            <span class="lbl">Pipeline</span>
+            <span class="val">sRGB &rarr; CMYK &rarr; sRGB</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">LUT</span>
+            <span class="val">3D CLUT, pre-built once</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Interpolation</span>
+            <span class="val">Tetrahedral, int8</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Hot path</span>
+            <span class="val">transformArrayViaLUT</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Workers / WASM</span>
+            <span class="val">None &mdash; main thread JS</span>
+        </div>
+        <div class="info-cell">
+            <span class="lbl">Allocation</span>
+            <span class="val">Zero per frame</span>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<footer class="footer">
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>
+        <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+        &middot;
+        <a href="/bench/browser/">Bench</a>
+    </span>
+</footer>
+
+<script>
+(function () {
+    'use strict';
+
+    const { Profile, Transform, eIntent } = window.jsColorEngine;
+
+    const video       = document.getElementById('srcVideo');
+    const canvas      = document.getElementById('proofCanvas');
+    const ctx         = canvas.getContext('2d', { willReadFrequently: true });
+    const playBtn     = document.getElementById('playBtn');
+    const statusText  = document.getElementById('statusText');
+    const fpsBadge    = document.getElementById('fpsBadge');
+    const proofTiming = document.getElementById('proofTiming');
+    const profileSel  = document.getElementById('profileSelect');
+    const intentSel   = document.getElementById('intentSelect');
+    const lockFpsCb   = document.getElementById('lockFps');
+
+    const hasVFC = typeof HTMLVideoElement !== 'undefined' &&
+                   'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+    let transform = null;
+    let running = false;
+    let rafId = 0;
+    let vfcId = 0;
+
+    let srcCanvas = null;
+    let srcCtx    = null;
+    let w = 0, h = 0, pixels = 0;
+
+    // FPS tracking
+    let frameCount = 0;
+    let lastFpsUpdate = 0;
+    let transformMsAccum = 0;
+
+    // ── System detection ──────────────────────────────────────────────────
+
+    function detectWasm() {
+        try {
+            if (typeof WebAssembly === 'object' &&
+                typeof WebAssembly.instantiate === 'function') return true;
+        } catch (_) {}
+        return false;
+    }
+
+    function detectSimd() {
+        try {
+            // The canonical SIMD feature-detect: compile a module that
+            // uses a v128 instruction. If it validates, SIMD is supported.
+            return WebAssembly.validate(new Uint8Array([
+                0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,
+                8,0,65,0,253,15,253,98,11
+            ]));
+        } catch (_) {}
+        return false;
+    }
+
+    const wasmOk = detectWasm();
+    const simdOk = detectSimd();
+
+    document.getElementById('sysWasm').textContent = wasmOk ? 'OK' : 'NOT AVAILABLE';
+    document.getElementById('sysWasm').className = 'val' + (wasmOk ? ' is-ok' : ' is-warn');
+    document.getElementById('sysSimd').textContent = simdOk ? 'OK' : 'NOT AVAILABLE';
+    document.getElementById('sysSimd').className = 'val' + (simdOk ? ' is-ok' : ' is-warn');
+    document.getElementById('sysVfc').textContent = hasVFC ? 'requestVideoFrameCallback' : 'requestAnimationFrame (fallback)';
+    document.getElementById('sysVfc').className = 'val' + (hasVFC ? ' is-ok' : '');
+
+    if (!simdOk) {
+        statusText.textContent = '\u26a0 No WASM SIMD \u2014 performance will be reduced';
+        statusText.className = 'timing-inline';
+    }
+
+    // ── Engine ────────────────────────────────────────────────────────────
+
+    function parseIntent() {
+        return eIntent[intentSel.value] ?? eIntent.perceptual;
+    }
+
+    async function buildTransform() {
+        statusText.textContent = 'Building LUT\u2026';
+        statusText.className = 'timing-inline is-busy';
+
+        const intent = parseIntent();
+
+        const srgb = new Profile();
+        srgb.loadVirtualProfile('*sRGB');
+        const cmyk = new Profile();
+        await cmyk.loadPromise(profileSel.value);
+
+        const t = new Transform({ buildLut: true, dataFormat: 'int8' });
+        const t0 = performance.now();
+        t.createMultiStage([srgb, intent, cmyk, intent, srgb]);
+        const lutMs = performance.now() - t0;
+
+        transform = t;
+
+        const kernel = t.lutMode || 'unknown';
+        document.getElementById('sysKernel').textContent = kernel;
+        document.getElementById('sysKernel').className = 'val' +
+            (kernel.includes('simd') ? ' is-ok' : kernel.includes('wasm') ? '' : ' is-warn');
+
+        statusText.textContent = `LUT built in ${lutMs.toFixed(0)} ms (${kernel}) \u2014 ready`;
+        statusText.className = 'timing-inline';
+        return lutMs;
+    }
+
+    function ensureBuffers() {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (vw === w && vh === h) return;
+
+        w = vw; h = vh;
+        pixels = w * h;
+        canvas.width = w;
+        canvas.height = h;
+
+        srcCanvas = document.createElement('canvas');
+        srcCanvas.width = w;
+        srcCanvas.height = h;
+        srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+    }
+
+    function processFrame() {
+        ensureBuffers();
+
+        srcCtx.drawImage(video, 0, 0, w, h);
+        const src = srcCtx.getImageData(0, 0, w, h).data;
+
+        const t0 = performance.now();
+        const result = transform.transformArrayViaLUT(src, true, true, true, pixels);
+        const ms = performance.now() - t0;
+
+        ctx.putImageData(new ImageData(result, w, h), 0, 0);
+
+        return ms;
+    }
+
+    function updateStats(ms) {
+        frameCount++;
+        transformMsAccum += ms;
+
+        const now = performance.now();
+        if (now - lastFpsUpdate >= 1000) {
+            const elapsed = (now - lastFpsUpdate) / 1000;
+            const fps = frameCount / elapsed;
+            const avg = transformMsAccum / frameCount;
+            const mpx = (pixels / (avg / 1000)) / 1e6;
+            const target = lockFpsCb.checked ? 30 : 60;
+
+            fpsBadge.textContent = `${fps.toFixed(0)} fps`;
+            fpsBadge.className = 'fps-badge' +
+                (fps >= target * 0.85 ? ' is-good' : fps >= target * 0.5 ? ' is-ok' : ' is-bad');
+
+            proofTiming.innerHTML =
+                `<span class="t-lbl">Transform</span> ${avg.toFixed(1)} ms/frame \u00b7 ${mpx.toFixed(1)} MPx/s<br>` +
+                `<span class="t-lbl">Resolution</span> ${w}\u00d7${h} (${(pixels / 1e6).toFixed(2)} MP)<br>` +
+                `<span class="t-lbl">Target</span> ${target} fps \u00b7 budget ${(1000 / target).toFixed(0)} ms/frame`;
+
+            frameCount = 0;
+            transformMsAccum = 0;
+            lastFpsUpdate = now;
+        }
+    }
+
+    // ── Frame loops ───────────────────────────────────────────────────────
+
+    // requestVideoFrameCallback: fires once per decoded video frame (~30fps)
+    function vfcLoop() {
+        if (!running) return;
+        const ms = processFrame();
+        updateStats(ms);
+        vfcId = video.requestVideoFrameCallback(vfcLoop);
+    }
+
+    // requestAnimationFrame: fires at display refresh rate (unlocked)
+    function rafLoop() {
+        if (!running) return;
+        const ms = processFrame();
+        updateStats(ms);
+        rafId = requestAnimationFrame(rafLoop);
+    }
+
+    function startLoop() {
+        lastFpsUpdate = performance.now();
+        frameCount = 0;
+        transformMsAccum = 0;
+
+        if (lockFpsCb.checked && hasVFC) {
+            vfcId = video.requestVideoFrameCallback(vfcLoop);
+        } else {
+            rafId = requestAnimationFrame(rafLoop);
+        }
+    }
+
+    function stopLoop() {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+        // No cancelVideoFrameCallback in all browsers — setting
+        // running=false causes vfcLoop to exit on next callback.
+    }
+
+    // ── Start / stop ──────────────────────────────────────────────────────
+
+    async function start() {
+        if (running) {
+            stop();
+            return;
+        }
+
+        try {
+            await buildTransform();
+            await video.play();
+            running = true;
+            playBtn.innerHTML = '&#9724; Stop';
+            startLoop();
+        } catch (e) {
+            console.error(e);
+            statusText.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    function stop() {
+        running = false;
+        stopLoop();
+        video.pause();
+        playBtn.innerHTML = '&#9654; Play';
+        statusText.textContent = 'Stopped';
+    }
+
+    playBtn.addEventListener('click', start);
+
+    lockFpsCb.addEventListener('change', () => {
+        if (!running) return;
+        stopLoop();
+        startLoop();
+    });
+
+    async function rebuildIfRunning() {
+        if (!running) return;
+        stop();
+        await start();
+    }
+    profileSel.addEventListener('change', rebuildIfRunning);
+    intentSel.addEventListener('change', rebuildIfRunning);
+
+})();
+</script>
+</body>
+</html>
