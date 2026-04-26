@@ -3,6 +3,8 @@
 **A fast, accurate ICC colour-management engine for JavaScript — 100 %
 native JS, zero dependencies, optional WASM for the hot path.**
 
+Live demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/>**
+
 - **Fast.** Over **200 million pixels per second** — roughly **25
   4K images per second** on a single CPU thread with WASM SIMD
   enabled. Hot-path kernels hand-tuned for V8 / SpiderMonkey / JSC;
