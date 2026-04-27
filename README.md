@@ -292,12 +292,28 @@ setups —
 const { Profile, Transform, eIntent, color } = require('jscolorengine');
 
 (async () => {
+    // Wrap profile loading in try/catch — profiles can be corrupt or missing.
     const cmykProfile = new Profile();
-    await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    try {
+        await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    } catch (err) {
+        console.error('Failed to load profile:', err.message);
+        return;
+    }
+    // Always check .loaded — false if the file existed but wasn't valid ICC.
+    if (!cmykProfile.loaded) {
+        console.error('Profile did not load correctly:', cmykProfile.lastError);
+        return;
+    }
 
     // No buildLut — this is the accuracy path.
     const lab2cmyk = new Transform();
-    lab2cmyk.create('*lab', cmykProfile, eIntent.perceptual);
+    try {
+        lab2cmyk.create('*lab', cmykProfile, eIntent.perceptual);
+    } catch (err) {
+        console.error('Transform create failed:', err.message);
+        return;
+    }
 
     const cmyk = lab2cmyk.transform(color.Lab(80.1, -22.3, 35.1));
     console.log(`CMYK: ${cmyk.C}, ${cmyk.M}, ${cmyk.Y}, ${cmyk.K}`);
@@ -311,7 +327,16 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
 
 (async () => {
     const cmykProfile = new Profile();
-    await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    try {
+        await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    } catch (err) {
+        console.error('Profile load failed:', err.message);
+        return;
+    }
+    if (!cmykProfile.loaded) {
+        console.error('Profile invalid or unsupported:', cmykProfile.lastError);
+        return;
+    }
 
     // SPEED PATH — pre-bake a LUT, pick int8 IO, enable BPC.
     // lutMode defaults to 'auto' which resolves to the fastest
@@ -322,7 +347,12 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
         dataFormat: 'int8',
         BPC:        true
     });
-    rgb2cmyk.create('*sRGB', cmykProfile, eIntent.relative);
+    try {
+        rgb2cmyk.create('*sRGB', cmykProfile, eIntent.relative);
+    } catch (err) {
+        console.error('Transform create failed:', err.message);
+        return;
+    }
 
     // imageData.data is [R, G, B, A, R, G, B, A, ...].
     // 2nd / 3rd args say "input has alpha, output does not" — alpha dropped.
@@ -342,7 +372,16 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
 
 (async () => {
     const cmykProfile = new Profile();
-    await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    try {
+        await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    } catch (err) {
+        console.error('Profile load failed:', err.message);
+        return;
+    }
+    if (!cmykProfile.loaded) {
+        console.error('Profile invalid or unsupported:', cmykProfile.lastError);
+        return;
+    }
 
     // BPC is per-stage: enable on the perceptual leg, disable on the
     // relative leg — a common soft-proofing recipe. lutMode defaults
@@ -352,11 +391,16 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
         dataFormat: 'int8',
         BPC:        [true, false]
     });
-    proof.createMultiStage([
-        '*sRGB',     eIntent.perceptual,
-        cmykProfile, eIntent.relative,
-        '*sRGB'
-    ]);
+    try {
+        proof.createMultiStage([
+            '*sRGB',     eIntent.perceptual,
+            cmykProfile, eIntent.relative,
+            '*sRGB'
+        ]);
+    } catch (err) {
+        console.error('Transform create failed:', err.message);
+        return;
+    }
 
     const rgbIn  = new Uint8ClampedArray([255, 0, 0,  0, 255, 0,  0, 0, 255]);
     const rgbOut = proof.transformArray(rgbIn, false, false);
@@ -495,8 +539,17 @@ kernel. The only difference is startup cost.
 // These two profiles are functionally identical.
 // Prefer the virtual one — same maths, no I/O, no decode time.
 const fast = new Profile('*sRGB');                   // ~0 ms
-const slow = new Profile();                          // a few ms + fetch/disk
-await slow.loadPromise('./profiles/sRGB_v4_ICC_preference.icc');
+
+// If you must load from disk, always wrap + check:
+const slow = new Profile();
+try {
+    await slow.loadPromise('./profiles/sRGB_v4_ICC_preference.icc');
+} catch (err) {
+    console.error('Profile load failed:', err.message);
+}
+if (!slow.loaded) {
+    console.error('Profile invalid:', slow.lastError);
+}
 ```
 
 **Use a real ICC profile when you actually need one:**

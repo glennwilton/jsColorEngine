@@ -48,8 +48,19 @@ for the history of this one.
 (async () => {
     const { Profile, Transform, eIntent } = jsColorEngine;
 
+    // Always wrap profile loading in try/catch — profiles can be corrupt,
+    // missing, or served with wrong MIME type. Check .loaded afterwards.
     const cmyk = new Profile();
-    await cmyk.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    try {
+        await cmyk.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    } catch (err) {
+        console.error('Profile load failed:', err.message);
+        return;
+    }
+    if (!cmyk.loaded) {
+        console.error('Profile invalid or unsupported:', cmyk.lastError);
+        return;
+    }
 
     // Build a single soft-proof transform: sRGB -> CMYK -> sRGB.
     // BPC is per-stage: on for the perceptual leg, off for the relative leg.
@@ -60,11 +71,16 @@ for the history of this one.
         dataFormat: 'int8',
         BPC: [true, false]
     });
-    proof.createMultiStage([
-        '*sRGB',  eIntent.perceptual,
-        cmyk,     eIntent.relative,
-        '*sRGB'
-    ]);
+    try {
+        proof.createMultiStage([
+            '*sRGB',  eIntent.perceptual,
+            cmyk,     eIntent.relative,
+            '*sRGB'
+        ]);
+    } catch (err) {
+        console.error('Transform create failed:', err.message);
+        return;
+    }
 
     const img = document.getElementById('source');         // an <img> already loaded
     const canvas = document.getElementById('preview');     // a <canvas> in the DOM
@@ -101,7 +117,16 @@ const { Profile, Transform, eIntent, encoding } = require('jscolorengine');
 
 (async () => {
     const cmykProfile = new Profile();
-    await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    try {
+        await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+    } catch (err) {
+        console.error('Profile load failed:', err.message);
+        return;
+    }
+    if (!cmykProfile.loaded) {
+        console.error('Profile invalid or unsupported:', cmykProfile.lastError);
+        return;
+    }
 
     // A stage that converts whatever's at the PCS to grey.
     const desaturateAtPCS = {
@@ -123,7 +148,12 @@ const { Profile, Transform, eIntent, encoding } = require('jscolorengine');
     };
 
     const greyToCMYK = new Transform();
-    greyToCMYK.create('*lab', cmykProfile, eIntent.perceptual, [desaturateAtPCS]);
+    try {
+        greyToCMYK.create('*lab', cmykProfile, eIntent.perceptual, [desaturateAtPCS]);
+    } catch (err) {
+        console.error('Transform create failed:', err.message);
+        return;
+    }
 })();
 ```
 

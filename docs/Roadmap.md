@@ -36,14 +36,17 @@ future-facing only.
 - [v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
     - [N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)](#n-channel-float-inputs-5--6--7--8-channel-input-profiles)
     - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
+    - [Custom LUT callbacks — `lutInputHook` / `lutOutputHook`](#custom-lut-callbacks--lutinputhook--lutoutputhook)
     - [Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)](#lab--int16-helpers-convertlab2int16--convertint162lab)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Dependency hygiene — Dependabot triage + devDependency bumps](#dependency-hygiene--dependabot-triage--devdependency-bumps)
+    - [Pipeline validation — `validateOnCreate` option](#pipeline-validation--validateoncreate-option)
     - [Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)](#compiled-non-lut-pipeline--tomodule-v15-centrepiece)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [DROPPED — float-WASM tier (was: float-wasm-scalar / f32 CLUT / float-wasm-simd)](#dropped--float-wasm-tier-was-float-wasm-scalar--f32-clut--float-wasm-simd)
 - [v1.6 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity](#v16-optional--lutmode-int-pipeline--s1516-for-lcms-parity)
+- [v1.7 (optional) — Hardened profile decode](#v17-optional--hardened-profile-decode)
 - [v2 — Separation of concerns: split Transform + Pipeline + Interpolator](#v2--separation-of-concerns-split-transform--pipeline--interpolator)
 - [What we are explicitly NOT doing](#what-we-are-explicitly-not-doing)
 - [Historical record — original v1.3 / v1.5 analysis (1D WASM POC)](#historical-record--original-v13--v15-analysis-1d-wasm-poc)
@@ -588,6 +591,14 @@ a code block in the guide, checked for drift by a tiny sync script.
 > - **`lutGridSize` option** — accuracy lever rolled forward from the
 >   v1.3 plan. Independent of any kernel change, lands cleanly on top
 >   of the v1.3 kernel ladder.
+> - **Custom LUT callbacks** (`lutInputHook` / `lutOutputHook`) —
+>   intercept the input and/or output of every cell during LUT build.
+>   Use cases: saturation boost (+15 % chroma on every sample before
+>   the profile transform), channel swap (build a LUT that maps R↔B),
+>   debug logging (dump every (input, output) pair to a file),
+>   synthetic LUTs built from scratch (identity + user-defined warp,
+>   no profile involved). Pure build-time hook — zero per-pixel cost
+>   at transform time.
 > - **`convert.lab2Int16` / `convert.int162Lab` helpers** — small
 >   convenience wrappers over the v1.3 16-bit ladder for callers
 >   feeding u16 Lab buffers directly. Two-layer API:
@@ -622,6 +633,14 @@ a code block in the guide, checked for drift by a tiny sync script.
 >   210/210, `npm run build` still produces browser bundles, all
 >   sample pages and the bench load/run, all alerts closed or
 >   explicitly dismissed-as-not-applicable.
+> - **Pipeline validation** (`validateOnCreate` option) — after
+>   `create()` / `createMultiStage()` builds the pipeline, run a
+>   single-pixel transform in a `try/catch` to validate the pipeline
+>   actually works. If it throws (NaN in a matrix, malformed curve,
+>   etc.), `create()` throws instead of returning a Transform that
+>   will fail on first use. Simple guard that guarantees both
+>   `transform()` and `transformArray()` will succeed if `create()`
+>   succeeded. Cheap (~1 µs), opt-in, zero cost if disabled.
 >
 > The compiled non-LUT pipeline + `toModule()` work is still the
 > centrepiece of v1.5 — those land after the warm-up items above.
@@ -735,6 +754,112 @@ it's 143 MB and breaks everything), with a clear error.
 ΔE₀₀ max drop from ~0.4 to ~0.1 in the saturation corners, for
 zero per-pixel cost — the LUT is built once, evaluated the same
 way. Free accuracy for anyone willing to pay 123 extra KB.
+
+### Custom LUT callbacks — `lutInputHook` / `lutOutputHook`
+
+Sometimes you don't want a vanilla profile-to-profile transform —
+you want to **warp** the colour space on the way in, on the way out,
+or both. Examples:
+
+- **Saturation boost.** Before each sample hits the profile
+  transform, bump chroma by 15 %. The resulting LUT bakes that boost
+  into every cell; at runtime the kernel just does its usual
+  tetrahedral interp — zero per-pixel cost for the boost.
+- **Channel swap / rotation.** Build a LUT that maps R↔B, or rotates
+  hue by 30°. Useful for split-toning, creative colour grading, or
+  testing channel-order bugs.
+- **Synthetic LUTs from scratch.** Start with an identity grid (each
+  cell's output = its input), then warp it with a user-defined
+  function — no ICC profile involved at all. The kernel doesn't care
+  where the LUT came from; it just interpolates.
+- **Debug logging.** Dump every `(inputRGB, outputCMYK)` pair to a
+  file during build so you can visualise the gamut mapping or diff
+  against an external reference.
+
+#### API shape
+
+Two optional callbacks on `Transform.create()`:
+
+```js
+const xf = Transform.create({
+    inputProfile:  sRGB,
+    outputProfile: GRACoL,
+    buildLut:      true,
+
+    // Called for every grid sample BEFORE the profile transform.
+    // Receives device-space input [0–1]; returns (possibly modified)
+    // device-space input [0–1]. Return the same array to pass through.
+    lutInputHook: (rgb) => {
+        // Example: boost saturation in Lab before the transform
+        const lab = convert.rgb2lab(rgb, sRGB);
+        lab[1] *= 1.15;  // +15% a*
+        lab[2] *= 1.15;  // +15% b*
+        return convert.lab2rgb(lab, sRGB);
+    },
+
+    // Called for every grid sample AFTER the profile transform.
+    // Receives device-space output [0–1]; returns (possibly modified)
+    // device-space output [0–1].
+    lutOutputHook: (cmyk) => {
+        // Example: clamp black channel to 80% max
+        cmyk[3] = Math.min(cmyk[3], 0.80);
+        return cmyk;
+    },
+});
+```
+
+Either hook can be omitted. Both receive and return plain `[c0, c1,
+c2, ...]` arrays in device-space [0–1] (not bytes, not Lab unless
+you convert yourself). The hooks run **only during LUT build** —
+once per grid cell, not once per pixel at transform time. A 17³
+grid calls each hook 4913 times; a 33³ grid calls each 35 937 times.
+Build cost goes up by the hook's complexity; transform cost is
+unchanged.
+
+#### Use cases in more detail
+
+| Use case | Hook | What it does |
+|----------|------|--------------|
+| Saturation boost | `lutInputHook` | Convert input RGB → Lab, scale a\*/b\*, convert back. |
+| Black-limit | `lutOutputHook` | Clamp K channel to a max (e.g. 80 %). |
+| Channel swap | `lutOutputHook` | `[c,m,y,k] => [c,y,m,k]` — swap M and Y. |
+| Hue rotation | `lutInputHook` | Convert to LCh, add 30° to h, convert back. |
+| Identity + warp | both | `inputProfile = outputProfile = sRGB`, hooks do all the work. |
+| Debug dump | either | `console.log(input, output)` or write to a file; return unchanged. |
+| Synthetic LUT | both | No profile at all — caller supplies `lutInputHook` that *is* the transform function, `lutOutputHook` returns identity. |
+
+For the "synthetic LUT from scratch" case, we may also want a
+`Transform.createFromHook({ inputChannels, outputChannels, hook })`
+factory that skips profiles entirely and just builds a LUT from the
+hook. That's a follow-on convenience; the core hooks above are the
+building block.
+
+#### Why build-time only
+
+The hooks run during `buildLut()`, not during `transformArray()`.
+That's the whole point — the warp is **baked into the LUT cells** so
+the per-pixel kernel stays fast. If you need a per-pixel hook
+(dynamic colour grading that changes every frame, say), that's a
+different feature (and a much more expensive one — the kernel would
+have to call out to JS on every pixel, breaking the WASM hot path).
+Build-time hooks keep the fast path fast.
+
+#### Effort and rationale
+
+**Effort.** Small. The LUT build loop already iterates over every
+grid cell and calls the profile transform; the hooks are two
+optional function calls bracketing that existing call. The only
+subtlety is ensuring the hooks receive / return the right colour
+space (device [0–1], not Lab, not bytes) so they compose cleanly
+with both RGB-input and CMYK-input profiles.
+
+**Why on the roadmap rather than shipped now.** The feature is
+simple but the API shape wants a bit of thought (should hooks
+receive Lab instead of device? should there be a `lutPcsHook` that
+runs in PCS space between the two profile legs?). Parking it in v1.5
+alongside `lutGridSize` keeps LUT-build options grouped; both can
+ship together with a unified "LUT build options" section in the
+Transform docs.
 
 ### Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)
 
@@ -1182,6 +1307,71 @@ queued.
 plan above is "set the floor at the current latest 5.x and let
 npm resolve from there". Re-pinning would just make the next
 Dependabot wave noisier.
+
+### Pipeline validation — `validateOnCreate` option
+
+A simple guard that catches "profile loaded OK but pipeline is
+broken" scenarios before the caller's first `transform()` or
+`transformArray()` call.
+
+**The problem.** A profile can load successfully (`.loaded = true`,
+no exception) but still produce a Transform that fails on first use:
+
+- A matrix with a `NaN` element (corrupt profile, decoder bug).
+- A curve that returns `undefined` for some inputs.
+- A CLUT with missing entries.
+- A custom pipeline stage that throws on certain PCS values.
+
+Today the failure surfaces inside `transform()` or `transformArray()`
+— possibly deep in production, possibly on the millionth pixel. The
+caller has to wrap every transform call in `try/catch`, which is
+tedious and doesn't help with debugging ("which profile? which
+stage?").
+
+**The fix.** After `create()` / `createMultiStage()` finishes
+building the pipeline, run a **single-pixel smoke test** through the
+full pipeline in a `try/catch`. If it throws, `create()` throws with
+a clear message ("pipeline validation failed: NaN in matrix stage")
+instead of returning a Transform that will fail later.
+
+```js
+const xf = new Transform({ validateOnCreate: true });
+try {
+    xf.create(inputProfile, outputProfile, intent);
+} catch (err) {
+    // err.message includes which stage failed
+    console.error('Pipeline broken:', err.message);
+}
+// If we get here, transform() and transformArray() are safe.
+```
+
+**Implementation.** At the end of `create()` / `createMultiStage()`:
+
+1. Pick a neutral test colour (mid-grey in device space, or D50 in
+   PCS — something unlikely to hit edge cases).
+2. Call `this.transform(testColour)` inside a `try/catch`.
+3. Check the result for `NaN` / `undefined` / out-of-range values.
+4. If anything is wrong, throw with context ("stage 2 (matrix)
+   returned NaN for input [0.5, 0.5, 0.5]").
+
+Cost is ~1 µs per `create()` — negligible compared to the LUT build
+(50–100 ms) or even the profile decode (~5 ms). Opt-in via
+`validateOnCreate: true` so existing code isn't affected; could
+become the default in a future major version once battle-tested.
+
+**Why this is valuable.** Once `create()` succeeds with validation
+enabled, the caller **knows** that `transform()` and
+`transformArray()` will not throw on well-formed input. The only
+remaining failure mode is caller error (wrong array length, wrong
+channel count) — and those are caught by existing guards. This
+closes the "profile loaded but pipeline broken" gap that v1.7's
+full profile hardening would also address, but with a fraction of
+the effort.
+
+**Effort.** Small — a few hours. The test-colour call is one line;
+the result check is a dozen lines; the error formatting is another
+dozen. Most of the work is deciding what "neutral test colour"
+means for each colour-space type (RGB, CMYK, Lab, XYZ, n-channel).
 
 ### Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)
 
@@ -1690,6 +1880,128 @@ path.
 If a real user pulls this forward, the plan is documented here so
 the implementation doesn't start from scratch. Until then, v1.6 is
 a skippable release slot.
+
+---
+
+## v1.7 (optional) — Hardened profile decode
+
+Status: **acknowledged Achilles' heel, parked until a production
+incident or external audit forces the issue.** Boring but important;
+new features are cooler, but this is worth doing eventually.
+
+### The problem
+
+The profile decoder in `src/decodeICC.js` currently **trusts the
+input**. If a profile is corrupted, truncated, or maliciously
+crafted, the decoder may:
+
+- Throw an unhandled exception that crashes a Node.js server loading
+  an embedded profile from a user-uploaded image.
+- Read past the end of a buffer (JS will return `undefined`, not
+  segfault, but the downstream math produces garbage or `NaN`).
+- Allocate a huge array if a tag claims an absurd element count
+  (DoS vector on a shared server).
+- Silently produce a malformed `Profile` object that blows up later
+  in `Transform.create()` with an unhelpful stack trace.
+
+None of these are security vulnerabilities in the "arbitrary code
+execution" sense — JavaScript's memory model protects against that —
+but they're **reliability vulnerabilities** for any deployment that
+handles untrusted profiles (print shops, web services, CI pipelines,
+anything that ingests user-supplied images with embedded ICC).
+
+### Minimum bar — `try / catch` around the hot spots
+
+The cheapest fix that makes the decoder "server-safe":
+
+1. Wrap the top-level `decodeICC()` entry point in a `try / catch`
+   that returns a well-formed error object (`{ ok: false, error:
+   'reason' }`) instead of throwing.
+2. Do the same for `Profile.load()` and `Loader.loadAll()` so the
+   caller can distinguish "profile didn't load" from "something
+   exploded".
+3. Document the error-return shape in the API docs.
+
+This doesn't *validate* the profile — garbage in still produces
+garbage out — but it guarantees **the server doesn't crash** and the
+caller gets a usable error message. Effort: a few hours.
+
+### Better — tag-level validation and sanity checks
+
+A proper hardening pass that treats the profile as untrusted input:
+
+1. **Header validation.** Check magic bytes (`acsp`), file size vs
+   declared size, profile class, colour space, PCS, version. Reject
+   early with a clear error if any are out of spec.
+2. **Tag-table bounds checks.** Every tag offset + size must fall
+   within the declared profile size. Reject overlapping tags,
+   tags that point past EOF, tags with zero size.
+3. **Per-tag type validation.** Each tag type (`curv`, `para`, `mft1`,
+   `mft2`, `mAB `, `mBA `, `XYZ `, `text`, etc.) has a defined
+   structure. Validate element counts, grid dimensions, curve point
+   counts against sane upper bounds before allocating arrays.
+4. **CLUT sanity.** Grid dimensions × channel count × bytes-per-
+   sample must match the declared tag size. Reject LUTs that claim
+   65³ × 4 × 2 = 2.2 GB.
+5. **Curve sanity.** Parametric curves (`para`) have 1–7 parameters
+   depending on function type; reject if the count doesn't match.
+   `curv` tables must have at least 1 entry (or 0 for identity).
+6. **Matrix sanity.** 3×3 + offset matrices should have finite,
+   non-NaN elements. Reject if determinant is zero (singular) or
+   if any element is outside a sane range (±1e6).
+7. **Graceful fallback.** If a tag fails validation, the decoder can
+   either (a) reject the whole profile, or (b) mark that tag as
+   "unsupported" and continue with a best-effort profile. Option (b)
+   is friendlier for embedded profiles where only the rendering
+   intent you're not using is corrupt.
+8. **NaN / undefined deep scan.** After decode, walk every numeric
+   value in the profile object (matrices, curves, CLUT entries,
+   whitepoint, primaries) and reject if any are `NaN`, `Infinity`,
+   or `undefined`. This is a cheap generic guard that catches
+   corruption the per-tag validators might miss — a truncated read
+   that returned `undefined`, a division by zero during decode, a
+   malformed float that parsed as `NaN`. Easy to implement as a
+   recursive sweep; runs once at load time, negligible cost.
+
+Effort: a week or two of careful, tedious work for the full
+tag-level validation. The NaN/undefined deep scan alone is a few
+hours and catches a surprising amount — worth doing as a quick
+first pass even before the detailed per-tag work. Every tag type needs
+its own validation function; the test suite needs a corpus of
+malformed profiles (truncated, oversized, wrong type, etc.) to
+exercise every guard.
+
+### Why optional / parked
+
+1. **No production incident yet.** The decoder has handled thousands
+   of real-world profiles without issue; the failure modes above are
+   theoretical until someone hits them.
+2. **New features are more visible.** v1.5's `toModule()`, N-channel
+   inputs, and LUT hooks all have immediate user value; hardening
+   the decoder doesn't add features, it just prevents rare failures.
+3. **It's boring.** Tag-by-tag validation is grunt work — important,
+   but not intellectually interesting. Easy to defer when shinier
+   things are on the list.
+4. **The risk is bounded.** JS can't segfault; the worst case is a
+   crashed server process or garbage output, both of which are
+   recoverable. This isn't a CVE-grade vulnerability.
+5. **Developers can already wrap the call site.** A `try / catch`
+   around `Profile.load()` or `Loader.loadAll()` today catches any
+   exception the decoder throws. The hardening work would make that
+   unnecessary and give better error messages, but it's not blocking
+   anyone from shipping a robust integration right now.
+
+### When this gets promoted
+
+- A user reports a crash on a real-world corrupt profile.
+- Someone wants to deploy jsColorEngine in a security-sensitive
+  context (SaaS image pipeline, print-shop portal) and asks for an
+  audit.
+- We decide to pursue "production-grade" branding and want to back
+  it up with a hardening pass.
+
+Until then, v1.7 is a skippable release slot — documented here so
+the scope is clear when the time comes.
 
 ---
 
