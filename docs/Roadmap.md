@@ -641,6 +641,15 @@ a code block in the guide, checked for drift by a tiny sync script.
 >   will fail on first use. Simple guard that guarantees both
 >   `transform()` and `transformArray()` will succeed if `create()`
 >   succeeded. Cheap (~1 µs), opt-in, zero cost if disabled.
+> - **Same-profile passthrough (intent-gated)** — when the input and
+>   output ICC profiles are the same, detect a **passthrough** path that
+>   still respects **rendering intent**: take a fast no-op or single-leg
+>   shortcut only where intent and BPC make that correct; otherwise keep
+>   the full transform (same profile both sides is *not* automatically
+>   identity — AToB/BToA asymmetry and table choice still matter). Bench
+>   and lcms parity for the intent matrix (perceptual, relative
+>   colorimetric, saturation, absolute), including same-CMYK-profile rows
+>   such as GRACoL → GRACoL.
 >
 > The compiled non-LUT pipeline + `toModule()` work is still the
 > centrepiece of v1.5 — those land after the warm-up items above.

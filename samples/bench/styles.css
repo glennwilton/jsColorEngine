@@ -389,6 +389,19 @@ table.results th {
 }
 table.results td.num { text-align: right; font-family: var(--mono); }
 table.results th.num { text-align: right; }
+table.results th.type-col,
+table.results td.type-cell {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    width: 2.75em;
+    white-space: nowrap;
+}
+table.results td.type-cell-na {
+    color: var(--text-dim);
+    font-weight: 400;
+}
 table.results td.bar-col,
 table.results th.bar-col { width: 200px; min-width: 180px; }
 

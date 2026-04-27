@@ -49,6 +49,27 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   Silicon), or LUT-free f64 when you need accuracy over throughput.
   See [Two paths, one Transform](#two-paths-one-transform).
 
+---
+
+## Table of contents
+
+- [Why compare against LittleCMS?](#why-compare-against-littlecms)
+- [It's fast, don't believe us? — run it yourself](#dont-believe-us--run-it-yourself)
+- [Two paths, one Transform](#two-paths-one-transform)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Features at a glance](#features-at-a-glance)
+- [Virtual vs ICC profiles — which should you use?](#virtual-vs-icc-profiles--which-should-you-use)
+- [Accuracy](#accuracy)
+- [Speed](#speed)
+- [Examples](#examples)
+- [Testing](#testing)
+- [Limitations](#limitations)
+- [Documentation](#documentation)
+- [License](#license)
+
+---
+
 ### Why compare against LittleCMS?
 
 [**LittleCMS**](https://www.littlecms.com/) is the de-facto standard
@@ -117,6 +138,8 @@ hardware, in the same session, with the same input bytes.
 > *executing*, not the language it's written in. Deep dive:
 > [docs/deepdive/JitInspection.md](./docs/deepdive/JitInspection.md).
 
+---
+
 ### Don't believe us — run it yourself
 
 Every MPx/s number in this README and in
@@ -159,25 +182,6 @@ a port — the implementation is independent, written for how a JIT
 compiler sees numeric typed-array loops. If you want to see how that
 changes the code, [the deep dive](./docs/deepdive/) has the V8
 assembly walkthroughs.
-
----
-
-## Table of contents
-
-- [Why compare against LittleCMS?](#why-compare-against-littlecms)
-- [Don't believe us — run it yourself](#dont-believe-us--run-it-yourself)
-- [Two paths, one Transform](#two-paths-one-transform)
-- [Install](#install)
-- [Quick start](#quick-start)
-- [Features at a glance](#features-at-a-glance)
-- [Virtual vs ICC profiles — which should you use?](#virtual-vs-icc-profiles--which-should-you-use)
-- [Accuracy](#accuracy)
-- [Speed](#speed)
-- [Examples](#examples)
-- [Testing](#testing)
-- [Limitations](#limitations)
-- [Documentation](#documentation)
-- [License](#license)
 
 ---
 

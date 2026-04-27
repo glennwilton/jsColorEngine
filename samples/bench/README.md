@@ -68,10 +68,10 @@ The full-comparison table runs **every direction × every mode** below:
 | ---------------------------- | --------- | ------------------------------ | ------------------------------------------------------------------------------ |
 | `lcms default`               | u8        | `0`                            | Default real-app config. Pinned heap buffers via `_cmsDoTransform`.            |
 | `lcms HIGHRES`               | u8        | `cmsFLAGS_HIGHRESPRECALC`      | Big precalc LUT (49 RGB / 23 CMYK).                                            |
-| `lcms NOOPT`                 | u8        | `cmsFLAGS_NOOPTIMIZE`          | No precalc LUT — full pipeline per pixel. Accuracy comparison vs jsCE no-LUT.  |
+| `lcms NOOPT`                 | u8        | `cmsFLAGS_NOOPTIMIZE`          | No precalc LUT — full pipeline per pixel. The lcms-wasm build in samples uses the **u16** pipeline on this path (Type column: `u16`), not f64; compare to jsCE no-LUT with that caveat. |
 | **`lcms default 16`**        | **u16**   | `0`                            | **v1.3.** Same precalc grid as the 8-bit row, but u16 I/O. Compare vs jsce `int16`. |
 | **`lcms HIGHRES 16`**        | **u16**   | `cmsFLAGS_HIGHRESPRECALC`      | **v1.3.** 16-bit + max grid.                                                   |
-| **`lcms NOOPT 16`**          | **u16**   | `cmsFLAGS_NOOPTIMIZE`          | **v1.3.** 16-bit pipeline accuracy comparison.                                 |
+| **`lcms NOOPT 16`**          | **u16**   | `cmsFLAGS_NOOPTIMIZE`          | **v1.3.** 16-bit I/O; same u16 pipeline note as 8-bit NOOPT (wasm build).        |
 
 Full table = 4 directions × (8 jsCE modes + 6 lcms-wasm flag/width combos) = **56 cells**.
 

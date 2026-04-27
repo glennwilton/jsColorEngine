@@ -84,20 +84,35 @@ per cell.
 
 Eight cells per direction:
 
-| Mode | What it is |
-|---|---|
-| **`jsce no-LUT` (f64)** | `buildLut: false`. Every pixel walks the full per-stage pipeline in 64-bit float. The accuracy configuration — slowest by design, most faithful math jsColorEngine can produce. Roughly comparable to `lcms NOOPTIMIZE` |
-| **`jsce float`** | `buildLut: true` + `lutMode: 'float'`. Float64 CLUT, tetrahedral interp in f64. Same interp math as no-LUT but the pipeline pre-collapses to a LUT so it's much faster |
-| **`jsce int`** | u16 CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via `Math.imul`. v1.1 default. Bit-exact vs the float path on 8-bit I/O |
-| **`jsce int-wasm-scalar`** | Same int math compiled to WebAssembly. ~1.4× over `int` on 3D, ~1.2× on 4D |
-| **`jsce int-wasm-simd`** | Channel-parallel WASM SIMD. ~3.0–3.5× over `int` on 3D, ~2.1–2.6× on 4D. Falls back to scalar if your browser lacks WASM SIMD |
-| **`lcms default`** | LittleCMS 2.16 compiled to wasm32, `flags = 0`. What every real-world lcms app uses — lcms picks the precalc LUT grid from the input channel count. Pinned heap buffers |
-| **`lcms HIGHRES`** | Same, with `cmsFLAGS_HIGHRESPRECALC` — 49-grid for RGB, 23-grid for CMYK. The accuracy ceiling of the LUT path |
-| **`lcms NOOPT`** | Same, with `cmsFLAGS_NOOPTIMIZE` so each call walks the full per-pixel pipeline. The lcms equivalent of jsce `no-LUT` and the fair accuracy-vs-accuracy comparison |
+| Mode | What it is                                                                                                                                                                                                                                                                                 |
+|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **`jsce no-LUT` (f64)** | `buildLut: false`. Every pixel walks the full per-stage pipeline in 64-bit float. The accuracy configuration — slowest by design, most faithful math jsColorEngine can produce. For lcms-wasm `NOOPTIMIZE`, see the row below — it is **not** f64 in the wasm build we ship.               |
+| **`jsce float`** | `buildLut: true` + `lutMode: 'float'`. Float64 CLUT, tetrahedral interp in f64. Same interp math as no-LUT but the pipeline pre-collapses to a LUT so it's much faster                                                                                                                     |
+| **`jsce int`** | u16 CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via `Math.imul`. v1.1 default. Bit-exact vs the float path on 8-bit I/O                                                                                                                                                     |
+| **`jsce int-wasm-scalar`** | Same int math compiled to WebAssembly. ~1.4× over `int` on 3D, ~1.2× on 4D                                                                                                                                                                                                                 |
+| **`jsce int-wasm-simd`** | Channel-parallel WASM SIMD. ~3.0–3.5× over `int` on 3D, ~2.1–2.6× on 4D. Falls back to scalar if your browser lacks WASM SIMD                                                                                                                                                              |
+| **`lcms default`** | LittleCMS 2.16 compiled to wasm32, `flags = 0`. What every real-world lcms app uses — lcms picks the precalc LUT grid from the input channel count. Pinned heap buffers                                                                                                                    |
+| **`lcms HIGHRES`** | Same, with `cmsFLAGS_HIGHRESPRECALC` — 49-grid for RGB, 23-grid for CMYK. The accuracy ceiling of the LUT path                                                                                                                                                                             |
+| **`lcms NOOPT`** | `cmsFLAGS_NOOPTIMIZE` — no precalc LUT; each call walks the full per-pixel pipeline. In the **lcms-wasm** binary vendored for samples, that path is **u16**, not f64 (native LittleCMS is typically f64). Use for throughput comparison; use jsce `no-LUT` as the f64 accuracy reference. |
 
 ### Per-cell metrics
 
-Each row captures five numbers:
+Each row has a **Type** column plus five timing numbers:
+
+- **Type** — `f64`,  `u8`, or `u16`, summarising the hot path at a glance:
+- **`f64`** = jsce `no-LUT` (full f64 per-pixel pipeline) or jsce `float`
+  (f64 CLUT);
+
+- **`u16`** = 16-bit I/O (jsce `int16*`, lcms
+  `TYPE_*_16` rows). This separates mixed precision rows without re-parsing
+  the Mode name every time. <br>**Note: lcms-wasm `NOOPT` only** — the Emscripten build
+  shipped in `samples` exposes only the 16 bit pipeline on the no-precalc
+  path, (not the same as native f64 lcms) <br>
+- **`u8`** = 8-bit I/O to
+  `transformArray` with a u16 integer CLUT (jsce `int` / `int-wasm-*`, lcms
+  8-bit default / HIGHRES)
+
+The five numbers are:
 
 1. **LUT build** — wall-clock of `new Transform(...).create(...)`.
    Includes pipeline build, integer-mirror LUT bake (for `int*`

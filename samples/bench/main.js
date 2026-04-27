@@ -94,6 +94,69 @@ function fmtMpx(m) {
 }
 
 /**
+ * Reorder #results-full tbody rows so each direction block is sorted by
+ * MPx/s descending (fastest first). Error rows (no `data-mpx` cell) sink
+ * to the bottom of their block. Re-applies `dir-sep` on the first row
+ * of each block only.
+ */
+function reorderFullComparisonTbody(tbody, directions) {
+    const byDir = new Map();
+    for (const d of directions) {
+        byDir.set(d.id, []);
+    }
+    for (const tr of tbody.querySelectorAll('tr')) {
+        const id = tr.dataset.benchDir;
+        if (id && byDir.has(id)) {
+            byDir.get(id).push(tr);
+        }
+    }
+    for (const d of directions) {
+        const list = byDir.get(d.id);
+        list.sort((a, b) => {
+            const aCell = a.querySelector('td.num[data-mpx]');
+            const bCell = b.querySelector('td.num[data-mpx]');
+            const aM    = aCell ? parseFloat(aCell.dataset.mpx) : -Infinity;
+            const bM    = bCell ? parseFloat(bCell.dataset.mpx) : -Infinity;
+            return bM - aM;
+        });
+    }
+    for (const d of directions) {
+        byDir.get(d.id).forEach((tr, i) => {
+            if (i === 0) {
+                tr.classList.add('dir-sep');
+            } else {
+                tr.classList.remove('dir-sep');
+            }
+            tbody.appendChild(tr);
+        });
+    }
+}
+
+/**
+ * Match table order: per direction, MPx/s descending (for copy-to-markdown).
+ */
+function sortFullResultsByDirAndMpx(results, directions) {
+    const byDir = new Map();
+    for (const d of directions) {
+        byDir.set(d.id, []);
+    }
+    for (const r of results) {
+        if (byDir.has(r.dirId)) {
+            byDir.get(r.dirId).push(r);
+        }
+    }
+    const out = [];
+    for (const d of directions) {
+        const list = byDir.get(d.id);
+        list.sort((a, b) => b.mpxs - a.mpxs);
+        for (const x of list) {
+            out.push(x);
+        }
+    }
+    return out;
+}
+
+/**
  * Same seeded PRNG as bench/mpx_summary.js + bench/lcms-comparison/bench.js.
  * Identical bytes both sides means like-for-like cache behaviour.
  */
@@ -580,6 +643,31 @@ async function measureRunner(runner, pixelCount, warmupIters, hotItersPerBatch) 
 
 // ============================================================ FULL COMPARISON
 
+/**
+ * What the hot path is "made of" at a glance: f64 (jsce no-LUT / float);
+ * u8 (8-bit I/O + u16 integer LUT); u16 (jsce int16* rows = 16-bit I/O, or
+ * lcms-wasm NOOPT = integer u16 pipeline in this wasm build vs native f64).
+ * Lets you compare mixed rows without re-reading the Mode label every time.
+ */
+function benchTypeLabel(cfg) {
+    if (cfg.kind === 'jsce') {
+        const id = cfg.mode.id;
+        if (id === 'no-lut' || id === 'float') {
+            return 'f64';
+        }
+        if (id === 'int16' || id.indexOf('int16-') === 0) {
+            return 'u16';
+        }
+        return 'u8';
+    }
+    const no = state.lcmsConsts && state.lcmsConsts.cmsFLAGS_NOOPTIMIZE;
+    if (no && (cfg.lcmsFlags & no)) {
+        // lcms-wasm NOOPT: integer u16 pipeline in this wasm build (not f64).
+        return 'u16';
+    }
+    return (cfg.bitDepth === 16) ? 'u16' : 'u8';
+}
+
 function badgeForMode(modeId) {
     if (modeId === 'no-lut')            return 'b-nolut';
     if (modeId === 'float')             return 'b-float';
@@ -675,7 +763,7 @@ async function runFullComparison() {
     // gets its own linear-memory instance.)
     const sharedWasmCache = {};
 
-    const results = []; // collected for markdown / vs-int normalisation
+    let results = []; // collected for markdown / vs-int normalisation
     let prevDirId = null;
 
     for (let i = 0; i < configs.length; i++) {
@@ -690,6 +778,7 @@ async function runFullComparison() {
 
         const isNewDir = cfg.dir.id !== prevDirId;
         const tr = document.createElement('tr');
+        tr.dataset.benchDir = cfg.dir.id;
         if (isNewDir) tr.classList.add('dir-sep');
         prevDirId = cfg.dir.id;
 
@@ -733,11 +822,14 @@ async function runFullComparison() {
                 runner.free();
             }
 
+            const typeCode = benchTypeLabel(cfg);
             tr.innerHTML =
                 '<td>' + cfg.dir.shortLabel + '</td>' +
                 '<td class="mode-cell ' + (demoted ? 'demoted' : '') + '">' +
                   '<span class="mode-badge ' + badgeCls + '">' + kernelLabel + '</span>' +
                 '</td>' +
+                '<td class="type-cell" title="f64=jsce no-LUT/float; u16 (NOOPT)=lcms-wasm integer pipeline in this build; u8/u16=I/O + integer LUT as labelled.">' +
+                    typeCode + '</td>' +
                 '<td class="lut-cell">' + lutDesc + '</td>' +
                 '<td class="num">' + fmtMs(result.lutBuildMs) + '</td>' +
                 '<td class="num">' + fmtMs(result.coldMs) + '</td>' +
@@ -751,6 +843,7 @@ async function runFullComparison() {
                 dirId: cfg.dir.id,
                 dirLabel: cfg.dir.shortLabel,
                 mode: kernelLabel,
+                typeCode,
                 kind: cfg.kind,
                 isLut: cfg.isLut,
                 lutDesc,
@@ -761,12 +854,16 @@ async function runFullComparison() {
                 '<td>' + cfg.dir.shortLabel + '</td>' +
                 '<td class="mode-cell"><span class="mode-badge ' + badgeForMode(cfg.kind === 'jsce' ? cfg.mode.id : 'lcms') + '">' +
                   (cfg.kind === 'jsce' ? cfg.mode.label : cfg.label) + '</span></td>' +
+                '<td class="type-cell type-cell-na">&mdash;</td>' +
                 '<td class="error-cell" colspan="7">' + (err && err.message || err) + '</td>';
             tbody.appendChild(tr);
             console.error('Bench cell failed:', cfg, err);
         }
         await yieldUi();
     }
+
+    reorderFullComparisonTbody(tbody, directions);
+    results = sortFullResultsByDirAndMpx(results, directions);
 
     // ---- Post-process: normalise bars per direction + compute vs-int ----
     const fastestPerDir = {};
@@ -987,14 +1084,15 @@ function copyFullMarkdown() {
     // ---- Full table ----
     lines.push('## Full results');
     lines.push('');
-    lines.push('| Direction | Mode | LUT | LUT build (ms) | Cold (ms) | Hot (ms) | MPx/s | vs `int` |');
-    lines.push('|---|---|---|---:|---:|---:|---:|---:|');
+    lines.push('| Direction | Mode | Type | LUT | LUT build (ms) | Cold (ms) | Hot (ms) | MPx/s | vs `int` |');
+    lines.push('|---|---|:---:|---|---:|---:|---:|---:|---:|');
     for (const row of r.results) {
         const intMpx = r.intMpxPerDir[row.dirId];
         const vsInt  = (intMpx > 0) ? (row.mpxs / intMpx).toFixed(2) + 'x' : '-';
         lines.push(
             '| ' + row.dirLabel.replace('&rarr;', '->') +
             ' | ' + row.mode +
+            ' | ' + (row.typeCode || '-') +
             ' | ' + (row.lutDesc || '-') +
             ' | ' + fmtMs(row.lutBuildMs) +
             ' | ' + fmtMs(row.coldMs) +

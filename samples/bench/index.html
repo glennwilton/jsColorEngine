@@ -60,7 +60,12 @@
         <code>int-wasm-simd</code>) plus lcms-wasm in three flag
         configurations &times; two I/O widths (<code>default</code>,
         <code>HIGHRESPRECALC</code>, <code>NOOPTIMIZE</code> at both 8-bit
-        and 16-bit). Per cell measures <em>LUT build time</em>,
+        and 16-bit). The <strong>Type</strong> column tags the hot path
+        as <code>f64</code> (jsce no-LUT or float f64 CLUT), <code>u16</code>
+        (lcms-wasm <code>NOOPT</code> (only u16 pipeline in the wasm
+        build), <code>u8</code> (8-bit I/O + u16 integer LUT),
+        or <code>u16</code> (16-bit I/O).
+        Per cell measures <em>LUT build time</em>,
         <em>cold first transform</em>, and the <em>hot run median
         ms/iter</em>.
     </p>
@@ -85,7 +90,7 @@
         <div class="summary-card" id="sum-card-lcms-accuracy">
             <div class="summary-card-head">
                 <span class="mode-badge b-lcms">Accuracy &middot; lcms-wasm</span>
-                <span class="summary-sub">NOOPTIMIZE &middot; pipeline &middot; 8-bit I/O</span>
+                <span class="summary-sub">NOOPTIMIZE &middot; u16 pipeline in wasm &middot; 8-bit I/O</span>
             </div>
             <div class="summary-range">
                 <span class="summary-range-lo">&mdash;</span>
@@ -172,6 +177,7 @@
                 <tr>
                     <th>Direction</th>
                     <th>Mode</th>
+                    <th class="type-col" title="f64=jsce; u16=lcms-wasm NOOPT; u8=8b I/O + u16 LUT; u16=16b I/O.">Type</th>
                     <th title="Lookup-table shape &amp; storage (axes = input channels, g1 = grid points per axis). &quot;no LUT&quot; means the per-pixel pipeline is walked in f64.">LUT</th>
                     <th class="num" title="Time to construct Transform + bake LUT (ms)">LUT&nbsp;build</th>
                     <th class="num" title="First call &mdash; includes JIT tier-up + WASM compile + cache misses (ms)">Cold&nbsp;1st</th>
@@ -540,6 +546,17 @@
             to report if you want to know how fast the kernel actually runs in
             steady state.
         </li>
+        <li>
+            <strong>Type</strong> (Full comparison table only) &mdash;
+            <code>f64</code>, <code>u8</code>, or <code>u16</code>.
+            <code>f64</code> = jsce <code>no-LUT</code> or
+            <code>float</code> (f64 path or f64 CLUT);
+            <code>u16</code> = lcms-wasm <code>NOOPT</code> rows only (the
+            wasm port here exposes a the u8/u16 pipeline, not f64);
+            <code>u8</code> = 8-bit I/O with u16 integer CLUT;
+            <code>u16</code> = 16-bit I/O (jsce <code>int16*</code>, lcms
+            16-bit). Lets you see f64 vs u16 vs u8 vs u16 at a glance.
+        </li>
     </ol>
 
     <h3>Modes</h3>
@@ -562,8 +579,8 @@
         <li><strong>jsColorEngine int16-wasm-simd</strong> &mdash; v1.3 WASM SIMD u16 kernel (channel-parallel <code>v128</code>, Q0.13). Bit-exact with both <code>int16</code> and <code>int16-wasm-scalar</code> &mdash; SIMD is a pure speed lift, not a precision trade. ~1.7&ndash;2.4&times; over <code>int16-wasm-scalar</code>, ~2.0&ndash;2.6&times; over JS <code>int16</code>, ~3.9&ndash;4.9&times; over the fastest <code>lcms 16-bit</code> row. Falls back to <code>int16-wasm-scalar</code> on hosts without WASM SIMD.</li>
         <li><strong>jsColorEngine int-wasm-scalar</strong> &mdash; same int math compiled to WebAssembly. ~1.4&times; over <code>int</code> on 3D, ~1.2&times; on 4D.</li>
         <li><strong>jsColorEngine int-wasm-simd</strong> &mdash; channel-parallel WASM SIMD. ~3.0&ndash;3.5&times; over <code>int</code> on 3D, ~2.1&ndash;2.6&times; on 4D. Falls back to scalar if your browser lacks WASM SIMD.</li>
-        <li><strong>lcms-wasm default / HIGHRES / NOOPT (8-bit)</strong> &mdash; LittleCMS 2.16 with <code>TYPE_*_8</code> formats. Pinned heap buffers via <code>_cmsDoTransform</code>. <code>default</code>=<code>flags=0</code>; <code>HIGHRES</code>=<code>cmsFLAGS_HIGHRESPRECALC</code> (49 RGB / 23 CMYK grid &mdash; LUT-path accuracy ceiling); <code>NOOPT</code>=<code>cmsFLAGS_NOOPTIMIZE</code> (no LUT, full pipeline per pixel &mdash; lcms equivalent of jsce <code>no-LUT</code>).</li>
-        <li><strong>lcms-wasm default / HIGHRES / NOOPT (16-bit)</strong> &mdash; same three flag variants but with <code>TYPE_*_16</code> formats. The lcms <em>precalc-LUT grid</em> is identical to the corresponding 8-bit row (lcms picks grid by colourspace, not by I/O bit depth), but the format converters at the pipeline edges flip from u8 to u16. Headline MPx/s typically drops ~10&ndash;15% vs the 8-bit row purely from the wider buffers. This is the apples-to-apples row to read jsce <code>int16</code> against.</li>
+        <li><strong>lcms-wasm default / HIGHRES / NOOPT (8-bit)</strong> &mdash; LittleCMS 2.16 with <code>TYPE_*_8</code> formats. Pinned heap buffers via <code>_cmsDoTransform</code>. <code>default</code>=<code>flags=0</code>; <code>HIGHRES</code>=<code>cmsFLAGS_HIGHRESPRECALC</code> (49 RGB / 23 CMYK grid &mdash; LUT-path accuracy ceiling); <code>NOOPT</code>=<code>cmsFLAGS_NOOPTIMIZE</code> (no precalc LUT; the wasm build does not expose the f64 paths, so we run the <strong>u16</strong> pipeline on NOOPT path, not f64 like stock native lcms, so the Type column shows <code>u16</code> and the jsce <code>no-LUT</code> row stays the f64 accuracy reference).</li>
+        <li><strong>lcms-wasm default / HIGHRES / NOOPT (16-bit)</strong> &mdash; same three flag variants but with <code>TYPE_*_16</code> formats. The lcms <em>precalc-LUT grid</em> is identical to the corresponding 8-bit row (lcms picks grid by colourspace, not by I/O bit depth), but the format converters at the pipeline edges flip from u8 to u16. Headline MPx/s typically drops ~10&ndash;15% vs the 8-bit row purely from the wider buffers. The <code>NOOPT</code> row shares the same u16 pipeline note as 8-bit NOOPT. The apples-to-apples row to read jsce <code>int16</code> against is the lcms <strong>default / HIGHRES</strong> 16-bit rows, not <code>NOOPT</code>.</li>
     </ul>
 
     <h3>The four benchmark directions, and why RGB&rarr;RGB is
@@ -572,7 +589,7 @@
         Each of the four directions exercises a genuinely distinct math
         path. The choice of endpoints matters &mdash; particularly on
         RGB&rarr;RGB, which is the one place where a naive choice lets one
-        engine silently cheat.
+        engine skew results by doing a passthough the both profiles are the same.
     </p>
     <ul class="explain">
         <li>
@@ -585,14 +602,15 @@
             <code>_cmsOptimizePipeline</code> detects the identity during
             <code>cmsCreateTransform()</code> and collapses the hot path to
             a byte copy; <em>measured impact: roughly +80% on lcms-wasm
-            RGB&rarr;RGB throughput, purely from the bogus passthrough.</em>
-            Firefox 165 &rarr; 91&nbsp;MPx/s moving from
-            sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB, same machine, same
-            session &mdash; that's the size of the cheat. jsColorEngine
-            doesn't have an equivalent identity-elision pass, so it was never
-            affected, but matrix-shaper collapse is a legitimate lcms
-            optimisation on RGB&rarr;RGB; we just need it to be exercised
-            against a <em>different</em> RGB profile so it's real work.
+            RGB&rarr;RGB throughput, purely from the passthrough optimisation.</em>
+            Matrix-shaper collapse is a legitimate lcms optimisation on RGB&rarr;RGB;
+            So to measure performace,  we just need it to be exercised against a
+            <em>different</em> RGB profile so it's real work. Firefox drops from
+            165 &rarr; 91&nbsp;MPx/s moving from sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB, same machine, same
+            session &mdash; that's the size of the difference. jsColorEngine doesn't have
+            an equivalent identity-elision pass fow now, so it was not apples to apples,
+            we want to test work done.
+
             <br>Our <code>samples/profiles/AdobeRGB1998.icc</code> is the
             560-byte reference Adobe RGB (1998) profile. lcms-wasm
             doesn't export <code>cmsCreateRGBProfile</code> /
