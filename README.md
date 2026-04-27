@@ -30,9 +30,19 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   custom pipeline stages spliced in at PCS; ΔE76 / ΔE2000 helpers;
   and spectral / illuminant maths for measurement workflows. See
   [Features at a glance](#features-at-a-glance).<br><br>
-- **Runs everywhere JavaScript does.** Node, browsers, Electron,
-  web workers, React Native (with a Buffer polyfill). No native
-  bindings, no compile step, no platform-specific binaries.<br><br>
+- **Portable — runs everywhere JavaScript does, no GPU required.**
+  Node.js (rack servers, headless RIPs, CI workers, AWS Lambda),
+  browsers, Electron, web workers, React Native (with a Buffer
+  polyfill). LUT video / image work in JS-land typically reaches for
+  WebGL / WebGPU fragment shaders for performance — fast and proven,
+  but those need a GPU, driver setup, and (often) a window context.
+  Non-starters on a headless prepress server, a containerised
+  colour-management worker, an SSH'd build box, or a CI step.
+  **WASM SIMD is the portable acceleration path:** same kernel,
+  same speed ceiling, anywhere the V8 / SpiderMonkey / JSC
+  WebAssembly engine runs (which is everywhere, including headless
+  containers with no display hardware). No native bindings, no
+  compile step, no platform-specific binaries.<br><br>
 - **Two APIs, one `Transform`.** `transform(colorObj)` for single
   colours (µs/call, always LUT-free). `transformArray(typedArray)`
   for bulk — pre-baked LUT at **45–270 MPx/s** (x86_64 → Apple

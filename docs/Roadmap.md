@@ -38,6 +38,7 @@ future-facing only.
     - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
     - [Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)](#lab--int16-helpers-convertlab2int16--convertint162lab)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
+    - [Dependency hygiene — Dependabot triage + devDependency bumps](#dependency-hygiene--dependabot-triage--devdependency-bumps)
     - [Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)](#compiled-non-lut-pipeline--tomodule-v15-centrepiece)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
@@ -610,6 +611,17 @@ a code block in the guide, checked for drift by a tiny sync script.
 >   See the section below.
 > - **`lcms_patch/` extraction** — janitorial follow-up from the v1.3
 >   compat harness (see Accuracy.md).
+> - **Dependency hygiene** — `webpack` 5.89 → current 5.x,
+>   `webpack-cli` 4 → 5, `webpack-dev-server` 4 → 5, `webpack-merge`
+>   5 → current. Clears the 32 open Dependabot alerts (all transitive
+>   `devDependencies` — `node-forge`, `serialize-javascript`,
+>   `body-parser`, `express`, `ws`, `minimatch`, `braces`, etc.); the
+>   runtime engine has zero direct vulnerable deps and ships nothing
+>   from `node_modules` in the npm tarball, so the security exposure
+>   today is contributor-machine only. Acceptance: full `npm test`
+>   210/210, `npm run build` still produces browser bundles, all
+>   sample pages and the bench load/run, all alerts closed or
+>   explicitly dismissed-as-not-applicable.
 >
 > The compiled non-LUT pipeline + `toModule()` work is still the
 > centrepiece of v1.5 — those land after the warm-up items above.
@@ -1068,6 +1080,108 @@ patched binary that's vendored in the repo. The patch extraction
 just removes the "you need our vendored lcms tree on disk" step
 for contributors who want to regenerate the oracle from scratch
 against a future lcms release.
+
+### Dependency hygiene — Dependabot triage + devDependency bumps
+
+After the v1.4.1 push, GitHub Dependabot reports **32 open alerts**
+(10 high, 14 medium, 8 low) on the default branch. Worth knowing
+upfront:
+
+- **All 32 are in `devDependencies`.** Zero alerts in the runtime
+  surface. The npm tarball excludes `node_modules/`, the engine
+  itself ships only `src/` + the built `dist/` browser bundles, and
+  none of the engine's own production code touches any of the
+  flagged transitive packages.
+- **Most cluster around the webpack 5.89 / webpack-dev-server 4.15 /
+  webpack-cli 4.10 toolchain.** That single chain pulls in
+  `node-forge` (4 high), `serialize-javascript` (1 high + 2 med),
+  `body-parser`, `express`, `send`, `serve-static`, `cookie`,
+  `on-headers`, `http-proxy-middleware`, `ws`, `qs`,
+  `follow-redirects`, `webpack-dev-middleware` — all flagged via
+  the dev-server / build-time path.
+- **A second smaller cluster comes from jest's `micromatch` chain**
+  — `minimatch` (1 high ReDoS), `braces` (1 high), `picomatch` (1
+  med). Resolves with a `package-lock.json` regeneration in most
+  cases without bumping jest itself.
+- **Risk profile is contributor-machine only.** A clone-and-build
+  on an untrusted network could in theory expose a contributor to
+  the dev-server SSRF / path-traversal / template-injection alerts;
+  end users running the published browser bundle from
+  o2creative.co.nz, a CDN, or `npm install jscolorengine` are not
+  exposed.
+
+#### Bump plan
+
+| Package              | Current  | Target   | Why                                           |
+|----------------------|----------|----------|-----------------------------------------------|
+| `webpack`            | ^5.89.0  | ^5.x current | Clears `AutoPublicPathRuntimeModule` XSS, `buildHttp` SSRF (×2), `serialize-javascript` chain |
+| `webpack-cli`        | ^4.10.0  | ^5.x     | Required pairing for `webpack` 5 latest; v4 is unmaintained |
+| `webpack-dev-server` | ^4.15.1  | ^5.x     | Single biggest alert clearer — closes the entire `node-forge` / `express` / `body-parser` / `cookie` / `on-headers` / `http-proxy-middleware` / `ws` cascade |
+| `webpack-merge`      | ^5.10.0  | ^6.x     | Housekeeping; no breaking change for our two configs |
+| `jest`               | ^29.7.0  | ^29.7 (lockfile refresh) or ^30.x | `package-lock.json` regen typically lifts `minimatch` / `braces` / `picomatch` to fixed versions without a major bump |
+| `adm-zip`            | ^0.5.10  | ^0.5 latest | Used only by the bench / sample tooling; no alerts but worth refreshing alongside |
+| `wabt`               | ^1.0.39  | unchanged | No alerts; pinned for WASM-emit reproducibility |
+
+`webpack-cli` 4 → 5 is the only bump with a real chance of CLI
+flag changes — the 5 line aligns with `webpack` 5 latest and the
+current `webpack-dev-server` 5 line. The two webpack configs in
+this repo (`webpack.config.js` + `speed_tests/tests.webpack.config.js`)
+use the standard `mode` / `entry` / `output` / `module.rules`
+shape so the bump should be cosmetic.
+
+#### Acceptance criteria
+
+1. **`npm test` — 210 / 210 across 19 suites.** Same suite that's
+   passing on `1.4.1`. Any test failure blocks the bump.
+2. **`npm run build`** produces the browser bundles. Webpack 5
+   latest may reshuffle module IDs (precedent: commit `ea2fb3e`,
+   *"Rebuild browser bundles (webpack module-id reshuffle from
+   npm publish)"*); a one-off "Rebuild browser bundles" commit
+   is acceptable, but the bundle output must round-trip the
+   existing transform tests.
+3. **Smoke-test the sample pages** end-to-end via
+   `node samples/serve.js`:
+   - `samples/index.html` — landing page navigation works.
+   - `samples/softproof.html` — image proof + plate previews
+     render, colour picker reads pixel values.
+   - `samples/softproof-vs-lcms.html` — both engines load, diff
+     panel updates with the slider, speed stats populate.
+   - `samples/live-video-softproof.html` — video sample plays,
+     soft-proof overlay updates frame-by-frame at 40+ fps.
+   - `samples/bench/index.html` — engine-info panel green for
+     both jsCE and lcms-wasm, all kernels post a result, charts
+     render, no console errors.
+4. **All Dependabot alerts close** (or are explicitly dismissed
+   with a documented reason — *"transitive dev-only, no fix
+   upstream, mitigated by [X]"*). Target: zero open alerts on
+   the v1.5 release branch.
+5. **No runtime surface changes.** The engine's `src/` tree must
+   not pick up any new direct dependencies; the bumps are
+   `devDependencies`-only.
+
+#### Effort and rationale
+
+**Effort.** Half a day. Bump the `package.json` numbers, run
+`npm install` to regenerate `package-lock.json`, run the full
+test suite, run the build, smoke the samples, push, watch
+Dependabot reconcile. The webpack-cli 4 → 5 bump is the only
+substantive change — the rest is lockfile churn.
+
+**Why on the roadmap rather than shipped now.** v1.4.1 was
+expressly a soft-proof correctness fix; bundling a toolchain bump
+into the same release would have widened the diff and the test
+matrix at exactly the moment we wanted a tight, reviewable
+patch. v1.5 is the natural home — the alert count is high but
+the *exposure* is low (dev-machine only, dev-only deps, nothing
+in the published tarball or the browser bundle), so it doesn't
+warrant a 1.4.2 patch ahead of the v1.5 work that's already
+queued.
+
+**Why we're not pinning to specific minor versions.** The
+`package.json` already uses `^` ranges for everything; the bump
+plan above is "set the floor at the current latest 5.x and let
+npm resolve from there". Re-pinning would just make the next
+Dependabot wave noisier.
 
 ### Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)
 
@@ -1719,8 +1833,29 @@ we're on.
 
 - **GPU (WebGL / WebGPU shaders).** Tempting because GPUs eat 3D LUTs
   for breakfast, but: (a) upload+download latency dominates for
-  anything under ~10 MPx, (b) WebGPU isn't universally available yet,
-  (c) the API surface is huge. Maybe v2.x; not on the near roadmap.
+  anything under ~10 MPx — the round-trip alone costs more than our
+  WASM SIMD kernel takes to do the work; (b) WebGPU isn't universally
+  available yet (Safari / iOS WebKit are still partial), and WebGL2
+  has its own quirks (no integer textures on a lot of mobile, sketchy
+  lookup precision); (c) the API surface is huge — shader compilation,
+  framebuffer management, texture upload, pipeline state, all of which
+  have to be testable headlessly; (d) **the strongest reason —
+  portability.** A lot of colour-management deployments don't have a
+  GPU at all: a headless Node.js process on a rack server doing
+  soft-proof for a print queue, a containerised RIP frontend, a CI
+  step that renders proof bytes for visual regression, an AWS Lambda
+  batch job, an SSH'd CLI on a build box. WebGL / WebGPU shaders need
+  a GPU, driver setup, and (often) a window context — non-starters in
+  those environments. WASM SIMD is the *portable* acceleration target:
+  same kernel, same speed ceiling, anywhere the V8 / SpiderMonkey /
+  JSC WASM engine runs (which is everywhere, including headless
+  containers with no display hardware). The Performance.md throughput
+  numbers are measured in browser benchmarks because that's where the
+  bench UI lives, but the engine's *value proposition* is "fast on
+  every JS host", not "fast on a host with a GPU". Maybe v2.x as an
+  opt-in browser-only kernel for callers who already have a GPU
+  pipeline up and want to fuse colour-management into it; not on
+  the near roadmap.
 - **Lab whitepoint awareness in the integer kernels.** Lab a/b are
   signed; our integer kernels assume unsigned u8/u16 inputs. We
   sidestep this by always going through device color (RGB or CMYK)

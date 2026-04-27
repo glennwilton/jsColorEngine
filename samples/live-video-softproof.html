@@ -120,6 +120,18 @@
             engine is fast enough to do a genuinely silly thing at 40+ fps
             just because it can.
         </p>
+        <p class="lead">
+            <strong>Why not WebGL?</strong> Real-time video LUT work in
+            the browser usually reaches for a fragment shader &mdash; fast
+            and proven. But a lot of jsColorEngine&rsquo;s actual users
+            don&rsquo;t have a GPU at all: headless Node.js on a print-queue
+            server, a containerised RIP, a CI step rendering proof previews,
+            an AWS Lambda batch job. Shaders need a GPU, driver, and often
+            a window context; WASM SIMD doesn&rsquo;t. This demo runs the
+            same kernel that would run on the server &mdash; the browser
+            tab is just a convenient place to <em>see</em> it move.
+        </p>
+
     </details>
     <p class="muted" style="margin-top:8px;">
         Pick a sample clip in the controls; attribution is shown there.

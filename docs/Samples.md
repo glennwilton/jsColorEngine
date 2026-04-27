@@ -27,7 +27,7 @@ and the explicit list of what's deliberately missing.
 
 | File | Status | Demonstrates |
 |---|---|---|
-| [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame decoded and run through a full ICC sRGB → CMYK → sRGB pipeline via a pre-built 3D CLUT — in real time. Pure JS, no WASM (for the transform), no WebGL, no workers. 40+ fps on 720p. |
+| [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame decoded and run through a full ICC sRGB → CMYK → sRGB pipeline via a pre-built 3D CLUT — in real time. JavaScript + WASM SIMD on a single thread; **no WebGL, no GPU, no workers**. 40+ fps on 720p — the same kernel that would run headless on a Node.js print-queue server. |
 | [`softproof.html`](../samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + render the C / M / Y / K plates as tinted previews. Floating colour picker with Lab, sRGB, CMYK, Delta E 2000 and Delta E 76. Shows `toProof`, `toSeparation`, `renderChannelAs`, `pixel()`, intent + BPC controls. |
 | [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm comparison. Same image, same profile, same pipeline — pixel-by-pixel diff visualisation with logarithmic gain slider (up to 128×), signed RGB mode, CMYK + RGB accuracy stats, speed ratio. |
 | [`index.html`](../samples/index.html) | Ready | Project landing page (overview; links to samples and bench). |
