@@ -1,5 +1,5 @@
 /* ==========================================================================
-   bench/browser/styles.css
+   samples/bench/styles.css
    Clean, modern, framework-free.
    Palette: dark slate + lime accent, suitable for long benchmark sessions.
    ========================================================================== */
@@ -8,6 +8,7 @@
     --bg:           #0f1419;
     --bg-card:      #161b22;
     --bg-card-2:    #1c232c;
+    --bg-card-3:    #191d23;
     --border:       #2a323d;
     --border-soft:  #1f2630;
     --text:         #e6edf3;
@@ -80,6 +81,23 @@ main {
     box-shadow: var(--shadow);
 }
 
+.topbar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+    margin-bottom: 12px;
+}
+.topbar-head .brand {
+    margin-bottom: 0;
+}
+.topbar-head .nav {
+    margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .brand {
     display: flex;
     align-items: baseline;
@@ -96,6 +114,27 @@ main {
     color: var(--text-dim);
     font-size: 13px;
     font-weight: 400;
+}
+
+.nav {
+    display: flex;
+    gap: 4px;
+    margin-left: -8px;
+}
+.nav a {
+    background: transparent;
+    color: var(--text-dim);
+    padding: 10px 16px;
+    font-size: 13px;
+    border-bottom: 2px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease;
+    border-radius: 4px 4px 0 0;
+    text-decoration: none;
+}
+.nav a:hover { color: var(--text); text-decoration: none; }
+.nav a.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
 }
 
 .tabs {
@@ -179,6 +218,11 @@ main {
     gap: 2px;
     min-height: 50px;
 }
+
+.info-cell:hover {
+    background: var(--bg-card-3);
+}
+
 .info-cell .lbl {
     color: var(--text-muted);
     font-size: 11px;

@@ -7,131 +7,105 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jsColorEngine &middot; Samples</title>
+<title>jsColorEngine</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="topbar">
-    <div class="brand">
-        <span class="brand-mark">jsColorEngine</span>
-        <span class="brand-tag">samples</span>
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">ICC colour in JavaScript</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html" class="is-active">Home</a>
+            <a href="samples.html#demos">Samples</a>
+            <a href="/samples/bench/">Bench</a>
+        </nav>
     </div>
-    <nav class="nav">
-        <a href="index.html" class="is-active">Home</a>
-        <a href="live-video-softproof.html">Live Video</a>
-        <a href="softproof.html">Soft Proof</a>
-        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
-        <a href="/bench/browser/">Bench</a>
+    <nav class="nav nav--secondary" aria-label="Home">
+        <a href="index.html" class="is-active">Welcome</a>
     </nav>
 </header>
 
 <main>
 
 <section class="card">
-    <h2>jsColorEngine &mdash; browser samples</h2>
+    <h2>jsColorEngine</h2>
     <p class="lead">
-        Runnable demos of the <a href="https://github.com/glennwilton/jsColorEngine">jsColorEngine</a>
-        ICC colour management library. Every demo is zero-build vanilla JS
-        driven by the small
-        <a href="ICCImage.md"><code>ICCImage</code></a> helper module.
+        Javascript ICC profile colour engine &mdash; in-browser colour management
+        and analysis. A fuller project introduction and design notes will
+        live here. For now, use <a href="samples.html">Samples</a> to try the
+        runnable demos, or <a href="/samples/bench/">Bench</a> to measure
+        throughput on your own hardware.
     </p>
     <p class="muted">
-        Engine: MPL-2.0 &middot; Samples: MIT
-        (<a href="LICENSE">LICENSE</a>) &middot;
-        Live: <a href="https://www.o2creative.co.nz/jscolorengine/samples/">o2creative.co.nz/jscolorengine</a> &middot;
-        Source: <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
+        Engine: MPL-2.0 &middot; <a href="https://github.com/glennwilton/jsColorEngine">Source on GitHub</a>
     </p>
 </section>
 
 <section class="card">
-    <h2>Demos</h2>
+    <h2>Explore samples</h2>
     <div class="info-grid" style="margin-top:12px">
-        <a href="live-video-softproof.html" class="info-cell" style="text-decoration:none">
+        <a href="samples.html#demos" class="info-cell" style="text-decoration:none">
             <span class="lbl">Ready</span>
-            <span class="val" style="color:var(--accent)">Live Video Soft Proof</span>
-            <span class="muted" style="margin-top:4px">
-                Real-time video colour management. Every frame decoded and
-                soft-proofed through a pre-built 3D CLUT &mdash; pure JS,
-                no WASM, no workers. 40+ fps on 720p. The &ldquo;you
-                can&rsquo;t do that in JS&rdquo; demo.
+            <span class="val" style="color:var(--accent)">Samples</span>
+            <span class="muted" style="margin-top:4px">Interactive demo pages.
+             <ul style="padding-left:15px">
+                <li>Live Video Soft proofing</li>
+                <li>Soft proofing with gamut warnings</li>
+                <li>jsCE vs Lcms-wasm</li>
+            </ul>
             </span>
         </a>
-        <a href="softproof.html" class="info-cell" style="text-decoration:none">
+        <a href="/samples/bench/" class="info-cell" style="text-decoration:none">
             <span class="lbl">Ready</span>
-            <span class="val" style="color:var(--accent)">Soft Proof</span>
-            <span class="muted" style="margin-top:4px">
-                sRGB &rarr; CMYK soft proof + C/M/Y/K plate previews.
-                Uses <code>toProof</code>, <code>toSeparation</code>,
-                <code>renderChannelAs</code>.
+            <span class="val" style="color:var(--accent)">Bench</span>
+            <span class="muted" style="margin-top:4px">Interactive browser benchmark.
+            <ul style="padding-left:15px">
+                <li>jsCE vs Lcms-wasm</li>
+                <li>float, int8 and int16 throughput</li>
+                <li>Native js, wasm and wasm simd</li>
+                <li>No lut vs LUT</li>
+            </ul>
             </span>
         </a>
-        <a href="softproof-vs-lcms.html" class="info-cell" style="text-decoration:none">
+        <a href="https://github.com/glennwilton/jsColorEngine/blob/main/samples/ICCImage.md" class="info-cell" style="text-decoration:none">
             <span class="lbl">Ready</span>
-            <span class="val" style="color:var(--accent)">jsCE vs lcms</span>
-            <span class="muted" style="margin-top:4px">
-                Pixel-diff comparison between jsColorEngine and lcms-wasm.
-                Accuracy + speed in one view, with amplified diff slider.
+            <span class="val" style="color:var(--accent)">ICCImage (on Github)</span>
+            <span class="muted" style="margin-top:4px">Helper API reference and usage.
+            <br>
+            <br>
+            A simple wrapper around <code>jsColorEngine</code> to make it
+            easy to load, convert and display images with ICC profiles.
             </span>
         </a>
         <div class="info-cell">
             <span class="lbl">Planned</span>
-            <span class="val" style="color:var(--text-muted)">Colour Calculator</span>
-            <span class="muted" style="margin-top:4px">
-                Per-pixel readout via <code>pixel(x, y)</code> &mdash;
-                Lab + sRGB + device values. No-LUT accuracy path.
-            </span>
-        </div>
-        <div class="info-cell">
-            <span class="lbl">Planned</span>
-            <span class="val" style="color:var(--text-muted)">Intent Comparison</span>
-            <span class="muted" style="margin-top:4px">
-                Side-by-side perceptual / relative / saturation / absolute
-                through the same proof profile.
-            </span>
+            <span class="val" style="color:var(--text-muted)">Users benchmarks</span>
+            <span class="muted" style="margin-top:4px">User-submitted benchmark summaries.</span>
         </div>
     </div>
-</section>
-
-<section class="card">
-    <h2>Running locally</h2>
-    <p class="lead">
-        The engine ships a UMD bundle at
-        <code>browser/jsColorEngineWeb.js</code>. Build it once, then
-        start the dev server:
-    </p>
-    <pre><code>npm run browser          # build the UMD bundle
-npm run samples:browser  # start dev server on :8080</code></pre>
-    <p class="lead" style="margin-top:12px">
-        Then open
-        <a href="http://localhost:8080/samples/">http://localhost:8080/samples/</a>.
-        The bench is at
-        <a href="http://localhost:8080/bench/browser/">/bench/browser/</a>.
-    </p>
-</section>
-
-<section class="card">
-    <h2>ICCImage helper</h2>
-    <p class="lead">
-        All demos share a small immutable image wrapper:
-        <a href="iccimage.js"><code>iccimage.js</code></a>.
-        It handles the &ldquo;load image &rarr; transform &rarr; display&rdquo;
-        plumbing so each demo stays under ~100 lines.
-    </p>
-    <p class="lead">
-        Full API reference:
-        <a href="ICCImage.md"><code>ICCImage.md</code></a>
+    <p class="muted" style="margin-top:16px; max-width:90ch">
+        Samples: MIT &mdash; all sample code and the <code>ICCImage</code> helper are
+        free to use and distribute under the sample
+        <a href="LICENSE">license</a>.
+        Demo images from <a href="https://picsum.photos">Lorem Picsum</a> and videos from
+        <a href="https://pixabay.com">Pixabay</a> remain copyrighted by their respective owners.
     </p>
 </section>
 
 </main>
 
 <footer class="footer">
-    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a> (sample pages)</span>
     <span>
         <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
         &middot;
-        <a href="/bench/browser/">Bench</a>
+        <a href="samples.html">Samples</a>
+        &middot;
+        <a href="/samples/bench/">Bench</a>
     </span>
 </footer>
 

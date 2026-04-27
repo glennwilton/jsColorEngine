@@ -1,5 +1,5 @@
 /*
- * bench/browser/main.js
+ * samples/bench/main.js
  * =====================
  *
  * Browser-side bench orchestrator. Three tabs:
@@ -24,7 +24,9 @@
 
 import { loadLcms, buildProfiles, freeProfiles, makeLcmsRunner, probeLcmsBuild } from './lcms-runner.js';
 
-const PROFILE_URL       = '/__tests__/GRACoL2006_Coated1v2.icc';
+// CMYK profile: same GRACoL print standard as tests, but the on-disk name
+// in samples/profiles/ is CoatedGRACoL2006.icc (see other sample pages).
+const PROFILE_URL       = '/samples/profiles/CoatedGRACoL2006.icc';
 
 // RGB->RGB MUST be sRGB -> AdobeRGB (NOT sRGB -> sRGB). If both endpoints
 // are sRGB, lcms's pipeline optimiser collapses the transform to an identity
@@ -32,7 +34,7 @@ const PROFILE_URL       = '/__tests__/GRACoL2006_Coated1v2.icc';
 // than any legitimate RGB->RGB conversion (measured: 78 vs 60 MPx/s in a
 // node smoke-test). Every other benchmark in this suite exercises a real
 // non-identity transform, so RGB->RGB has to too.
-const ADOBE_RGB_URL     = '/__tests__/AdobeRGB1998.icc';
+const ADOBE_RGB_URL     = '/samples/profiles/AdobeRGB1998.icc';
 
 // ============================================================ STATE
 
@@ -352,7 +354,7 @@ async function init() {
         state.jsGracol = new state.jsce.Profile();
         state.jsGracol.loadBinary(buf);
         if (!state.jsGracol.loaded) {
-            throw new Error('jsColorEngine: failed to decode GRACoL2006_Coated1v2.icc');
+            throw new Error('jsColorEngine: failed to decode CoatedGRACoL2006.icc');
         }
         // jsce side of RGB->RGB uses the built-in '*adobergb' profile
         // (same matrix primaries + gamma 2.2 as the AdobeRGB ICC bytes we
@@ -362,7 +364,7 @@ async function init() {
         // within +/-1 LSB vs the ICC.
         const profileMs = nowMs() - t0;
         $('#info-profile').textContent =
-            'GRACoL2006_Coated1v2.icc (' + (buf.byteLength / 1024).toFixed(0) + ' KB) + ' +
+            'CoatedGRACoL2006.icc (' + (buf.byteLength / 1024).toFixed(0) + ' KB) + ' +
             'AdobeRGB1998.icc (' + (bufAdobe.byteLength / 1024).toFixed(1) + ' KB), ' +
             'fetched + decoded in ' + profileMs.toFixed(0) + ' ms';
         $('#info-profile').classList.add('is-ok');
@@ -385,17 +387,21 @@ async function init() {
             const build = await probeLcmsBuild();
             let tag = '';
             if (build && !build.error) {
+                // Informational only: lcms-wasm is a stock emcc -O3 build of
+                // LittleCMS 2.16 (no -msimd128). That is a property of the
+                // shipped binary, not a host-capability problem, so the cell
+                // stays green when lcms loads successfully.
                 tag = build.hasSimd
                     ? ' - SIMD build'
-                    : ' - scalar build (no -msimd128)';
+                    : ' - stock scalar build';
             }
             $('#info-lcms').textContent =
                 'lcms ' + (consts.LCMS_VERSION || '?') + ' (wasm32) loaded' + tag;
-            $('#info-lcms').classList.add(build && build.hasSimd ? 'is-ok' : 'is-warn');
+            $('#info-lcms').classList.add('is-ok');
         } catch (err) {
             state.lcmsAvailable = false;
             $('#info-lcms').textContent =
-                'NOT AVAILABLE - cd bench/lcms-comparison && npm install';
+                'NOT AVAILABLE - add lcms.js + lcms.wasm under samples/lcms-wasm-dist/';
             $('#info-lcms').classList.add('is-warn');
             console.warn('lcms-wasm load failed:', err);
             // Disable the lcms checkbox since we can't run those rows

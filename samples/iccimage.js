@@ -410,15 +410,17 @@ export class ICCImage {
      * Soft-proof: src → proofProfile → *sRGB. Returned ICCImage is sRGB-
      * tagged so toCanvas() blits without further conversion.
      *
-     * `intent` and `BPC` may be a single value (applied to both legs) or
-     * a 2-element array `[srcToProof, proofToScreen]`.
+     * `intent` may be a single value (RGB→proof only; the CMYK→*sRGB preview
+     * leg is always relative colorimetric) or `[srcToProof, proofToScreen]`.
+     * `BPC` may be boolean (black-point compensation on the RGB→proof leg only)
+     * or `[srcToProof, proofToScreen]`.
      */
     async toProof(proofProfile, { intent, BPC = [false, false], lutGamutMode = 'none', lutGamutLimit = 5, lutGamutMapScale = 25.5, lutGamutColor } = {}) {
         const { eIntent } = _engine();
         const intents = Array.isArray(intent)
             ? intent
-            : [intent ?? eIntent.relative, intent ?? eIntent.relative];
-        const bpcArr = Array.isArray(BPC) ? BPC : [BPC, BPC];
+            : [intent ?? eIntent.relative, eIntent.relative]; // [ user intent for src to profile, proofing intent is always eIntent.relative]
+        const bpcArr = Array.isArray(BPC) ? BPC : [BPC, false];
         const sRGB = _sRGBProfile();
 
         const transformChain = [this._raw.profile, intents[0], proofProfile, intents[1], sRGB];

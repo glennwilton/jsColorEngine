@@ -36,6 +36,7 @@ future-facing only.
 - [v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
     - [N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)](#n-channel-float-inputs-5--6--7--8-channel-input-profiles)
     - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
+    - [Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)](#lab--int16-helpers-convertlab2int16--convertint162lab)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)](#compiled-non-lut-pipeline--tomodule-v15-centrepiece)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
@@ -71,7 +72,7 @@ browser benchmark + documentation restructure.
 - `lutMode: 'auto'` as the new default, with `int8 + buildLut: true`
   resolving to `'int-wasm-simd'` and automatic demotion chain (SIMD
   → scalar WASM → JS `'int'`) at `create()` time.
-- Browser benchmark (`bench/browser/` + [docs/Bench.md](./Bench.md))
+- Browser benchmark (`samples/bench/` + [docs/Bench.md](./Bench.md))
   — zero-dependency, runs every kernel against `lcms-wasm`.
 - Full documentation restructure: README → overview, Deep dive →
   internals, Performance.md → measurements, Roadmap.md → future
@@ -120,7 +121,8 @@ and will land iteratively.
   plate previews + colour picker),
   [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html)
   (pixel-level accuracy comparison with lcms-wasm),
-  [`index.html`](../samples/index.html) (landing page).
+  [`index.html`](../samples/index.html) (project landing) and
+  [`samples.html`](../samples/samples.html) (demo index).
 - **License: GPL-3.0 → MPL-2.0.** File-level copyleft removes the
   main adoption blocker GPL posed for commercial embedders.
 - **Sample infrastructure** — `samples/serve.js` dev server,
@@ -585,6 +587,27 @@ a code block in the guide, checked for drift by a tiny sync script.
 > - **`lutGridSize` option** — accuracy lever rolled forward from the
 >   v1.3 plan. Independent of any kernel change, lands cleanly on top
 >   of the v1.3 kernel ladder.
+> - **`convert.lab2Int16` / `convert.int162Lab` helpers** — small
+>   convenience wrappers over the v1.3 16-bit ladder for callers
+>   feeding u16 Lab buffers directly. Two-layer API:
+>   `convert.lab2Int16` / `convert.int162Lab` as the portable
+>   lower-level primitive (takes an encoding sub-object — typically
+>   `lut.inLab` or `lut.outLab` — or an explicit numeric tuple;
+>   survives JSON / `structuredClone` / worker post-message), and
+>   four explicit Transform wrappers
+>   (`xform.inputLab2Int16` / `xform.outputLab2Int16` /
+>   `xform.inputInt162Lab` / `xform.outputInt162Lab`) as the
+>   ergonomic top for callers who already have a Transform in hand
+>   and want to read or write either side without ambiguity.
+>   Preferred storage: numeric scaling values **as data** on the
+>   LUT (`pcsVersion` for human-readable JSON, `labNumerator` /
+>   `abDenominator` for math, pre-computed multipliers for the
+>   hot loop) so any future encoding is a numeric-tuple change
+>   rather than a code change. Bulk array helpers are intentionally
+>   *not* shipped — the math is straight-line and developers can
+>   inline a tight loop tuned for their use case (and use the
+>   scalar `transform.outputInt162Lab` as a ground-truth check).
+>   See the section below.
 > - **`lcms_patch/` extraction** — janitorial follow-up from the v1.3
 >   compat harness (see Accuracy.md).
 >
@@ -700,6 +723,323 @@ it's 143 MB and breaks everything), with a clear error.
 ΔE₀₀ max drop from ~0.4 to ~0.1 in the saturation corners, for
 zero per-pixel cost — the LUT is built once, evaluated the same
 way. Free accuracy for anyone willing to pay 123 extra KB.
+
+### Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)
+
+The v1.3 16-bit kernel ladder (`int16` / `int16-wasm-scalar` /
+`int16-wasm-simd`) shipped with fast u16 LUT paths for the common
+RGB / CMYK workflows, but the **Lab side** of those paths still
+expects the caller to know the ICC PCS encoding to round-trip a u16
+buffer through `*Lab` / `*LabD50` / a Lab-PCS profile.
+
+#### Why the encoding question is non-trivial
+
+ICC v2 and ICC v4 use *different* u16 Lab encodings, and the engine
+already distinguishes them internally via `stage_LabD50_to_PCSv2` /
+`stage_LabD50_to_PCSv4` (and their inverses) in
+[`src/Transform.js`](../src/Transform.js):
+
+| Encoding         | L → u16                | a → u16                  | Notes |
+|------------------|------------------------|--------------------------|-------|
+| **v2 (legacy)**  | `L * 65280 / 100`      | `(a + 128) * 65280 / 256` | `L=100` ⇒ `0xFF00`, `a=0` ⇒ `0x8080` |
+| **v4**           | `L * 65535 / 100`      | `(a + 128) * 65535 / 257` | `L=100` ⇒ `0xFFFF`, `a=0` ⇒ `0x8080` |
+
+Round-tripping a u16 buffer through the *wrong* encoding gives a
+silent ~0.4 % drift, not a hard error — so whatever API ships has
+to make the encoding choice unambiguous on every call.
+
+#### Preferred design — store the scaling constants as data on the LUT
+
+Three approaches considered, in increasing order of preference:
+
+**1. Re-normalise the LUT to one canonical encoding.** Rejected.
+v1.3's u16 LUTs are scaled for the kernel's Q0.13 weight contract,
+not the ICC PCS spec — re-baking them to a single "canonical" Lab
+encoding would either lose precision or duplicate the LUT, and is
+asymmetric between input and output sides anyway.
+
+**2. Attach the encoder/decoder as a method on the LUT.**
+Considered: `xform.lut.toLab(device)` and `xform.lut.fromLab(lab)`
+are ergonomic and the LUT carries the truth. **Rejected because
+of portability and serialisation costs**:
+
+- `JSON.stringify(xform.lut)` silently drops methods. A LUT
+  serialised for cache / IndexedDB / disk loses its encoder, and
+  the deserialised LUT looks fine but `toLab()` is undefined.
+- `structuredClone()` and the worker-postMessage boundary refuse
+  functions outright (`DataCloneError`). A LUT can't cross from
+  the main thread to a worker as data, which is exactly what the
+  v1.3 throughput story wants enabled.
+- Mixing data and behaviour on the same object means every
+  consumer (samples, downstream tools, custom pipelines) needs a
+  live `Transform` instance to access the encoders. Pure-data
+  consumers can't.
+
+**3. Store the scaling values numerically on the LUT.** Preferred.
+The helpers read **plain numbers** off the LUT and do the math
+inline — no function dispatch, no version branch in the hot loop,
+fully JSON-serialisable, fully `structuredClone`-able, fully
+worker-portable.
+
+```js
+// At Transform.create() / buildLut() time, populate from the profiles.
+// Both sides recorded independently so soft-proof / device-link
+// transforms (where the input and output Lab encoding can legally
+// differ) Just Work.
+//
+// pcsVersion     = ICC profile version (2 | 4) — kept alongside the
+//                  numeric constants so a serialised LUT JSON is
+//                  human-readable on the file. Encoders/decoders
+//                  still use the numeric fields below; pcsVersion
+//                  is metadata for humans and tools, not the hot loop.
+// labNumerator   = u16 raw at L=100  (v4: 65535, v2: 65280)
+// abDenominator  = (a+128)-divisor   (v4:   255, v2:   256)
+// L denominator is implicit (100); aOffset is implicit (128).
+
+xform.lut.inLab  = inputProfile.pcs  === 'LAB'
+    ? { pcsVersion:    inputProfile.version,
+        labNumerator:  inputProfile.version  === 4 ? 65535 : 65280,
+        abDenominator: inputProfile.version  === 4 ?   255 :   256 }
+    : null;
+
+xform.lut.outLab = outputProfile.pcs === 'LAB'
+    ? { pcsVersion:    outputProfile.version,
+        labNumerator:  outputProfile.version === 4 ? 65535 : 65280,
+        abDenominator: outputProfile.version === 4 ?   255 :   256 }
+    : null;
+```
+
+A serialised LUT then carries a self-describing block that's
+obvious at a glance:
+
+```json
+"inLab":  { "pcsVersion": 4, "labNumerator": 65535, "abDenominator": 255 },
+"outLab": { "pcsVersion": 2, "labNumerator": 65280, "abDenominator": 256 }
+```
+
+You can read a cached LUT off disk and immediately tell which
+profile encoding it was built against, without having to back-
+solve from the numerator/denominator pair.
+
+The helpers then read the numbers and do the math directly — no
+`switch (version)`, no method-table indirection. They take the
+**encoding sub-object** (typically `lut.inLab` or `lut.outLab`)
+rather than the full LUT, so there's no in / out ambiguity at the
+lower layer — the caller picks the side and passes the
+corresponding tuple:
+
+```js
+// Single colour — caller passes the encoding it wants, helper does the multiply.
+function lab2Int16(L, a, b, encoding) {
+    const N = encoding.labNumerator;
+    const D = encoding.abDenominator;
+    return [
+        Math.round(L * N / 100),
+        Math.round((a + 128) * N / D),
+        Math.round((b + 128) * N / D)
+    ];
+}
+
+// Caller picks the side — same helper, different sub-object:
+const u16In  = convert.lab2Int16(L, a, b, xform.lut.inLab);   // input-side encode
+const u16Out = convert.lab2Int16(L, a, b, xform.lut.outLab);  // output-side encode
+```
+
+`N / 100` and `N / D` can be pre-computed once at LUT-build time
+and stored as `lMul` / `abMul` (and their reciprocals as
+`lInvMul` / `abInvMul` for the decode side) so the inner loop
+becomes a single multiply per channel — no division in the hot
+path. That's where the "faster and no lookup" win lands.
+
+**Bulk array helpers are intentionally not shipped.** A tight
+typed-array loop over the same scalar arithmetic is straight-line
+code and pays back more when *the developer* writes it for their
+exact buffer layout (interleaved vs planar, RGBA vs Lab-only, in-
+place vs new-allocation). Shipping `labArray2Int16Array` /
+`int16Array2LabArray` plus their input / output variants would be
+four more methods on the public surface for a use case where the
+caller already knows their best loop shape. The four scalar
+`transform.*` methods below are still useful as a ground-truth
+oracle — call `transform.outputInt162Lab(u[0], u[1], u[2])` once
+on a known sample to verify the inline loop produces the same
+floats.
+
+The same shape extends to **any encoding we'd ever care about**,
+not just v2 / v4: native u16 with a clamped L axis, custom
+high-precision device-link encodings, the eventual `int20` /
+`int24` paths if those land, even XYZ PCS — every encoding is
+just a different `(labNumerator, abDenominator, lOffset, aOffset)`
+tuple parked on the LUT. The helper code never branches; the
+numbers do all the work.
+
+For low-level callers who genuinely don't have a LUT in scope
+(custom pipelines, off-engine tooling, tests), keep an
+explicit-numbers overload as an escape hatch:
+
+```js
+const u16 = convert.lab2Int16(L, a, b, { labNumerator: 65535, abDenominator: 255 });
+const u16 = convert.lab2Int16(L, a, b, 'v4');   // shorthand → resolves to the tuple above
+const u16 = convert.lab2Int16(L, a, b, 'v2');   // shorthand → 65280 / 256
+```
+
+#### Transform-level wrappers — the ergonomic top of the API
+
+`convert.*` is the load-bearing primitive (portable, low-level,
+takes an encoding sub-object or explicit tuple). For the common
+case where the caller already has a `Transform` and wants to
+encode / decode against either side without thinking about it,
+ship four explicit wrappers on the Transform class — one per
+direction × side:
+
+```js
+// Wrappers — pure forwarders, no defaults, no inferred sides.
+// Each method names its side explicitly, so the call site reads
+// like a sentence: "encode Lab to int16 for the *input* side".
+xform.inputLab2Int16   = function(L, a, b)    { return convert.lab2Int16(L, a, b,    this.lut.inLab);  };
+xform.outputLab2Int16  = function(L, a, b)    { return convert.lab2Int16(L, a, b,    this.lut.outLab); };
+xform.inputInt162Lab   = function(uL, ua, ub) { return convert.int162Lab(uL, ua, ub, this.lut.inLab);  };
+xform.outputInt162Lab  = function(uL, ua, ub) { return convert.int162Lab(uL, ua, ub, this.lut.outLab); };
+```
+
+Why four explicit methods rather than a defaulting pair:
+
+- **Soft-proof and device-link transforms can have different Lab
+  encodings on each side.** A v2-input → v4-output device-link is
+  perfectly legal; an unprefixed `xform.lab2Int16` would have to
+  pick a "default" side and silently do the wrong thing on the
+  other one. Four explicit methods make the side a property of the
+  call, not of the library's defaulting policy.
+- **The IDE tells the story.** Typing `xform.` in a modern editor
+  surfaces all four methods grouped together; the prefixes
+  (`input` / `output`) read out loud, so the caller doesn't have
+  to remember which way the unprefixed default went.
+- **No defaulting policy to document.** The previous design had a
+  "encode reads `inLab`, decode reads `outLab`" rule that you'd
+  have to look up every time you used it. Four explicit methods
+  remove that lookup entirely.
+
+Why both layers ship:
+
+- **`convert.*` is what survives serialisation.** A LUT (or just
+  its `inLab` / `outLab` sub-object) cached to IndexedDB / disk /
+  a worker still works, because the helper just reads numeric
+  properties off the (re-hydrated) data.
+- **`Transform.*` is what's discoverable.** A user who's already
+  written `xform.transform(...)` will type `xform.` in their IDE
+  and see `inputLab2Int16` / `outputLab2Int16` /
+  `inputInt162Lab` / `outputInt162Lab` right alongside the
+  transform methods. They never need to learn about `convert.*` or
+  `xform.lut.inLab` shapes unless they hit the portable case.
+- **Hot path is the same on both.** Method dispatch on a
+  monomorphic call site lowers to the same machine code as a
+  direct `convert.*` call; the wrapper has zero runtime cost.
+
+Why this shape, summarised:
+
+- **Pure data, no functions.** `JSON.stringify`, `structuredClone`,
+  `postMessage` to a worker all work without losing the encoder.
+  A LUT cached to IndexedDB and re-loaded a session later still
+  knows how to decode itself.
+- **Faster than a version switch.** The helper compiles to a
+  straight-line multiply — V8 sees stable numeric properties on
+  a LUT object that doesn't change shape, and inlines the loads.
+  No `if (v2) ... else ...` branch in the inner loop.
+- **Caller can't pass the wrong encoding.** The LUT carries the
+  truth; the helper just reads numbers off it. Wiring a Lab
+  buffer into a v2-profile transform produces v2-encoded u16,
+  and the same call against a v4 profile produces v4-encoded
+  u16, with no code change at the call site.
+- **Symmetric for input vs output sides, no defaulting.** The
+  Transform layer ships all four explicit methods
+  (`inputLab2Int16`, `outputLab2Int16`, `inputInt162Lab`,
+  `outputInt162Lab`); the convert layer takes the encoding
+  sub-object directly. Soft-proof and device-link transforms —
+  where the source and destination Lab encoding can legally
+  differ — do the right thing because the caller (or wrapper)
+  names which side it means at the call site, not via a default
+  buried in the docs.
+- **Future-extensible.** Adding a new encoding (whether a
+  hypothetical ICC v5, a custom internal one, or a non-Lab PCS)
+  is a numeric-tuple change, not a code change.
+- **Cheap to implement.** The encoding constants already live in
+  `stage_LabD50_to_PCSv4` / `stage_LabD50_to_PCSv2` (and
+  inverses); the helpers lift those constants into `convert.*`,
+  read them off the encoding sub-object, and the four `Transform`
+  wrappers are five-line forwarders. Two scalar `convert.*`
+  functions, four scalar `Transform.*` wrappers, no bulk-array
+  surface — the whole feature is a couple of hundred lines plus
+  tests.
+
+#### Open API questions (decide before shipping)
+
+1. **Property names on the LUT.** Working names above are
+   `lut.inLab.{ pcsVersion, labNumerator, abDenominator }` (and
+   `lut.outLab.*` for the inverse). Variations worth bikeshedding:
+   - `lut.inLab` vs `lut.labEncodeIn` vs `lut.labIn` — short or
+     verb-y or symmetric-with-`outLab`?
+   - Pre-computed multipliers (`lMul`, `abMul`, `lInvMul`,
+     `abInvMul`) vs raw numerator/denominator pairs vs both? Both
+     is cheap (4 extra Number slots), keeps `pcsVersion` as the
+     human-readable label, the numerator/denominator as the
+     mathematical truth, and the multipliers as the hot-loop
+     fast path. Consumers that only care about one (humans,
+     readers, hot-loop kernels) read what they need.
+2. **What does `convert.*` accept?** Working answer: an encoding
+   sub-object (`lut.inLab` / `lut.outLab` shape — `{ pcsVersion,
+   labNumerator, abDenominator, lMul?, abMul?, lInvMul?,
+   abInvMul? }`) or a string shorthand (`'v2'` / `'v4'`) or an
+   explicit numeric tuple. *Not* the full LUT — keeping the side
+   selection out of `convert.*` is what makes the four explicit
+   `Transform.*` wrappers feel right (each one passes its specific
+   sub-object). A `Profile`-aware overload is a straight follow-on
+   if it turns out callers want to skip the Transform entirely; one
+   `typeof` check at the helper entry covers it.
+3. **What happens when the metadata is missing?** A Transform
+   built from a non-Lab profile pair has `lut.inLab = null` /
+   `lut.outLab = null`. Calling
+   `xform.inputLab2Int16(...)` (or the equivalent `convert.*`
+   call with a `null` encoding) against one of those should throw
+   with a clear "this Transform's input PCS isn't Lab — call this
+   on a Lab-PCS Transform, or use `convert.lab2Int16` with an
+   explicit encoding tuple" error, not silently default to v4.
+4. **Bulk array helpers — explicitly out of scope.** No
+   `labArray2Int16Array` / `int16Array2LabArray` (and no
+   per-side variants). The math is straight-line; developers who
+   want bulk performance can write a tight typed-array loop
+   tuned for their buffer layout, and use
+   `transform.outputInt162Lab` (etc.) as a scalar oracle to
+   validate it. Four scalar Transform methods + two `convert.*`
+   primitives is the entire surface.
+5. **Where they live** — `src/convert.js` (engine-level, exported
+   on the public `convert` namespace). Engine-level is the right
+   home — these are encoding primitives, not sample plumbing. The
+   four Transform wrappers live on the existing `Transform` class
+   prototype.
+
+#### Effort and rationale
+
+**Effort.** Small. The encoding constants already live in
+`stage_LabD50_to_PCSv4` / `stage_LabD50_to_PCSv2` /
+`stage_PCSv4_to_LabD50` / `stage_PCSv2_to_LabD50`; the helpers lift
+those constants into `convert.*` (two scalar functions —
+`lab2Int16` and `int162Lab`), add four scalar wrappers on the
+`Transform` prototype, and ship tests against the existing oracle
+(Lab round-trip through both encodings, bit-exact within
+rounding). The `lut.inLab` / `lut.outLab` numeric tuples
+(`pcsVersion`, `labNumerator`, `abDenominator`, plus pre-computed
+multipliers) are a one-step addition at Transform-build time,
+populated from `inputProfile.version` / `outputProfile.version`.
+No bulk-array surface to test, document, or maintain.
+
+**Why on the roadmap rather than shipped now.** The 16-bit LUT path
+itself is fully usable through profile transforms (Lab profiles
+just-work via the staged pipeline); these helpers are a
+convenience for callers who want to *bypass* the Transform and
+hand-feed u16 Lab buffers. That's a v1.5-class polish item, not a
+correctness gap. The LUT-bound design above is what we'd ship if
+this becomes a real-world need; the standalone-version overload is
+the escape hatch for the few callers who legitimately don't have a
+LUT in scope.
 
 ### `lcms_patch/` extraction (v1.3 follow-up)
 

@@ -53,16 +53,22 @@
 <body>
 
 <header class="topbar">
-    <div class="brand">
-        <span class="brand-mark">jsColorEngine</span>
-        <span class="brand-tag">samples</span>
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">samples</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html#demos">Samples</a>
+            <a href="/samples/bench/">Bench</a>
+        </nav>
     </div>
-    <nav class="nav">
-        <a href="index.html">Home</a>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
         <a href="live-video-softproof.html" class="is-active">Live Video</a>
         <a href="softproof.html">Soft Proof</a>
         <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
-        <a href="/bench/browser/">Bench</a>
     </nav>
 </header>
 
@@ -74,7 +80,7 @@
         &mdash; real-time video soft-proofing engine.
     </h1>
     <p class="lead" style="font-size:13px;">
-        Because somewhere, someone needs to know whether their cat video is
+        Because somewhere, someone needs to know whether their car video is
         CMYK-safe for GRACoL 2006 Coated. That person is probably not you. But the
         proof is right there that jsColorEngine is fast enough to do real time video.
     </p>
@@ -89,14 +95,15 @@
         <p class="lead" style="margin-top:8px;">
             The headline is <strong>zero hot-path cost.</strong> The
             tetrahedral interpolator doesn&rsquo;t know or care whether a
-            LUT cell carries a soft-proof RGB or a warning-stamped one
+            LUT cell carries a soft-proof RGB image or video frame
             &mdash; it just blends 8 corners. All the profile maths
             amortises into a one-time ~50&ndash;100&thinsp;ms LUT bake.
         </p>
         <p class="lead">
             Budget: 720&times;1280 @ 30&thinsp;fps =
             27.6&thinsp;MPx/s. The 3D int8 path already sits at
-            60&ndash;200&thinsp;MPx/s &mdash; plenty of slack even after
+            60&ndash;200&thinsp;MPx/s &mdash; on a mid range x64 processor,
+            plenty of slack even after
             <code>drawImage</code> round-trip overhead.
         </p>
         <p class="lead">
@@ -108,18 +115,27 @@
             normally can only show on stills, and only after a render-wait.
         </p>
         <p class="lead">
-            And this quietly demonstrates that the engine
-            is fast enough to do a genuinely silly thing at 40+ fps,
-            which is the actual sales pitch proven.
+            This is what happens when you realize you can and don't
+            stop to think if you should. This quietly demonstrates that the
+            engine is fast enough to do a genuinely silly thing at 40+ fps
+            just because it can.
         </p>
     </details>
     <p class="muted" style="margin-top:8px;">
-        Video by Norberto Navarro Valiente from Pixabay &middot; 720&times;1280
+        Pick a sample clip in the controls; attribution is shown there.
     </p>
 </section>
 
 <section class="card">
     <div class="controls">
+        <label>
+            Sample video
+            <select id="videoSelect">
+                <option value="video/sample1.mp4" selected>Colourful</option>
+                <option value="video/sample2.mp4">Car</option>
+                <option value="video/sample3.mp4">Autumn</option>
+            </select>
+        </label>
         <label>
             CMYK Profile
             <select id="profileSelect">
@@ -144,6 +160,7 @@
         <input type="checkbox" id="lockFps" style="display:none">
         <span id="statusText" class="timing-inline"></span>
     </div>
+    <p class="muted" style="margin-top:12px;" id="videoAttribution"></p>
 </section>
 
 <section class="card">
@@ -152,9 +169,7 @@
             <div class="panel-head">
                 <span class="engine-name">Original sRGB</span>
             </div>
-            <video id="srcVideo" muted loop playsinline preload="auto">
-                <source src="video/sample.mp4" type="video/mp4">
-            </video>
+            <video id="srcVideo" muted loop playsinline preload="auto"></video>
         </div>
         <div>
             <div class="panel-head">
@@ -233,7 +248,7 @@
     <span>
         <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
         &middot;
-        <a href="/bench/browser/">Bench</a>
+        <a href="/samples/bench/">Bench</a>
     </span>
 </footer>
 
@@ -252,7 +267,23 @@
     const proofTiming = document.getElementById('proofTiming');
     const profileSel  = document.getElementById('profileSelect');
     const intentSel   = document.getElementById('intentSelect');
+    const videoSel    = document.getElementById('videoSelect');
+    const videoAttrEl = document.getElementById('videoAttribution');
     const lockFpsCb   = document.getElementById('lockFps');
+
+    const VIDEO_CREDIT = {
+        'video/sample1.mp4': 'Colourful &mdash; Video by Norberto Navarro Valiente from Pixabay',
+        'video/sample2.mp4': 'Car &mdash; Video by MD RONI ISLAM from Pixabay',
+        'video/sample3.mp4': 'Autumn &mdash; Video by Robert from Pixabay',
+    };
+
+    function setVideoSource() {
+        const url = videoSel.value;
+        if (running) stop();
+        video.src = url;
+        video.load();
+        videoAttrEl.innerHTML = VIDEO_CREDIT[url] || '';
+    }
 
     const hasVFC = typeof HTMLVideoElement !== 'undefined' &&
                    'requestVideoFrameCallback' in HTMLVideoElement.prototype;
@@ -327,7 +358,7 @@
 
         const t = new Transform({ buildLut: true, dataFormat: 'int8' });
         const t0 = performance.now();
-        t.createMultiStage([srgb, intent, cmyk, intent, srgb]);
+        t.createMultiStage([srgb, intent, cmyk, eIntent.relative, srgb]);
         const lutMs = performance.now() - t0;
 
         transform = t;
@@ -480,6 +511,9 @@
     }
     profileSel.addEventListener('change', rebuildIfRunning);
     intentSel.addEventListener('change', rebuildIfRunning);
+    videoSel.addEventListener('change', setVideoSource);
+
+    setVideoSource();
 
 })();
 </script>

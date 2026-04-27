@@ -3,21 +3,24 @@
 **A fast, accurate ICC colour-management engine for JavaScript — 100 %
 native JS, zero dependencies, optional WASM for the hot path.**
 
-Live demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/>**
+Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/>**
 
-- **Fast.** Over **200 million pixels per second** — roughly **25
-  4K images per second** on a single CPU thread with WASM SIMD
-  enabled. Hot-path kernels hand-tuned for V8 / SpiderMonkey / JSC;
-  optional WebAssembly (scalar + SIMD) kernels for the image path.
+- **Fast.** Over **210 MPx/s on x86_64** and up to **270 MPx/s on
+  Apple Silicon (M4)** — roughly **25–32 4K images per second** on a
+  single CPU thread with WASM SIMD enabled. Hot-path kernels
+  hand-tuned for V8 / SpiderMonkey / JSC; optional WebAssembly
+  (scalar + SIMD) kernels for the image path. The wider ARM register
+  file lifts the **4D CMYK paths by ~65 %** over x86_64 — see
+  [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
   **Faster than steelmanned native C LittleCMS on 3 of 4 image
   workflows in pure JavaScript** (same hardware, same profile,
   same compiler, lcms2 built with every optimisation flag short of
-  PGO — see [Speed](#speed)).
+  PGO — see [Speed](#speed)).<br><br>
 - **Accurate.** **LUT-free mode** (`buildLut: false`) — every pixel
   walks the full f64 pipeline, no LUT quantisation, no rounding
   short-cuts. For colour-critical / prepress / proof / measurement
   work where ΔE matters more than MPx/s. Available on both APIs.
-  See [Accuracy](#accuracy).
+  See [Accuracy](#accuracy).<br><br>
 - **Fully-featured CMS.** Everything you'd expect from a mature
   colour-management library: RGB, CMYK, Lab, XYZ, and 3CLR/4CLR
   device spaces; ICC v2 and v4 profile loading (LUT-based **and**
@@ -26,15 +29,15 @@ Live demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/
   trilinear / tetrahedral interpolation; multi-step transforms;
   custom pipeline stages spliced in at PCS; ΔE76 / ΔE2000 helpers;
   and spectral / illuminant maths for measurement workflows. See
-  [Features at a glance](#features-at-a-glance).
+  [Features at a glance](#features-at-a-glance).<br><br>
 - **Runs everywhere JavaScript does.** Node, browsers, Electron,
   web workers, React Native (with a Buffer polyfill). No native
-  bindings, no compile step, no platform-specific binaries.
+  bindings, no compile step, no platform-specific binaries.<br><br>
 - **Two APIs, one `Transform`.** `transform(colorObj)` for single
   colours (µs/call, always LUT-free). `transformArray(typedArray)`
-  for bulk — pre-baked LUT at 45–210 MPx/s, or LUT-free f64 when
-  you need accuracy over throughput. See
-  [Two paths, one Transform](#two-paths-one-transform).
+  for bulk — pre-baked LUT at **45–270 MPx/s** (x86_64 → Apple
+  Silicon), or LUT-free f64 when you need accuracy over throughput.
+  See [Two paths, one Transform](#two-paths-one-transform).
 
 ### Why compare against LittleCMS?
 
@@ -63,7 +66,10 @@ be fast enough. The numbers below are all measured on the same
 hardware, in the same session, with the same input bytes.
 
 - **~1.5–2.1× faster than `lcms-wasm`** on pure JS,
-  **~4.5–6.5× with WASM SIMD** enabled.
+  **~3.2–5.7× with WASM SIMD on x86_64** and **~3.2–6.4× on Apple
+  Silicon (M4)** — top of range on the 4D CMYK paths, where the
+  larger ARM register file widens the gap further (lcms-wasm stays
+  scalar on either CPU).<br><br>
 - **Beats steelmanned native C LittleCMS on 3 of 4 image workflows
   in pure JavaScript** on the same hardware (1.04×, 0.93×, 1.49×,
   1.40× for RGB→Lab, RGB→CMYK, CMYK→RGB, CMYK→CMYK respectively).
@@ -71,7 +77,7 @@ hardware, in the same session, with the same input bytes.
   -funroll-loops -flto` — every compiler trick short of PGO — so the
   comparison isn't a strawman. Enable the WASM SIMD default and we
   win all four by **2–5×**. Full measured table in
-  [docs/Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
+  [docs/Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).<br><br>
 - **Faithful float-precision peer of LittleCMS.** jsCE's float
   pipeline matches lcms2 native f64 to **≤ 0.06 ΔE76 (Lab) / ≤ 1.24
   LSB (RGB) / ≤ 0.04 % ink (CMYK)** across 130 reference files and
@@ -79,11 +85,11 @@ hardware, in the same session, with the same input bytes.
   on 98.5–100 % of samples** vs `lcms-wasm`. Both validation harnesses
   ship in the repo. Methodology and the one documented outlier are
   in [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md). See
-  [Accuracy](#accuracy).
+  [Accuracy](#accuracy).<br><br>
 - **No WASM required, no native bindings, no compile step.** The
   pure-JS kernels already beat `lcms-wasm` on every direction; WASM
   scalar and WASM SIMD modes are opt-in toppings that demote cleanly
-  on hosts that don't support them.
+  on hosts that don't support them.<br><br>
 - **~1.9× smaller over the wire.** ~267 KB raw / ~68 KB gzip / ~53
   KB brotli in a single JS file, including virtual profiles,
   spectral data, the full ICC v2/v4 decoder, **and 8 inline base64
@@ -105,16 +111,15 @@ hardware, in the same session, with the same input bytes.
 
 Every MPx/s number in this README and in
 [docs/Performance.md](./docs/Performance.md) was measured with
-the in-browser bench at [`bench/browser/`](./bench/browser/)
-([live](https://www.o2creative.co.nz/jscolorengine/bench/browser/)).
+the in-browser bench at [`samples/bench/`](./samples/bench/)
+([live sample demos including real time video soft proofing demo no one asked for](https://www.o2creative.co.nz/jscolorengine/samples/bench/)).
 It runs every `lutMode` against the real `lcms-wasm` library, on *your*
 hardware, in *your* browser — zero upload, zero telemetry, everything
 runs locally.
 
 ```bash
-npm run browser                                       # build the UMD bundle (once)
-cd bench/lcms-comparison && npm install && cd ../..   # one-time, enables lcms rows
-npm run bench:browser                                 # open http://localhost:8080/
+npm run browser   # build the UMD bundle (once)
+npm run serve     # samples + browser bench on :8080 — see /samples/ and /samples/bench/
 ```
 
 The bench has five tabs: Full comparison (every direction × every
@@ -127,12 +132,17 @@ See **[docs/Bench.md](./docs/Bench.md)** for the full guide, the
 methodology notes, and the submission template if your numbers
 disagree with ours.
 
-> Benchmarks quoted here were measured on one developer machine
-> (Node 20, V8, x64). Ratios (1.5× over lcms-wasm, 3.25× for WASM SIMD
-> over plain JS) should be stable across x64; absolute MPx/s will move
-> with your CPU. User-submitted results on other OSes / CPUs /
-> browsers are welcome — **and methodology critiques are equally
-> welcome**; if we're measuring wrong we'd rather hear about it.
+> Benchmarks quoted here were measured on **two reference machines**:
+> a developer Windows box (Node 20, V8, x86_64) and an Apple M4 Mac
+> mini in Chrome 147. Ratios (1.5× over lcms-wasm in pure JS, 3.25×
+> for WASM SIMD over plain JS on x86_64, ~1.4–1.6× ARM lift on top of
+> that for the WASM tiers) should be stable across like CPUs;
+> absolute MPx/s will move with your hardware. The per-architecture
+> comparison is in
+> [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
+> User-submitted results on other OSes / CPUs / browsers are welcome
+> — **and methodology critiques are equally welcome**; if we're
+> measuring wrong we'd rather hear about it.
 
 A lot of the core concepts are lifted from LittleCMS. This is **not**
 a port — the implementation is independent, written for how a JIT
@@ -169,7 +179,7 @@ right one matters more than any other choice you'll make.
 | Use case | API | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calculations, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` | 45–210 MPx/s on a desktop CPU | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Image / array processing** | `transform.transformArray(typedArray, ...)` | 45–210 MPx/s on x86_64, up to 270 MPx/s on Apple Silicon | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
 
 Both live on the same `Transform` object — you pick which by calling
 `transform()` or `transformArray()`, and by passing `{buildLut: true}`
@@ -592,18 +602,27 @@ prepress calcs, anything converting tens to hundreds of colours at a
 time.
 
 For image work: build a LUT (`new Transform({buildLut: true})`) and
-use `transformArray()`. Headline throughput on Node 20 / V8 / x64,
-GRACoL2006 CMYK profile, 65 K pixels per iter, median of 5 × 100
-iters:
+use `transformArray()`. Headline throughput, GRACoL2006 + AdobeRGB1998,
+65 K pixels per iter, hot-median across 5 batches — **measured on two
+reference machines** (Node 20 / V8 / x86_64 *and* Apple M4 Mac mini /
+Chrome 147):
 
-**8-bit I/O** (`dataFormat: 'int8'`)
+**8-bit I/O** (`dataFormat: 'int8'`) — `'int-wasm-simd'` per architecture
 
-| Workflow | `'int'` (u16, JS) | `'int-wasm-scalar'` | `'int-wasm-simd'` | FPS @ 1080p (SIMD)† |
+| Workflow | `'int'` (u16, JS, x86_64) | `'int-wasm-scalar'` (x86_64) | `'int-wasm-simd'` **x86_64** | `'int-wasm-simd'` **Apple M4** |
 |---|---|---|---|---|
-| RGB → RGB   (sRGB → AdobeRGB) | 72 MPx/s | ~101 MPx/s | **~234 MPx/s** | **113 fps** |
-| RGB → CMYK  (sRGB → GRACoL)   | 62 MPx/s | ~87 MPx/s  | **~210 MPx/s** | **101 fps** |
-| CMYK → RGB  (GRACoL → sRGB)   | 59 MPx/s | ~72 MPx/s  | **~125 MPx/s** | **60 fps** |
-| CMYK → CMYK (GRACoL → GRACoL) | 49 MPx/s | ~60 MPx/s  | **~125 MPx/s** | **60 fps** |
+| RGB → RGB   (sRGB → AdobeRGB) | 72 MPx/s | ~101 MPx/s | **~216 MPx/s** | **269 MPx/s** |
+| RGB → CMYK  (sRGB → GRACoL)   | 62 MPx/s | ~87 MPx/s  | **~210 MPx/s** | **258 MPx/s** |
+| CMYK → RGB  (GRACoL → sRGB)   | 59 MPx/s | ~72 MPx/s  | **~128 MPx/s** | **211 MPx/s** |
+| CMYK → CMYK (GRACoL → GRACoL) | 49 MPx/s | ~60 MPx/s  | **~128 MPx/s** | **210 MPx/s** |
+
+The 3D paths gain ~25 % going from x86_64 to ARM64; the **4D CMYK
+paths gain ~65 %**. That asymmetry is the register-pressure
+prediction in [JIT inspection](./docs/deepdive/JitInspection.md#implications-for-future-work)
+landing exactly where it was filed: 4D was GPR-saturated on x86, ARM64
+(31 GPRs vs 11 allocatable) frees the spill traffic. Full per-mode
+table — including the same lift on JS `int` and WASM scalar — in
+[Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
 
 **16-bit I/O** (`dataFormat: 'int16'`, v1.3 — Chrome 147 / x86_64,
 65 K pixels/iter, vs `lcms-wasm` 16-bit best for context)
@@ -618,12 +637,15 @@ iters:
 The three u16 kernels are bit-exact against each other; SIMD is
 ~3.9–4.9× faster than `lcms-wasm` 16-bit on every workflow.
 
-<small>† FPS @ 1080p is 1920×1080 = 2.07 MPx/frame, single-threaded.
-Nobody's recommending CMYK video, and "frames per second" is a silly
-unit for a colour-management library, but it gives a usable mental
-model of how much headroom the engine has for everyday image work.
-RGB → RGB at 113 fps means a 4K still image (8.3 MPx) finishes in
-~35 ms single-thread.</small>
+<small>† **Image-work mental model.** A 1080p frame is 1920×1080 ≈
+2.07 MPx; a 4K still is 8.3 MPx. So 269 MPx/s on M4 RGB → RGB is
+~130 fps at 1080p, or a 4K still in ~31 ms single-thread. 210 MPx/s
+on x86_64 RGB → CMYK is ~101 fps at 1080p. Nobody's recommending
+CMYK video, and "frames per second" is a silly unit for a
+colour-management library, but it gives a usable mental model of how
+much headroom the engine has for everyday image work. ([Update: we
+actually built a live demo of real-time soft-proofing of HD video in
+your browser](https://www.o2creative.co.nz/jscolorengine/samples/live-video-softproof.html)).
 
 ### vs native C LittleCMS — same hardware, same session
 
@@ -689,15 +711,23 @@ install: [`bench/lcms_c/README.md`](./bench/lcms_c/README.md).
   [Performance.md §4](./docs/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
 - **Enabling WASM SIMD triples the 3D throughput over JS `'int'`**
   (range 2.94–3.50×), bit-exact. 4D kernels (CMYK input) land 2.04–
-  2.57× over JS `'int'` — limited by per-pixel scalar prologue,
-  not the SIMD body. On hosts without v128, the dispatcher demotes to
-  WASM scalar, then to JS `'int'`, then to `'float'`; code doesn't
-  change.
-- **Ratios are stable across x64 machines; absolute numbers aren't.**
+  2.57× over JS `'int'` on x86_64 — limited by per-pixel scalar
+  prologue, not the SIMD body. On hosts without v128, the dispatcher
+  demotes to WASM scalar, then to JS `'int'`, then to `'float'`;
+  code doesn't change.
+- **Apple Silicon (M4) runs ~1.4–1.6× faster than x86_64 at every
+  tier** — pure JS `'int'`, WASM scalar, *and* WASM SIMD — because
+  ARM64's 31 GPRs (vs ~11 allocatable on x86-64) erase the spill
+  traffic that dominates the kernels on x86. The biggest lift lands
+  on the **4D CMYK paths** (+65 %), which is exactly the prediction
+  the [JIT-inspection deep-dive](./docs/deepdive/JitInspection.md#implications-for-future-work)
+  was filed against — see [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
+  for the full table.
+- **Ratios are stable across like CPUs; absolute numbers aren't.**
   JS engines (V8, SpiderMonkey, JSC) schedule the hot loops
   differently and their optimisers evolve between releases. Treat
   the numbers above as a guide, not a contract. Run the in-browser
-  bench (`node bench/browser/serve.js`) on your own machine.
+  bench (`npm run serve`) on your own machine.
 
 Full benchmark methodology, the 15 % JIT-deletable-by-WASM analysis,
 the lcms-wasm comparison table, the "we measured" vs "we predicted"
@@ -727,8 +757,10 @@ custom pipeline stages at PCS, are in
 
 ### Live demos
 
-Self-contained HTML demos ship in `samples/` and are hosted at
-**<https://www.o2creative.co.nz/jscolorengine/samples/>**:
+Self-contained HTML demos ship in `samples/`. The site entry is
+**<https://www.o2creative.co.nz/jscolorengine/samples/>** (project landing);
+the demo index and setup notes are on
+**[samples.html](https://www.o2creative.co.nz/jscolorengine/samples/samples.html)**.
 
 - **[Live Video Soft Proof](https://www.o2creative.co.nz/jscolorengine/samples/live-video-softproof.html)**
   — real-time video colour management. Every frame decoded and soft-proofed
@@ -741,7 +773,7 @@ Self-contained HTML demos ship in `samples/` and are hosted at
   — pixel-by-pixel accuracy comparison with amplified diff slider (up to
   128×), CMYK + RGB stats, speed ratio.
 
-Run locally with `npm run samples:browser` — see
+Run locally with `npm run serve` — see
 [docs/Samples.md](./docs/Samples.md) for setup.
 
 ---
@@ -797,7 +829,7 @@ everyday colour management. Things outside that scope:
 
 | Page | What it covers |
 |---|---|
-| **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide ([live](https://www.o2creative.co.nz/jscolorengine/bench/browser/)) |
+| **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide ([live](https://www.o2creative.co.nz/jscolorengine/samples/bench/)) |
 | **[Deep dive](./docs/deepdive/)** | How it works, why it's fast — pipeline model, lutMode internals, JIT inspection, WASM kernel design |
 | **[Performance](./docs/Performance.md)** | Benchmark numbers, discoveries in the journey, lcms comparison |
 | **[Samples](./docs/Samples.md)** | Live demos — video soft-proof, image soft-proof, jsCE vs lcms-wasm comparison ([live](https://www.o2creative.co.nz/jscolorengine/samples/)) |
@@ -827,7 +859,7 @@ give the same numbers without opening a browser:
 
 ```bash
 # In-browser comparison UI vs lcms-wasm — opens localhost:8080
-npm run bench:browser
+npm run serve
 
 # Headless: headline throughput through the shipped dispatcher, all four lutModes
 node bench/mpx_summary.js

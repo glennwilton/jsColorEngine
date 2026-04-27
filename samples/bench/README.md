@@ -3,7 +3,7 @@
 A fully self-contained, zero-upload, in-browser benchmark for
 jsColorEngine. Runs every `lutMode` against the real `lcms-wasm`
 library directly in your browser. Clone the repo, start a static
-server, open `localhost:8080/`, and you've reproduced the numbers
+server, open <http://localhost:8080/samples/bench/>, and you've reproduced the numbers
 in [`../../docs/Performance.md`](../../docs/Performance.md) on your
 own hardware.
 
@@ -17,12 +17,15 @@ source layout only.
 From the repo root:
 
 ```sh
-npm run browser                                       # build UMD bundle (once)
-cd bench/lcms-comparison && npm install && cd ../..   # one-time, enables lcms rows
-npm run bench:browser                                 # or: node bench/browser/serve.js
+npm run browser   # build UMD bundle (once)
+npm run serve     # samples/ + bench/ on :8080  (or: node samples/bench/serve.js for bench only)
 ```
 
-Then open <http://localhost:8080/>. Stop with `Ctrl+C`.
+Ensure `samples/lcms-wasm-dist/` contains `lcms.js` + `lcms.wasm` (vendored from
+the lcms-wasm package) and `samples/profiles/` has `CoatedGRACoL2006.icc` +
+`AdobeRGB1998.icc`.
+
+Then open <http://localhost:8080/samples/bench/>. Stop with `Ctrl+C`.
 
 ## Source layout
 
@@ -74,4 +77,4 @@ Full table = 4 directions × (8 jsCE modes + 6 lcms-wasm flag/width combos) = **
 
 ## Stopping the server
 
-`Ctrl+C` in the terminal running `node bench/browser/serve.js`.
+`Ctrl+C` in the terminal running `npm run serve` (or `node samples/bench/serve.js`).

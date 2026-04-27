@@ -30,7 +30,8 @@ and the explicit list of what's deliberately missing.
 | [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame decoded and run through a full ICC sRGB → CMYK → sRGB pipeline via a pre-built 3D CLUT — in real time. Pure JS, no WASM (for the transform), no WebGL, no workers. 40+ fps on 720p. |
 | [`softproof.html`](../samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + render the C / M / Y / K plates as tinted previews. Floating colour picker with Lab, sRGB, CMYK, Delta E 2000 and Delta E 76. Shows `toProof`, `toSeparation`, `renderChannelAs`, `pixel()`, intent + BPC controls. |
 | [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm comparison. Same image, same profile, same pipeline — pixel-by-pixel diff visualisation with logarithmic gain slider (up to 128×), signed RGB mode, CMYK + RGB accuracy stats, speed ratio. |
-| [`index.html`](../samples/index.html) | Ready | Landing page with demo index and setup instructions. |
+| [`index.html`](../samples/index.html) | Ready | Project landing page (overview; links to samples and bench). |
+| [`samples.html`](../samples/samples.html) | Ready | Sample hub with demo index, local run instructions, and `ICCImage` links. |
 
 ### Planned demos (from [Roadmap §v1.4](./Roadmap.md))
 
@@ -46,8 +47,10 @@ demos load via a `<script>` tag (it exposes `window.jsColorEngine`).
 
 ```bash
 npm run browser          # rebuild browser/jsColorEngineWeb.js
-npm run samples:browser  # start dev server on :8080
-# then open http://localhost:8080/samples/
+npm run serve  # start dev server on :8080 (samples + browser bench)
+# then open http://localhost:8080/samples/  (landing)
+#    demos index: http://localhost:8080/samples/samples.html
+#    bench: http://localhost:8080/samples/bench/
 ```
 
 For the soft-proof and comparison demos, drop one or more CMYK ICC profiles

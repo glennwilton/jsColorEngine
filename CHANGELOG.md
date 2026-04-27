@@ -7,6 +7,86 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.4.1] — 2026-04-27
+
+Patch release: sample and helper fixes for soft-proof pipelines.
+
+### Fixed — Soft-proof “reverse” leg (CMYK → preview sRGB)
+
+This is what happens when you are so excited about your video demo you forget to check your homework. The CMYK → sRGB pass that drives on-screen preview must use **relative
+colorimetric** intent only. Applying the user-selected proof intent
+(perceptual, saturation, etc.) on both RGB → CMYK and CMYK → sRGB
+**double-applies** gamut handling and is not how separation preview
+is meant to behave.
+
+- **`samples/iccimage.js` — `ICCImage.toProof()`** — When `intent` or
+  `BPC` is passed as a single value, the second leg now defaults to
+  **relative colorimetric** and **no black-point compensation**;
+  the first leg still receives the caller’s intent and BPC. Explicit
+  two-element arrays still override per leg. **`toCanvas()`** was
+  already relative-only for non-sRGB profiles; unchanged.
+
+### Fixed — Sample demos aligned with the above
+
+- **`samples/softproof-vs-lcms.html`** — lcms-wasm: second transform
+  uses `INTENT_RELATIVE_COLORIMETRIC` and high-res precalc only (no
+  BPC on the preview transform). jsCE path uses `toProof()` defaults.
+- **`samples/softproof.html`** — `toProof()` uses the same intent /
+  BPC defaults as the helper (explicit per-leg arrays removed as
+  redundant).
+- **`samples/live-video-softproof.html`** — `createMultiStage` chain
+  already ended with `eIntent.relative` before sRGB; unchanged, now
+  documented as the reference pattern alongside the other demos.
+
+### Changed — Interactive bench moved under `samples/`
+
+- Moved the browser interactive bench from `bench/browser` to
+  `samples/bench` so sample pages are self-contained in one tree.
+- Updated sample/bench references and navigation links accordingly,
+  including the samples landing flow.
+
+### Fixed — Bench engine-info panel: lcms scalar build wrongly shown as a warning
+
+- **`samples/bench/main.js`** — when lcms-wasm loads, the `info-lcms`
+  cell now stays **green** regardless of whether the shipped lcms.wasm
+  is a SIMD or scalar build. Previously a stock (scalar) build painted
+  the cell amber, which read like a host SIMD problem when in fact
+  jsCE's own SIMD kernels were running fine on the same host.
+- The build tag changed from `scalar build (no -msimd128)` to
+  `stock scalar build` — informational, not a deficiency. About-this-
+  bench copy in `samples/bench/index.html` and `docs/Bench.md` reworded
+  to match.
+
+### Added — ARM64 / Apple Silicon (M4) measurement
+
+- **`docs/Performance.md` § 2.6** — new section with measured M4
+  Mac mini numbers (Chrome 147, browser bench): SIMD 3D paths
+  +25 % over x86_64, **SIMD 4D paths +65 %**. The `int-wasm-scalar`
+  and pure-JS `int` tiers gain the same ~1.4–1.6×, confirming the
+  global register-pressure win predicted in the JIT-inspection
+  deep-dive months earlier (31 ARM64 GPRs vs ~11 allocatable on
+  x86-64).
+- **`docs/deepdive/JitInspection.md`** — “Implications for future
+  work” updated: the “measure on M1/M4” experiment is now a
+  measured result, with the spill-vanishes-on-ARM hypothesis
+  confirmed and cross-linked back to Performance § 2.6.
+- **`docs/Bench.md`** — caveats list calls out the ~1.4–1.6× ARM
+  lift so M-series users aren’t surprised when their numbers run
+  ahead of the x86 headline table.
+- **`README.md`** — headline “Fast” bullet, lcms-wasm comparison
+  bullet, “Two paths” summary, bench caveat, **and the 8-bit Speed
+  table** all now show x86_64 + Apple M4 side-by-side. New “Apple
+  Silicon (M4) runs ~1.4–1.6× faster” bullet in the Speed key
+  takeaways.
+
+### Release note — GitHub-only update
+
+- This `1.4.1` release is for the GitHub source/docs/samples path.
+  npm packages do not ship `samples/`, so these demo updates are not
+  distributed via npm.
+
+---
+
 ## [1.4.0] — 2026-04-26
 
 The showcase release. v1.3 banked the performance story (158 MPx/s

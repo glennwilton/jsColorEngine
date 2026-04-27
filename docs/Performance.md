@@ -48,6 +48,7 @@ roadmap at the bottom.
     - [2.3 WASM scalar — the predicted 1.4× landed](#23-wasm-scalar--the-predicted-14-landed)
     - [2.4 WASM SIMD 3D — channel-parallel was the right axis](#24-wasm-simd-3d--channel-parallel-was-the-right-axis)
     - [2.5 WASM 4D — hoisted prologue + flag-gated K-plane loop](#25-wasm-4d--hoisted-prologue--flag-gated-k-plane-loop)
+    - [2.6 ARM64 / Apple Silicon — the register-pressure prediction landed](#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
     - [Reproducing every number on this page](#reproducing-every-number-on-this-page)
 - [3. Discoveries in the journey](#3-discoveries-in-the-journey)
     - [3.1 lcms-wasm RGB→RGB is a no-op — a benchmarking trap](#31-lcms-wasm-rgbrgb-is-a-no-op--a-benchmarking-trap)
@@ -426,6 +427,89 @@ output mode. That's the v1.3 hook (§5).
 for the flag-gated loop structure, the i32x4 K-LERP derivation, and
 the three design wins that made 4D SIMD actually beat scalar.
 
+### 2.6 ARM64 / Apple Silicon — the register-pressure prediction landed
+
+**What we did.** [Deep-dive / JIT inspection](./deepdive/JitInspection.md#implications-for-future-work)
+predicted that ARM64 — 31 GPRs vs x86-64's effective 11 allocatable —
+would all but erase the spill traffic that dominates the kernels (36–53 %
+of every mov on x64 is a stack reload, see § 2.1). The 4D paths in
+particular were predicted to win the most because they're the ones
+saturating the GPR file at 4-axis bookkeeping.
+
+We finally got an M-series box to verify on. **Apple M4 Mac mini, Chrome
+147, browser bench (`samples/bench/`), 65 K pixels/iter, GRACoL2006 +
+AdobeRGB1998, hot-median across 5 batches.** Reproducible by anyone with
+an M-series Mac and the bench page.
+
+**What we found.** Headline `int-wasm-simd` (the v1.2 default), x86_64
+Win/Node baseline (§ 1) vs M4:
+
+| Direction       | x86_64 SIMD¹ | **M4 SIMD** | M4 / x86 |
+|-----------------|-------------:|------------:|---------:|
+| RGB → RGB  (3D) | ~216 MPx/s   | **269 MPx/s** | 1.25× |
+| RGB → CMYK (3D) | ~210 MPx/s   | **258 MPx/s** | 1.23× |
+| CMYK → RGB (4D) | ~128 MPx/s   | **211 MPx/s** | **1.65×** |
+| CMYK → CMYK(4D) | ~128 MPx/s   | **210 MPx/s** | **1.64×** |
+
+<small>¹ x86_64 numbers are the v1.2 figures from §1's headline table
+(Win x64 / Node 20). M4 numbers are the same workload via the browser
+bench, so the comparison is approximate (Chrome's V8 build vs Node's,
+slightly different JIT vintage), but the **shape** of the ARM lift is
+what the deep-dive predicted.</small>
+
+The 3D paths gain ~25 %, the 4D paths gain ~65 %. That asymmetry is the
+prediction landing exactly where it was filed: 3D never spilled badly to
+begin with (~47 % of its moves were spills, but the kernel ran fine);
+4D was register-saturated and is the one ARM64 was supposed to rescue.
+**It did.** Both 4D directions are now within 25 % of the 3D directions
+on M4 — on x86_64 they were a flat 60 % behind.
+
+The same ARM lift shows up at every tier of the ladder, not just SIMD:
+
+| Direction       | mode                    | x86_64¹ | **M4** |
+|-----------------|-------------------------|--------:|------:|
+| RGB → RGB  (3D) | jsce JS `int`           | ~72     | **108** |
+| RGB → RGB  (3D) | jsce `int-wasm-scalar`  | ~99     | **165** |
+| CMYK → CMYK(4D) | jsce JS `int`           | ~49     | **68**  |
+| CMYK → CMYK(4D) | jsce `int-wasm-scalar`  | ~60     | **95**  |
+| CMYK → CMYK(4D) | jsce no-LUT (f64)       | ~3.8    | **7.6** |
+
+The ratio is ~1.4–1.6× across pure-JS, WASM scalar, *and* the no-LUT
+f64 pipeline — not just SIMD. That's the signature of a global register-
+pressure win, not a SIMD-specific one. **V8's ARM64 backend gets to use
+the wider register file regardless of which numerical domain the kernel
+is in**; the same lift carries through every mode.
+
+**vs lcms-wasm on the same M4 run** (image LUT path, jsce SIMD vs lcms
+best):
+
+| Direction       | M4 jsce SIMD | M4 lcms best | speedup |
+|-----------------|-------------:|-------------:|--------:|
+| RGB → RGB       | 269 MPx/s    | 136 (HIGHRES) | 1.98× |
+| RGB → CMYK      | 258 MPx/s    | 81  (default) | 3.19× |
+| CMYK → RGB      | 211 MPx/s    | 37  (HIGHRES) | **5.7×** |
+| CMYK → CMYK     | 210 MPx/s    | 33  (HIGHRES) | **6.4×** |
+
+The CMYK speedups are bigger here than on x86_64 (~4–5×) because lcms
+stays scalar on either CPU (`stock scalar build`, no `-msimd128`) while
+jsCE benefits from the same ARM register-pressure lift on top of SIMD.
+That's structural — it's not lcms doing anything wrong, it's that the
+two engines diverge more on a register-rich CPU than a register-poor
+one.
+
+**Implication for the roadmap.** The deep-dive's open question
+("how much of our current cost is x86-specific") now has a number on
+it: roughly 25 % of the SIMD 3D budget and **40 % of the SIMD 4D
+budget** is x86-register-pressure tax. Future JS-level spill experiments
+(load `c0/c1/c2` just-in-time per channel, narrow CLUT-read live ranges
+— see [JitInspection.md](./deepdive/JitInspection.md#implications-for-future-work))
+are now provably most worth running against the **x86 baseline**, since
+the ARM CPUs already extract that headroom for free.
+
+**→ See [deep-dive / JIT inspection — implications for future work](./deepdive/JitInspection.md#implications-for-future-work)**
+for the original prediction (Apr 2026, pre-measurement) and the
+spill-counter walkthrough that produced it.
+
 ### Reproducing every number on this page
 
 All the benches are shipped. Node 20 and a standard install, no extra
@@ -461,7 +545,7 @@ node bench/wasm_poc/tetra4d_nch_run.js
 node bench/wasm_poc/tetra4d_simd_run.js
 
 # In-browser comparison vs lcms-wasm (§4) — opens a UI at localhost:8080
-node bench/browser/serve.js
+npm run serve
 ```
 
 If your numbers differ meaningfully from the tables above, we want to
@@ -1240,7 +1324,7 @@ sRGB, `bench/int16_poc/bench_int16_simd_vs_scalar.js`):**
 | CMYK → RGB   (GRACoL → LabD50) | 50           | 56                  | **129**               | 26             | 2.30×          | 4.89×        |
 | CMYK → CMYK  (GRACoL → GRACoL) | 41           | 49                  | **117**               | 24             | 2.40×          | 4.84×        |
 
-The browser numbers (Chrome 147, x86_64, [`bench/browser/`](./Bench.md))
+The browser numbers (Chrome 147, x86_64, see [docs/Bench.md](./Bench.md))
 land in the same band — see the roadmap retrospective for the
 side-by-side jsCE / lcms-wasm / lcms-wasm-16 table. The point is
 the same in either harness: the SIMD u16 kernel wins on every

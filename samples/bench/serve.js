@@ -1,5 +1,5 @@
 /*
- * bench/browser/serve.js
+ * samples/bench/serve.js
  * ======================
  *
  * Tiny zero-dependency static HTTP server for the browser bench.
@@ -11,19 +11,23 @@
  *   - jsColorEngine's Profile.loadURL() uses XHR/fetch
  *
  * Usage:
- *   node bench/browser/serve.js              # default port 8080
- *   node bench/browser/serve.js --port=9000  # custom port
+ *   node samples/bench/serve.js              # default port 8080
+ *   node samples/bench/serve.js --port=9000  # custom port
  *
  * The server's document root is the repo root, so relative URLs like
  *   /browser/jsColorEngineWeb.js
- *   /bench/lcms-comparison/node_modules/lcms-wasm/dist/lcms.wasm
- *   /__tests__/GRACoL2006_Coated1v2.icc
+ *   /samples/lcms-wasm-dist/lcms.wasm
+ *   /samples/profiles/CoatedGRACoL2006.icc
  * all resolve naturally without any copying or symlinking.
+ *
+ * Prefer the unified dev server (same port for samples + bench):
+ *   npm run serve
  *
  * Pre-flight checks:
  *   - browser/jsColorEngineWeb.js exists  (built via `npm run browser`)
- *   - lcms-wasm package present           (installed via the bench/lcms-comparison sub-package)
- * The script prints a friendly error pointing at the fix if either is missing.
+ *   - samples/lcms-wasm-dist/lcms.js + lcms.wasm
+ *   - samples/profiles/CoatedGRACoL2006.icc and AdobeRGB1998.icc
+ * The script prints a friendly error pointing at the fix if any is missing.
  */
 
 'use strict';
@@ -82,29 +86,29 @@ function preflight() {
             '                (production UMD bundle)\n' +
             '  or for dev:   npm run browser-watch\n' +
             '                (writes to browser-dev/ with sourcemaps; you must then\n' +
-            '                edit bench/browser/index.html to point at browser-dev/)\n'
+            '                edit samples/bench/index.html to point at browser-dev/)\n'
         );
     }
-    const lcmsJs   = path.join(REPO_ROOT, 'bench', 'lcms-comparison', 'node_modules', 'lcms-wasm', 'dist', 'lcms.js');
-    const lcmsWasm = path.join(REPO_ROOT, 'bench', 'lcms-comparison', 'node_modules', 'lcms-wasm', 'dist', 'lcms.wasm');
+    const lcmsJs   = path.join(REPO_ROOT, 'samples', 'lcms-wasm-dist', 'lcms.js');
+    const lcmsWasm = path.join(REPO_ROOT, 'samples', 'lcms-wasm-dist', 'lcms.wasm');
     if (!fs.existsSync(lcmsJs) || !fs.existsSync(lcmsWasm)) {
         errors.push(
-            'Missing lcms-wasm:  bench/lcms-comparison/node_modules/lcms-wasm/\n' +
-            '  Install it:       cd bench/lcms-comparison && npm install\n' +
-            '                    (it lives in a sub-package so the main jsColorEngine\n' +
-            '                     install stays light)\n'
+            'Missing lcms-wasm:  samples/lcms-wasm-dist/lcms.js and lcms.wasm\n' +
+            '  Copy the dist/ output from the lcms-wasm npm package, or run\n' +
+            '  `npm pack lcms-wasm` and extract dist/ into that folder.\n'
         );
     }
-    const profile = path.join(REPO_ROOT, '__tests__', 'GRACoL2006_Coated1v2.icc');
-    if (!fs.existsSync(profile)) {
+    const gracol = path.join(REPO_ROOT, 'samples', 'profiles', 'CoatedGRACoL2006.icc');
+    const adobe  = path.join(REPO_ROOT, 'samples', 'profiles', 'AdobeRGB1998.icc');
+    if (!fs.existsSync(gracol) || !fs.existsSync(adobe)) {
         errors.push(
-            'Missing profile:  __tests__/GRACoL2006_Coated1v2.icc\n' +
-            '  This file ships in the repo. If it is missing the working copy is\n' +
-            '  incomplete \u2014 try `git status` and `git checkout`.\n'
+            'Missing ICC profiles in samples/profiles/:\n' +
+            '  - CoatedGRACoL2006.icc (GRACoL CMYK)\n' +
+            '  - AdobeRGB1998.icc (non-identity RGB\u2194RGB for the bench)\n'
         );
     }
     if (errors.length) {
-        console.error('\n[bench/browser] pre-flight FAILED:\n');
+        console.error('\n[samples/bench] pre-flight FAILED:\n');
         for (const e of errors) console.error('  ' + e.replace(/\n/g, '\n  '));
         process.exit(1);
     }
@@ -146,22 +150,22 @@ function handle(req, res) {
     const parsed = url.parse(req.url);
     let p = parsed.pathname || '/';
 
-    // Redirect '/' and '/bench/browser' (no trailing slash) to the
+    // Redirect '/' and '/samples/bench' (no trailing slash) to the
     // bench index with a trailing slash. Doing this as a 302 (not just
     // silently serving the HTML) is important: the browser's "base URL"
     // for resolving relative hrefs/srcs in the page is the URL in the
     // address bar, not whatever file we happen to return. Without the
     // redirect, '/styles.css' and '/main.js' would 404 because the
     // browser would resolve them against '/'.
-    if (p === '/' || p === '/bench/browser') {
+    if (p === '/' || p === '/samples/bench') {
         res.statusCode = 302;
-        res.setHeader('Location', '/bench/browser/');
+        res.setHeader('Location', '/samples/bench/');
         res.end();
         return;
     }
     // Serve the index.html for the directory URL itself.
-    if (p === '/bench/browser/') {
-        p = '/bench/browser/index.html';
+    if (p === '/samples/bench/') {
+        p = '/samples/bench/index.html';
     }
 
     const filePath = safeJoin(REPO_ROOT, p);
@@ -180,10 +184,11 @@ preflight();
 const server = http.createServer(handle);
 server.listen(port, () => {
     console.log('================================================================');
-    console.log(' jsColorEngine browser bench');
+    console.log(' jsColorEngine browser bench (standalone server)');
     console.log('================================================================');
     console.log(' serving repo root: ' + REPO_ROOT);
-    console.log(' open in browser  : http://localhost:' + port + '/');
+    console.log(' open in browser  : http://localhost:' + port + '/samples/bench/');
+    console.log(' (unified dev server: npm run serve)');
     console.log(' stop server      : Ctrl+C');
     console.log('');
 });
@@ -191,7 +196,7 @@ server.listen(port, () => {
 server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
         console.error('Port ' + port + ' already in use. Try:');
-        console.error('  node bench/browser/serve.js --port=' + (port + 1));
+        console.error('  node samples/bench/serve.js --port=' + (port + 1));
         process.exit(1);
     }
     throw err;

@@ -1,5 +1,5 @@
 /*
- * bench/browser/lcms-runner.js
+ * samples/bench/lcms-runner.js
  * ============================
  *
  * Thin browser-side wrapper around lcms-wasm. Provides the same
@@ -27,7 +27,7 @@
  *                                `buildLut: false` (the "accuracy" path).
  */
 
-const LCMS_DIST = '/bench/lcms-comparison/node_modules/lcms-wasm/dist/';
+const LCMS_DIST = '/samples/lcms-wasm-dist/';
 
 let cachedLcms = null;
 let cachedConsts = null;

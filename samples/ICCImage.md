@@ -142,9 +142,10 @@ result).
 Soft-proof: `src → proofProfile → *sRGB`. Returned image is sRGB-tagged so
 `.toCanvas()` blits directly.
 
-`intent` and `BPC` may be a single value (applied to both legs) or a
-`[srcToProof, proofToScreen]` pair, e.g.
-`{ intent: [eIntent.perceptual, eIntent.relative], BPC: [true, false] }`.
+A single `intent` sets **RGB → proof** only; the CMYK → display-sRGB preview
+leg is always **relative colorimetric**. A single `BPC` applies **black-point
+compensation on the first leg only**. Pass `[srcToProof, proofToScreen]` or
+`[bpcFirst, bpcSecond]` to override either leg explicitly.
 
 #### `await img.toSeparation(proofProfile, { intent, BPC } = {})`
 

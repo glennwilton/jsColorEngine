@@ -147,7 +147,7 @@ does all that redundant rounding work every pixel.
 
 From `bench/mpx_summary.js` on Node 20 / V8 / x64 using the GRACoL2006 ICC
 profile. Expect absolute numbers to shift on other engines/machines — the
-[browser bench](../../bench/browser/) measures in-browser and reports live
+[browser bench](../../samples/bench/) measures in-browser and reports live
 numbers with a copy-to-markdown export.
 
 ### Where the 10–15 % comes from in production

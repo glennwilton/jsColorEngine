@@ -221,11 +221,22 @@ we actually want.</small>
 - **ARM64 (Apple M-series, modern Cortex-A) has 31 GPRs.** V8 keeps ~26
   allocatable, vs ~11 on x86-64. Our 13-15 value working set fits with
   huge headroom — register pressure should largely *vanish* on ARM.
-  Measuring on an M1/M4 would quantify how much of our current cost is
-  x86-specific, and is the obvious next experiment. Expected outcome:
-  spill rate drops from ~50 % to single-digits on the 3D kernels, perhaps
-  10-20 % on the 4D kernels (still more live values than allocatable
-  registers, but far less acute).
+  Expected outcome at the time: spill rate drops from ~50 % to single-
+  digits on the 3D kernels, perhaps 10-20 % on the 4D kernels (still
+  more live values than allocatable registers, but far less acute).
+
+  **Measured Apr 2026 (M4 Mac mini, Chrome 147, browser bench).** The
+  prediction landed in the right shape: SIMD 3D paths gained ~25 %
+  going from x86_64 to M4 (216 → 269 MPx/s on RGB → RGB), SIMD **4D
+  paths gained ~65 %** (128 → 211 MPx/s on CMYK → RGB; 128 → 210 on
+  CMYK → CMYK). The 4D directions were the ones predicted to win
+  most because they're the ones saturating the GPR file, and they
+  did — both 4D directions are now within 25 % of the 3D directions
+  on M4, where on x86_64 they were a flat 60 % behind. The same ~1.4–
+  1.6× ARM lift carries through pure-JS `int`, `int-wasm-scalar`,
+  and even the no-LUT f64 pipeline — the signature of a *global*
+  register-pressure win, not a SIMD-specific one. Full numbers in
+  [Performance § 2.6](../Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
 - **WASM scalar on x86-64** wins here too, and perhaps more than we
   initially credited. WASM's linear memory is a single base pointer with
   no aliasing constraints, so the WASM compiler can pin the
@@ -242,6 +253,30 @@ we actually want.</small>
   - Probable ceiling is 10-20 % on top of current `'int'`, or zero if
     V8's allocator is already at the local optimum. Worth testing,
     worth being ready for "no effect" as the answer.
+
+- **PARKED — algebraic reorder of the K-LERP / 3D-interp add/mul
+  chain to keep more intermediates in x86 registers.** The core
+  expression `(d0 + (CLUT[base1] - a) * rx + (b - d0) * ry +
+  (a - b) * rz)` (and its 4D K-LERP outer wrap) is associatively
+  free to re-shape. A different bracketing — e.g. accumulating
+  `d0 * (1 - rx - ry + rz) + a * (rx - rz) + b * (ry - rz) +
+  CLUT[base1] * rx` style, or an FMA-friendly Horner-like form —
+  *might* narrow the simultaneous live set enough that V8's x86
+  allocator stops spilling the K0 / K1 intermediates on the 4D
+  paths. Algebraic identity, so bit-exact-by-design (subject to
+  the same Q0.16 / u20 rounding contract). The
+  [Apr 2026 M4 measurement](../Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
+  shows the 4D paths gain ~65 % on ARM64 vs ~25 % on 3D — i.e.
+  most of the remaining x86 cost on 4D **is** spill traffic, which
+  is what this reorder would target. **Parked deliberately**:
+  real-world image-path performance is already excellent
+  (~210 MPx/s on x86_64 SIMD, ~270 MPx/s on M4 SIMD — see
+  [Performance § 1](../Performance.md#1-where-we-are--current-numbers)),
+  and re-shaping a hot expression for a speculative single-platform
+  win against a known-good baseline isn't worth the regression
+  surface today. Worth keeping on file for a future "V8 regressed
+  the allocator on us" rainy day, or for a contributor with a
+  spill-count micro-bench to spare.
 
 **Compute is only 9-18 %, so the kernel is memory-move-bound, not ALU-bound.**
 This refines the SIMD expectation: vectorising the *arithmetic* alone

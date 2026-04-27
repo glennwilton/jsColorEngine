@@ -234,7 +234,7 @@ taskset -c 0 ./bench_lcms
 - [`bench/lcms_c/`](./) *(this folder)* — native lcms2 baseline.
   Requires a C compiler; produces the `wasm × ?×` number that
   Performance.md §4 currently estimates.
-- [`bench/browser/`](../browser) — every jsColorEngine `lutMode` +
+- [`samples/bench/`](../../samples/bench) — every jsColorEngine `lutMode` +
   `lcms-wasm` side-by-side in the browser. Same four workflows.
 - [`bench/mpx_summary.js`](../mpx_summary.js) — jsColorEngine alone,
   node, used as the authoritative source for the README speed

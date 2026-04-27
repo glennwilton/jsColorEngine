@@ -1,5 +1,5 @@
 /*
- * bench/browser/_smoke_int16.js
+ * samples/bench/_smoke_int16.js
  * =============================
  *
  * Headless smoke test: exercise the SAME int16 wiring the browser bench
@@ -33,15 +33,19 @@ const path = require('path');
     const jsce = require(path.join(REPO, 'src', 'main'));
 
     // Load profiles
-    const gracolBytes = fs.readFileSync(path.join(REPO, '__tests__', 'GRACoL2006_Coated1v2.icc'));
-    const adobeBytes  = fs.readFileSync(path.join(REPO, '__tests__', 'AdobeRGB1998.icc'));
+    const gracolBytes = fs.readFileSync(
+        path.join(REPO, 'samples', 'profiles', 'CoatedGRACoL2006.icc')
+    );
+    const adobeBytes  = fs.readFileSync(
+        path.join(REPO, 'samples', 'profiles', 'AdobeRGB1998.icc')
+    );
 
     const jsGracol = new jsce.Profile();
     jsGracol.loadBinary(new Uint8Array(gracolBytes));
 
     // lcms-wasm is ESM; use dynamic import.
     const lcmsMod = await import(
-        'file:///' + path.join(REPO, 'bench', 'lcms-comparison', 'node_modules', 'lcms-wasm', 'dist', 'lcms.js').replace(/\\/g, '/')
+        'file:///' + path.join(REPO, 'samples', 'lcms-wasm-dist', 'lcms.js').replace(/\\/g, '/')
     );
     const lcms    = await lcmsMod.instantiate();
     const consts  = {

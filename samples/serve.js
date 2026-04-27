@@ -7,7 +7,7 @@
  * Document root is the repo root so relative URLs like
  *   /browser/jsColorEngineWeb.js
  *   /samples/profiles/CoatedGRACoL2006.icc
- *   /bench/browser/                          (cross-link to the bench)
+ *   /samples/bench/                        (browser performance bench)
  * all resolve naturally.
  *
  * Usage:
@@ -15,7 +15,7 @@
  *   node samples/serve.js --port=9000  # custom port
  *
  * npm shortcut:
- *   npm run samples:browser
+ *   npm run serve
  */
 
 'use strict';
@@ -87,9 +87,13 @@ function preflight() {
     } else {
         console.log(' profiles         : ' + profiles.join(', '));
     }
+    const lcmsJs   = path.join(REPO_ROOT, 'samples', 'lcms-wasm-dist', 'lcms.js');
     const lcmsWasm = path.join(REPO_ROOT, 'samples', 'lcms-wasm-dist', 'lcms.wasm');
-    if (!fs.existsSync(lcmsWasm)) {
-        console.log(' lcms-wasm-dist   : NOT FOUND (softproof-vs-lcms.html will not work)');
+    if (!fs.existsSync(lcmsJs) || !fs.existsSync(lcmsWasm)) {
+        errors.push(
+            'Missing lcms-wasm:  samples/lcms-wasm-dist/lcms.js and lcms.wasm\n' +
+            '  Copy the dist/ output from the lcms-wasm package into that folder.\n'
+        );
     } else {
         console.log(' lcms-wasm-dist   : OK');
     }
@@ -141,9 +145,23 @@ function handle(req, res) {
         p = '/samples/index.html';
     }
 
-    // Serve index.html for bare directory paths under /bench/browser/
+    // Legacy site URLs -> current bench path
     if (p === '/bench/browser' || p === '/bench/browser/') {
-        p = '/bench/browser/index.html';
+        res.statusCode = 302;
+        res.setHeader('Location', '/samples/bench/');
+        res.end();
+        return;
+    }
+
+    // Browser bench: redirect to a trailing slash so module-relative script URLs resolve
+    if (p === '/samples/bench') {
+        res.statusCode = 302;
+        res.setHeader('Location', '/samples/bench/');
+        res.end();
+        return;
+    }
+    if (p === '/samples/bench/') {
+        p = '/samples/bench/index.html';
     }
 
     const filePath = safeJoin(REPO_ROOT, p);
@@ -166,7 +184,7 @@ server.listen(port, () => {
     console.log('================================================================');
     console.log(' serving repo root: ' + REPO_ROOT);
     console.log(' samples          : http://localhost:' + port + '/samples/');
-    console.log(' bench            : http://localhost:' + port + '/bench/browser/');
+    console.log(' bench            : http://localhost:' + port + '/samples/bench/');
     console.log(' stop server      : Ctrl+C');
     console.log('');
 });

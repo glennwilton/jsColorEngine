@@ -79,16 +79,22 @@
 <body>
 
 <header class="topbar">
-    <div class="brand">
-        <span class="brand-mark">jsColorEngine</span>
-        <span class="brand-tag">samples</span>
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">samples</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html#demos">Samples</a>
+            <a href="/samples/bench/">Bench</a>
+        </nav>
     </div>
-    <nav class="nav">
-        <a href="index.html">Home</a>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
         <a href="live-video-softproof.html">Live Video</a>
         <a href="softproof.html" class="is-active">Soft Proof</a>
         <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
-        <a href="/bench/browser/">Bench</a>
     </nav>
 </header>
 
@@ -129,8 +135,8 @@
         <label>
             Intent + BPC
             <select id="intentSelect">
-                <option value="perceptual"     selected>Perceptual</option>
-                <option value="perceptual-bpc">Perceptual + BPC</option>
+                <option value="perceptual" selected>Perceptual</option>
+<!--                <option value="perceptual-bpc">Perceptual + BPC</option>-->
                 <option value="relative">Relative</option>
                 <option value="relative-bpc">Relative + BPC</option>
                 <option value="saturation">Saturation</option>
@@ -141,12 +147,29 @@
         <label>
             Source Image
             <select id="imageSelect">
-                <option value="https://picsum.photos/id/1015/1200/800">Mountain lake (1200&times;800)</option>
-                <option value="https://picsum.photos/id/1043/1200/800">Portrait (1200&times;800)</option>
-                <option value="https://picsum.photos/id/1069/1200/800">Forest (1200&times;800)</option>
-                <option value="https://picsum.photos/id/1025/800/1200">Dog portrait (800&times;1200)</option>
-                <option value="https://picsum.photos/id/1074/800/1200">Person portrait (800&times;1200)</option>
-                <option value="https://picsum.photos/id/1035/800/1200">Misty forest (800&times;1200)</option>
+                <optgroup label="Portrait (1200&times;800)">
+                    <option value="https://picsum.photos/id/23/800/1200">Forks</option>
+                    <option value="https://picsum.photos/id/355/800/1200">Cameras</option>
+                    <option value="https://picsum.photos/id/376/800/1200">New York</option>
+                    <option value="https://picsum.photos/id/454/800/1200">Holding Camera</option>
+                    <option value="https://picsum.photos/id/766/800/1200">Coffee Beans</option>
+                    <option value="https://picsum.photos/id/838/800/1200">Woman and Child</option>
+                    <option value="https://picsum.photos/id/870/800/1200">Lighthouse</option>
+                    <option value="https://picsum.photos/id/981/800/1200">Stars</option>
+                    <option value="https://picsum.photos/id/631/800/1200">Leaf</option>
+                </optgroup>
+                <optgroup label="Landscape (1200&times;800)">
+                    <option value="https://picsum.photos/id/1069/1200/800">Jellyfish</option>
+                    <option value="https://picsum.photos/id/1015/1200/800">Mountain lake</option>
+                    <option value="https://picsum.photos/id/237/1200/800">Black Dog</option>
+                    <option value="https://picsum.photos/id/287/1200/800">Landscape</option>
+                    <option value="https://picsum.photos/id/292/1200/800">Vegetables</option>
+                    <option value="https://picsum.photos/id/323/1200/800">Coastline</option>
+                    <option value="https://picsum.photos/id/502/1200/800">Forest</option>
+                    <option value="https://picsum.photos/id/871/1200/800">Cove</option>
+                    <option value="https://picsum.photos/id/553/1200/800">Autumn</option>
+                    <option value="https://picsum.photos/id/1074/1200/800">Lioness</option>
+                </optgroup>
             </select>
         </label>
         <label>
@@ -247,7 +270,7 @@
     <span>
         <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
         &middot;
-        <a href="/bench/browser/">Bench</a>
+        <a href="/samples/bench/">Bench</a>
     </span>
 </footer>
 
@@ -342,8 +365,8 @@
 
         let t0 = performance.now();
         const localProof = await src.toProof(proofProfile, {
-            intent: [intent, eIntent.relative],
-            BPC:    [bpc, false],
+            intent,
+            BPC: bpc,
             ...gamutOpts,
         });
         t.proofMs = performance.now() - t0;

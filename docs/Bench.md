@@ -14,9 +14,9 @@
 
 **Don't trust our numbers — run them yourself.**
 
-[`bench/browser/`](../bench/browser/) is a fully self-contained, zero-
+[`samples/bench/`](../samples/bench/) is a fully self-contained, zero-
 upload, in-browser benchmark. Clone the repo, start a tiny local
-static server, open `http://localhost:8080/`, and the page runs every
+static server, open <http://localhost:8080/samples/bench/>, and the page runs every
 `lutMode` × every direction × the real lcms-wasm library right there
 on your hardware. All the MPx/s numbers in
 [`docs/Performance.md`](./Performance.md) and the headline table in
@@ -35,19 +35,20 @@ From the repo root:
 # 1. Build the browser (UMD) bundle. Re-run after any src/ change.
 npm run browser
 
-# 2. Install lcms-wasm (one-time; lives in a sub-package so the main
-#    install stays light). Skip to omit the lcms comparison rows.
-cd bench/lcms-comparison && npm install && cd ../..
+# 2. Ensure the vendored lcms-wasm dist is present (npm package output):
+#      samples/lcms-wasm-dist/lcms.js  +  lcms.wasm
+#    and ICCs under samples/profiles/ (CoatedGRACoL2006.icc, AdobeRGB1998.icc).
 
 # 3. Start the static server. Zero deps, just Node's built-in http.
-npm run bench:browser
-#   or:  node bench/browser/serve.js
-#   or:  node bench/browser/serve.js --port=9000
+npm run serve
+#   or:  node samples/serve.js
+#   or:  node samples/bench/serve.js
+#   or:  node samples/serve.js --port=9000
 ```
 
-Open <http://localhost:8080/> in your browser. The page boots, fetches
-the GRACoL2006 ICC profile, loads lcms-wasm, and lights up the run
-buttons.
+Open <http://localhost:8080/samples/bench/> in your browser. The page
+boots, fetches the CMYK + AdobeRGB profiles, loads lcms-wasm, and
+lights up the run buttons.
 
 Stop the server with `Ctrl+C` in the terminal.
 
@@ -249,7 +250,7 @@ affected by the wrong setup. But the matrix-shaper collapse is a
 legitimate optimisation — we just have to exercise it against a
 **different** RGB profile so the work is real.
 
-`__tests__/AdobeRGB1998.icc` is the 560-byte reference Adobe RGB
+`samples/profiles/AdobeRGB1998.icc` is the 560-byte reference Adobe RGB
 (1998) profile. lcms-wasm doesn't export `cmsCreateRGBProfile` or
 `cmsBuildGamma`, so the bench loads the ICC bytes directly rather
 than synthesising the profile in memory.
@@ -314,13 +315,14 @@ lcms kernel runs scalar regardless of host SIMD support.
 jsColorEngine's `int-wasm-simd` path ships hand-tuned channel-
 parallel v128 kernels for 3D and 4D tetrahedral interpolation.
 That's a real capability gap, not a benchmark bias — the "lcms-wasm"
-line in the engine-info panel says `scalar build (no -msimd128)`
-precisely to flag this.
+line in the engine-info panel says `stock scalar build` precisely to
+flag this. (Informational, not a problem; the cell stays green when
+lcms loads.)
 
 A SIMD-compiled lcms-wasm (same source, built with
 `-msimd128 -O3`) would close a lot of the gap. We'd welcome that
 comparison if anyone wants to rebuild lcms with SIMD on and ship it
-back to `bench/lcms-comparison/node_modules/lcms-wasm/dist/lcms.wasm`
+back to `samples/lcms-wasm-dist/lcms.wasm`
 — open a PR.
 
 ---
@@ -362,6 +364,13 @@ back to `bench/lcms-comparison/node_modules/lcms-wasm/dist/lcms.wasm`
   can swing 30 %+ across browsers.** Chrome, Firefox, and Safari
   each have very different V8 / SpiderMonkey / JavaScriptCore
   tier-up curves. Use a single browser when comparing modes.
+- **ARM64 / Apple Silicon runs ~1.4–1.6× faster than x86_64** at every
+  tier (JS `int`, WASM scalar, WASM SIMD), with the biggest lift on
+  the **4D CMYK paths** that were register-saturated on x86. The
+  prediction lived in the [JIT inspection deep-dive](./deepdive/JitInspection.md#implications-for-future-work)
+  for months before an M4 Mac mini measurement confirmed it; full
+  numbers and analysis in
+  [Performance § 2.6](./Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
 - **Mobile CPUs throttle aggressively under sustained load.** The
   "Hot iters" setting is conservative by default; bumping it on
   mobile can show throttling kick in (MPx/s sliding down across
@@ -372,8 +381,8 @@ back to `bench/lcms-comparison/node_modules/lcms-wasm/dist/lcms.wasm`
   `int-wasm-simd` rows will run the scalar fallback (tagged with
   `[int-wasm-scalar]` in the Mode cell).
 - **lcms-wasm not loaded?** The bench still runs; only the lcms rows
-  are skipped. `cd bench/lcms-comparison && npm install` enables
-  them.
+  are skipped. Add `lcms.js` + `lcms.wasm` under
+  `samples/lcms-wasm-dist/` to enable them.
 
 ---
 
@@ -408,7 +417,7 @@ hear about it than keep quoting biased numbers.
   SIMD rows land where they do
 - [Deep dive / LUT modes](./deepdive/LutModes.md) — what each
   `lutMode` actually does inside
-- [`bench/browser/`](../bench/browser/) — the bench source; each
+- [`samples/bench/`](../samples/bench/) — the bench source; each
   file's role is documented in its header comment
 - Other benches shipping in the repo:
   [`bench/mpx_summary.js`](../bench/mpx_summary.js) (Node headline
