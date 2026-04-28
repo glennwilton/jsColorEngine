@@ -1,6 +1,6 @@
 {
   "name": "jscolorengine",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "src/main.js",

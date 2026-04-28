@@ -7,6 +7,111 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.4.2] — 2026-04-28
+
+### Added — WASM memory management
+
+WASM linear memory can only grow by spec — a transient large image
+permanently inflates the buffer. Two automatic post-run guards and
+manual controls reclaim it:
+
+- **`wasmMaxMemory`** (default **128 MB**) — absolute ceiling. After
+  each transform, any state exceeding this compacts immediately.
+  Large images still process fine; memory is freed before the method
+  returns. Prevents runaway memory with zero configuration.
+  `setWasmMaxMemory(bytes)` / `{ wasmMaxMemory: N }`. Set 0 to disable.
+- **`wasmShrinkRatio`** — relative guard. After each transform,
+  compacts when memory exceeds `ratio ×` what the image just needed.
+  Keeps memory proportional to the current workload. Default 0 (off).
+  `setWasmShrinkRatio(N)` / `{ wasmShrinkRatio: N }`.
+- **`compactWasmMemory()`** — explicit re-instantiation (~0.1 ms).
+- **`releaseWasmMemory()`** — drops all WASM states; falls back to
+  pure-JS `'int'` kernels.
+- **`wasmMemoryBytes()`** — diagnostic: total bytes across all states.
+
+See [WASM memory management deep dive](./docs/deepdive/WasmKernels.md#wasm-memory-management-v142)
+for benchmarks and design rationale.
+
+### Added — reusable output buffer for `transformArrayViaLUT`
+
+Pass a pre-allocated `Uint8ClampedArray` (or `Uint16Array` for int16
+modes) as the `outputArray` parameter to eliminate per-call allocation
+and reduce GC pressure. Especially beneficial for real-time workflows
+(video soft-proofing, animation loops) where allocation churn can
+trigger GC pauses.
+
+### Added — Lab ↔ int16 encoding helpers
+
+- **`convert.lab2Int16(L, a, b, encoding)`** — encode float Lab to
+  ICC u16 values (v2 or v4 encoding).
+- **`convert.int162Lab(uL, ua, ub, encoding)`** — decode ICC u16 Lab
+  back to float Lab object (D50 white point).
+- **`convert.labEncoding.v2` / `.v4`** — frozen preset objects with
+  pre-computed multipliers for zero-branch hot-loop encoding.
+- **`lut.inLab` / `lut.outLab`** — encoding metadata auto-populated
+  on the LUT at `create()` time when the corresponding profile is a
+  Lab profile. Survives `JSON.stringify` / `structuredClone` /
+  `postMessage` (pure data, no functions).
+- Four **Transform wrappers**: `inputLab2Int16`, `outputLab2Int16`,
+  `inputInt162Lab`, `outputInt162Lab` — read the encoding from the
+  LUT automatically, throw clearly if the profile side isn't Lab.
+
+### Added — LUT build hooks (`lutInputHook` / `lutOutputHook`)
+
+Per-grid-cell hooks that run during LUT construction, baking warps
+into the LUT with zero per-pixel runtime cost.
+
+- **Constructor shorthand**: `{ lutInputHook: fn, lutOutputHook: fn }`.
+- **Composable API**: `addLutInputHook(fn, 'before'|'after')`,
+  `addLutOutputHook(fn, 'before'|'after')`, `clearLutHooks()`.
+  Multiple hooks chain in array order.
+- Output hooks receive a second read-only argument (`deviceIn`) —
+  the original grid-cell input, useful for logging/debugging.
+- Injected into all four LUT builders (1D/2D/3D/4D).
+
+### Changed — hot-path optimisations
+
+- `_expectsU16` and `_isIntegerMode` cached at `create()` time,
+  removing 9 string comparisons per `transformArrayViaLUT` call.
+- `isIntLutCompatible` check moved from per-call to `create()` time.
+
+### Fixed — sample link portability
+
+All absolute paths in `samples/` converted to relative, making the
+demo tree deployable to any web server path without URL rewriting.
+
+### Docs — sample code comments
+
+Added inline documentation to `samples/live-video-softproof.html` and
+`samples/softproof.html` explaining ICCImage usage, the colour pipeline,
+Transform API calls, output buffer reuse, WASM memory management,
+channel plate rendering, and the accuracy-path colour picker. Samples
+now serve as learning material as much as demos.
+
+### Tests
+
+- New **`__tests__/transform_wasm_memory.tests.js`** — 14 tests
+  covering compact, release, auto-shrink, `wasmMemoryBytes`,
+  `wasmMaxMemory` default/ceiling/runtime, and post-run compaction.
+- New **`__tests__/convert_lab_int16.tests.js`** — 32 tests covering
+  `convert.lab2Int16` / `convert.int162Lab` (v2 + v4 round-trips,
+  boundary values, clamping, error cases) and the four Transform
+  wrappers (`lut.inLab`/`outLab` population, encode/decode, throws
+  on non-Lab profiles).
+- New **`__tests__/transform_lut_hooks.tests.js`** — 16 tests covering
+  constructor hooks, `addLut*Hook` methods, `before`/`after` ordering,
+  `clearLutHooks`, hook composability, channel counts, call counts,
+  and output hook `deviceIn` second argument.
+- New **`__tests__/transform_guards.tests.js`** — 18 tests covering
+  input/output validation: wrong outputArray type, outputArray too
+  small, no pipeline, preserveAlpha without alpha, CMYK channel counts,
+  and guard forwarding through `transformArray`.
+- Removed 7 format-tag guardrail tests that were testing internal
+  tampering (mutating `intLut.version` on a live Transform), not
+  public API behaviour.
+
+---
+
 ## [1.4.1] — 2026-04-27
 
 Patch release: sample and helper fixes for soft-proof pipelines.

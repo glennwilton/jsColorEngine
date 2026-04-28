@@ -48,7 +48,7 @@
         margin-top: 6px;
     }
 </style>
-<script src="/browser/jsColorEngineWeb.js"></script>
+<script src="../browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
 
@@ -60,8 +60,8 @@
         </div>
         <nav class="nav" aria-label="Site">
             <a href="index.html">Home</a>
-            <a href="samples.html#demos">Samples</a>
-            <a href="/samples/bench/">Bench</a>
+            <a href="samples.html"  class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
         </nav>
     </div>
     <nav class="nav nav--secondary" aria-label="Sample demos">
@@ -260,7 +260,7 @@
     <span>
         <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
         &middot;
-        <a href="/samples/bench/">Bench</a>
+        <a href="bench/">Bench</a>
     </span>
 </footer>
 
@@ -268,7 +268,15 @@
 (function () {
     'use strict';
 
+    // ── jsColorEngine imports ─────────────────────────────────────────────
+    //
+    // Profile  – loads or creates ICC colour profiles (sRGB, CMYK, etc.)
+    // Transform – builds a colour pipeline and transforms pixel data
+    // eIntent  – rendering-intent enum: perceptual, relative, saturation, absolute
+
     const { Profile, Transform, eIntent } = window.jsColorEngine;
+
+    // ── DOM references ────────────────────────────────────────────────────
 
     const video       = document.getElementById('srcVideo');
     const canvas      = document.getElementById('proofCanvas');
@@ -305,16 +313,29 @@
     let rafId = 0;
     let vfcId = 0;
 
+    // Off-screen canvas used to grab raw RGBA pixel data from the video.
     let srcCanvas = null;
     let srcCtx    = null;
     let w = 0, h = 0, pixels = 0;
 
-    // FPS tracking
+    // Pre-allocated output buffer — reused every frame to avoid per-frame
+    // Uint8ClampedArray allocation and garbage-collection pressure.
+    // See "Output buffer reuse" below in processFrame().
+    let reusableOut = null;
+
+    // FPS / throughput tracking (updated once per second)
     let frameCount = 0;
     let lastFpsUpdate = 0;
     let transformMsAccum = 0;
 
     // ── System detection ──────────────────────────────────────────────────
+    //
+    // jsColorEngine auto-detects WASM / SIMD and picks the fastest kernel:
+    //   SIMD available   → 'int-wasm-simd'   (~160 MPx/s)
+    //   WASM only        → 'int-wasm-scalar'  (~85 MPx/s)
+    //   neither          → 'int' pure JS      (~75 MPx/s)
+    //
+    // We detect here just to show the user what their browser supports.
 
     function detectWasm() {
         try {
@@ -326,8 +347,6 @@
 
     function detectSimd() {
         try {
-            // The canonical SIMD feature-detect: compile a module that
-            // uses a v128 instruction. If it validates, SIMD is supported.
             return WebAssembly.validate(new Uint8Array([
                 0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,
                 8,0,65,0,253,15,253,98,11
@@ -351,7 +370,23 @@
         statusText.className = 'timing-inline';
     }
 
-    // ── Engine ────────────────────────────────────────────────────────────
+    // ── Engine setup ──────────────────────────────────────────────────────
+    //
+    // The colour pipeline for soft-proofing is:
+    //
+    //   sRGB  →  CMYK (print profile)  →  sRGB
+    //
+    // This simulates what the image would look like once printed on a
+    // specific press/paper stock and then viewed on screen.
+    //
+    // The pipeline is built once via createMultiStage(). Internally this
+    // bakes a 3D CLUT (colour look-up table) — all the heavy profile
+    // maths (chromatic adaptation, gamut mapping, PCS conversion, TRC
+    // curves) is folded into the LUT at build time (~50–100 ms).
+    //
+    // After that, every frame just calls transformArrayViaLUT() which
+    // does fast tetrahedral interpolation through the pre-built LUT —
+    // no profile maths at all on the hot path.
 
     function parseIntent() {
         return eIntent[intentSel.value] ?? eIntent.perceptual;
@@ -363,18 +398,31 @@
 
         const intent = parseIntent();
 
+        // Step 1: Load profiles.
+        // '*sRGB' is a built-in virtual profile — no file needed.
+        // The CMYK profile is loaded from a .icc file via HTTP.
         const srgb = new Profile();
         srgb.loadVirtualProfile('*sRGB');
         const cmyk = new Profile();
         await cmyk.loadPromise(profileSel.value);
 
+        // Step 2: Create a Transform with LUT mode.
+        //   buildLut: true  — pre-build a 3D CLUT for fast pixel transforms
+        //   dataFormat: 'int8' — input/output are Uint8ClampedArray (0–255)
         const t = new Transform({ buildLut: true, dataFormat: 'int8' });
+
+        // Step 3: Build the multi-stage pipeline.
+        // The chain alternates [profile, intent, profile, intent, profile].
+        // Here: sRGB → (perceptual) → CMYK → (relative) → sRGB
+        // This is the expensive step (~50–100 ms). It only runs once per
+        // profile/intent change — not per frame.
         const t0 = performance.now();
         t.createMultiStage([srgb, intent, cmyk, eIntent.relative, srgb]);
         const lutMs = performance.now() - t0;
 
         transform = t;
 
+        // Show which kernel the engine auto-selected
         const kernel = t.lutMode || 'unknown';
         document.getElementById('sysKernel').textContent = kernel;
         document.getElementById('sysKernel').className = 'val' +
@@ -384,6 +432,8 @@
         statusText.className = 'timing-inline';
         return lutMs;
     }
+
+    // ── Per-frame processing ──────────────────────────────────────────────
 
     function ensureBuffers() {
         const vw = video.videoWidth;
@@ -395,26 +445,64 @@
         canvas.width = w;
         canvas.height = h;
 
+        // Off-screen canvas to extract RGBA pixels from the video element
         srcCanvas = document.createElement('canvas');
         srcCanvas.width = w;
         srcCanvas.height = h;
         srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+
+        // OUTPUT BUFFER REUSE
+        // Allocate one Uint8ClampedArray for the entire session at this
+        // resolution. We pass this into transformArrayViaLUT() on every
+        // frame so the engine writes directly into it instead of creating
+        // a new array each time. Benefits:
+        //   - Zero per-frame JS allocation (no new Uint8ClampedArray)
+        //   - Reduced GC pressure (critical for smooth 60fps)
+        //   - ~3–5% throughput gain (measured in bench/)
+        // The buffer is only re-created if the video resolution changes.
+        reusableOut = new Uint8ClampedArray(pixels * 4);
     }
 
     function processFrame() {
         ensureBuffers();
 
+        // Grab the current video frame as raw RGBA pixel data
         srcCtx.drawImage(video, 0, 0, w, h);
         const src = srcCtx.getImageData(0, 0, w, h).data;
 
+        // THE HOT PATH — this is the only jsColorEngine call per frame.
+        //
+        // transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha,
+        //                      preserveAlpha, pixelCount, outputArray)
+        //
+        //   inputArray    : Uint8ClampedArray of RGBA pixels from the video
+        //   inputHasAlpha : true — the canvas gives us RGBA (4 bytes/pixel)
+        //   outputHasAlpha: true — we need RGBA output for putImageData
+        //   preserveAlpha : true — copy alpha through unchanged
+        //   pixelCount    : number of pixels (width × height)
+        //   outputArray   : reusableOut — our pre-allocated buffer
+        //
+        // Internally this runs tetrahedral interpolation through the
+        // pre-built 3D CLUT using the best available kernel (WASM SIMD
+        // → WASM scalar → pure JS, auto-selected at create() time).
+        //
+        // WASM memory is managed automatically: wasmMaxMemory (default
+        // 128 MB) compacts after oversized images; wasmShrinkRatio keeps
+        // memory proportional to the workload. For fixed-size video frames
+        // neither guard ever fires — zero overhead.
         const t0 = performance.now();
-        const result = transform.transformArrayViaLUT(src, true, true, true, pixels);
+        transform.transformArrayViaLUT(src, true, true, true, pixels, reusableOut);
         const ms = performance.now() - t0;
 
-        ctx.putImageData(new ImageData(result, w, h), 0, 0);
+        // Write the transformed pixels to the visible canvas.
+        // reusableOut already contains the RGBA result — we wrap it in
+        // an ImageData (zero-copy view) and blit it.
+        ctx.putImageData(new ImageData(reusableOut, w, h), 0, 0);
 
         return ms;
     }
+
+    // ── Stats display ─────────────────────────────────────────────────────
 
     function updateStats(ms) {
         frameCount++;
@@ -444,8 +532,20 @@
     }
 
     // ── Frame loops ───────────────────────────────────────────────────────
+    //
+    // Two loop strategies depending on browser support:
+    //
+    // requestVideoFrameCallback (rVFC):
+    //   Fires once per decoded video frame (~30 fps for a 30fps video).
+    //   More efficient — only processes when a new frame is actually
+    //   available. But can cause timing issues if the transform takes
+    //   too long relative to the callback budget.
+    //
+    // requestAnimationFrame (rAF):
+    //   Fires at the display refresh rate (typically 60 Hz). May re-process
+    //   the same video frame if the video is 30fps, but gives smoother
+    //   UI updates and is universally supported.
 
-    // requestVideoFrameCallback: fires once per decoded video frame (~30fps)
     function vfcLoop() {
         if (!running) return;
         const ms = processFrame();
@@ -453,7 +553,6 @@
         vfcId = video.requestVideoFrameCallback(vfcLoop);
     }
 
-    // requestAnimationFrame: fires at display refresh rate (unlocked)
     function rafLoop() {
         if (!running) return;
         const ms = processFrame();
@@ -476,11 +575,17 @@
     function stopLoop() {
         cancelAnimationFrame(rafId);
         rafId = 0;
-        // No cancelVideoFrameCallback in all browsers — setting
-        // running=false causes vfcLoop to exit on next callback.
     }
 
     // ── Start / stop ──────────────────────────────────────────────────────
+    //
+    // On first play:
+    //   1. buildTransform() loads profiles and bakes the LUT (once)
+    //   2. video.play() starts the media element
+    //   3. startLoop() kicks off the per-frame processing loop
+    //
+    // Changing the CMYK profile or intent stops playback, rebuilds the
+    // LUT with the new settings, and restarts.
 
     async function start() {
         if (running) {
@@ -507,6 +612,8 @@
         playBtn.innerHTML = '&#9654; Play';
         statusText.textContent = 'Stopped';
     }
+
+    // ── Event wiring ──────────────────────────────────────────────────────
 
     playBtn.addEventListener('click', start);
 

@@ -74,6 +74,11 @@ roadmap at the bottom.
 - [7. Choosing a configuration](#7-choosing-a-configuration)
     - [The four tiers — accuracy vs speed](#the-four-tiers--accuracy-vs-speed)
     - [Quick reference — when to enable what](#quick-reference--when-to-enable-what)
+- [8. Identity transforms and same-profile passthrough](#8-identity-transforms-and-same-profile-passthrough)
+    - [Why this matters](#why-this-matters)
+    - [Why we don't micro-optimise matrix-shaper decomposition](#why-we-dont-micro-optimise-matrix-shaper-decomposition)
+    - [Same-profile passthrough — user expectations > math](#same-profile-passthrough--user-expectations--math)
+    - [Proposed design](#proposed-design)
 
 ---
 
@@ -1393,6 +1398,77 @@ states — `wasmTetra3DInt16` / `wasmTetra4DInt16` / their SIMD
 siblings, all loaded lazily, all idempotent across Transforms
 sharing the same cache.
 
+**v1.3 dispatcher and hot-path optimisations — measured.**
+
+Two additional optimisations shipped on top of the kernel ladder:
+a table-driven dispatcher (`src/lutKernelTable.js`) that replaces the
+legacy if/else cascade in `transformArrayViaLUT`, and an optional
+reusable output buffer parameter that eliminates per-call typed-array
+allocation.
+
+**Dispatcher: table-driven vs legacy cascade
+(`bench/dispatcher_compare_bench.js`, Node 20, Win x64, 65 K
+pixels/iter, median of 5 × 100 iters, 500 iter warmup):**
+
+| Config | Table-driven | Legacy cascade | Ratio |
+|---|---|---|---|
+| RGB→RGB `int` | 72.4 MPx/s | 72.6 MPx/s | 1.00× |
+| RGB→CMYK `int` | 62.9 | 62.8 | 1.00× |
+| CMYK→RGB `int` | 60.5 | 61.0 | 0.99× |
+| RGB→RGB `int-wasm-scalar` | 87.4 | 89.8 | 0.97× |
+| RGB→CMYK `int-wasm-scalar` | 71.2 | 71.0 | 1.00× |
+| CMYK→RGB `int-wasm-scalar` | 57.0 | 56.8 | 1.00× |
+| RGB→RGB `int-wasm-simd` | 161.9 | 165.5 | 0.98× |
+| RGB→CMYK `int-wasm-simd` | 179.0 | 162.9 | 1.10× |
+| CMYK→RGB `int-wasm-simd` | 103.6 | 106.6 | 0.97× |
+
+**Conclusion: no regression.** Ratios scatter ±3 % around 1.00×
+across all 9 configs — well inside bench noise. The table-driven
+dispatcher's per-call overhead (one threshold compare + one indirect
+call) is indistinguishable from the legacy cascade's string
+comparisons + switch/case. The one outlier (RGB→CMYK SIMD 1.10×)
+is a 0.03 ms delta at 65 K pixels and inverts on re-runs — noise,
+not signal.
+
+The dispatcher swap also cached two lutMode-derived booleans
+(`_expectsU16`, `_isIntegerMode`) at `create()` time, eliminating
+9 string comparisons and the `isIntLutCompatible()` function call
+from every `transformArrayViaLUT` invocation. These savings are
+amortised into the noise floor on the bench (they're nanoseconds
+against a millisecond kernel), but remove unnecessary work from
+the hot path on principle.
+
+**Reusable output buffer
+(`bench/transformArray_reuse_output_bench.js`, Node 20, Win x64,
+1 Mi pixels/iter, sRGB → AdobeRGB RGB→RGB, median of 6 × 12
+iters, 40 iter warmup):**
+
+| lutMode | Alloc each call | Reuse buffer | Speedup | Delta |
+|---|---|---|---|---|
+| `int` | 74.9 MPx/s | 77.5 MPx/s | 1.034× | +3.3 % |
+| `int-wasm-scalar` | 85.4 | 86.9 | 1.018× | +1.7 % |
+| `int-wasm-simd` | 164.4 | 175.6 | 1.068× | +6.4 % |
+
+**The faster the kernel, the more the allocation matters.** At
+1 Mi pixels the `new Uint8ClampedArray(3 Mi)` allocation + GC
+pressure is ~0.4 ms — invisible against the `int` kernel's 14 ms,
+but 6.4 % of the SIMD kernel's 6 ms. For real-time loops
+(video soft-proof, live preview) the reusable buffer is the right
+call. The throughput delta also understates the real-world benefit:
+the bench runs in a tight loop where V8's generational GC barely
+fires, but in production each discarded 3 MB typed array
+accumulates in the young generation and eventually triggers a GC
+pause that stalls the frame. Reusing the buffer eliminates that
+allocation churn entirely — zero young-gen pressure from the
+output side, no GC pauses attributable to the colour pipeline.
+
+WASM kernels copy input into linear memory and output back out
+regardless of whether the caller provides a buffer — the WASM
+copy cost is the same either way. The win is purely the JS-side
+allocation avoidance. The type-check guards on the caller-provided
+buffer (`instanceof Uint8ClampedArray`, `.length >= needed`) run
+once per call, not per pixel — unmeasurable overhead.
+
 What v1.3 deliberately *doesn't* ship:
 
 - **N-channel input kernels (5 / 6 / 7 / 8-ch input device profiles).**
@@ -1550,3 +1626,106 @@ can't deliver:
 | Color-measurement (delta-E vs target) | `buildLut: false` for full f64 pipeline, or pin `lutMode: 'float'` if you need the LUT path. Don't use integer kernels — ≤ 1 LSB drift is visually invisible but non-zero, and in bulk can shift ΔE decisions at the margin. |
 | Real-time video / large 4K+ images | Default `'auto'` — dispatcher picks `'int-wasm-simd'` (shipped v1.2) and demotes to scalar WASM / `'int'` on hosts without SIMD / WASM. |
 | Pinned benchmarking / CI determinism | Explicit `lutMode: 'int-wasm-simd'` (or any specific kernel name) to fail loudly on hosts that can't run it, instead of silently demoting. |
+
+---
+
+## 8. Identity transforms and same-profile passthrough
+
+### Why this matters
+
+LittleCMS's [Fast Float plug-in](https://www.littlecms.com/plugin/#fast-float)
+publishes benchmark numbers of up to 2000 MB/s on "same MatrixShaper"
+transforms. That headline is achievable because lcms detects special
+cases at `cmsCreateTransform()` time:
+
+- **Same profile, same primaries** — collapse to a 1D gamma-only
+  curve delta (skip the 3×3 matrix entirely).
+- **Identity profile pair** — collapse to a memcpy.
+- **Curves-only** — skip the matrix, apply 1D LUTs per channel.
+
+These are legitimate optimisations for the real-world case where an
+app loads an sRGB-embedded JPEG and the monitor is also tagged sRGB.
+But they inflate benchmark numbers if you're not careful about what
+you're measuring — that 2000 MB/s "transform" is really a glorified
+memcpy with a gamma lookup, not a colour conversion.
+
+### Why we don't micro-optimise matrix-shaper decomposition
+
+jsColorEngine's LUT approach brute-forces past this problem. Once
+you've pre-baked the entire transform into a 33³ CLUT, the
+per-pixel cost is the same whether the underlying math was a matrix,
+a gamma curve, or a full CMYK 4D pipeline — it's all tetrahedral
+interpolation against pre-computed nodes. Our WASM SIMD already
+hits 1026 MB/s on RGB→RGB *with* the full matrix path baked into the
+LUT, which is 7× lcms's default 8-bit CLUT number (~150 MB/s from
+their published graphs, unknown hardware and date).
+
+Detecting "these two matrix profiles share primaries, only gamma
+differs" and short-circuiting to a 1D curve would only help the
+`buildLut: false` accuracy path (~11 MPx/s). Nobody uses that path
+for bulk image throughput — it exists for measurement-grade accuracy.
+Shaving a matrix multiply off 11 MPx/s doesn't move the needle.
+
+This was probably important on single-core Pentium 4s twenty years
+ago when lcms was running without SIMD and without LUT pre-bake.
+Today the LUT *is* the optimisation — it makes the pipeline
+complexity invisible to the hot loop.
+
+**Decision: skip matrix-shaper decomposition.** The LUT already
+absorbs it. Not on the roadmap.
+
+### Same-profile passthrough — user expectations > math
+
+The one identity case worth handling is **same profile both sides**.
+Not for performance (the LUT path is already fast), but for
+**correctness from the user's perspective**.
+
+**Matrix/TRC profiles (RGB).** Forward and reverse paths are true
+mathematical inverses: curves → matrix → PCS → matrix⁻¹ → inverse
+curves. Same-profile is provably identity regardless of rendering
+intent:
+
+- Relative colorimetric — matrices cancel, curves cancel.
+- Perceptual / Saturation — matrix profiles have no perceptual or
+  saturation tables; engine falls back to relative. Same result.
+- Absolute — chromatic adaptation for white point difference;
+  same profile → same white point → cancels.
+
+**CLUT-based profiles (CMYK).** This is where user expectations
+diverge from mathematical reality. AToB and BToA tables are
+**independently authored** in the ICC profile:
+
+- Relative colorimetric — AToB1 and BToA1 are independent CLUTs
+  with independent quantization. Round-trip will be *close* but
+  not bit-exact.
+- Absolute — same as relative plus white point adapt; same CLUT
+  quantization issue.
+- Perceptual — AToB0 and BToA0 may have completely different gamut
+  mappings baked in (forward perceptual ≠ inverse of backward
+  perceptual). Round-trip could produce visibly different values.
+
+So mathematically, SWOP→SWOP through AToB→BToA *will* change pixel
+values. But **no user in the world expects "convert from SWOP to
+SWOP" to alter their data**. If they hand the same profile to both
+sides, they want their values back unchanged — silently introducing
+CLUT quantization error would be a bug in their eyes, not a feature.
+
+This is a clear case of **user expectations > technically-correct
+behaviour**. The mathematically "correct" round-trip is the wrong
+default.
+
+### Proposed design
+
+**`identityPassthrough`** option (default: `true`). When source and
+destination resolve to the same profile at `create()` time, skip
+the entire pipeline/LUT build and route `transformArray` to a
+typed-array copy. No per-pixel cost, no CLUT quantization error,
+no surprise. This is the "do what I mean" default.
+
+Set `identityPassthrough: false` to force the full AToB → BToA
+round-trip — useful for testing, profiling, or workflows that need
+to exercise the CLUT path (e.g. verifying that a profile's
+AToB/BToA tables are self-consistent).
+
+See [Roadmap.md § Transform identity / NOP detection](./Roadmap.md#transform-identity--nop-detection)
+for implementation plan and timeline.

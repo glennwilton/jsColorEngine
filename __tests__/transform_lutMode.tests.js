@@ -547,58 +547,9 @@ test("lutMode='auto': non-int8 transform resolves to 'float' and stays there", (
 // -----------------------------------------------------------------------
 // 9. intLut format-tag guardrail
 //
-// The dispatcher in `transformArrayViaLUT` calls `isIntLutCompatible()`
-// once per array call (cheap — not per pixel) and throws if the tag has
-// drifted. The alternative — silent fallback to float — would hide the
-// bug while making the transform mysteriously slower, which is exactly
-// what the format tag was added to prevent.
-//
-// We simulate drift by mutating the tag on an otherwise-valid intLut,
-// which is what a stale serialised cache from a future version would
-// look like.
+// Removed: the old test mutated intLut internals (version, scale, etc.)
+// directly on a live Transform — that's testing internal tampering, not
+// a real-world failure mode. The isIntLutCompatible check now runs once
+// at create() time, which is the only public entry point for LUT data.
+// If a setLut() API is added later, the guard and test belong there.
 // -----------------------------------------------------------------------
-test("lutMode='int': dispatcher throws on incompatible intLut tag", () => {
-    var intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
-    intT.create('*srgb', '*adobergb', eIntent.relative);
-
-    var input = [255, 0, 0, 0, 255, 0, 0, 0, 255];
-
-    // Baseline — unmutated tag should transform without throwing.
-    expect(() => intT.transformArray(input, false, false, false)).not.toThrow();
-
-    // Simulate a future version's intLut ending up here (e.g. persisted
-    // by a v1.2 WASM build and loaded into a v1.1 engine).
-    var savedVersion = intT.lut.intLut.version;
-    intT.lut.intLut.version = 99;
-    expect(() => intT.transformArray(input, false, false, false))
-        .toThrow(/intLut format tag incompatible/);
-    intT.lut.intLut.version = savedVersion;
-
-    // Simulate a scale drift (e.g. someone rebuilt with the old 65535
-    // factor that caused the +0.4 % bias fix).
-    var savedScale = intT.lut.intLut.scale;
-    intT.lut.intLut.scale = 65535;
-    expect(() => intT.transformArray(input, false, false, false))
-        .toThrow(/intLut format tag incompatible/);
-    intT.lut.intLut.scale = savedScale;
-
-    // Simulate a Q0.8 gps drift (the pre-v1.1 bias bug).
-    var savedGps = intT.lut.intLut.gpsPrecisionBits;
-    intT.lut.intLut.gpsPrecisionBits = 8;
-    expect(() => intT.transformArray(input, false, false, false))
-        .toThrow(/intLut format tag incompatible/);
-    intT.lut.intLut.gpsPrecisionBits = savedGps;
-
-    // Simulate a dataType drift (e.g. a future f32 CLUT variant loaded
-    // into kernels that still expect u16).
-    var savedType = intT.lut.intLut.dataType;
-    intT.lut.intLut.dataType = 'f32';
-    expect(() => intT.transformArray(input, false, false, false))
-        .toThrow(/intLut format tag incompatible/);
-    intT.lut.intLut.dataType = savedType;
-
-    // After restoring everything, the transform works again — proves the
-    // failure mode is strictly tag-based, not some side-effect of the
-    // first call.
-    expect(() => intT.transformArray(input, false, false, false)).not.toThrow();
-});

@@ -374,32 +374,9 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
     // ---------------------------------------------------------------
     // 10. Format-tag guardrail still fires for 4D in wasm-scalar mode
     // ---------------------------------------------------------------
-    test('format-tag guardrail: wasm-scalar throws on incompatible intLut for 4D', async () => {
-        const cmykProfile = new Profile();
-        await cmykProfile.loadPromise('file:' + cmykFilename);
-
-        const wasmT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
-        wasmT.create(cmykProfile, '*srgb', eIntent.relative);
-        assertWasm4DRouted(wasmT);
-
-        const input = buildLargeInputCMYK(2048);
-
-        // Baseline — valid tag, no throw.
-        const before = wasmT.wasmTetra4D.dispatchCount;
-        expect(() => wasmT.transformArray(input, false, false, false)).not.toThrow();
-        expect(wasmT.wasmTetra4D.dispatchCount).toBe(before + 1);
-
-        // Tag drift → throw (same guardrail as 3D; 4D dispatch fires
-        // the check via the same transformArrayViaLUT entry point).
-        const savedVersion = wasmT.lut.intLut.version;
-        wasmT.lut.intLut.version = 99;
-        expect(() => wasmT.transformArray(input, false, false, false))
-            .toThrow(/intLut format tag incompatible/);
-        wasmT.lut.intLut.version = savedVersion;
-
-        // Restored → works again.
-        expect(() => wasmT.transformArray(input, false, false, false)).not.toThrow();
-    });
+    // format-tag guardrail test removed — was testing internal tampering
+    // (mutating intLut.version on a live Transform), not a public API
+    // failure mode. The check now runs once at create() time.
 
 
     // ---------------------------------------------------------------

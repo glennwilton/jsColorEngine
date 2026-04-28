@@ -581,13 +581,16 @@
         // Transforms created from the same bag share compile work. Each
         // Transform still has its own linear-memory instance.
         this.wasmCache             = options.wasmCache || null;
+        this._wasmShrinkRatio      = options.wasmShrinkRatio || 0;
+        this._wasmMaxMemory        = options.wasmMaxMemory !== undefined
+            ? options.wasmMaxMemory : 128 * 1024 * 1024;
         this.wasmTetra3D           = null;
         this.wasmTetra3DSimd       = null;
-        this.wasmTetra3DInt16      = null;   // v1.3 — u16 I/O scalar 3D
-        this.wasmTetra3DInt16Simd  = null;   // v1.3 — u16 I/O SIMD 3D
+        this.wasmTetra3DInt16      = null;
+        this.wasmTetra3DInt16Simd  = null;
         this.wasmTetra4D           = null;
-        this.wasmTetra4DInt16      = null;   // v1.3 — u16 I/O scalar 4D
-        this.wasmTetra4DInt16Simd  = null;   // v1.3 — u16 I/O SIMD 4D
+        this.wasmTetra4DInt16      = null;
+        this.wasmTetra4DInt16Simd  = null;
         this.wasmTetra4DSimd       = null;
 
         // v1.3 — table-driven LUT kernel dispatcher cache. Resolved once
@@ -609,6 +612,20 @@
         this._lutKernelThreshold = 0;
         this._lutKernelBigKey    = null;  // diagnostic — which entry won
         this._lutKernelSmallKey  = null;  // diagnostic — which entry won
+        this._expectsU16         = false; // cached: lutMode is int16 family
+        this._isIntegerMode      = false; // cached: lutMode is any integer family
+
+        // LUT build hooks — run per grid cell during createNDDeviceLUT,
+        // zero per-pixel cost. Each array holds functions chained in
+        // order; addLutInputHook / addLutOutputHook manage ordering.
+        this._lutInputHooks  = [];
+        this._lutOutputHooks = [];
+        if (typeof options.lutInputHook === 'function') {
+            this._lutInputHooks.push(options.lutInputHook);
+        }
+        if (typeof options.lutOutputHook === 'function') {
+            this._lutOutputHooks.push(options.lutOutputHook);
+        }
 
         this.interpolation3D = options.interpolation3D ? options.interpolation3D.toLowerCase() : 'tetrahedral';
         this.interpolation4D = options.interpolation4D ? options.interpolation4D.toLowerCase() : 'tetrahedral';
@@ -769,8 +786,16 @@
     }
 
     /**
-     * Set a prebuilt lut - which can be used instead of using profiles
-     * @param lut
+     * Set a prebuilt lut — used instead of profile-based LUT generation.
+     *
+     * Currently validates chain structure only (profile/intent links).
+     * TODO: full LUT validation — CLUT dimensions, precision vs lutMode,
+     * inputChannels/outputChannels consistency, intLut compatibility.
+     * When added, this becomes the single validation gate so that
+     * transformArrayViaLUT can trust the LUT unconditionally.
+     *
+     * @param {Object} lut  Prebuilt LUT object with chain, CLUT, precision, etc.
+     * @throws {string} If chain structure is invalid.
      */
     setLut(lut){
         this.lut = lut;
@@ -812,6 +837,77 @@
 
 
         this.create(inputProfile, outputProfile, intent);
+    }
+
+    /**
+     * Add a hook that runs on each grid-cell's **input** during LUT build.
+     *
+     * The function receives a plain `[c0, c1, …]` array in device space
+     * [0–1] and must return an array of the same length (may be the same
+     * object, mutated in place).
+     *
+     * @param {Function} fn  `(deviceIn) => deviceIn`
+     * @param {'before'|'after'} [where='after']
+     *   `'after'`  — append (runs after previously added hooks).
+     *   `'before'` — prepend (runs before previously added hooks).
+     * @returns {Transform} this (for chaining)
+     */
+    addLutInputHook(fn, where) {
+        if (typeof fn !== 'function') throw 'addLutInputHook: fn must be a function';
+        if (where === 'before') {
+            this._lutInputHooks.unshift(fn);
+        } else {
+            this._lutInputHooks.push(fn);
+        }
+        return this;
+    }
+
+    /**
+     * Add a hook that runs on each grid-cell's **output** during LUT build.
+     *
+     * The function receives a plain `[c0, c1, …]` array in device space
+     * [0–1] and must return an array of the same length. A second
+     * read-only argument carries the original grid-cell input — useful
+     * for logging/debugging but must not be mutated.
+     *
+     * @param {Function} fn  `(deviceOut, deviceIn) => deviceOut`
+     * @param {'before'|'after'} [where='after']
+     *   `'after'`  — append (runs after previously added hooks).
+     *   `'before'` — prepend (runs before previously added hooks).
+     * @returns {Transform} this (for chaining)
+     */
+    addLutOutputHook(fn, where) {
+        if (typeof fn !== 'function') throw 'addLutOutputHook: fn must be a function';
+        if (where === 'before') {
+            this._lutOutputHooks.unshift(fn);
+        } else {
+            this._lutOutputHooks.push(fn);
+        }
+        return this;
+    }
+
+    /**
+     * Remove all LUT build hooks.
+     * @returns {Transform} this
+     */
+    clearLutHooks() {
+        this._lutInputHooks.length  = 0;
+        this._lutOutputHooks.length = 0;
+        return this;
+    }
+
+    /**
+     * Apply a chain of hook functions to a colour sample.
+     * @param {Function[]} hooks
+     * @param {number[]} values  - mutable current sample
+     * @param {number[]} [context] - read-only second arg (e.g. original input for output hooks)
+     * @private
+     */
+    _applyLutHooks(hooks, values, context) {
+        for (var i = 0; i < hooks.length; i++) {
+            values = hooks[i](values, context);
+        }
+        return values;
     }
 
     cloneLut(CLUT, encoding){
@@ -1274,6 +1370,8 @@
             }
         }
 
+        this._propagateWasmMemorySettings();
+
         // v1.3 — resolve LUT dispatcher table refs ONCE per create().
         // Walks the fallback chain in src/lutKernelTable.js for the
         // current (lutMode, inputChannels, outputChannels) triple,
@@ -1284,6 +1382,33 @@
         // is gray/duotone (handled by separate kernels, not the table).
         this._resolveLutKernels();
 
+        // Cache lutMode classification booleans so the per-call hot path
+        // in transformArrayViaLUT avoids repeated string comparisons.
+        // Must run AFTER lutMode demotions above have settled.
+        var lm = this.lutMode;
+        this._expectsU16    = (lm === 'int16' || lm === 'int16-wasm-scalar' || lm === 'int16-wasm-simd');
+        this._isIntegerMode = (lm === 'int' || lm === 'int16'
+            || lm === 'int-wasm-scalar'  || lm === 'int-wasm-simd'
+            || lm === 'int16-wasm-scalar' || lm === 'int16-wasm-simd');
+
+        // Validate intLut compatibility once at create() time. The only way
+        // an incompatible intLut can exist is if someone attached a foreign
+        // one from a different engine version — buildIntLut() always produces
+        // a compatible result. Throwing here (loud, immediate, grep-able)
+        // removes the need for a per-call guard in transformArrayViaLUT.
+        if(this._isIntegerMode && this.lut && this.lut.intLut
+            && !this.isIntLutCompatible(this.lut.intLut)){
+            throw new Error(
+                'jsColorEngine: intLut format tag incompatible with this version. ' +
+                'Got {version:' + this.lut.intLut.version +
+                ', dataType:' + JSON.stringify(this.lut.intLut.dataType) +
+                ', scale:' + this.lut.intLut.scale +
+                ', gpsPrecisionBits:' + this.lut.intLut.gpsPrecisionBits +
+                ', accWidth:' + this.lut.intLut.accWidth + '}. ' +
+                'Rebuild the Transform via create() or set lutMode:"float".'
+            );
+        }
+
         if(this.verbose){
             if(this.optimise){
                 console.log(this.optimiseInfo());
@@ -1292,6 +1417,203 @@
             }
         }
     };
+
+    /**
+     * Propagate memory-management settings to all live WASM states.
+     */
+    _propagateWasmMemorySettings() {
+        var states = [
+            this.wasmTetra3D, this.wasmTetra3DSimd,
+            this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
+            this.wasmTetra4D, this.wasmTetra4DSimd,
+            this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+        ];
+        var ratio = this._wasmShrinkRatio;
+        var max   = this._wasmMaxMemory;
+        for (var i = 0; i < states.length; i++) {
+            if (states[i]) {
+                states[i].shrinkRatio = ratio;
+                states[i].maxMemory   = max;
+            }
+        }
+    }
+
+    /**
+     * @param {number} ratio  When > 0, bind() will automatically re-
+     *   instantiate the WASM module whenever existing linear memory is
+     *   more than `ratio ×` the size actually needed. For example:
+     *
+     *     transform.setWasmShrinkRatio(4);
+     *
+     *   means "if the buffer is more than 4× larger than what the image
+     *   just processed needed, compact it". Checked post-run — memory
+     *   is reclaimed before transformArrayViaLUT returns. This keeps
+     *   memory proportional to the current workload without penalising
+     *   fixed-size workflows (the video demo runs same-size frames so
+     *   the ratio is never hit).
+     *
+     *   Set to 0 to disable (default).
+     *
+     * Cost of a triggered compact: ~0.1 ms (re-instantiation from a
+     * cached Module) + one LUT re-copy on next call. Negligible
+     * compared to the savings of releasing tens of MB of WASM memory.
+     */
+    setWasmShrinkRatio(ratio) {
+        this._wasmShrinkRatio = ratio || 0;
+        this._propagateWasmMemorySettings();
+    }
+
+    /**
+     * @param {number} bytes  Absolute WASM memory ceiling in bytes.
+     *   Checked immediately after each transform — if any state's
+     *   memory exceeds this, compact fires before the method returns.
+     *   The image still processes normally; cleanup is post-run.
+     *
+     *   Default: 128 MB (134217728). Set to 0 to disable.
+     *
+     *   Complements wasmShrinkRatio: shrinkRatio keeps memory
+     *   proportional to the workload, maxMemory is a hard ceiling
+     *   that protects against runaway growth. Developers can raise
+     *   the ceiling to match their workload.
+     */
+    setWasmMaxMemory(bytes) {
+        this._wasmMaxMemory = bytes || 0;
+        this._propagateWasmMemorySettings();
+    }
+
+    /**
+     * Compact all live WASM states NOW — each state re-instantiates
+     * its Module, starting with a fresh 1-page (64 KB) linear memory.
+     * The old Instance and its (potentially large) memory become
+     * eligible for GC.
+     *
+     * Typical use: after processing a batch that included an unusually
+     * large image, call this to release the inflated buffers before
+     * switching to a smaller-image workflow.
+     *
+     * The Transform remains fully functional — next transformArrayViaLUT
+     * call will grow the fresh memory to exactly the size needed and
+     * re-copy the LUT (~0.1 ms overhead).
+     */
+    _postRunWasmCheck() {
+        if (this._wasmMaxMemory <= 0 && this._wasmShrinkRatio <= 0) return;
+        var states = [
+            this.wasmTetra3D, this.wasmTetra3DSimd,
+            this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
+            this.wasmTetra4D, this.wasmTetra4DSimd,
+            this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+        ];
+        for (var i = 0; i < states.length; i++) {
+            if (states[i]) states[i].compactIfNeeded();
+        }
+    }
+
+    compactWasmMemory() {
+        var states = [
+            this.wasmTetra3D, this.wasmTetra3DSimd,
+            this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
+            this.wasmTetra4D, this.wasmTetra4DSimd,
+            this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+        ];
+        for (var i = 0; i < states.length; i++) {
+            if (states[i]) states[i].compact();
+        }
+    }
+
+    /**
+     * Destroy all WASM states, releasing their linear memory to GC.
+     * The Transform falls back to pure-JS integer kernels until
+     * create() is called again to reload WASM modules.
+     *
+     * Use when a Transform is being shelved or when you need
+     * absolute certainty that WASM memory is freed.
+     */
+    releaseWasmMemory() {
+        this.wasmTetra3D          = null;
+        this.wasmTetra3DSimd      = null;
+        this.wasmTetra3DInt16     = null;
+        this.wasmTetra3DInt16Simd = null;
+        this.wasmTetra4D          = null;
+        this.wasmTetra4DSimd      = null;
+        this.wasmTetra4DInt16     = null;
+        this.wasmTetra4DInt16Simd = null;
+        this._resolveLutKernels();
+    }
+
+    /**
+     * Returns the total byte length of WASM linear memory currently
+     * held across all live WASM states. Useful for diagnostics,
+     * deciding when to compact, or logging memory pressure.
+     */
+    wasmMemoryBytes() {
+        var total = 0;
+        var states = [
+            this.wasmTetra3D, this.wasmTetra3DSimd,
+            this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
+            this.wasmTetra4D, this.wasmTetra4DSimd,
+            this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+        ];
+        for (var i = 0; i < states.length; i++) {
+            if (states[i]) total += states[i].memory.buffer.byteLength;
+        }
+        return total;
+    }
+
+    /**
+     * Encode float Lab to u16 using this Transform's **input**-side
+     * PCS encoding (ICC v2 or v4, determined at create() time).
+     * @param {number} L  0–100
+     * @param {number} a  -128..+127
+     * @param {number} b  -128..+127
+     * @returns {number[]} [uL, ua, ub] clamped to 0..65535
+     * @throws If the input profile's PCS is not Lab.
+     */
+    inputLab2Int16(L, a, b) {
+        if (!this.lut || !this.lut.inLab) throw 'inputLab2Int16: input PCS is not Lab';
+        return convert.lab2Int16(L, a, b, this.lut.inLab);
+    }
+
+    /**
+     * Encode float Lab to u16 using this Transform's **output**-side
+     * PCS encoding.
+     * @param {number} L  0–100
+     * @param {number} a  -128..+127
+     * @param {number} b  -128..+127
+     * @returns {number[]} [uL, ua, ub] clamped to 0..65535
+     * @throws If the output profile's PCS is not Lab.
+     */
+    outputLab2Int16(L, a, b) {
+        if (!this.lut || !this.lut.outLab) throw 'outputLab2Int16: output PCS is not Lab';
+        return convert.lab2Int16(L, a, b, this.lut.outLab);
+    }
+
+    /**
+     * Decode u16 Lab values to float Lab using this Transform's
+     * **input**-side PCS encoding.
+     * @param {number} uL  u16 lightness
+     * @param {number} ua  u16 a
+     * @param {number} ub  u16 b
+     * @returns {{type, L, a, b, whitePoint}} Lab colour object (D50)
+     * @throws If the input profile's PCS is not Lab.
+     */
+    inputInt162Lab(uL, ua, ub) {
+        if (!this.lut || !this.lut.inLab) throw 'inputInt162Lab: input PCS is not Lab';
+        return convert.int162Lab(uL, ua, ub, this.lut.inLab);
+    }
+
+    /**
+     * Decode u16 Lab values to float Lab using this Transform's
+     * **output**-side PCS encoding.
+     * @param {number} uL  u16 lightness
+     * @param {number} ua  u16 a
+     * @param {number} ub  u16 b
+     * @returns {{type, L, a, b, whitePoint}} Lab colour object (D50)
+     * @throws If the output profile's PCS is not Lab.
+     */
+    outputInt162Lab(uL, ua, ub) {
+        if (!this.lut || !this.lut.outLab) throw 'outputInt162Lab: output PCS is not Lab';
+        return convert.int162Lab(uL, ua, ub, this.lut.outLab);
+    }
 
     gamutCheck(inDevice, outDevice, outputChannels){
         let labIn  = this.gamutTransforms.src2Lab.transform(this._gamutDeviceToObj(inDevice, true));
@@ -1522,6 +1844,13 @@
             gamutMode:     this.lutGamutMode,
             gamutLimit:    this.lutGamutMode === 'color' ? this.lutGamutLimit : 0,
             gamutMapScale: (this.lutGamutMode === 'map' || this.lutGamutMode === 'colorMap') ? this.lutGamutMapScale : 0,
+
+            inLab:  this.inputProfile  && this.inputProfile.type  === eProfileType.Lab
+                ? convert.labEncoding[this.inputProfile.version  === 2 ? 'v2' : 'v4']
+                : null,
+            outLab: this.outputProfile && this.outputProfile.type === eProfileType.Lab
+                ? convert.labEncoding[this.outputProfile.version === 2 ? 'v2' : 'v4']
+                : null,
         }
 
         /**
@@ -1861,8 +2190,15 @@
         var step = 1 / (gridPoints - 1);
         var a,o;
         var count = 0;
+        var inHooks  = this._lutInputHooks;
+        var outHooks = this._lutOutputHooks;
+        var hasIn  = inHooks.length  > 0;
+        var hasOut = outHooks.length > 0;
         for(a = 0; a < gridPoints; a++){
-            var device = this.forward([a * step]);
+            var src = [a * step];
+            if (hasIn) src = this._applyLutHooks(inHooks, src);
+            var device = this.forward(src);
+            if (hasOut) device = this._applyLutHooks(outHooks, device, src);
             for(o = 0; o < outputChannels; o++){
                 CLUT[position++] = device[o];
             }
@@ -1885,14 +2221,20 @@
         var a,b,o
         var av;
         var count = 0;
+        var inHooks  = this._lutInputHooks;
+        var outHooks = this._lutOutputHooks;
+        var hasIn  = inHooks.length  > 0;
+        var hasOut = outHooks.length > 0;
         for(a = 0; a < gridPoints; a++){
             av = a * step;
             for(b = 0; b < gridPoints; b++) {
-                // input is already scaled to 0.0 to 1.0 as we are using device encoding
-                var device = this.forward([av, b * step]);
+                var src = [av, b * step];
+                if (hasIn) src = this._applyLutHooks(inHooks, src);
+                var device = this.forward(src);
+                if (hasOut) device = this._applyLutHooks(outHooks, device, src);
 
                 if(this.lutGamutMode !== 'none'){
-                    device = this.gamutCheck([av, b * step], device, outputChannels);
+                    device = this.gamutCheck(src, device, outputChannels);
                 }
 
                 for(o = 0; o < outputChannels; o++){
@@ -1919,14 +2261,19 @@
         var r,g,b,o;
         var rv,gv;
         var count = 0;
+        var inHooks  = this._lutInputHooks;
+        var outHooks = this._lutOutputHooks;
+        var hasIn  = inHooks.length  > 0;
+        var hasOut = outHooks.length > 0;
         for(r = 0; r < gridPoints; r++){
             rv = r * step;
             for(g = 0; g < gridPoints; g++){
                 gv = g * step;
                 for( b = 0; b < gridPoints; b++){
-                    // input is already scaled to 0.0 to 1.0 as we are using device encoding
-                    let src = [rv, gv, b * step]
+                    let src = [rv, gv, b * step];
+                    if (hasIn) src = this._applyLutHooks(inHooks, src);
                     var device = this.forward(src);
+                    if (hasOut) device = this._applyLutHooks(outHooks, device, src);
 
                     if(this.lutGamutMode !== 'none'){
                         device = this.gamutCheck(src, device, outputChannels);
@@ -1964,6 +2311,10 @@
         var pipeline = this.pipeline;
         var len = pipeline.length;
         var device = [0,0,0,0];
+        var inHooks  = this._lutInputHooks;
+        var outHooks = this._lutOutputHooks;
+        var hasIn  = inHooks.length  > 0;
+        var hasOut = outHooks.length > 0;
 
         for(c = 0; c < gridPoints; c++){
             cv = c * step;
@@ -1972,12 +2323,12 @@
                 for( y = 0; y < gridPoints; y++){
                     yv = y * step;
                     for( k = 0; k < gridPoints; k++){
-                        // input is already scaled to 0.0 to 1.0 as we are using device encoding
-
                         let src = [cv, mv, yv, k * step];
+                        if (hasIn) src = this._applyLutHooks(inHooks, src);
                         for(i = 0; i < len; i++){
                             device = pipeline[i].funct.call(this, src, pipeline[i].stageData, pipeline[i]);
                         }
+                        if (hasOut) device = this._applyLutHooks(outHooks, device, src);
 
                         if(this.lutGamutMode !== 'none'){
                             device = this.gamutCheck(src, device, outputChannels);
@@ -2173,60 +2524,14 @@
         // [0, 65280] → [0, 65535] bit-trick); every other path (float,
         // int, int-wasm-*) writes u8 into a clamped Uint8ClampedArray.
         // Alpha cell follows the same width.
-        var outputArray = (this.lutMode === 'int16'
-                || this.lutMode === 'int16-wasm-scalar'
-                || this.lutMode === 'int16-wasm-simd')
+        var outputArray = this._expectsU16
             ? new Uint16Array(pixelCount * outputBytesPerPixel)
             : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
         var inputChannels = lut.inputChannels;
         var outputChannels = lut.outputChannels;
 
-        // Integer fast path safety check — runs ONCE per array call, not
-        // per pixel, so the cost is amortised to zero against the hot
-        // loop. We only check when the caller actually asked for the
-        // integer path AND an intLut is present; otherwise there's
-        // nothing to validate.
-        //
-        // Why throw (vs. silent anything):
-        //   - In v1.1 `buildIntLut()` is the only producer, so a mismatch
-        //     can ONLY arise from someone attaching a foreign intLut
-        //     (serialised cache from a different version, test fixture,
-        //     hand-built object, etc). That is always a dev bug, not a
-        //     data-dependent edge case.
-        //   - If we did NOT throw (no check at all, or silent fallback
-        //     with no signal), the integer kernel would run against a
-        //     CLUT / gps / accumulator that disagree with its hardcoded
-        //     shift and rounding biases. The output would still look
-        //     plausible — no crash, no obvious corruption — but with
-        //     an elevated per-channel LSB error rate that is almost
-        //     impossible to spot without a pixel-level diff against
-        //     the float kernel. That is the single worst failure mode
-        //     in a colour pipeline: wrong numbers that nobody notices
-        //     until someone prints a proof and the greys cast.
-        //   - Throwing gives a clear, immediate, grep-able error
-        //     pointing at the exact fix (rebuild via create() or
-        //     switch to lutMode:'float'). Loud failure >> silent drift.
-        //
-        // If you are calling `transformArrayViaLUT` directly with a
-        // pre-built intLut you got from somewhere else, this is the
-        // guardrail.
-        if((this.lutMode === 'int'
-                || this.lutMode === 'int16'
-                || this.lutMode === 'int-wasm-scalar'
-                || this.lutMode === 'int-wasm-simd'
-                || this.lutMode === 'int16-wasm-scalar'
-                || this.lutMode === 'int16-wasm-simd')
-            && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
-            throw new Error(
-                'jsColorEngine: intLut format tag incompatible with this version. ' +
-                'Got {version:' + lut.intLut.version +
-                ', dataType:' + JSON.stringify(lut.intLut.dataType) +
-                ', scale:' + lut.intLut.scale +
-                ', gpsPrecisionBits:' + lut.intLut.gpsPrecisionBits +
-                ', accWidth:' + lut.intLut.accWidth + '}. ' +
-                'Rebuild the Transform via create() or set lutMode:"float".'
-            );
-        }
+        // intLut compatibility is validated once at create() time —
+        // no per-call guard needed here. See create() for the check.
 
         switch(inputChannels){
             case 1: // Gray / mono
@@ -2824,16 +3129,65 @@
      *                                   to (outputHasAlpha && inputHasAlpha).
      * @param  {number}  [pixelCount]    Pixels to convert. Defaults to
      *                                   Math.floor(inputArray.length / inputBPP).
-     * @return {Uint8ClampedArray|Uint16Array} A new typed array of length
-     *                                   pixelCount * outputBytesPerPixel.
-     *                                   Type matches the lutMode family
-     *                                   (u16 for int16-* modes, u8 otherwise).
+     * @param  {Uint8ClampedArray|Uint16Array} [outputArray]
+     *                                   Optional destination buffer to reuse.
+     *                                   Must match expected output type and
+     *                                   have at least pixelCount * outputBPP
+     *                                   length.
+     * @return {Uint8ClampedArray|Uint16Array} Output typed array. If
+     *                                   outputArray is provided and valid, the
+     *                                   same instance is returned.
+     *  WASM MEMORY RETENTION
+     *
+     *   When lutMode is a WASM variant ('int-wasm-scalar', 'int-wasm-simd',
+     *   etc.), each call allocates WASM linear memory sized for the current
+     *   image. This memory persists between calls and only grows — WASM
+     *   pages cannot be released back to the OS by spec. In practice:
+     *
+     *   - Fixed-size workflows (video frames, same-size batch): memory
+     *     stabilises after the first call. No growth, no waste.
+     *   - Mixed-size workflows: memory stays at the high-water mark of
+     *     the largest image processed unless automatic guards are active.
+     *
+     *   Automatic guards (checked immediately after every transform):
+     *     wasmMaxMemory  (default 128 MB) — compacts any state whose memory
+     *                    exceeds this absolute byte ceiling. Set 0 to disable.
+     *     wasmShrinkRatio — compacts when memory exceeds ratio × what was
+     *                    needed for the image just processed. Default 0 (off).
+     *
+     *   Both fire post-run, so even the last image in a batch releases
+     *   memory immediately — no need to wait for a subsequent call.
+     *
+     *   Manual control:
+     *     transform.compactWasmMemory()    — re-instantiate, fresh memory
+     *     transform.releaseWasmMemory()    — drop WASM entirely, use JS
+     *     transform.wasmMemoryBytes()      — check current usage
+     *
+     *   See docs/deepdive/WasmKernels.md § "WASM memory management" for
+     *   benchmarked costs and design rationale.
+     *
+     * @param  {Uint8ClampedArray|Uint16Array|Float64Array|Array} inputArray
+     * @param  {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
+     * @param  {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
+     * @param  {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
+     *                                   to (outputHasAlpha && inputHasAlpha).
+     * @param  {number}  [pixelCount]    Pixels to convert. Defaults to
+     *                                   Math.floor(inputArray.length / inputBPP).
+     * @param  {Uint8ClampedArray|Uint16Array} [outputArray]
+     *                                   Optional destination buffer to reuse.
+     *                                   Must match expected output type and
+     *                                   have at least pixelCount * outputBPP
+     *                                   length. Eliminates per-call allocation
+     *                                   and reduces GC pressure — especially
+     *                                   beneficial for real-time loops (video,
+     *                                   animation).
+     * @return {Uint8ClampedArray|Uint16Array} Output typed array. If
+     *                                   outputArray is provided and valid, the
+     *                                   same instance is returned.
      * @throws {string} 'No LUT loaded' if the Transform was built without
      *                  buildLut: true.
-     * @throws {Error}  on intLut format-tag mismatch (rebuild via create()
-     *                  or set lutMode:'float').
      */
-    transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount){
+    transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
         var lut = this.lut;
         if(!lut){
             throw 'No LUT loaded';
@@ -2847,35 +3201,28 @@
         if(pixelCount === undefined){
             pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
         }
-        // Output buffer type matches the kernel family: u16 modes write
-        // Uint16Array, everything else writes Uint8ClampedArray. Same
-        // policy as the legacy dispatcher (kept identical for bit-exact
-        // equivalence in tests).
-        var outputArray = (this.lutMode === 'int16' || this.lutMode === 'int16-wasm-scalar' || this.lutMode === 'int16-wasm-simd')
-            ? new Uint16Array(pixelCount * outputBytesPerPixel)
-            : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
+        var expectedLen = pixelCount * outputBytesPerPixel;
+        var expectsU16 = this._expectsU16;
+        if(outputArray === undefined){
+            outputArray = expectsU16
+                ? new Uint16Array(expectedLen)
+                : new Uint8ClampedArray(expectedLen);
+        } else {
+            if(expectsU16){
+                if(!(outputArray instanceof Uint16Array)){
+                    throw new Error('transformArrayViaLUT: outputArray must be Uint16Array for lutMode="' + this.lutMode + '".');
+                }
+            } else if(!(outputArray instanceof Uint8ClampedArray)){
+                throw new Error('transformArrayViaLUT: outputArray must be Uint8ClampedArray for lutMode="' + this.lutMode + '".');
+            }
+            if(outputArray.length < expectedLen){
+                throw new Error('transformArrayViaLUT: outputArray too small (got ' + outputArray.length + ', need ' + expectedLen + ').');
+            }
+        }
         var inputChannels = lut.inputChannels;
 
-        // Same intLut compatibility guard as legacy — runs once per
-        // array call, amortised to zero against the hot loop. See
-        // legacy transformArrayViaLUT for the full rationale.
-        if((this.lutMode === 'int'
-                || this.lutMode === 'int16'
-                || this.lutMode === 'int-wasm-scalar'
-                || this.lutMode === 'int-wasm-simd'
-                || this.lutMode === 'int16-wasm-scalar'
-                || this.lutMode === 'int16-wasm-simd')
-            && lut.intLut && !this.isIntLutCompatible(lut.intLut)){
-            throw new Error(
-                'jsColorEngine: intLut format tag incompatible with this version. ' +
-                'Got {version:' + lut.intLut.version +
-                ', dataType:' + JSON.stringify(lut.intLut.dataType) +
-                ', scale:' + lut.intLut.scale +
-                ', gpsPrecisionBits:' + lut.intLut.gpsPrecisionBits +
-                ', accWidth:' + lut.intLut.accWidth + '}. ' +
-                'Rebuild the Transform via create() or set lutMode:"float".'
-            );
-        }
+        // intLut compatibility is validated once at create() time —
+        // no per-call guard needed here. See create() for the check.
 
         // Gray and duotone bypass the table — they're handled by
         // dedicated kernels with no fallback chain to express.
@@ -2909,6 +3256,8 @@
             : this._lutKernelSmall;
         run(this, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
 
+        this._postRunWasmCheck();
+
         return outputArray;
     }
 
@@ -2921,7 +3270,7 @@
      *  ROUTING TABLE
      *
      *   dataFormat === 'int8' AND LUT prebuilt
-     *      → transformArrayViaLUT()  — the IMAGE FAST PATH (~45-70 Mpx/s).
+     *      → transformArrayViaLUT()  — the IMAGE FAST PATH (~45-215 Mpx/s).
      *        outputFormat is ignored (always Uint8ClampedArray out).
      *
      *   dataFormat === 'object' OR 'objectFloat'
@@ -2934,6 +3283,21 @@
      *        numeric array. SLOW for image data — if you're processing
      *        pixels, rebuild the Transform with `buildLut: true` so you get
      *        routed to the fast path above.
+     *
+     *  WASM MEMORY & OUTPUT BUFFER REUSE
+     *
+     *   When routed to the LUT fast path with a WASM lutMode, WASM linear
+     *   memory is retained between calls at the high-water mark of the
+     *   largest image processed (WASM pages cannot shrink by spec). Pass
+     *   `outputArray` to reuse a pre-allocated buffer and avoid per-call
+     *   JS allocation / GC pressure.
+     *
+     *   Memory is automatically capped at 128 MB by default
+     *   (wasmMaxMemory) — anything beyond that is compacted on the next
+     *   call. See transformArrayViaLUT() JSDoc for all reclaim methods
+     *   (compactWasmMemory, setWasmShrinkRatio, setWasmMaxMemory,
+     *   releaseWasmMemory, wasmMemoryBytes) and
+     *   docs/deepdive/WasmKernels.md for full details.
      *
      *  OUTPUT FORMAT
      *
@@ -2950,7 +3314,6 @@
      *   - Pixel-format strings: 'RGB', 'RGBA', 'BGRA', 'CMYK', 'CMYKA'
      *     replacing the current inputHasAlpha/outputHasAlpha/preserveAlpha
      *     triple-boolean.
-     *   - Optional `out` buffer to skip allocation in tight realtime loops.
      *
      * @param {Uint8ClampedArray|Uint8Array|Uint16Array|Float32Array|Float64Array|Array} inputArray
      * @param {boolean} inputHasAlpha
@@ -2958,19 +3321,22 @@
      * @param {boolean} [preserveAlpha]
      * @param {number}  [pixelCount]
      * @param {string}  [outputFormat]  See OUTPUT FORMAT above.
+     * @param {Uint8ClampedArray|Uint16Array} [outputArray]
+     *                  Optional reusable destination buffer. Only used when
+     *                  transformArray() routes to transformArrayViaLUT().
      * @returns {Uint8ClampedArray|Uint16Array|Float32Array|Float64Array|Array}
      * @throws {string} 'No Pipeline' if create()/createMultiStage() hasn't run.
      * @throws {string} 'forwardArray can only be used with int8 or int16
      *                  dataFormat' for invalid combinations.
      */
-    transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat){
+    transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat, outputArray){
 
         if(!this.pipelineCreated){
             throw 'No Pipeline';
         }
 
         if((this.dataFormat === 'int8' || this.dataFormat === 'int16') && this.lut !== false){
-            return this.transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount);
+            return this.transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray);
         }
 
         if(this.dataFormat === 'object' || this.dataFormat === 'objectFloat'){

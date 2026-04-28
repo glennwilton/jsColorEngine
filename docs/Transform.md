@@ -35,6 +35,7 @@ colours / pixels as you like.
 * [Gamut warning modes](#gamut-warning-modes)
 * [Methods](#methods)
 * [Properties](#properties)
+* [LUT build hooks](#lut-build-hooks)
 * [Notes about prebuilt LUT size](#notes-about-prebuilt-lut-size)
 * [Misread-prone option names](#misread-prone-option-names)
 
@@ -301,11 +302,179 @@ Parameters:
   `Array`. Ignored on the LUT path (which always returns
   `Uint8ClampedArray`).
 
-### `transform.transformArrayViaLUT(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?)`
+### `transform.transformArrayViaLUT(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?, outputArray?)`
 
 The fast image path explicitly. Requires `buildLut: true,
-dataFormat: 'int8'` at construction time and a `Uint8ClampedArray` (or
-plain `Array` of bytes) as input. Always returns a `Uint8ClampedArray`.
+dataFormat: 'int8'` (or `'int16'`) at construction time.
+
+* `outputArray` — optional pre-allocated `Uint8ClampedArray` (or
+  `Uint16Array` for int16 modes) to write into. Must be at least
+  `pixelCount × outputBPP` long. When provided, the same instance is
+  returned — no allocation, no GC pressure. Ideal for real-time
+  loops (video soft-proofing, animation).
+
+Returns a `Uint8ClampedArray` (or `Uint16Array` for int16 modes).
+
+**WASM memory retention:** when `lutMode` is a WASM variant, each call
+may grow WASM linear memory to fit the current image. This memory
+persists and only grows (WASM spec limitation). Fixed-size workflows
+(video, batches) stabilise after the first call. Mixed-size workflows
+retain the high-water mark of the largest image unless explicitly
+reclaimed — see [WASM memory management](#wasm-memory-management)
+below.
+
+### WASM memory management
+
+When using WASM `lutMode` variants (`'int-wasm-scalar'`,
+`'int-wasm-simd'`, `'int16-wasm-scalar'`, `'int16-wasm-simd'`), WASM
+linear memory is allocated per-Transform and can only grow — it cannot
+be returned to the OS by the WASM specification.
+
+For fixed-size workflows (video frames, same-size image batches),
+memory stabilises after the first call. For mixed-size workflows, a
+one-off large image permanently inflates the buffer unless reclaimed.
+
+#### Reclaiming WASM memory
+
+| Method | Effect |
+|---|---|
+| `transform.compactWasmMemory()` | Re-instantiate all WASM states with fresh 1-page (64 KB) memory. ~0.1 ms cost + one LUT re-copy on next call. Transform stays fully functional. |
+| `transform.setWasmShrinkRatio(N)` | Auto-compact after each transform when memory exceeds `N ×` what the just-processed image needed. E.g. `4` = compact when buffer is >4× oversized. Set `0` to disable (default). Also available as constructor option `{ wasmShrinkRatio: 4 }`. |
+| `transform.setWasmMaxMemory(bytes)` | Absolute memory ceiling. Checked immediately after each transform — if WASM memory exceeds this, compacts right away. Default **128 MB**. Set `0` to disable. Also available as constructor option `{ wasmMaxMemory: N }`. |
+| `transform.releaseWasmMemory()` | Drop all WASM states; dispatcher falls back to pure-JS `'int'` kernels. Call `create()` to reload WASM. |
+| `transform.wasmMemoryBytes()` | Returns total bytes held across all WASM states (diagnostic). |
+| `transform = null` | Let GC collect everything — WASM, LUT, the lot. |
+
+`wasmShrinkRatio` keeps memory proportional to the current workload
+(prevents hovering at a high-water mark). `wasmMaxMemory` is a safety
+net — an absolute cap that protects against runaway growth. Both checks
+fire post-run, so the last image in a batch always cleans up.
+
+**Typical patterns:**
+
+```js
+// Video / real-time: fixed frame size, no compaction needed.
+// Memory stabilises after frame 1.
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+t.create(src, dst, intent);
+for (const frame of frames) {
+    t.transformArrayViaLUT(frame, ...);
+}
+
+// Batch with occasional large image: auto-compact.
+const t = new Transform({
+    dataFormat: 'int8', buildLut: true,
+    wasmShrinkRatio: 4   // compact when memory > 4× needed
+});
+t.create(src, dst, intent);
+for (const img of images) {
+    t.transformArrayViaLUT(img, ...);  // auto-compacts after outliers
+}
+
+// Explicit cleanup after a known-large image:
+t.transformArrayViaLUT(hugeImage, ...);
+t.compactWasmMemory();   // reclaim immediately
+```
+
+For benchmarks and implementation details, see
+[WASM memory management](./deepdive/WasmKernels.md#wasm-memory-management-v142)
+in the deep dive.
+
+### Lab ↔ int16 encoding helpers
+
+When working with `dataFormat: 'int16'` transforms that involve a Lab
+profile, the LUT carries encoding metadata so you can convert between
+float Lab and the ICC u16 representation without knowing the profile
+version:
+
+```js
+// Build a transform with a Lab output
+const t = new Transform({ dataFormat: 'int16', buildLut: true });
+t.create('*srgb', '*Lab', eIntent.relative);
+
+// Encode float Lab → u16 (uses the output profile's ICC encoding)
+const u16 = t.outputLab2Int16(50, 20, -30);  // [uL, ua, ub]
+
+// Decode u16 → float Lab
+const lab = t.outputInt162Lab(u16[0], u16[1], u16[2]);
+// { type, L: 50, a: 20, b: -30, whitePoint: d50 }
+```
+
+**Transform methods** (read encoding from the LUT automatically):
+
+| Method | Side | Direction |
+|---|---|---|
+| `inputLab2Int16(L, a, b)` | input profile | Lab → u16 |
+| `outputLab2Int16(L, a, b)` | output profile | Lab → u16 |
+| `inputInt162Lab(uL, ua, ub)` | input profile | u16 → Lab |
+| `outputInt162Lab(uL, ua, ub)` | output profile | u16 → Lab |
+
+Throws if the corresponding profile is not a Lab profile.
+
+**Low-level** (`convert.*`) — portable, works without a Transform:
+
+```js
+const u16 = convert.lab2Int16(50, 20, -30, 'v4');
+const lab = convert.int162Lab(u16[0], u16[1], u16[2], 'v4');
+// Also accepts encoding objects: convert.labEncoding.v2, .v4
+```
+
+**LUT metadata** — `lut.inLab` / `lut.outLab` are auto-populated at
+`create()` time. They are plain frozen objects (no functions), so they
+survive `JSON.stringify`, `structuredClone`, and `postMessage` to
+workers.
+
+### LUT build hooks
+
+Hooks let you warp the colour space during LUT construction — once per
+grid cell, not per pixel at runtime. The warped values are baked into
+the LUT cells so the per-pixel kernel stays fast (zero overhead).
+
+```js
+const xf = new Transform({
+    dataFormat: 'int8',
+    buildLut:   true,
+    // Simple form — single hook via constructor
+    lutOutputHook: (cmyk) => {
+        cmyk[3] = Math.min(cmyk[3], 0.80);   // clamp K to 80%
+        return cmyk;
+    },
+});
+xf.create(sRGB, graCoL, eIntent.relative);
+```
+
+For composable / ordered hooks, use the method API:
+
+| Method | Description |
+|---|---|
+| `addLutInputHook(fn, where?)` | Add a pre-transform hook. `where` = `'before'` (prepend) or `'after'` (append, default). |
+| `addLutOutputHook(fn, where?)` | Add a post-transform hook. Same ordering. |
+| `clearLutHooks()` | Remove all hooks. |
+
+Hooks are called in array order. Each receives a plain `[c0, c1, …]`
+array in device space [0–1] and must return an array of the same
+length. `addLutInputHook(fn, 'before')` prepends so it runs first;
+`addLutOutputHook(fn)` (default `'after'`) appends so it runs last.
+
+**Output hooks** receive a second read-only argument — the original
+grid-cell input — useful for logging and debugging:
+
+```js
+xf.addLutOutputHook((deviceOut, deviceIn) => {
+    console.log('IN', deviceIn, '→ OUT', deviceOut);
+    return deviceOut;
+});
+```
+
+```js
+xf.addLutOutputHook(clampK, 'after');
+xf.addLutInputHook(boostSat, 'before');
+xf.create(sRGB, graCoL, eIntent.relative);
+```
+
+A 33³ grid calls each hook 35 937 times; a 17⁴ grid 83 521 times.
+Build cost increases by the hook's complexity; transform cost is
+unchanged.
 
 ### Diagnostics
 

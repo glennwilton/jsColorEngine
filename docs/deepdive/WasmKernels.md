@@ -612,6 +612,157 @@ CPU's `VPMULLD` + `v128.load64_zero` throughput; it will shift somewhat
 on different microarchitectures but not so much that the relative
 ordering of the kernels flips.
 
+## WASM memory management (v1.4.2)
+
+WASM linear memory can only grow, never shrink — `memory.grow()` is
+one-way by spec, and the `memory.discard` proposal has no shipping
+browser implementation as of 2026. This means a transient large image
+(e.g. a one-off 100 MB file in a workflow that normally processes 2 MB
+images) permanently inflates every WASM state's linear memory for the
+lifetime of the Transform.
+
+### How memory works internally
+
+Each WASM state (`Tetra3DState`, `Tetra4DState`, etc.) owns a
+`WebAssembly.Instance` with its own linear memory. Layout:
+
+```
+[ LUT (u16 CLUT) | input (u8/u16) | output (u8/u16) | pad/scratch ]
+ ^lutPtr          ^inputPtr        ^outputPtr
+```
+
+`bind()` checks `memory.buffer.byteLength` against what the current
+`(intLut, pixelCount, cMax)` shape needs. If memory is too small, it
+calls `memory.grow()`. The LUT is identity-checked by reference and
+only re-copied when it changes (common case: never, same LUT for life).
+
+The compiled `WebAssembly.Module` is the expensive part (~5 ms first
+compile). It's cached in the caller's `wasmCache` bag and shared across
+Transforms. Instantiation from a cached Module is ~0.1 ms.
+
+### The problem
+
+After processing a 4 Mpx image, a 3D scalar state holds ~25 MB of
+linear memory. If the next thousand images are 16 Kpx, those 25 MB
+sit unused but unreclaimable — V8 / SpiderMonkey will not return WASM
+pages to the OS.
+
+### How compaction works
+
+Compaction re-instantiates a WASM state from its stored
+`WebAssembly.Module`. The old Instance (and its large memory) becomes
+GC-eligible. The new Instance starts with 1 page (64 KB); the next
+`bind()` grows it to exactly what's needed and re-copies the LUT.
+Cost: ~0.1 ms per state (instantiation from a compiled Module is
+near-free) + one LUT re-copy.
+
+### Post-run memory guards
+
+Both automatic guards run immediately **after** every
+`transformArrayViaLUT` call — the image is fully processed and the
+result is already in the JS output array. If either guard fires,
+memory is reclaimed before the method returns. This means the last
+image in a batch never leaves memory bloated.
+
+When neither guard fires (the common case for fixed-size workflows),
+the post-run check is a single `byteLength` read + two integer
+comparisons — effectively zero overhead.
+
+**`wasmShrinkRatio` — keeps memory proportional to the workload**
+
+After each transform, every WASM state checks whether its memory pages
+exceed `pagesNeeded × ratio` for the image just processed. If so,
+`compact()` fires. This prevents the high-water mark from lingering
+when you switch from large images to small ones.
+
+```js
+transform.setWasmShrinkRatio(4);  // compact when memory > 4× what was just needed
+```
+
+Also available as a constructor option: `{ wasmShrinkRatio: 4 }`.
+
+- Fixed-size workflows: the ratio is never exceeded — zero overhead.
+- Mixed-size workflows: compact fires once when image size drops
+  significantly, then stabilises at the smaller level.
+- Default: `0` (disabled). Enable when processing variable-size images.
+
+**`wasmMaxMemory` — absolute ceiling (default 128 MB)**
+
+An absolute byte ceiling. After each transform, if any state's memory
+exceeds this value, it compacts. A 1 GB image still processes fine —
+memory just gets reclaimed right after.
+
+```js
+// Default: 128 MB — reasonable for servers and browsers
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+
+// Lower ceiling for memory-constrained environments
+const t2 = new Transform({ wasmMaxMemory: 64 * 1024 * 1024 });
+
+// Change at runtime
+t.setWasmMaxMemory(256 * 1024 * 1024);
+
+// Disable — memory never auto-reclaims (use compactWasmMemory() manually)
+t.setWasmMaxMemory(0);
+```
+
+The cost of a triggered compact for a 200 MB image that takes ~300 ms
+to process at SIMD speeds: ~0.1 ms re-instantiation = 0.03% — invisible.
+
+**How the two guards complement each other:**
+
+| Guard | Role | When it matters |
+|---|---|---|
+| `wasmShrinkRatio` | Relative — keeps memory proportional to current workload | Mixed-size workflows: prevents hovering at the high-water mark |
+| `wasmMaxMemory` | Absolute — hard ceiling, protects against runaway memory | Safety net: caps memory regardless of image size |
+
+Both are independent; either can trigger a compact, and both can be
+active simultaneously. For most users the 128 MB default is sufficient
+— it prevents runaway memory on servers and long-lived browser tabs
+without any configuration. Developers processing larger images
+routinely can raise the ceiling to match their workload.
+
+### Manual control
+
+**`compactWasmMemory()` — explicit, immediate**
+
+```js
+transform.transformArrayViaLUT(hugeImage, ...);  // memory grows to 25 MB
+transform.compactWasmMemory();                    // → 64 KB, old 25 MB freed
+transform.transformArrayViaLUT(smallImage, ...);  // grows to ~400 KB
+```
+
+Useful when you know you've finished a burst of large images and want
+deterministic cleanup.
+
+**`releaseWasmMemory()` — full teardown**
+
+Sets all WASM states to null and re-resolves the kernel dispatcher
+to fall back to pure-JS `'int'` kernels. Use when shelving a Transform
+or when you need a guarantee that WASM memory is freed. Call `create()`
+again to reload WASM.
+
+### `wasmMemoryBytes()` — diagnostic
+
+Returns total bytes across all live WASM states. Useful for monitoring
+memory pressure, deciding when to compact, or logging.
+
+### Benchmarked cost of auto-compact (post-run)
+
+`bench/wasm_shrink_ratio_bench.js` measures the worst case: alternating
+big/small images every call so compact fires after every large image.
+
+| Scenario | Overhead (scalar) | Overhead (SIMD) | Memory saved |
+|---|---|---|---|
+| 64K ↔ 16K px | 0% (never fires) | 0% (never fires) | 0 KB |
+| 1M ↔ 16K px  | +9% | +23% | 6 MB |
+| 4M ↔ 16K px  | +14% | +22% | 24 MB |
+
+The overhead numbers are worst-case (compact fires after every large
+image in the alternating pair). In practice, you see a one-off compact
+when image size drops, then nothing until the next size jump — the
+amortised cost is effectively zero.
+
 ## Related
 
 - [Architecture](./Architecture.md) — where the WASM kernels plug into

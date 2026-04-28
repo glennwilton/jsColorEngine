@@ -25,6 +25,15 @@ future-facing only.
 > re-deriving the design. Numbers and trade-offs come from measurement,
 > not speculation — see Performance.md for the evidence behind each
 > projection.
+>
+> **Convention: plan here, thinking elsewhere.** The roadmap is the
+> *what* and *when* — keep sections short and actionable. Detailed
+> analysis, trade-off reasoning, benchmark results, and design
+> rationale live in [Performance.md](./Performance.md),
+> [deep-dive docs](./deepdive/), or inline code comments. Roadmap
+> sections should reference those docs rather than duplicating the
+> long-tail thinking, so ideas don't get lost across copy/paste and
+> the roadmap stays scannable.
 
 ---
 
@@ -33,14 +42,12 @@ future-facing only.
 - [Shipped so far](#shipped-so-far)
 - [v1.4 — Image helper + browser samples (shipped)](#v14--image-helper--browser-samples)
     - [Browser samples](#browser-samples)
+- [v1.4.2 — Polishing pass (planned)](#v145--polishing-pass-planned)
 - [v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
     - [N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)](#n-channel-float-inputs-5--6--7--8-channel-input-profiles)
-    - [Tunable LUT grid size — `lutGridSize` option](#tunable-lut-grid-size--lutgridsize-option)
-    - [Custom LUT callbacks — `lutInputHook` / `lutOutputHook`](#custom-lut-callbacks--lutinputhook--lutoutputhook)
-    - [Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)](#lab--int16-helpers-convertlab2int16--convertint162lab)
-    - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Dependency hygiene — Dependabot triage + devDependency bumps](#dependency-hygiene--dependabot-triage--devdependency-bumps)
     - [Pipeline validation — `validateOnCreate` option](#pipeline-validation--validateoncreate-option)
+    - [Transform identity / NOP detection](#transform-identity--nop-detection)
     - [Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)](#compiled-non-lut-pipeline--tomodule-v15-centrepiece)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
@@ -49,6 +56,9 @@ future-facing only.
 - [v1.7 (optional) — Hardened profile decode](#v17-optional--hardened-profile-decode)
 - [v2 — Separation of concerns: split Transform + Pipeline + Interpolator](#v2--separation-of-concerns-split-transform--pipeline--interpolator)
 - [What we are explicitly NOT doing](#what-we-are-explicitly-not-doing)
+- [Research and analysis](#research-and-analysis)
+    - [LUT grid size sweep — `lutGridSize` analysis](#lut-grid-size-sweep--lutgridsize-analysis)
+    - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
 - [Historical record — original v1.3 / v1.5 analysis (1D WASM POC)](#historical-record--original-v13--v15-analysis-1d-wasm-poc)
 
 ---
@@ -206,10 +216,9 @@ What's deliberately **not** in v1.3:
   through the f64 pipeline today and don't have a real-world
   use case for a fast int / WASM path. v1.5 adds them on the
   **float side only** (see below).
-- **`lutGridSize` option.** Bumped to v1.5 — the int16 kernel
-  ladder was the higher-value v1.3 pull, and the sample suite
-  in v1.4 is the higher-value next step before we go back to
-  more accuracy levers.
+- **`lutGridSize` option.** Moved to [Research and analysis](#research-and-analysis)
+  — needs benchmarking (accuracy knee, cache knee) before it
+  becomes a feature. Not version-gated.
 - **`lcms_patch/` regen-able diff** for the patched `transicc`
   binary. The endpoint-diff and per-pixel triage harnesses both
   shipped (see [Accuracy.md](./deepdive/Accuracy.md)) — the open
@@ -224,10 +233,10 @@ What's deliberately **not** in v1.3:
 The v1.3 plan above shipped as scoped (modulo the deliberate
 deferrals noted in the bullet list). The original "v1.3 plan"
 prose that lived here has been folded into the shipped retrospective
-and into [Accuracy.md](./deepdive/Accuracy.md). Two follow-up items
-that were originally drafted under v1.3 — `lutGridSize` and the
-`lcms_patch/` extraction — moved to v1.5 alongside the bigger
-compiled-pipeline work (next-but-one section).
+and into [Accuracy.md](./deepdive/Accuracy.md). The `lcms_patch/`
+extraction follow-up is now tracked in v1.4.2 as a polish-pass item,
+`lutGridSize` moved to [Research and analysis](#research-and-analysis),
+and the larger compiled-pipeline work remains in v1.5.
 
 ---
 
@@ -574,197 +583,37 @@ tuning guide** (when it lands) — each one is the "working copy" of
 a code block in the guide, checked for drift by a tiny sync script.
 
 ---
-## v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`
+## v1.4.2 — Polishing pass (planned)
 
-> **Scope reframe (Apr 2026).** v1.5 was originally "compiled
-> non-LUT transforms + `toModule()` distribution". After the v1.3
-> close-out two smaller items got slotted in at the front of its
-> queue, and the ICCImage helper + samples work was promoted to v1.4
-> (its own showcase release on the back of the v1.3 perf story).
-> v1.5 now bundles:
->
-> - **N-channel float inputs** — quick, low-risk extension of the
->   existing float pipeline to cover 5/6/7/8-channel input device
->   profiles (RISO MZ770, multi-spot press profiles). Float pipeline
->   only — see the section below for why we don't need a fast int /
->   WASM path for these.
-> - **`lutGridSize` option** — accuracy lever rolled forward from the
->   v1.3 plan. Independent of any kernel change, lands cleanly on top
->   of the v1.3 kernel ladder.
-> - **Custom LUT callbacks** (`lutInputHook` / `lutOutputHook`) —
->   intercept the input and/or output of every cell during LUT build.
->   Use cases: saturation boost (+15 % chroma on every sample before
->   the profile transform), channel swap (build a LUT that maps R↔B),
->   debug logging (dump every (input, output) pair to a file),
->   synthetic LUTs built from scratch (identity + user-defined warp,
->   no profile involved). Pure build-time hook — zero per-pixel cost
->   at transform time.
-> - **`convert.lab2Int16` / `convert.int162Lab` helpers** — small
->   convenience wrappers over the v1.3 16-bit ladder for callers
->   feeding u16 Lab buffers directly. Two-layer API:
->   `convert.lab2Int16` / `convert.int162Lab` as the portable
->   lower-level primitive (takes an encoding sub-object — typically
->   `lut.inLab` or `lut.outLab` — or an explicit numeric tuple;
->   survives JSON / `structuredClone` / worker post-message), and
->   four explicit Transform wrappers
->   (`xform.inputLab2Int16` / `xform.outputLab2Int16` /
->   `xform.inputInt162Lab` / `xform.outputInt162Lab`) as the
->   ergonomic top for callers who already have a Transform in hand
->   and want to read or write either side without ambiguity.
->   Preferred storage: numeric scaling values **as data** on the
->   LUT (`pcsVersion` for human-readable JSON, `labNumerator` /
->   `abDenominator` for math, pre-computed multipliers for the
->   hot loop) so any future encoding is a numeric-tuple change
->   rather than a code change. Bulk array helpers are intentionally
->   *not* shipped — the math is straight-line and developers can
->   inline a tight loop tuned for their use case (and use the
->   scalar `transform.outputInt162Lab` as a ground-truth check).
->   See the section below.
-> - **`lcms_patch/` extraction** — janitorial follow-up from the v1.3
->   compat harness (see Accuracy.md).
-> - **Dependency hygiene** — `webpack` 5.89 → current 5.x,
->   `webpack-cli` 4 → 5, `webpack-dev-server` 4 → 5, `webpack-merge`
->   5 → current. Clears the 32 open Dependabot alerts (all transitive
->   `devDependencies` — `node-forge`, `serialize-javascript`,
->   `body-parser`, `express`, `ws`, `minimatch`, `braces`, etc.); the
->   runtime engine has zero direct vulnerable deps and ships nothing
->   from `node_modules` in the npm tarball, so the security exposure
->   today is contributor-machine only. Acceptance: full `npm test`
->   210/210, `npm run build` still produces browser bundles, all
->   sample pages and the bench load/run, all alerts closed or
->   explicitly dismissed-as-not-applicable.
-> - **Pipeline validation** (`validateOnCreate` option) — after
->   `create()` / `createMultiStage()` builds the pipeline, run a
->   single-pixel transform in a `try/catch` to validate the pipeline
->   actually works. If it throws (NaN in a matrix, malformed curve,
->   etc.), `create()` throws instead of returning a Transform that
->   will fail on first use. Simple guard that guarantees both
->   `transform()` and `transformArray()` will succeed if `create()`
->   succeeded. Cheap (~1 µs), opt-in, zero cost if disabled.
-> - **Same-profile passthrough (intent-gated)** — when the input and
->   output ICC profiles are the same, detect a **passthrough** path that
->   still respects **rendering intent**: take a fast no-op or single-leg
->   shortcut only where intent and BPC make that correct; otherwise keep
->   the full transform (same profile both sides is *not* automatically
->   identity — AToB/BToA asymmetry and table choice still matter). Bench
->   and lcms parity for the intent matrix (perceptual, relative
->   colorimetric, saturation, absolute), including same-CMYK-profile rows
->   such as GRACoL → GRACoL.
->
-> The compiled non-LUT pipeline + `toModule()` work is still the
-> centrepiece of v1.5 — those land after the warm-up items above.
-> This is **the largest single piece of post-v1.4 work** and could
-> meaningfully delay the release; v1.4's sample suite shipped ahead
-> of it precisely so the project kept shipping visible progress on
-> top of the v1.3 perf story.
+Small, high-impact cleanup release focused on allocation hygiene and
+sample portability while v1.5 centrepiece work is in flight.
 
-### N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)
+- **DONE — WASM memory management.** `wasmMaxMemory` (default 128 MB)
+  and `wasmShrinkRatio` post-run guards, plus `compactWasmMemory()`,
+  `releaseWasmMemory()`, `wasmMemoryBytes()`.
+- **DONE — reuse output buffers.** `transformArrayViaLUT()` and
+  LUT-routed `transformArray()` now accept an optional destination
+  array so tight loops can avoid per-call allocations and reduce GC
+  churn.
+- **DONE — Update benchmarks to reuse buffers.** Bench scripts
+  normalized; hot-loop measurements no longer include avoidable
+  output allocations. MB/s metric added alongside MPx/s.
+- **DONE — Make sample links/lib references relative.** All sample
+  pages now use fully relative paths for scripts/assets/profiles.
+- **DONE — Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`).**
+  Convenience/API polish for u16 Lab encode/decode workflows.
+  Shipped with `lut.inLab`/`lut.outLab` encoding metadata and four
+  Transform wrappers (`inputLab2Int16`, etc.).
+- **DONE — Custom LUT callbacks (`lutInputHook` / `lutOutputHook`).**
+  Build-time-only LUT shaping hooks with zero per-pixel cost.
+  Composable via `addLutInputHook()` / `addLutOutputHook()` with
+  `before`/`after` ordering; `clearLutHooks()` to reset.
+  Output hooks also receive the original input as a second argument
+  for debugging/logging.
 
-**Today.** jsColorEngine's float (`lutMode: 'float'` /
-`buildLut: false`) and `'int'` paths handle 3- and 4-channel input
-device profiles at speed. For inputs with 5 or more channels (the
-2C / 3C RISO MZ770 spot profiles in the lcms-compat suite, plus
-real-world multi-spot CMYKOG / Hexachrome / 7-colour press profiles),
-the engine **already produces correct output** through the f64
-non-LUT pipeline (`buildLut: false`), which has no input-channel
-limit. What it doesn't do is build a fast LUT for them.
+Design notes for the LUT hooks are kept in the section below.
 
-**v1.5 adds:** `tetrahedralInterpNDArray_*Ch_loop` (the float
-N-channel kernel, the natural extension of the existing 3D and
-4D float kernels) and the build path in `createNDDeviceLUT()` that
-emits an N-D `Float64Array` CLUT. This means an N-channel input
-profile picks up the same float-LUT interpolation speedup the 3-
-and 4-channel inputs get today (~10× over the per-pixel pipeline
-walker), without changing the int / WASM kernel surface.
-
-**Deliberately NOT shipping**: `int` / `int-wasm-scalar` /
-`int-wasm-simd` for N>4 input. The use case isn't there. Three
-reasons:
-
-1. **No real-world high-throughput user.** N-channel input profiles
-   exist for press separation jobs (proofing one spot CMYKOG file)
-   and measurement workflows (instrument-derived n-channel scans),
-   not for image batch processing. The image throughput where the
-   int / WASM ladder pays off is a 3- or 4-channel input world
-   (RGB, CMYK).
-2. **The dimensional explosion.** A 17⁵ N-channel CLUT is 1.4 M
-   cells; 17⁶ is 24 M; 17⁷ is 410 M. Even at u16 (2 bytes/cell),
-   17⁷ × 4-output is 3.3 GB. Float (8 bytes) is 13 GB. Whatever
-   speed an N-channel int kernel could deliver, the LUT bake is the
-   bottleneck — and most interesting N-channel profiles use a
-   smaller grid (9 or 11 per axis) precisely because of this.
-3. **The float kernel is the right shape.** Float doesn't multiply
-   the per-axis weight precision constraint that drove the
-   Q0.13 / two-rounding choice on int 4D — `f64.mul` has 53 bits of
-   mantissa to spend, so an N-axis interp at f64 is a straight
-   tetrahedral walk with no intermediate rounding. The kernel is
-   shorter, simpler, and well-suited to the workflows that actually
-   want N-channel inputs (single-pixel inspection, slow batch
-   measurement passes, gamut shell generation).
-
-**Effort:** small. The 3D and 4D float kernels in
-[`src/Transform.js`](../src/Transform.js) are the template — N-channel
-unrolls the same simplex walk over an N-D index. Plumbed through
-the existing `lutKernelTable.js` dispatcher as a new
-`(lutMode='float', inCh=N)` row. Existing N-channel test profiles
-in [`bench/lcms_compat/profiles/`](../bench/lcms_compat/profiles/)
-become the regression surface.
-
-**Result:** v1.5 closes the input-side coverage matrix on the float
-path. The fast (int / WASM) ladder stays at 3- and 4-channel input
-where the throughput case lives. v1.3's kernel feature-completeness
-claim is *for the workloads jsColorEngine targets at speed*; v1.5
-extends the *correctness-and-convenience* surface to cover the long
-tail of input shapes without adding a fast path that no one would
-exercise.
-
-### Tunable LUT grid size — `lutGridSize` option
-
-Second v1.3 accuracy lever, independent of the 16-bit work above.
-ICC profiles typically ship with `clutPoints = 17` (so a 3D LUT is
-17³ = 4913 cells). Doubling the grid size quadruples accuracy in
-hot-gamut regions at predictable memory cost:
-
-| Grid | 3D f64 | 3D f32 | 4D f64 (CMYK) | 4D f32 (CMYK) |
-|---|---|---|---|---|
-| 17 | 19.6 KB | 9.8 KB | 334 KB | 167 KB |
-| 25 | 62.5 KB | 31 KB  | 1.6 MB  | 781 KB |
-| 33 | 143 KB  | 72 KB  | 9.5 MB  | 4.7 MB |
-| 49 | 470 KB  | 235 KB | 24 MB   | 12 MB  |
-| 65 | 1.1 MB  | 550 KB | 143 MB  | 71 MB  |
-
-**TODO — bench work before shipping:** measure the actual accuracy
-/ speed curve so we can recommend sensible upper bounds:
-
-1. Add a `bench/lutGridSweep.js` that builds the same profile at
-   grid sizes {17, 25, 33, 49, 65, 97, 129} for 3D, {17, 21, 25,
-   33} for 4D, and measures:
-   - ΔE₀₀ RMS and max against the f64 non-LUT pipeline as ground
-     truth, across a gamut sweep (IT8.7/4 target + L*a*b* stratified
-     grid)
-   - MPx/s throughput for each kernel family (JS int, JS float,
-     WASM scalar, WASM SIMD)
-   - L1 / L2 / L3 cache pressure — at what grid size does the
-     tetrahedral loop start missing L2?
-2. Find the **accuracy knee** (grid at which doubling size halves
-   ΔE by less than a round-off) for 3D and 4D separately.
-3. Find the **cache knee** (grid at which throughput drops ≥ 15 %
-   as LUT spills L2) for each kernel. Different for CMYK (3D per
-   K-plane) vs RGB.
-4. Document the sweet spots in Performance.md §7 — likely 33³ for
-   3D and 21⁴ or 25⁴ for 4D, but let the numbers decide.
-
-**API shape:** just `lutGridSize: 17 | 25 | 33 | 49 | 65` at
-`Transform.create()` time. Default `undefined` = use the profile's
-native `clutPoints`. Upper bound enforced (we refuse 65⁴ because
-it's 143 MB and breaks everything), with a clear error.
-
-**Expected win:** at 33³ vs 17³ on a GRACoL profile we should see
-ΔE₀₀ max drop from ~0.4 to ~0.1 in the saturation corners, for
-zero per-pixel cost — the LUT is built once, evaluated the same
-way. Free accuracy for anyone willing to pay 123 extra KB.
-
-### Custom LUT callbacks — `lutInputHook` / `lutOutputHook`
+### Custom LUT callbacks — `lutInputHook` / `lutOutputHook` ✓ shipped
 
 Sometimes you don't want a vanilla profile-to-profile transform —
 you want to **warp** the colour space on the way in, on the way out,
@@ -842,6 +691,23 @@ For the "synthetic LUT from scratch" case, we may also want a
 factory that skips profiles entirely and just builds a LUT from the
 hook. That's a follow-on convenience; the core hooks above are the
 building block.
+---
+#### Plugin style, allow multiple hooks, but keep them build-time only and turn the gamut mapping feature into a plugin that uses them
+
+Noting that the hooks are a plugin-style extension point, we can design them to be
+composable (multiple hooks run in sequence, each receiving the previous hook's output) 
+without caring about the specific use cases. 
+
+Also noting the similarity between the existing gamut-mapping LUT feature 
+(baking a ΔE warning into the LUT) and the hook use cases, 
+we can implement the gamut mapping as a plugin that uses the hooks.
+This way, we keep the core engine clean and focused on profile transforms,
+while allowing for flexible extensions like gamut mapping without hardcoding
+them into the engine.
+
+So the gamut-maping is both a feature and an example of a plugin book for the lut hooks.
+
+----
 
 #### Why build-time only
 
@@ -852,6 +718,8 @@ the per-pixel kernel stays fast. If you need a per-pixel hook
 different feature (and a much more expensive one — the kernel would
 have to call out to JS on every pixel, breaking the WASM hot path).
 Build-time hooks keep the fast path fast.
+
+----
 
 #### Effort and rationale
 
@@ -865,10 +733,14 @@ with both RGB-input and CMYK-input profiles.
 **Why on the roadmap rather than shipped now.** The feature is
 simple but the API shape wants a bit of thought (should hooks
 receive Lab instead of device? should there be a `lutPcsHook` that
-runs in PCS space between the two profile legs?). Parking it in v1.5
-alongside `lutGridSize` keeps LUT-build options grouped; both can
-ship together with a unified "LUT build options" section in the
-Transform docs.
+runs in PCS space between the two profile legs?). If `lutGridSize`
+graduates from [Research and analysis](#research-and-analysis) to a
+feature, both can ship together with a unified "LUT build options"
+section in the Transform docs.
+
+-----
+
+-----
 
 ### Lab ↔ int16 helpers (`convert.lab2Int16` / `convert.int162Lab`)
 
@@ -1116,20 +988,32 @@ Why this shape, summarised:
   surface — the whole feature is a couple of hundred lines plus
   tests.
 
+What about float versions?
+
+-  `inputLab2Float` initally sounds like a good idea but then 
+  we already have a full object based pipeline for that (the 
+  profile transform itself) — and the helper's would just
+  add another API surface to maintain, with no real win over just calling
+  `transform.transform(dataFormat: object)`. The u16 helpers are a
+  special case because the caller is already working with u16 buffers and
+  needs the encoding constants; the float helpers would be a thin wrapper over
+  the existing transform path that doesn't save much and adds API surface.
+- Skipped because unnecessary.
+
 #### Open API questions (decide before shipping)
 
 1. **Property names on the LUT.** Working names above are
    `lut.inLab.{ pcsVersion, labNumerator, abDenominator }` (and
    `lut.outLab.*` for the inverse). Variations worth bikeshedding:
-   - `lut.inLab` vs `lut.labEncodeIn` vs `lut.labIn` — short or
-     verb-y or symmetric-with-`outLab`?
-   - Pre-computed multipliers (`lMul`, `abMul`, `lInvMul`,
-     `abInvMul`) vs raw numerator/denominator pairs vs both? Both
-     is cheap (4 extra Number slots), keeps `pcsVersion` as the
-     human-readable label, the numerator/denominator as the
-     mathematical truth, and the multipliers as the hot-loop
-     fast path. Consumers that only care about one (humans,
-     readers, hot-loop kernels) read what they need.
+    - `lut.inLab` vs `lut.labEncodeIn` vs `lut.labIn` — short or
+      verb-y or symmetric-with-`outLab`?
+    - Pre-computed multipliers (`lMul`, `abMul`, `lInvMul`,
+      `abInvMul`) vs raw numerator/denominator pairs vs both? Both
+      is cheap (4 extra Number slots), keeps `pcsVersion` as the
+      human-readable label, the numerator/denominator as the
+      mathematical truth, and the multipliers as the hot-loop
+      fast path. Consumers that only care about one (humans,
+      readers, hot-loop kernels) read what they need.
 2. **What does `convert.*` accept?** Working answer: an encoding
    sub-object (`lut.inLab` / `lut.outLab` shape — `{ pcsVersion,
    labNumerator, abDenominator, lMul?, abMul?, lInvMul?,
@@ -1186,6 +1070,117 @@ correctness gap. The LUT-bound design above is what we'd ship if
 this becomes a real-world need; the standalone-version overload is
 the escape hatch for the few callers who legitimately don't have a
 LUT in scope.
+
+---
+## v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`
+
+> **Scope reframe (Apr 2026).** v1.5 was originally "compiled
+> non-LUT transforms + `toModule()` distribution". After the v1.3
+> close-out two smaller items got slotted in at the front of its
+> queue, and the ICCImage helper + samples work was promoted to v1.4
+> (its own showcase release on the back of the v1.3 perf story).
+> v1.5 now bundles:
+>
+> - **N-channel float inputs** — quick, low-risk extension of the
+>   existing float pipeline to cover 5/6/7/8-channel input device
+>   profiles (RISO MZ770, multi-spot press profiles). Float pipeline
+>   only — see the section below for why we don't need a fast int /
+>   WASM path for these.
+> - **Dependency hygiene** — `webpack` 5.89 → current 5.x,
+>   `webpack-cli` 4 → 5, `webpack-dev-server` 4 → 5, `webpack-merge`
+>   5 → current. Clears the 32 open Dependabot alerts (all transitive
+>   `devDependencies` — `node-forge`, `serialize-javascript`,
+>   `body-parser`, `express`, `ws`, `minimatch`, `braces`, etc.); the
+>   runtime engine has zero direct vulnerable deps and ships nothing
+>   from `node_modules` in the npm tarball, so the security exposure
+>   today is contributor-machine only. Acceptance: full `npm test`
+>   210/210, `npm run build` still produces browser bundles, all
+>   sample pages and the bench load/run, all alerts closed or
+>   explicitly dismissed-as-not-applicable.
+> - **Pipeline validation** (`validateOnCreate` option) — after
+>   `create()` / `createMultiStage()` builds the pipeline, run a
+>   single-pixel transform in a `try/catch` to validate the pipeline
+>   actually works. If it throws (NaN in a matrix, malformed curve,
+>   etc.), `create()` throws instead of returning a Transform that
+>   will fail on first use. Simple guard that guarantees both
+>   `transform()` and `transformArray()` will succeed if `create()`
+>   succeeded. Cheap (~1 µs), opt-in, zero cost if disabled.
+> - **Same-profile passthrough (intent-gated)** — when the input and
+>   output ICC profiles are the same, detect a **passthrough** path that
+>   still respects **rendering intent**: take a fast no-op or single-leg
+>   shortcut only where intent and BPC make that correct; otherwise keep
+>   the full transform (same profile both sides is *not* automatically
+>   identity — AToB/BToA asymmetry and table choice still matter). Bench
+>   and lcms parity for the intent matrix (perceptual, relative
+>   colorimetric, saturation, absolute), including same-CMYK-profile rows
+>   such as GRACoL → GRACoL.
+>
+> The compiled non-LUT pipeline + `toModule()` work is still the
+> centrepiece of v1.5 — those land after the warm-up items above.
+> This is **the largest single piece of post-v1.4 work** and could
+> meaningfully delay the release; v1.4's sample suite shipped ahead
+> of it precisely so the project kept shipping visible progress on
+> top of the v1.3 perf story.
+
+### N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)
+
+**Today.** jsColorEngine's float (`lutMode: 'float'` /
+`buildLut: false`) and `'int'` paths handle 3- and 4-channel input
+device profiles at speed. For inputs with 5 or more channels (the
+2C / 3C RISO MZ770 spot profiles in the lcms-compat suite, plus
+real-world multi-spot CMYKOG / Hexachrome / 7-colour press profiles),
+the engine **already produces correct output** through the f64
+non-LUT pipeline (`buildLut: false`), which has no input-channel
+limit. What it doesn't do is build a fast LUT for them.
+
+**v1.5 adds:** `tetrahedralInterpNDArray_*Ch_loop` (the float
+N-channel kernel, the natural extension of the existing 3D and
+4D float kernels) and the build path in `createNDDeviceLUT()` that
+emits an N-D `Float64Array` CLUT. This means an N-channel input
+profile picks up the same float-LUT interpolation speedup the 3-
+and 4-channel inputs get today (~10× over the per-pixel pipeline
+walker), without changing the int / WASM kernel surface.
+
+**Deliberately NOT shipping**: `int` / `int-wasm-scalar` /
+`int-wasm-simd` for N>4 input. The use case isn't there. Three
+reasons:
+
+1. **No real-world high-throughput user.** N-channel input profiles
+   exist for press separation jobs (proofing one spot CMYKOG file)
+   and measurement workflows (instrument-derived n-channel scans),
+   not for image batch processing. The image throughput where the
+   int / WASM ladder pays off is a 3- or 4-channel input world
+   (RGB, CMYK).
+2. **The dimensional explosion.** A 17⁵ N-channel CLUT is 1.4 M
+   cells; 17⁶ is 24 M; 17⁷ is 410 M. Even at u16 (2 bytes/cell),
+   17⁷ × 4-output is 3.3 GB. Float (8 bytes) is 13 GB. Whatever
+   speed an N-channel int kernel could deliver, the LUT bake is the
+   bottleneck — and most interesting N-channel profiles use a
+   smaller grid (9 or 11 per axis) precisely because of this.
+3. **The float kernel is the right shape.** Float doesn't multiply
+   the per-axis weight precision constraint that drove the
+   Q0.13 / two-rounding choice on int 4D — `f64.mul` has 53 bits of
+   mantissa to spend, so an N-axis interp at f64 is a straight
+   tetrahedral walk with no intermediate rounding. The kernel is
+   shorter, simpler, and well-suited to the workflows that actually
+   want N-channel inputs (single-pixel inspection, slow batch
+   measurement passes, gamut shell generation).
+
+**Effort:** small. The 3D and 4D float kernels in
+[`src/Transform.js`](../src/Transform.js) are the template — N-channel
+unrolls the same simplex walk over an N-D index. Plumbed through
+the existing `lutKernelTable.js` dispatcher as a new
+`(lutMode='float', inCh=N)` row. Existing N-channel test profiles
+in [`bench/lcms_compat/profiles/`](../bench/lcms_compat/profiles/)
+become the regression surface.
+
+**Result:** v1.5 closes the input-side coverage matrix on the float
+path. The fast (int / WASM) ladder stays at 3- and 4-channel input
+where the throughput case lives. v1.3's kernel feature-completeness
+claim is *for the workloads jsColorEngine targets at speed*; v1.5
+extends the *correctness-and-convenience* surface to cover the long
+tail of input shapes without adding a fast path that no one would
+exercise.
 
 ### `lcms_patch/` extraction (v1.3 follow-up)
 
@@ -1382,13 +1377,32 @@ the result check is a dozen lines; the error formatting is another
 dozen. Most of the work is deciding what "neutral test colour"
 means for each colour-space type (RGB, CMYK, Lab, XYZ, n-channel).
 
+### Transform identity / NOP detection
+
+Detect same-profile transforms at `create()` time and short-circuit
+to a typed-array copy instead of building a pipeline or LUT.
+
+- **`identityPassthrough`** option (default: `true`). Compare source
+  and destination profiles; if identical, route `transformArray` to
+  a copy. Set `false` to force the full AToB → BToA round-trip.
+- Future optional layers: pipeline-level `stage_nop()` for composed
+  identity; LUT-level identity grid detection.
+- **Priority:** Low — same-profile transforms are uncommon in
+  production. Main value is user-expectation correctness and
+  benchmark parity.
+
+**Full analysis** — why user expectations > math for CMYK
+round-trips, why we skip matrix-shaper decomposition (the LUT
+brute-forces past it), and the lcms Fast Float comparison — is in
+[Performance.md § 8](./Performance.md#8-identity-transforms-and-same-profile-passthrough).
+
 ### Compiled non-LUT pipeline + `toModule()` (v1.5 centrepiece)
 
-The N-channel float and `lutGridSize` items above are the smaller
-v1.5 wins. The remainder of v1.5 is the larger compiled-pipeline +
-`toModule()` work — originally scoped as the only v1.5 item before
-the v1.3 close-out reshuffled the queue. Same plan as before, same
-acceptance criteria.
+The N-channel float item above is the smaller v1.5 win. The
+remainder of v1.5 is the larger compiled-pipeline + `toModule()`
+work — originally scoped as the only v1.5 item before the v1.3
+close-out reshuffled the queue. Same plan as before, same acceptance
+criteria.
 
 > **Scope reframe (Apr 2026, post-POC).** v1.5 was originally "WASM
 > SIMD for matrix-shaper transforms", then broadened to "code
@@ -2252,6 +2266,106 @@ pixels. See `bench/wasm_poc/README.md` for the full analysis.
 4. **`Math.imul` is no longer worth using as a perf optimisation**
    in modern V8. Still useful as insurance against accidental
    float promotion, but plain `*` produces identical machine code.
+
+---
+
+## Research and analysis
+
+Not tied to a release version — these are investigations, benchmarks,
+and infrastructure that can land at any time and inform future
+feature work. Useful to do, not gated on shipping a version number.
+
+### LUT grid size sweep — `lutGridSize` analysis
+
+ICC profiles typically ship with `clutPoints = 17` (so a 3D LUT is
+17³ = 4913 cells). Doubling the grid size quadruples accuracy in
+hot-gamut regions at predictable memory cost:
+
+| Grid | 3D f64 | 3D f32 | 4D f64 (CMYK) | 4D f32 (CMYK) |
+|---|---|---|---|---|
+| 17 | 19.6 KB | 9.8 KB | 334 KB | 167 KB |
+| 25 | 62.5 KB | 31 KB  | 1.6 MB  | 781 KB |
+| 33 | 143 KB  | 72 KB  | 9.5 MB  | 4.7 MB |
+| 49 | 470 KB  | 235 KB | 24 MB   | 12 MB  |
+| 65 | 1.1 MB  | 550 KB | 143 MB  | 71 MB  |
+
+**Bench work needed before shipping as a feature:**
+
+1. Add a `bench/lutGridSweep.js` that builds the same profile at
+   grid sizes {17, 25, 33, 49, 65, 97, 129} for 3D, {17, 21, 25,
+   33} for 4D, and measures:
+   - ΔE₀₀ RMS and max against the f64 non-LUT pipeline as ground
+     truth, across a gamut sweep (IT8.7/4 target + L*a*b* stratified
+     grid)
+   - MPx/s throughput for each kernel family (JS int, JS float,
+     WASM scalar, WASM SIMD)
+   - L1 / L2 / L3 cache pressure — at what grid size does the
+     tetrahedral loop start missing L2?
+2. Find the **accuracy knee** (grid at which doubling size halves
+   ΔE by less than a round-off) for 3D and 4D separately.
+3. Find the **cache knee** (grid at which throughput drops ≥ 15 %
+   as LUT spills L2) for each kernel. Different for CMYK (3D per
+   K-plane) vs RGB.
+4. Document the sweet spots in Performance.md — likely 33³ for
+   3D and 21⁴ or 25⁴ for 4D, but let the numbers decide.
+
+**If the analysis justifies a feature:** expose as
+`lutGridSize: 17 | 25 | 33 | 49 | 65` at `Transform.create()` time.
+Default `undefined` = use the profile's native `clutPoints`. Upper
+bound enforced (refuse 65⁴ — 143 MB breaks everything).
+
+**Expected win:** at 33³ vs 17³ on a GRACoL profile, ΔE₀₀ max
+should drop from ~0.4 to ~0.1 in the saturation corners, for zero
+per-pixel cost — the LUT is built once, evaluated the same way.
+
+### Automated profile oracle — bulk ICC compatibility testing
+
+Drop ICC profiles into a folder, run a single command, get a
+pass/warning/fail results table for every profile. Catches decoder
+crashes, load failures, and accuracy regressions against
+lcms-generated ground truth — without manual test authoring.
+
+**How it works:**
+
+1. **Profile corpus.** A folder tree (e.g. `test-profiles/`) of ICC
+   files collected from any source — vendor downloads, customer
+   submissions, ICC profile registry, random PDFs, colour-managed
+   TIFFs. Organised into subfolders by source or category for
+   triage. Committed to the repo or `.gitignore`d with a download
+   script — depends on licensing.
+
+2. **Oracle generation (Node + lcms `transicc`).** A script scans the
+   corpus, and for each profile runs lcms's `transicc` (or the
+   patched batch-mode variant from `lcms_patch/`) to generate
+   reference `.it8` target files. Outputs are sorted into matching
+   subfolders alongside the source profiles. This is the ground
+   truth — lcms is the industry-standard reference implementation.
+   Run once (or on CI when profiles change); results are cached.
+
+3. **Automated test runner.** A Jest (or standalone Node) harness
+   walks the corpus:
+   - **Load test** — can jsColorEngine load the profile without
+     throwing? Result: pass or fail + error message.
+   - **Transform test** — build a transform (e.g. profile → Lab),
+     run the same input values as the `.it8` oracle, compare output.
+     Result: pass (within tolerance), warning (within loose
+     tolerance), or fail (outside tolerance or crash).
+   - **Results table** — summary output (console + markdown) with
+     one row per profile: filename, colour space, status, max ΔE
+     vs oracle, notes. Easy to scan for regressions.
+
+4. **Incremental growth.** Adding a new profile to the corpus is just
+   dropping a file in the folder and re-running. No test code to
+   write. The oracle script and test runner handle everything.
+
+**What this catches:** profiles that crash the decoder, profiles that
+produce wrong colours, regressions after engine changes, and edge
+cases we'd never think to write manual tests for (weird vendor
+profiles, unusual colour spaces, oversized CLUTs, non-standard tags).
+
+**Priority.** Medium — high value per effort once the script exists.
+The lcms `transicc` tooling is already partially in place from the
+existing `lcms_patch/` work.
 
 ---
 

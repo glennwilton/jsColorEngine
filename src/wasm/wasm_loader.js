@@ -173,7 +173,7 @@ function createTetra3DState(options) {
     if (typeof exports.interp_tetra3d_nCh !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra3DState(exports, exports.interp_tetra3d_nCh, false);
+    return new Tetra3DState(exports, exports.interp_tetra3d_nCh, false, mod, 'interp_tetra3d_nCh');
 }
 
 /**
@@ -213,7 +213,7 @@ function createTetra3DInt16State(options) {
     if (typeof exports.interp_tetra3d_nCh_int16 !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra3DInt16State(exports, exports.interp_tetra3d_nCh_int16, false);
+    return new Tetra3DInt16State(exports, exports.interp_tetra3d_nCh_int16, false, mod, 'interp_tetra3d_nCh_int16');
 }
 
 /**
@@ -259,7 +259,7 @@ function createTetra3DInt16SimdState(options) {
     if (typeof exports.interp_tetra3d_simd_int16 !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra3DInt16State(exports, exports.interp_tetra3d_simd_int16, true);
+    return new Tetra3DInt16State(exports, exports.interp_tetra3d_simd_int16, true, mod, 'interp_tetra3d_simd_int16');
 }
 
 /**
@@ -297,7 +297,7 @@ function createTetra3DSimdState(options) {
     if (typeof exports.interp_tetra3d_simd !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra3DState(exports, exports.interp_tetra3d_simd, true);
+    return new Tetra3DState(exports, exports.interp_tetra3d_simd, true, mod, 'interp_tetra3d_simd');
 }
 
 /**
@@ -335,7 +335,7 @@ function createTetra4DState(options) {
     if (typeof exports.interp_tetra4d_nCh !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra4DState(exports, exports.interp_tetra4d_nCh, false);
+    return new Tetra4DState(exports, exports.interp_tetra4d_nCh, false, mod, 'interp_tetra4d_nCh');
 }
 
 /**
@@ -373,7 +373,7 @@ function createTetra4DInt16State(options) {
     if (typeof exports.interp_tetra4d_nCh_int16 !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra4DInt16State(exports, exports.interp_tetra4d_nCh_int16, false);
+    return new Tetra4DInt16State(exports, exports.interp_tetra4d_nCh_int16, false, mod, 'interp_tetra4d_nCh_int16');
 }
 
 /**
@@ -418,7 +418,7 @@ function createTetra4DInt16SimdState(options) {
     if (typeof exports.interp_tetra4d_simd_int16 !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra4DInt16State(exports, exports.interp_tetra4d_simd_int16, true);
+    return new Tetra4DInt16State(exports, exports.interp_tetra4d_simd_int16, true, mod, 'interp_tetra4d_simd_int16');
 }
 
 /**
@@ -457,24 +457,28 @@ function createTetra4DSimdState(options) {
     if (typeof exports.interp_tetra4d_simd !== 'function' || !exports.memory) {
         return null;
     }
-    return new Tetra4DState(exports, exports.interp_tetra4d_simd, true);
+    return new Tetra4DState(exports, exports.interp_tetra4d_simd, true, mod, 'interp_tetra4d_simd');
 }
 
 // ---------------------------------------------------------------------------
 // Tetra3DState — per-instance memory layout + kernel call wrapper
 // ---------------------------------------------------------------------------
 
-function Tetra3DState(exports, kernel, isSimd) {
+function Tetra3DState(exports, kernel, isSimd, module, kernelName) {
     this.exports      = exports;
     this.memory       = exports.memory;
     this.kernel       = kernel;
-    this.isSimd       = !!isSimd;   // diagnostic only; not read by hot path
+    this.isSimd       = !!isSimd;
+    this.module       = module || null;
+    this.kernelName   = kernelName || '';
+    this.shrinkRatio  = 0;    // 0 = disabled; e.g. 4 = compact when memory > 4× needed
+    this.maxMemory    = 0;    // 0 = disabled; bytes — compact when buffer exceeds this
     this.lutPtr       = 0;
     this.inputPtr     = 0;
     this.outputPtr    = 0;
     this.lutBytes     = 0;
-    this.boundIntLut  = null;  // identity check — skip re-copy when same LUT
-    this.reservedCap  = 0;     // input + output bytes currently fitted
+    this.boundIntLut  = null;
+    this.reservedCap  = 0;
 
     // Monotonically increasing count of runTetra3D() calls. Intended for
     // tests (to prove the WASM kernel actually ran, not just that outputs
@@ -494,6 +498,45 @@ function Tetra3DState(exports, kernel, isSimd) {
 }
 
 /**
+ * Post-run check: compact if memory exceeds maxMemory or shrinkRatio
+ * relative to what was last bound. Called by Transform after each
+ * transformArrayViaLUT. Cost: one byteLength read + two comparisons.
+ */
+Tetra3DState.prototype.compactIfNeeded = function () {
+    var bytes = this.memory.buffer.byteLength;
+    if (this.maxMemory > 0 && bytes > this.maxMemory) {
+        this.compact();
+    } else if (this.shrinkRatio > 0) {
+        var pagesHave   = (bytes / 65536) | 0;
+        var pagesNeeded = Math.ceil((this.lutBytes + this.reservedCap) / 65536);
+        if (pagesHave > pagesNeeded * this.shrinkRatio) {
+            this.compact();
+        }
+    }
+};
+
+/**
+ * Re-instantiate from the stored Module, releasing old linear memory.
+ * The old Instance (and its potentially-large memory) becomes eligible
+ * for GC. The new Instance starts with 1 page (64 KB); next bind()
+ * grows it to exactly what's needed. Cost: ~0.1 ms (instantiation
+ * from a compiled Module is near-free).
+ */
+Tetra3DState.prototype.compact = function () {
+    if (!this.module) return;
+    var instance = new WebAssembly.Instance(this.module, {});
+    this.exports     = instance.exports;
+    this.memory      = instance.exports.memory;
+    this.kernel      = instance.exports[this.kernelName];
+    this.boundIntLut = null;
+    this.lutBytes    = 0;
+    this.reservedCap = 0;
+    this.lutPtr      = 0;
+    this.inputPtr    = 0;
+    this.outputPtr   = 0;
+};
+
+/**
  * Ensure linear memory is big enough for this (intLut, pixelCount, cMax,
  * inBPP, outBPP) shape and that the LUT is copied in. Fast re-entry
  * when called with the same binding (common case: same LUT, same pixel
@@ -509,17 +552,8 @@ Tetra3DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP)
     var inputBytes  = pixelCount * inBPP;
     var outputBytes = pixelCount * outBPP;
 
-    // SIMD kernel stores 4 bytes per pixel via v128.store32_lane. For
-    // cMax=3 without alpha (outBPP=3), the last pixel writes 1 junk
-    // byte past the nominal end of the output region. Pad by 4 bytes
-    // defensively — trivial cost, avoids conditionally branching here
-    // on (cMax, outBPP) and future-proofs against similar lane-overrun
-    // tricks in later kernels.
     var outputTail = this.isSimd ? 4 : 0;
 
-    // 8-byte align the LUT end so the subsequent input region starts
-    // on an aligned offset. Not strictly required by WASM (unaligned
-    // i32.load is legal) but keeps the copy paths happy.
     var lutPtr      = 0;
     var lutAligned  = (lutBytes + 7) & ~7;
     var inputPtr    = lutPtr + lutAligned;
@@ -529,6 +563,7 @@ Tetra3DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP)
 
     var pagesNeeded = Math.ceil(totalBytes / 65536);
     var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+
     if (pagesHave < pagesNeeded) {
         this.memory.grow(pagesNeeded - pagesHave);
     }
@@ -644,11 +679,15 @@ Tetra3DState.prototype.runTetra3D = function (
 // to keep the u8 hot path completely unchanged — zero risk of perf
 // regression on the v1.2 default kernel from this v1.3 work.
 
-function Tetra3DInt16State(exports, kernel, isSimd) {
+function Tetra3DInt16State(exports, kernel, isSimd, module, kernelName) {
     this.exports       = exports;
     this.memory        = exports.memory;
     this.kernel        = kernel;
     this.isSimd        = !!isSimd;
+    this.module        = module || null;
+    this.kernelName    = kernelName || '';
+    this.shrinkRatio   = 0;
+    this.maxMemory     = 0;
     this.lutPtr        = 0;
     this.inputPtr      = 0;
     this.outputPtr     = 0;
@@ -658,25 +697,21 @@ function Tetra3DInt16State(exports, kernel, isSimd) {
     this.dispatchCount = 0;
 }
 
+Tetra3DInt16State.prototype.compact = Tetra3DState.prototype.compact;
+Tetra3DInt16State.prototype.compactIfNeeded = Tetra3DState.prototype.compactIfNeeded;
+
 /**
  * inBPP / outBPP defaults assume no alpha — 6 bytes (3 × u16) input
  * and `cMax * 2` bytes output. Pass 8 / (cMax+1)*2 when alpha is
  * present on either side.
  */
 Tetra3DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
-    if (inBPP  === undefined) inBPP  = 6;             // 3 u16 channels
-    if (outBPP === undefined) outBPP = cMax * 2;       // cMax u16 channels
+    if (inBPP  === undefined) inBPP  = 6;
+    if (outBPP === undefined) outBPP = cMax * 2;
     var lutBytes    = intLut.CLUT.byteLength;
     var inputBytes  = pixelCount * inBPP;
     var outputBytes = pixelCount * outBPP;
 
-    // SIMD u16 kernel stores 8 bytes per pixel via v128.store64_lane
-    // (4 lanes of u16). For cMax=3 without alpha (outBPP=6), the last
-    // pixel writes 2 junk bytes past the nominal end of the output
-    // region. Pad by 4 bytes defensively (mirrors the u8 SIMD slack
-    // pattern in Tetra3DState.prototype.bind, where it's 4 bytes for
-    // store32_lane / 1 junk byte). Trivial cost, avoids conditionally
-    // branching here on (cMax, outBPP).
     var outputTail = this.isSimd ? 4 : 0;
 
     var lutPtr      = 0;
@@ -688,6 +723,7 @@ Tetra3DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, ou
 
     var pagesNeeded = Math.ceil(totalBytes / 65536);
     var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+
     if (pagesHave < pagesNeeded) {
         this.memory.grow(pagesNeeded - pagesHave);
     }
@@ -789,11 +825,15 @@ Tetra3DInt16State.prototype.runTetra3D = function (
 // 4D-specific surface area (extra kernel args, scratch region, input
 // stride) that a shared parent would end up mostly conditionals.
 
-function Tetra4DState(exports, kernel, isSimd) {
+function Tetra4DState(exports, kernel, isSimd, module, kernelName) {
     this.exports       = exports;
     this.memory        = exports.memory;
     this.kernel        = kernel;
-    this.isSimd        = !!isSimd;   // diagnostic + +4 output-tail slack
+    this.isSimd        = !!isSimd;
+    this.module        = module || null;
+    this.kernelName    = kernelName || '';
+    this.shrinkRatio   = 0;
+    this.maxMemory     = 0;
     this.lutPtr        = 0;
     this.inputPtr      = 0;
     this.outputPtr     = 0;
@@ -804,6 +844,22 @@ function Tetra4DState(exports, kernel, isSimd) {
     this.dispatchCount = 0;
 }
 
+Tetra4DState.prototype.compact = function () {
+    if (!this.module) return;
+    var instance = new WebAssembly.Instance(this.module, {});
+    this.exports     = instance.exports;
+    this.memory      = instance.exports.memory;
+    this.kernel      = instance.exports[this.kernelName];
+    this.boundIntLut = null;
+    this.lutBytes    = 0;
+    this.reservedCap = 0;
+    this.lutPtr      = 0;
+    this.inputPtr    = 0;
+    this.outputPtr   = 0;
+    this.scratchPtr  = 0;
+};
+
+Tetra4DState.prototype.compactIfNeeded = Tetra3DState.prototype.compactIfNeeded;
 Tetra4DState.SCRATCH_BYTES = 64;
 
 /**
@@ -821,10 +877,6 @@ Tetra4DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP)
     var outputBytes = pixelCount * outBPP;
     var scratchBytes = Tetra4DState.SCRATCH_BYTES;
 
-    // SIMD kernel stores 4 bytes per pixel via v128.store32_lane. For
-    // cMax=3 without alpha (outBPP=3) the last pixel's store runs one
-    // byte past the nominal output end; pad by 4 defensively, mirroring
-    // the Tetra3DState convention.
     var outputTail = this.isSimd ? 4 : 0;
 
     var lutPtr      = 0;
@@ -838,6 +890,7 @@ Tetra4DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP)
 
     var pagesNeeded = Math.ceil(totalBytes / 65536);
     var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+
     if (pagesHave < pagesNeeded) {
         this.memory.grow(pagesNeeded - pagesHave);
     }
@@ -926,11 +979,15 @@ Tetra4DState.prototype.runTetra4D = function (
 // The state class is a separate clone (not a parameterised Tetra4DState)
 // to keep the u8 4D hot path completely unchanged.
 
-function Tetra4DInt16State(exports, kernel, isSimd) {
+function Tetra4DInt16State(exports, kernel, isSimd, module, kernelName) {
     this.exports       = exports;
     this.memory        = exports.memory;
     this.kernel        = kernel;
     this.isSimd        = !!isSimd;
+    this.module        = module || null;
+    this.kernelName    = kernelName || '';
+    this.shrinkRatio   = 0;
+    this.maxMemory     = 0;
     this.lutPtr        = 0;
     this.inputPtr      = 0;
     this.outputPtr     = 0;
@@ -940,6 +997,9 @@ function Tetra4DInt16State(exports, kernel, isSimd) {
     this.reservedCap   = 0;
     this.dispatchCount = 0;
 }
+
+Tetra4DInt16State.prototype.compact = Tetra4DState.prototype.compact;
+Tetra4DInt16State.prototype.compactIfNeeded = Tetra3DState.prototype.compactIfNeeded;
 
 // Scratch region size in bytes (scalar 4D u16 K0-plane intermediate
 // buffer, see tetra4d_nch_int16.wat). The SIMD 4D u16 kernel keeps
@@ -955,18 +1015,13 @@ Tetra4DInt16State.SCRATCH_BYTES = 64;
  * present on either side.
  */
 Tetra4DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
-    if (inBPP  === undefined) inBPP  = 8;             // 4 u16 channels (KCMY)
-    if (outBPP === undefined) outBPP = cMax * 2;       // cMax u16 channels
+    if (inBPP  === undefined) inBPP  = 8;
+    if (outBPP === undefined) outBPP = cMax * 2;
     var lutBytes     = intLut.CLUT.byteLength;
     var inputBytes   = pixelCount * inBPP;
     var outputBytes  = pixelCount * outBPP;
     var scratchBytes = Tetra4DInt16State.SCRATCH_BYTES;
 
-    // SIMD u16 kernel stores 8 bytes per pixel via v128.store64_lane
-    // (4 lanes of u16). For cMax=3 without alpha (outBPP=6), the
-    // last pixel writes 2 junk bytes past the nominal output end;
-    // pad by 4 defensively (mirrors Tetra3DInt16State / Tetra4DState
-    // SIMD slack convention).
     var outputTail   = this.isSimd ? 4 : 0;
 
     var lutPtr      = 0;
@@ -980,6 +1035,7 @@ Tetra4DInt16State.prototype.bind = function (intLut, pixelCount, cMax, inBPP, ou
 
     var pagesNeeded = Math.ceil(totalBytes / 65536);
     var pagesHave   = (this.memory.buffer.byteLength / 65536) | 0;
+
     if (pagesHave < pagesNeeded) {
         this.memory.grow(pagesNeeded - pagesHave);
     }

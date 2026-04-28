@@ -74,7 +74,7 @@
     }
     .timing-inline.is-busy { color: var(--accent); }
 </style>
-<script src="/browser/jsColorEngineWeb.js"></script>
+<script src="../browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
 
@@ -86,8 +86,8 @@
         </div>
         <nav class="nav" aria-label="Site">
             <a href="index.html">Home</a>
-            <a href="samples.html#demos">Samples</a>
-            <a href="/samples/bench/">Bench</a>
+            <a href="samples.html"  class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
         </nav>
     </div>
     <nav class="nav nav--secondary" aria-label="Sample demos">
@@ -270,14 +270,65 @@
     <span>
         <a href="https://github.com/glennwilton/jsColorEngine">GitHub</a>
         &middot;
-        <a href="/samples/bench/">Bench</a>
+        <a href="bench/">Bench</a>
     </span>
 </footer>
 
 <script type="module">
+    // ── ICCImage ──────────────────────────────────────────────────────────
+    //
+    // ICCImage is a small immutable image wrapper around jsColorEngine.
+    // It owns the workflow: "I have an image → I want to proof / separate /
+    // inspect it." Every conversion returns a NEW ICCImage — the source is
+    // never mutated.
+    //
+    // Key concepts:
+    //
+    //   ICCImage.fromHTMLImage(el)   — create from an <img> / canvas / bitmap.
+    //                                  Pixels are extracted via a 2D canvas
+    //                                  (always 8-bit RGBA sRGB).
+    //
+    //   img.toProof(profile, opts)   — soft-proof: src → CMYK → sRGB.
+    //                                  Returns an sRGB-tagged ICCImage whose
+    //                                  pixels simulate what the image would
+    //                                  look like printed on the given profile.
+    //
+    //   img.toSeparation(profile)    — convert to the profile's native space
+    //                                  (typically CMYK). The returned ICCImage
+    //                                  carries real ink-channel data — its
+    //                                  raw buffer IS the separation.
+    //
+    //   img.toCanvas(canvas)         — blit to a <canvas>. If the image is
+    //                                  already sRGB uint8, blits direct. If
+    //                                  not, it auto-builds (and caches) a
+    //                                  [terminal → sRGB] transform first.
+    //
+    //   img.renderChannelAs('C')     — extract one ink channel (e.g. Cyan)
+    //                                  and render it as a tinted RGBA ICCImage.
+    //
+    //   img.pixel(x, y)             — single-pixel readout via the accuracy
+    //                                  path (no LUT). Returns { lab, srgb,
+    //                                  device } — useful for colour pickers.
+    //
+    //   img.info                     — metadata: dimensions, colour space,
+    //                                  profile name, chain history, cache size.
+    //
+    // ChannelSets.CMYK provides channel definitions (index, name, short,
+    // tint colour) for iterating ink plates.
+    //
+    // TransformCache is shared between an ICCImage and all its derivatives
+    // (toProof / toSeparation / etc.), so the expensive LUT build only
+    // happens once per unique (chain + intent + BPC) combination.
+    //
+    // See iccimage.js header and ICCImage.md for the full API.
+
     import { ICCImage, ChannelSets } from './iccimage.js';
 
+    // jsColorEngine core — Profile for loading ICC files, eIntent for
+    // rendering intents, convert for deltaE colour-difference formulas.
     const { Profile, eIntent, convert } = window.jsColorEngine;
+
+    // ── DOM references ────────────────────────────────────────────────────
 
     const imgEl       = document.createElement('img');
     imgEl.crossOrigin = 'anonymous';
@@ -298,12 +349,24 @@
     const tipSwatchCMYK = document.getElementById('tipSwatchCMYK');
     const tipBody      = document.getElementById('tipBody');
 
+    // ── Application state ─────────────────────────────────────────────────
+    //
+    // src   — the source ICCImage (sRGB, loaded from the selected URL)
+    // sep   — the CMYK separation ICCImage (from src.toSeparation)
+    // proof — the soft-proof ICCImage (from src.toProof — sRGB-tagged)
+    //
+    // All three are ICCImage instances. They share the same TransformCache,
+    // so switching intent or profile only rebuilds the LUTs that changed.
+
     let src = null;
     let sep = null;
     let proof = null;
     const profileCache = new Map();
 
     // ── Intent + BPC parsing ──────────────────────────────────────────────
+    //
+    // The dropdown value encodes both the rendering intent and whether
+    // black-point compensation (BPC) is enabled, e.g. 'relative-bpc'.
 
     function parseIntent() {
         const v = intentSel.value;
@@ -348,6 +411,15 @@
     }
 
     // ── Run pass ──────────────────────────────────────────────────────────
+    //
+    // A single "pass" does three things:
+    //   1. Soft-proof  — src.toProof()       → sRGB image simulating print
+    //   2. Separation  — src.toSeparation()  → CMYK image with real ink data
+    //   3. Render      — blit both to canvas + render C/M/Y/K plate previews
+    //
+    // This is called twice per build(): once "cold" (LUT build + transform)
+    // and once "warm" (cached LUT, transform only) to show the performance
+    // difference.
 
     function parseGamut() {
         const v = gamutSel.value;
@@ -363,6 +435,17 @@
         const gamutOpts = parseGamut();
         const t = {};
 
+        // SOFT-PROOF: src (sRGB) → CMYK (press profile) → sRGB
+        //
+        // toProof() builds a multi-stage Transform internally:
+        //   [srcProfile, intent, proofProfile, eIntent.relative, *sRGB]
+        //
+        // On first call this bakes the 3D CLUT (~50–100 ms). On subsequent
+        // calls with the same profile/intent the cached Transform is reused
+        // and only the pixel transform runs (~5–15 ms for 1 MP).
+        //
+        // The returned ICCImage is sRGB-tagged — its pixels represent what
+        // the image would look like after printing and viewing on screen.
         let t0 = performance.now();
         const localProof = await src.toProof(proofProfile, {
             intent,
@@ -371,18 +454,48 @@
         });
         t.proofMs = performance.now() - t0;
 
+        // SEPARATION: src (sRGB) → CMYK (press profile)
+        //
+        // toSeparation() builds a [srcProfile, intent, proofProfile]
+        // Transform. The returned ICCImage's raw data IS the CMYK ink
+        // values — each pixel has 4 channels (C, M, Y, K) in 0–255 range.
+        //
+        // We can then call renderChannelAs('C') etc. to visualise
+        // individual ink plates.
         t0 = performance.now();
         const localSep = await src.toSeparation(proofProfile, {
             intent, BPC: bpc,
         });
         t.sepMs = performance.now() - t0;
 
+        // RENDER: blit source, proof, and channel plates to canvases
         t0 = performance.now();
+
+        // toCanvas() auto-detects that src is already sRGB uint8 → blits
+        // directly without any colour transform.
         await src.toCanvas(screenCv);
+
+        // localProof is also sRGB uint8 (toProof returns sRGB-tagged) →
+        // direct blit, no extra conversion.
         await localProof.toCanvas(proofCv);
+
+        // img.info returns metadata including the chain history, which
+        // shows the full conversion path (e.g. "sRGB → Perceptual →
+        // GRACoL 2006 → Relative → sRGB").
         dumpInfo(screenInfo, src);
         dumpInfo(proofInfo, localProof);
 
+        // CHANNEL PLATES: render each CMYK ink as a tinted preview.
+        //
+        // ChannelSets.CMYK defines the four channels:
+        //   [{ index: 0, name: 'cyan',    short: 'C', tint: [0,174,239] },
+        //    { index: 1, name: 'magenta', short: 'M', tint: [236,0,140] },
+        //    ...]
+        //
+        // renderChannelAs('C') extracts the Cyan channel from the CMYK
+        // separation and produces an sRGB RGBA ICCImage where the channel
+        // value drives the alpha and the tint colour fills RGB. This makes
+        // each plate visually meaningful (cyan ink shown as cyan, etc.).
         channelHost.innerHTML = '';
         for (const def of ChannelSets.CMYK) {
             const cv = document.createElement('canvas');
@@ -403,6 +516,15 @@
     }
 
     // ── Build ─────────────────────────────────────────────────────────────
+    //
+    // The main workflow:
+    //   1. Load the source image → ICCImage.fromHTMLImage()
+    //   2. Load the CMYK profile → Profile.loadPromise()
+    //   3. Cold run  — first time: LUT build + transform (measures total cost)
+    //   4. Warm run  — second time: cached LUT, transform only (measures throughput)
+    //
+    // The cold/warm split demonstrates the TransformCache in action: the
+    // first call pays the LUT build cost, the second call reuses it.
 
     async function build() {
         runBtn.disabled = true;
@@ -411,6 +533,11 @@
         timingInline.className = 'timing-inline is-busy';
 
         try {
+            // Step 1: Create ICCImage from browser <img>.
+            // fromHTMLImage() draws the image onto a 2D canvas to extract
+            // RGBA pixels, then wraps them in an ICCImage tagged with *sRGB.
+            // maxPixels caps the resolution via bilinear downscale to keep
+            // the demo responsive.
             if (!src) {
                 await loadImage(imageSel.value);
                 src = await ICCImage.fromHTMLImage(imgEl, { maxPixels: 4_000_000 });
@@ -419,10 +546,12 @@
             const pixels = src.info.width * src.info.height;
             $('t-pixels').textContent = (pixels / 1e6).toFixed(2) + ' MP';
 
+            // Step 2: Load the CMYK press profile (.icc file via HTTP).
+            // Cached after first load so switching intent doesn't reload.
             const { profile: proofProfile, ms: profileMs } = await loadProfile(profileSel.value);
             $('t-profile').textContent = profileMs > 0 ? fmtMs(profileMs) : 'cached';
 
-            // Cold run
+            // Step 3: Cold run — includes LUT build time.
             const cold = await runPass(proofProfile);
             sep   = cold.sep;
             proof = cold.proof;
@@ -432,9 +561,13 @@
             $('tc-total').textContent  = fmtMs(cold.t.totalMs);
             $('t-cache').textContent   = src.info.cacheSize + ' transforms';
 
+            // Wait two animation frames to let the browser paint the cold
+            // results before starting the warm run.
             await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-            // Warm run
+            // Step 4: Warm run — LUT is cached, only the pixel transform runs.
+            // This represents the steady-state performance you'd see in a
+            // real application.
             const warm = await runPass(proofProfile);
             sep   = warm.sep;
             proof = warm.proof;
@@ -445,7 +578,6 @@
             $('tw-render').textContent    = fmtMs(warm.t.renderMs);
             $('tw-total').textContent     = fmtMs(warm.t.totalMs);
 
-            // Inline summary next to button
             const avgMs = ((warm.t.proofMs + warm.t.sepMs) / 2);
             const avgMpx = fmtMpx(pixels, avgMs);
             timingInline.textContent = `${fmtMs(warm.t.proofMs + warm.t.sepMs)} \u00b7 ~${avgMpx} MPx/s avg`;
@@ -463,6 +595,18 @@
     }
 
     // ── Colour picker (floating tooltip) ──────────────────────────────────
+    //
+    // Hovering any canvas shows a floating tooltip with per-pixel colour
+    // data. This demonstrates ICCImage.pixel(x, y) — the accuracy-path
+    // single-pixel readout that returns { lab, srgb, device }.
+    //
+    // The tooltip shows:
+    //   - Source sRGB values + hex
+    //   - CIE L*a*b* (D50, relative colorimetric)
+    //   - CMYK ink percentages (from the separation ICCImage's raw buffer)
+    //   - CMYK round-trip Lab (from sep.pixel() — re-converts CMYK→Lab)
+    //   - deltaE 2000 and deltaE 76 between source Lab and CMYK round-trip Lab
+    //   - Split swatch: source RGB (left) vs soft-proof RGB (right)
 
     function canvasToImageXY(canvas, e) {
         const rect = canvas.getBoundingClientRect();
@@ -471,6 +615,8 @@
         return { x, y };
     }
 
+    // Read CMYK ink values directly from the separation's raw buffer.
+    // No colour transform needed — the data IS the separation.
     function readCMYK(x, y) {
         if (!sep || !sep.raw) return null;
         const r = sep.raw;
@@ -487,6 +633,7 @@
         };
     }
 
+    // Read the soft-proof RGB value for the swatch display.
     function proofRGB(x, y) {
         if (!proof || !proof.raw) return null;
         const r = proof.raw;
@@ -508,9 +655,15 @@
         const r = src.raw;
         if (x < 0 || x >= r.width || y < 0 || y >= r.height) { hideTooltip(); return; }
 
+        // pixel() uses the accuracy path (no LUT) — it builds two
+        // dataFormat:'object' Transforms on first call (pixelToLab and
+        // pixelToSRGB), then reuses them. Returns lab, srgb, and device
+        // values for the pixel.
         const px   = src.pixel(x, y);
         const cmyk = readCMYK(x, y);
 
+        // For deltaE: convert the CMYK separation's ink values back to Lab
+        // via sep.pixel(), then compare against the source pixel's Lab.
         let cmykLab = null;
         let dE = null;
         if (sep && sep.raw && x < sep.raw.width && y < sep.raw.height) {
@@ -521,7 +674,6 @@
         const { R, G, B, hex } = px.srgb;
         const { L, a, b } = px.lab;
 
-        // Split swatch: source RGB left, soft-proof RGB right
         tipSwatchRGB.style.background  = hex;
         tipSwatchCMYK.style.background = proofRGB(x, y) || hex;
 
@@ -571,7 +723,11 @@
         showTooltip(e, x, y);
     });
 
-    // ── Wiring ────────────────────────────────────────────────────────────
+    // ── Event wiring ──────────────────────────────────────────────────────
+    //
+    // Changing the profile, intent, or gamut mode triggers a full rebuild.
+    // Changing the image clears the cached source and derivatives first,
+    // since the new image needs a fresh ICCImage.fromHTMLImage() call.
 
     runBtn.addEventListener('click', build);
     profileSel.addEventListener('change', build);

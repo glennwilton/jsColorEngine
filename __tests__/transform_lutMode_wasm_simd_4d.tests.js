@@ -460,27 +460,8 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
     // ---------------------------------------------------------------
     // 12. Format-tag guardrail still fires via 4D SIMD dispatch
     // ---------------------------------------------------------------
-    test('format-tag guardrail: 4D SIMD throws on incompatible intLut', async () => {
-        const cmykProfile = new Profile();
-        await cmykProfile.loadPromise('file:' + cmykFilename);
-
-        const simdT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
-        simdT.create(cmykProfile, '*srgb', eIntent.relative);
-        assertSimd4DRouted(simdT);
-
-        const input = buildLargeInputCMYK(2048);
-
-        const before = simdT.wasmTetra4DSimd.dispatchCount;
-        expect(() => simdT.transformArray(input, false, false, false)).not.toThrow();
-        expect(simdT.wasmTetra4DSimd.dispatchCount).toBe(before + 1);
-
-        const savedVersion = simdT.lut.intLut.version;
-        simdT.lut.intLut.version = 99;
-        expect(() => simdT.transformArray(input, false, false, false))
-            .toThrow(/intLut format tag incompatible/);
-        simdT.lut.intLut.version = savedVersion;
-
-        expect(() => simdT.transformArray(input, false, false, false)).not.toThrow();
-    });
+    // format-tag guardrail test removed — was testing internal tampering
+    // (mutating intLut.version on a live Transform), not a public API
+    // failure mode. The check now runs once at create() time.
 
 });

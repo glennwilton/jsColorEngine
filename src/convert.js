@@ -2337,4 +2337,84 @@ convert.wavelength2RGB = function (wavelength) {
     }
 };
 
+// ============================================================================
+//  Lab ↔ u16 encoding helpers
+// ============================================================================
+//
+// ICC v2 and v4 use different u16 Lab encodings. These helpers convert
+// between float Lab (L 0–100, a/b -128..+127) and the u16 representation
+// used in int16 typed-array buffers. The encoding is carried as a plain
+// numeric object so it survives JSON.stringify / structuredClone / postMessage.
+
+var LAB_ENC_V2 = Object.freeze({
+    pcsVersion:   2,
+    labNumerator: 65280,
+    lMul:         65280 / 100,
+    abMul:        65280 / 255,
+    lInvMul:      100 / 65280,
+    abInvMul:     255 / 65280
+});
+
+var LAB_ENC_V4 = Object.freeze({
+    pcsVersion:   4,
+    labNumerator: 65535,
+    lMul:         65535 / 100,
+    abMul:        65535 / 255,
+    lInvMul:      100 / 65535,
+    abInvMul:     255 / 65535
+});
+
+convert.labEncoding = { v2: LAB_ENC_V2, v4: LAB_ENC_V4 };
+
+function resolveLabEncoding(encoding) {
+    if (typeof encoding === 'string') {
+        if (encoding === 'v2') return LAB_ENC_V2;
+        if (encoding === 'v4') return LAB_ENC_V4;
+        throw new Error('Unknown Lab encoding: "' + encoding + '". Use "v2", "v4", or an encoding object.');
+    }
+    return encoding;
+}
+
+/**
+ * Convert float Lab to ICC u16 values.
+ *
+ * @param {number} L  Lightness 0–100
+ * @param {number} a  -128..+127
+ * @param {number} b  -128..+127
+ * @param {object|string} encoding  Encoding object ({lMul, abMul}) or
+ *     string shorthand ('v2' | 'v4'). Typically `xform.lut.inLab` or
+ *     `xform.lut.outLab`.
+ * @returns {number[]} [uL, ua, ub] clamped to 0..65535
+ */
+convert.lab2Int16 = function (L, a, b, encoding) {
+    var enc = resolveLabEncoding(encoding);
+    return [
+        Math.max(0, Math.min(65535, Math.round(L * enc.lMul))),
+        Math.max(0, Math.min(65535, Math.round((a + 128) * enc.abMul))),
+        Math.max(0, Math.min(65535, Math.round((b + 128) * enc.abMul)))
+    ];
+};
+
+/**
+ * Convert ICC u16 Lab values to float Lab.
+ *
+ * @param {number} uL  u16 lightness
+ * @param {number} ua  u16 a
+ * @param {number} ub  u16 b
+ * @param {object|string} encoding  Encoding object ({lInvMul, abInvMul}) or
+ *     string shorthand ('v2' | 'v4'). Typically `xform.lut.inLab` or
+ *     `xform.lut.outLab`.
+ * @returns {{type, L, a, b, whitePoint}} Lab colour object (D50)
+ */
+convert.int162Lab = function (uL, ua, ub, encoding) {
+    var enc = resolveLabEncoding(encoding);
+    return {
+        type: eColourType.Lab,
+        L: uL * enc.lInvMul,
+        a: ua * enc.abInvMul - 128,
+        b: ub * enc.abInvMul - 128,
+        whitePoint: convert.d50
+    };
+};
+
 module.exports = convert;

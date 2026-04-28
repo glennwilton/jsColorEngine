@@ -28,6 +28,10 @@ profile shipped with the repo works for every CMYK example here.
 
 - [Canvas round-trip — soft-proof into a `<canvas>`](#canvas-round-trip--soft-proof-into-a-canvas)
 - [Insert a custom pipeline stage](#insert-a-custom-pipeline-stage)
+- [LUT hook — inverted colour (input hook)](#lut-hook--inverted-colour-input-hook)
+- [LUT hook — TAC limiter (output hook)](#lut-hook--tac-limiter-output-hook)
+- [LUT hook — debug logger (output hook with source context)](#lut-hook--debug-logger-output-hook-with-source-context)
+- [LUT hook — chaining multiple hooks](#lut-hook--chaining-multiple-hooks)
 
 ---
 
@@ -165,6 +169,157 @@ Custom stages can be added at any location the pipeline exposes:
 
 See [`src/Transform.js`](../src/Transform.js) `stageFn` documentation
 for the full signature and available locations.
+
+---
+
+## LUT hook — inverted colour (input hook)
+
+An **input hook** warps the device values before the profile transform
+runs. Here we invert the RGB input so the resulting LUT bakes the
+inversion into every grid cell — at runtime the kernel runs at full
+speed with zero per-pixel overhead.
+
+```js
+const { Transform, eIntent } = require('jscolorengine');
+
+const xf = new Transform({
+    dataFormat: 'int8',
+    buildLut:   true,
+
+    // Input hook: invert RGB before the profile transform.
+    // Each channel is device-space [0–1], so 1 − v flips it.
+    lutInputHook: (rgb) => [1 - rgb[0], 1 - rgb[1], 1 - rgb[2]],
+});
+
+xf.create('*srgb', '*adobergb', eIntent.relative);
+
+// Every pixel that goes through this transform now gets a
+// colour-managed inversion — not a naive byte flip, but an
+// inversion that passes through the full profile pipeline.
+const src = new Uint8ClampedArray([255, 0, 0,  0, 128, 255]);
+const out = xf.transformArray(src, false, false, false, 2);
+// out: inverted + gamut-mapped to AdobeRGB
+```
+
+---
+
+## LUT hook — TAC limiter (output hook)
+
+An **output hook** modifies device values after the profile transform.
+This example clamps Total Area Coverage (the sum of all CMYK
+channels) to a maximum. When the total exceeds the limit, C, M, and Y
+are scaled down proportionally while K is preserved — print workflows
+often protect K because it carries the most visual weight.
+
+> **Note:** This is a simplified demonstration, not a colorimetrically
+> correct TAC strategy. Production GCR/UCR workflows typically operate
+> in the profile's AToB/BToA tables or via ICC DeviceLink profiles,
+> not post-transform hooks. Use this as a starting point.
+
+```js
+const { Profile, Transform, eIntent } = require('jscolorengine');
+
+(async () => {
+    const cmyk = new Profile();
+    await cmyk.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+
+    const TAC_LIMIT = 3.0;  // 300% expressed in [0–1] per channel
+
+    const xf = new Transform({
+        dataFormat: 'int8',
+        buildLut:   true,
+
+        // Output hook: if total ink > TAC_LIMIT, scale CMY
+        // down to fit while keeping K untouched.
+        lutOutputHook: (cmyk) => {
+            const total = cmyk[0] + cmyk[1] + cmyk[2] + cmyk[3];
+            if (total > TAC_LIMIT) {
+                const cmyTotal = cmyk[0] + cmyk[1] + cmyk[2];
+                if (cmyTotal > 0) {
+                    const allowed = TAC_LIMIT - cmyk[3];
+                    const scale   = allowed / cmyTotal;
+                    cmyk[0] *= scale;
+                    cmyk[1] *= scale;
+                    cmyk[2] *= scale;
+                }
+            }
+            return cmyk;
+        },
+    });
+
+    xf.create('*srgb', cmyk, eIntent.perceptual);
+
+    const pixels = new Uint8ClampedArray([10, 20, 30,  200, 100, 50]);
+    const result = xf.transformArray(pixels, false, false, false, 2);
+    // result: CMYK bytes with TAC guaranteed ≤ 300%
+})();
+```
+
+---
+
+## LUT hook — debug logger (output hook with source context)
+
+Output hooks receive an optional **second argument** — the original
+grid-cell input (read-only). This is perfect for build-time
+debugging: you can log every (input → output) pair the LUT produces
+without touching the values.
+
+Because hooks only run during `create()` (once per grid cell, not once
+per pixel), logging here is free at runtime — the kernel never calls
+your hook.
+
+```js
+const { Transform, eIntent } = require('jscolorengine');
+
+const xf = new Transform({
+    dataFormat: 'int8',
+    buildLut:   true,
+    lutGridPoints3D: 5,   // small grid so the log is readable
+});
+
+// Log every grid sample during build.
+xf.addLutOutputHook(function (deviceOut, deviceIn) {
+    console.log(
+        'IN  [%s] → OUT [%s]',
+        deviceIn.map(v => v.toFixed(3)).join(', '),
+        deviceOut.map(v => v.toFixed(3)).join(', ')
+    );
+    return deviceOut;   // pass through unchanged
+});
+
+xf.create('*srgb', '*adobergb', eIntent.relative);
+// Console shows 125 lines (5³), e.g.:
+//   IN  [0.000, 0.000, 0.000] → OUT [0.000, 0.000, 0.000]
+//   IN  [0.000, 0.000, 0.250] → OUT [0.065, 0.047, 0.259]
+//   ...
+//   IN  [1.000, 1.000, 1.000] → OUT [1.000, 1.000, 1.000]
+
+// Now transformArray runs at full speed — no hooks involved.
+const img = new Uint8ClampedArray(1024 * 3);
+const out = xf.transformArray(img, false, false, false, 1024);
+```
+
+---
+
+## LUT hook — chaining multiple hooks
+
+Multiple hooks can be added before `create()`. They run in the order
+they were added — each hook receives the previous hook's output.
+
+```js
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+
+t.addLutOutputHook(tacLimit);    // first: clamp TAC
+t.addLutOutputHook(debugLog);    // second: log the clamped result
+
+t.create('*srgb', cmykProfile, eIntent.perceptual);
+// tacLimit ran on every grid cell, then debugLog saw the clamped values.
+// At runtime, transformArray is full speed — hooks are baked in.
+```
+
+Hooks must be added **after** `new Transform()` and **before**
+`create()` — `create()` is when the LUT is built and the hooks fire.
+Use `clearLutHooks()` if you need to rebuild with different hooks.
 
 ---
 

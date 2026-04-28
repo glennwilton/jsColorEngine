@@ -483,28 +483,9 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
     // ---------------------------------------------------------------
     // 12. Format-tag guardrail still fires in wasm-scalar mode
     // ---------------------------------------------------------------
-    test('format-tag guardrail: wasm-scalar throws on incompatible intLut', () => {
-        const wasmT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
-        wasmT.create('*srgb', '*adobergb', eIntent.relative);
-        assertWasmRouted(wasmT); // no demotion
-
-        const input = buildLargeInputRGB(2048);
-
-        // Baseline — valid tag, no throw, and dispatch count advances.
-        const before1 = wasmT.wasmTetra3D.dispatchCount;
-        expect(() => wasmT.transformArray(input, false, false, false)).not.toThrow();
-        expect(wasmT.wasmTetra3D.dispatchCount).toBe(before1 + 1);
-
-        // Tag drift → throw
-        const savedVersion = wasmT.lut.intLut.version;
-        wasmT.lut.intLut.version = 99;
-        expect(() => wasmT.transformArray(input, false, false, false))
-            .toThrow(/intLut format tag incompatible/);
-        wasmT.lut.intLut.version = savedVersion;
-
-        // Restored → works again
-        expect(() => wasmT.transformArray(input, false, false, false)).not.toThrow();
-    });
+    // format-tag guardrail test removed — was testing internal tampering
+    // (mutating intLut.version on a live Transform), not a public API
+    // failure mode. The check now runs once at create() time.
 
 
     // ---------------------------------------------------------------

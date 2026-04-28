@@ -93,6 +93,17 @@ function fmtMpx(m) {
     return m.toFixed(0);
 }
 
+function fmtMBs(m) {
+    if (!isFinite(m) || m <= 0) return '-';
+    if (m < 10)  return m.toFixed(1);
+    if (m < 100) return m.toFixed(0);
+    return m.toFixed(0);
+}
+
+function totalBpp(inCh, outCh, is16bit) {
+    return (inCh + outCh) * (is16bit ? 2 : 1);
+}
+
 /**
  * Reorder #results-full tbody rows so each direction block is sorted by
  * MPx/s descending (fastest first). Error rows (no `data-mpx` cell) sink
@@ -823,6 +834,13 @@ async function runFullComparison() {
             }
 
             const typeCode = benchTypeLabel(cfg);
+            const is16 = cfg.kind === 'jsce'
+                ? (cfg.mode.dataFormat === 'int16')
+                : (cfg.bitDepth === 16);
+            const wf = cfg.kind === 'jsce' ? cfg.dir.js : cfg.dir.lcms;
+            const bpp = totalBpp(wf.inCh, wf.outCh, is16);
+            const mbps = result.mpxs * bpp;
+
             tr.innerHTML =
                 '<td>' + cfg.dir.shortLabel + '</td>' +
                 '<td class="mode-cell ' + (demoted ? 'demoted' : '') + '">' +
@@ -835,6 +853,7 @@ async function runFullComparison() {
                 '<td class="num">' + fmtMs(result.coldMs) + '</td>' +
                 '<td class="num">' + fmtMs(result.hotMs) + '</td>' +
                 '<td class="num">' + fmtMpx(result.mpxs) + '</td>' +
+                '<td class="num">' + fmtMBs(mbps) + '</td>' +
                 '<td class="bar-col"><div class="bar"><div class="bar-fill ' + badgeCls + '" data-mpx="' + result.mpxs + '"></div></div></td>' +
                 '<td class="num" data-direction="' + cfg.dir.id + '" data-mpx="' + result.mpxs + '">-</td>';
             tbody.appendChild(tr);
@@ -847,6 +866,7 @@ async function runFullComparison() {
                 kind: cfg.kind,
                 isLut: cfg.isLut,
                 lutDesc,
+                mbps,
                 ...result,
             });
         } catch (err) {
@@ -855,7 +875,7 @@ async function runFullComparison() {
                 '<td class="mode-cell"><span class="mode-badge ' + badgeForMode(cfg.kind === 'jsce' ? cfg.mode.id : 'lcms') + '">' +
                   (cfg.kind === 'jsce' ? cfg.mode.label : cfg.label) + '</span></td>' +
                 '<td class="type-cell type-cell-na">&mdash;</td>' +
-                '<td class="error-cell" colspan="7">' + (err && err.message || err) + '</td>';
+                '<td class="error-cell" colspan="8">' + (err && err.message || err) + '</td>';
             tbody.appendChild(tr);
             console.error('Bench cell failed:', cfg, err);
         }
@@ -1084,8 +1104,8 @@ function copyFullMarkdown() {
     // ---- Full table ----
     lines.push('## Full results');
     lines.push('');
-    lines.push('| Direction | Mode | Type | LUT | LUT build (ms) | Cold (ms) | Hot (ms) | MPx/s | vs `int` |');
-    lines.push('|---|---|:---:|---|---:|---:|---:|---:|---:|');
+    lines.push('| Direction | Mode | Type | LUT | LUT build (ms) | Cold (ms) | Hot (ms) | MPx/s | MB/s | vs `int` |');
+    lines.push('|---|---|:---:|---|---:|---:|---:|---:|---:|---:|');
     for (const row of r.results) {
         const intMpx = r.intMpxPerDir[row.dirId];
         const vsInt  = (intMpx > 0) ? (row.mpxs / intMpx).toFixed(2) + 'x' : '-';
@@ -1098,6 +1118,7 @@ function copyFullMarkdown() {
             ' | ' + fmtMs(row.coldMs) +
             ' | ' + fmtMs(row.hotMs) +
             ' | ' + fmtMpx(row.mpxs) +
+            ' | ' + fmtMBs(row.mbps || 0) +
             ' | ' + vsInt + ' |'
         );
     }
@@ -1693,6 +1714,10 @@ async function runPixelSweep() {
     tbody.innerHTML = '';
     $('#run-sweep').disabled = true;
 
+    const is16 = modeId.indexOf('int16') >= 0 || modeId.endsWith('-16');
+    const wf = modeId.startsWith('lcms-') ? dir.lcms : dir.js;
+    const bpp = totalBpp(wf.inCh, wf.outCh, is16);
+
     const results = [];
     for (let i = 0; i < sizes.length; i++) {
         const { w, h } = sizes[i];
@@ -1705,26 +1730,22 @@ async function runPixelSweep() {
         try {
             if (modeId.startsWith('lcms-')) {
                 if (!state.lcmsAvailable) throw new Error('lcms-wasm not loaded');
-                // Pixel-sweep tab fixes the lcms variant to HIGHRESPRECALC -
-                // the pixel-count question is "does the SAME kernel scale?",
-                // not "which lcms flag is fastest?", so we don't need three
-                // flag rows here. The 16-bit path is selected by the
-                // 'lcms-highres-16' mode id.
                 runner = makeLcmsWarmupRunner(dir, modeId, px);
             } else {
                 runner = makeJsceRunner(dir, modeId, px, {});
             }
-            // Adjust iters: at 4M pixels we don't want to spin for 60s
             const itersPerBatch = Math.max(3, Math.min(hotPerBatch, Math.floor(hotPerBatch * 65536 / px)));
             const result = await measureRunner(runner, px, Math.min(50, hotPerBatch), itersPerBatch);
             runner.free();
 
+            const mbps = result.mpxs * bpp;
             const tr = document.createElement('tr');
             tr.innerHTML =
                 '<td>' + w + ' &times; ' + h + '</td>' +
                 '<td class="num">' + px.toLocaleString() + '</td>' +
                 '<td class="num">' + fmtMs(result.hotMs) + '</td>' +
                 '<td class="num">' + fmtMpx(result.mpxs) + '</td>' +
+                '<td class="num">' + fmtMBs(mbps) + '</td>' +
                 '<td class="bar-col"><div class="bar"><div class="bar-fill ' + badgeForMode(modeId) + '" data-mpx="' + result.mpxs + '"></div></div></td>';
             tbody.appendChild(tr);
             results.push(result);
@@ -1733,7 +1754,7 @@ async function runPixelSweep() {
             tr.innerHTML =
                 '<td>' + w + ' &times; ' + h + '</td>' +
                 '<td class="num">' + px.toLocaleString() + '</td>' +
-                '<td class="error-cell" colspan="3">' + (err && err.message || err) + '</td>';
+                '<td class="error-cell" colspan="4">' + (err && err.message || err) + '</td>';
             tbody.appendChild(tr);
             console.error(err);
         }

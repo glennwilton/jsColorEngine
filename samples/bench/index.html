@@ -6,7 +6,7 @@
 <title>jsColorEngine &middot; Browser Bench</title>
 <link rel="stylesheet" href="styles.css">
 <!-- jsColorEngine UMD bundle. Built via `npm run browser` -> browser/jsColorEngineWeb.js -->
-<script src="/browser/jsColorEngineWeb.js"></script>
+<script src="../../browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
 
@@ -17,9 +17,9 @@
             <span class="brand-tag">browser bench</span>
         </div>
         <nav class="nav" aria-label="Site">
-            <a href="/samples/">Home</a>
-            <a href="/samples/samples.html#demos">Samples</a>
-            <a href="/samples/bench/" class="is-active">Bench</a>
+            <a href="../">Home</a>
+            <a href="../samples.html">Samples</a>
+            <a href="./" class="is-active">Bench</a>
         </nav>
     </div>
     <nav class="tabs" id="tabs" aria-label="Bench views">
@@ -183,6 +183,7 @@
                     <th class="num" title="First call &mdash; includes JIT tier-up + WASM compile + cache misses (ms)">Cold&nbsp;1st</th>
                     <th class="num" title="Median of 5 batches after warmup (ms / iter)">Hot&nbsp;ms</th>
                     <th class="num">MPx/s</th>
+                    <th class="num" title="Total throughput: (input + output) bytes per second">MB/s</th>
                     <th class="bar-col">relative speed</th>
                     <th class="num" title="Speedup vs jsColorEngine `int` for the same direction">vs&nbsp;`int`</th>
                 </tr>
@@ -510,6 +511,7 @@
                     <th class="num">Pixels</th>
                     <th class="num">Hot ms / iter</th>
                     <th class="num">MPx/s</th>
+                    <th class="num" title="Total throughput: (input + output) bytes per second">MB/s</th>
                     <th class="bar-col">relative</th>
                 </tr>
             </thead>
@@ -545,6 +547,30 @@
             stabilised), then the median of 5 timed batches. This is the number
             to report if you want to know how fast the kernel actually runs in
             steady state.
+        </li>
+        <li>
+            <strong>MPx/s</strong> (Mega-pixels per second) &mdash; the primary
+            throughput metric. One pixel = one colour sample regardless of
+            channel count or bit depth. This is what the table sorts on and
+            what the bar chart visualises. Use MPx/s when comparing kernels
+            within the same direction (same channel layout), because the
+            per-pixel work is identical and the number directly answers
+            &ldquo;how many pixels can I process per second?&rdquo;
+        </li>
+        <li>
+            <strong>MB/s</strong> (Megabytes per second) &mdash; total data
+            throughput, calculated as
+            <code>MPx/s &times; (inputChannels + outputChannels) &times; bytesPerSample</code>.
+            For u8 modes <code>bytesPerSample&nbsp;=&nbsp;1</code>; for u16
+            modes <code>bytesPerSample&nbsp;=&nbsp;2</code>. This counts
+            <em>both</em> input and output bytes (the CPU has to read one and
+            write the other, so both contribute to memory pressure). Use MB/s
+            when comparing across different channel counts (e.g.&nbsp;RGB
+            vs&nbsp;CMYK), across bit depths (u8 vs&nbsp;u16), or against
+            other engines that report throughput in bytes &mdash; for example
+            LittleCMS&rsquo;s
+            <a href="https://www.littlecms.com/plugin/#fast-float">Fast&nbsp;Float
+            plug-in</a> benchmarks use MB/s.
         </li>
         <li>
             <strong>Type</strong> (Full comparison table only) &mdash;

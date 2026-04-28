@@ -159,3 +159,59 @@ test('sRGB+Alpha to CMYK+Alpha via LUT with PRESERVE Alpha with length of 3', as
         62, 46, 46, 0,          200
     ]));
 });
+
+test('transformArrayViaLUT supports reusable output buffer', async () => {
+    let cmykProfile = new Profile();
+    await cmykProfile.loadPromise('file:' + cmykFilename);
+
+    expect(cmykProfile.loaded).toBe(true);
+
+    let rgb2CMYK = new Transform({
+        dataFormat: 'int8',
+        builtLut: true
+    });
+    rgb2CMYK.create('*srgb', cmykProfile, eIntent.relative);
+
+    let input = [
+        150,100,50,
+        50,50,50,
+        200,200,200
+    ];
+    let out = new Uint8ClampedArray(20);
+
+    let output = rgb2CMYK.transformArrayViaLUT(input, false, false, false, 3, out);
+    expect(output).toBe(out);
+    expect(output.slice(0, 12)).toEqual(new Uint8ClampedArray([
+        94, 157, 243, 40,
+        202, 182, 177, 171,
+        62, 46, 46, 0
+    ]));
+});
+
+test('transformArray forwards reusable output buffer on LUT route', async () => {
+    let cmykProfile = new Profile();
+    await cmykProfile.loadPromise('file:' + cmykFilename);
+
+    expect(cmykProfile.loaded).toBe(true);
+
+    let rgb2CMYK = new Transform({
+        dataFormat: 'int8',
+        builtLut: true
+    });
+    rgb2CMYK.create('*srgb', cmykProfile, eIntent.relative);
+
+    let input = [
+        150,100,50,
+        50,50,50,
+        200,200,200
+    ];
+    let out = new Uint8ClampedArray(20);
+
+    let output = rgb2CMYK.transformArray(input, false, false, false, 3, undefined, out);
+    expect(output).toBe(out);
+    expect(output.slice(0, 12)).toEqual(new Uint8ClampedArray([
+        94, 157, 243, 40,
+        202, 182, 177, 171,
+        62, 46, 46, 0
+    ]));
+});

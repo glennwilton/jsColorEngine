@@ -497,24 +497,8 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
     // ---------------------------------------------------------------
     // 13. Format-tag guardrail still fires in wasm-simd mode
     // ---------------------------------------------------------------
-    test('format-tag guardrail: wasm-simd throws on incompatible intLut', () => {
-        const simdT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
-        simdT.create('*srgb', '*adobergb', eIntent.relative);
-        assertSimdRouted(simdT);
-
-        const input = buildLargeInputRGB(2048);
-
-        const before1 = simdT.wasmTetra3DSimd.dispatchCount;
-        expect(() => simdT.transformArray(input, false, false, false)).not.toThrow();
-        expect(simdT.wasmTetra3DSimd.dispatchCount).toBe(before1 + 1);
-
-        const savedVersion = simdT.lut.intLut.version;
-        simdT.lut.intLut.version = 99;
-        expect(() => simdT.transformArray(input, false, false, false))
-            .toThrow(/intLut format tag incompatible/);
-        simdT.lut.intLut.version = savedVersion;
-
-        expect(() => simdT.transformArray(input, false, false, false)).not.toThrow();
-    });
+    // format-tag guardrail test removed — was testing internal tampering
+    // (mutating intLut.version on a live Transform), not a public API
+    // failure mode. The check now runs once at create() time.
 
 });
