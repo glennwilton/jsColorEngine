@@ -1148,6 +1148,18 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 >   and lcms parity for the intent matrix (perceptual, relative
 >   colorimetric, saturation, absolute), including same-CMYK-profile rows
 >   such as GRACoL → GRACoL.
+> - **Fully-bound transformArrayFn (dispatch optimisation)** — the
+>   v1.3 table-driven dispatcher pre-resolves `_lutKernelBig` /
+>   `_lutKernelSmall` at `create()`/`setLut()` time but
+>   `transformArrayViaLUT` still does a per-call branch + indirect
+>   call to dispatch them. The original design intent was to bind a
+>   single `this.transformArrayFn = boundKernel` closure once, so
+>   the hot path is one direct closure call — zero branches, no
+>   method dispatch through `transformArray()` → `transformArrayViaLUT()`.
+>   For `pixelCount ≥ 256` (the realistic case) the SMALL kernel
+>   never runs, so a single-kernel binding is correct without
+>   conditional logic. Easy refactor, modest win on small arrays
+>   (~1-2% on big arrays where args normalisation dominates).
 >
 > The compiled non-LUT pipeline + `toModule()` work is still the
 > centrepiece of v1.5 — those land after the warm-up items above.
