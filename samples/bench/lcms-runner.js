@@ -27,7 +27,7 @@
  *                                `buildLut: false` (the "accuracy" path).
  */
 
-const LCMS_DIST = '/samples/lcms-wasm-dist/';
+const LCMS_DIST = '../lcms-wasm-dist/';
 
 let cachedLcms = null;
 let cachedConsts = null;

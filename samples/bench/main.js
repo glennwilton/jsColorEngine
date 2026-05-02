@@ -26,7 +26,7 @@ import { loadLcms, buildProfiles, freeProfiles, makeLcmsRunner, probeLcmsBuild }
 
 // CMYK profile: same GRACoL print standard as tests, but the on-disk name
 // in samples/profiles/ is CoatedGRACoL2006.icc (see other sample pages).
-const PROFILE_URL       = '/samples/profiles/CoatedGRACoL2006.icc';
+const PROFILE_URL       = '../profiles/CoatedGRACoL2006.icc';
 
 // RGB->RGB MUST be sRGB -> AdobeRGB (NOT sRGB -> sRGB). If both endpoints
 // are sRGB, lcms's pipeline optimiser collapses the transform to an identity
@@ -34,7 +34,7 @@ const PROFILE_URL       = '/samples/profiles/CoatedGRACoL2006.icc';
 // than any legitimate RGB->RGB conversion (measured: 78 vs 60 MPx/s in a
 // node smoke-test). Every other benchmark in this suite exercises a real
 // non-identity transform, so RGB->RGB has to too.
-const ADOBE_RGB_URL     = '/samples/profiles/AdobeRGB1998.icc';
+const ADOBE_RGB_URL     = '../profiles/AdobeRGB1998.icc';
 
 // ============================================================ STATE
 
