@@ -18,6 +18,9 @@
     /* eslint-disable no-console */
     console.log('%c', el);
 
+    // Expose detection result globally so bench markdown copy can include it
+    window._devtoolsOpen = open;
+
     if (open) {
         // Inject a fixed-position warning banner above all other content
         var banner = document.createElement('div');

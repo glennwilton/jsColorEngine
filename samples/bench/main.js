@@ -1030,6 +1030,7 @@ function readEngineInfo() {
         ['User agent',    pick('#info-ua')],
         ['CPU cores',     pick('#info-cores')],
         ['Page',          pick('#info-secure')],
+        ['DevTools open', window._devtoolsOpen ? 'YES ⚠ — results may be 2–3× slower' : 'No'],
     ];
 }
 
