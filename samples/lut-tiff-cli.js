@@ -249,7 +249,6 @@ function runImport() {
             console.error('  --scale <n>           pixel scale used on export (1, 2, or 3)');
             console.error('\nThese values are printed in the text strip at the bottom of the TIFF.');
         } else if (msg.includes('spread')) {
-            console.error('The LUT pixel data is corrupted:');
             console.error('LUT region corrupted — JPEG compression, incorrect crop, or wrong --scale value.');
             console.error('Resave as TIFF LZW or uncompressed; never use JPEG.');
         }
