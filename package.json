@@ -1,7 +1,7 @@
 {
   "name": "jscolorengine",
   "version": "1.4.4",
-  "description": "Javascript ICC Profile Color Engine with additional features for color management and analysis",
+  "description": "Fast ICC colour engine for JavaScript — WASM-SIMD LUT kernels (~210 MPx/s x86, ~270 MPx/s Apple Silicon), full f64 accuracy pipeline, portable LUT JSON, TIFF visual editing workflow. Outperforms lcms-wasm in 3 of 4 image workflows. ICC v2/v4, all intents, BPC, soft-proof, prepress, zero native deps, browser + Node.",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "src/main.js",
   "browser": {
