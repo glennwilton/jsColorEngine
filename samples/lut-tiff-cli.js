@@ -250,9 +250,8 @@ function runImport() {
             console.error('\nThese values are printed in the text strip at the bottom of the TIFF.');
         } else if (msg.includes('spread')) {
             console.error('The LUT pixel data is corrupted:');
-            console.error('  • JPEG compression was used — resave as TIFF LZW or uncompressed');
-            console.error('  • The LUT region was painted over, cropped, or resized');
-            console.error('  • Wrong --scale value (check the text strip in the TIFF)');
+            console.error('LUT region corrupted — JPEG compression, incorrect crop, or wrong --scale value.');
+            console.error('Resave as TIFF LZW or uncompressed; never use JPEG.');
         }
         process.exit(1);
     }

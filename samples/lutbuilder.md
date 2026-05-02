@@ -518,7 +518,7 @@ fs.writeFileSync('tac_300.json', JSON.stringify(tac.toJSON()));
 
 ### W4 — Hybrid try/catch (lcms fallback for exotic profiles)
 
-> **The killer pattern for production use.** jsCE can't parse every exotic ICC profile — this pattern gives you lcms as an automatic fallback with an identical runtime API. Either path produces a LUT-backed Transform running at the same WASM-SIMD speed; your image loop never needs to know which engine did the colour math.
+> **The killer pattern for production use.** Any Transform produced by either path runs at the same WASM-SIMD speed — your image loop never knows which engine did the colour math. jsCE handles the common case; lcms catches anything it can't parse.
 
 ```js
 let transform;
