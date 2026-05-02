@@ -786,8 +786,11 @@ function downloadJSON() {
     if (!importedBuilder) return;
     applyImportNotes();
     const json = JSON.stringify(importedBuilder.toJSON(), null, 2);
-    const type = document.getElementById('lutType')?.value || 'lut';
-    const name = 'lut_n' + importedBuilder._size + '_' + importedBuilder._inCh + 'to' + importedBuilder._outCh + '.json';
+    // Build filename from the imported chain: e.g. sRGB_to_SWOP_n33_3to4.json
+    const chain  = importedBuilder._chain || [];
+    const inName  = ((chain[0] && (chain[0].name || chainCS(chain[0]))) || 'in' ).replace(/\s+/g,'_').replace(/[^\w-]/g,'').slice(0,20);
+    const outName = ((chain[2] && (chain[2].name || chainCS(chain[2]))) || 'out').replace(/\s+/g,'_').replace(/[^\w-]/g,'').slice(0,20);
+    const name = inName + '_to_' + outName + '_n' + importedBuilder._size + '_' + importedBuilder._inCh + 'to' + importedBuilder._outCh + '.json';
     downloadBytes(new TextEncoder().encode(json), name, 'application/json');
 }
 
