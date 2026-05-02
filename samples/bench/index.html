@@ -6,6 +6,7 @@
 <title>jsColorEngine &middot; Browser Bench</title>
 <link rel="stylesheet" href="styles.css">
 <!-- jsColorEngine UMD bundle. Built via `npm run browser` -> browser/jsColorEngineWeb.js -->
+<script src="../devtools-warn.js"></script>
 <script src="../browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
@@ -32,18 +33,6 @@
 </header>
 
 <main>
-
-<!-- DEVTOOLS WARNING ======================================================= -->
-<section class="card" id="devtools-warning" style="border-color:var(--warn);background:rgba(251,191,36,0.06);display:none">
-    <p style="margin:0;color:var(--warn);font-weight:600;font-size:14px">
-        ⚠ DevTools appears to be open — close it before running the bench.
-    </p>
-    <p class="muted" style="margin:6px 0 0;font-size:12px">
-        Chrome DevTools overrides timers, intercepts console calls, and pauses
-        JIT compilation. Results with DevTools open can be <strong>2–3× slower</strong>
-        than real-world performance. Close DevTools, reload the page, then run.
-    </p>
-</section>
 
 <!-- ENGINE INFO PANEL ====================================================== -->
 <section class="card">
