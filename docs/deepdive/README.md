@@ -88,6 +88,7 @@ recipes.
 | [WASM kernels](./WasmKernels.md) | Hand-written `.wat` for 3D and 4D tetrahedral interp. SIMD channel-parallel layout, rolling-shutter pack, the V8 inliner lesson. Reproduction recipes |
 | [Compiled pipeline (POC)](./CompiledPipeline.md) | `transform.compile()` — turning the runtime stage walker into one straight-line JS function per profile chain. 1.75× on sRGB→CMYK, three measurement methods, and the path to `getSource()` / `toModule()` |
 | [Accuracy](./Accuracy.md) | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
+| [LUTs](./Luts.md) | Custom LUT creation, TIFF-based visual editing, lcms-wasm bridge, portable JSON serialisation format, and the architecture for CMS-agnostic LUT capture and redistribution. Companion how-to: [`samples/lutbuilder.md`](../../samples/lutbuilder.md). |
 
 ## Learn more (external)
 

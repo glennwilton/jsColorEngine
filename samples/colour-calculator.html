@@ -1,0 +1,635 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+
+  Colour Calculator — interactive ICC-aware space converter.
+
+  Showcases the jsColorEngine OBJECT pipeline:
+    - transform.transform(colorObj)  — single-colour, full f64 precision
+    - convert.Lab2XYZ / XYZ2Lab      — pure math, no profile
+    - convert.Lab / RGB / CMYK / XYZ — colour object constructors
+
+  Lab is the canonical internal representation (ICC PCS D50).
+  Change any space, press Update — everything else follows via the engine.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Colour Calculator</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    .calc-wrap {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+    }
+    .swatch-panel {
+        flex: 0 0 120px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: center;
+    }
+    .swatch-main {
+        width: 120px;
+        height: 120px;
+        border-radius: 10px;
+        border: 2px solid var(--border, #2a2f36);
+        background: #808080;
+        transition: background 0.15s;
+    }
+    .swatch-label {
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+        color: var(--text-muted, #888);
+        text-align: center;
+    }
+    .swatch-hex {
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        color: var(--text, #ddd);
+    }
+
+    .fields-panel { flex: 1; min-width: 300px; }
+
+    .space-row {
+        display: grid;
+        grid-template-columns: 80px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border-soft, #1d2228);
+    }
+    .space-row:last-child { border-bottom: none; }
+
+    .space-name {
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        color: var(--accent, #6cf);
+        font-weight: bold;
+    }
+    .space-fields {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+    }
+    .field-group input {
+        width: 72px;
+        background: var(--bg-card, #1a1e23);
+        border: 1px solid var(--border, #2a2f36);
+        color: var(--text, #ddd);
+        padding: 5px 7px;
+        border-radius: 4px;
+        font-family: var(--mono, monospace);
+        font-size: 13px;
+        text-align: right;
+    }
+    .field-group input:focus {
+        border-color: var(--accent, #6cf);
+        outline: none;
+    }
+    .field-group input.source {
+        border-color: var(--accent-2, #5d8);
+    }
+    .field-lbl {
+        font-family: var(--mono, monospace);
+        font-size: 10px;
+        color: var(--text-muted, #888);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .space-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+    }
+    .space-meta select {
+        background: var(--bg-card, #1a1e23);
+        border: 1px solid var(--border, #2a2f36);
+        color: var(--text, #ddd);
+        padding: 4px 6px;
+        border-radius: 4px;
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+    }
+    .mini-swatch {
+        width: 32px;
+        height: 20px;
+        border-radius: 4px;
+        border: 1px solid var(--border, #2a2f36);
+        background: #808080;
+    }
+
+    .controls-row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-top: 16px;
+        flex-wrap: wrap;
+    }
+    .intent-group { display: flex; gap: 4px; }
+    .intent-btn {
+        background: var(--bg-card, #1a1e23);
+        border: 1px solid var(--border, #2a2f36);
+        color: var(--text-muted, #888);
+        padding: 5px 12px;
+        border-radius: 4px;
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        cursor: pointer;
+    }
+    .intent-btn.active {
+        border-color: var(--accent-2, #5d8);
+        color: var(--accent-2, #5d8);
+        background: rgba(96,220,160,0.07);
+    }
+    .update-btn {
+        background: var(--bg-card, #1a1e23);
+        border: 1px solid var(--accent, #6cf);
+        color: var(--accent, #6cf);
+        padding: 5px 16px;
+        border-radius: 4px;
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        cursor: pointer;
+    }
+    .update-btn:hover { background: rgba(102,204,255,0.1); }
+    .de-readout {
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        color: var(--text-muted, #888);
+    }
+    .status-line {
+        font-family: var(--mono, monospace);
+        font-size: 11px;
+        color: var(--text-muted, #888);
+        margin-top: 8px;
+    }
+</style>
+<script src="../browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">samples</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html" class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
+        </nav>
+    </div>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="lut-cmyk-to-rgb.html">CMYK → RGB LUT</a>
+        <a href="lut-tiff-builder.html">LUT TIFF Builder</a>
+        <a href="colour-calculator.html" class="is-active">Colour Calculator</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="card">
+    <h2>Colour Calculator (Beta)</h2>
+    <p class="lead">
+        Enter a colour in any space — Lab, XYZ, RGB, or CMYK — and the engine
+        converts to all others using real ICC profiles. Uses the
+        <strong>object pipeline</strong> (<code>transform.transform(colorObj)</code>) —
+        single-colour, full f64 precision, no LUT quantisation.
+    </p>
+    <p class="muted">
+        Lab D50 is the canonical bridge space (ICC PCS). XYZ ↔ Lab uses
+        <code>convert.Lab2XYZ()</code> / <code>convert.XYZ2Lab()</code> (pure math).
+        RGB and CMYK conversions use loaded ICC profiles.
+    </p>
+
+    <div class="calc-wrap">
+
+        <!-- ── Colour swatch ──────────────────────────────────────────── -->
+        <div class="swatch-panel">
+            <div class="swatch-main" id="swatchMain"></div>
+            <div class="swatch-label">sRGB display</div>
+            <div class="swatch-hex" id="swatchHex">#808080</div>
+        </div>
+
+        <!-- ── Fields ────────────────────────────────────────────────── -->
+        <div class="fields-panel">
+
+            <!-- Lab -->
+            <div class="space-row" data-space="lab">
+                <span class="space-name">Lab D50</span>
+                <div class="space-fields">
+                    <div class="field-group">
+                        <input type="number" id="fL" value="50.00" step="0.01" min="0" max="100">
+                        <span class="field-lbl">L</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fa" value="0.00" step="0.01" min="-128" max="127">
+                        <span class="field-lbl">a</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fb" value="0.00" step="0.01" min="-128" max="127">
+                        <span class="field-lbl">b</span>
+                    </div>
+                </div>
+                <div class="space-meta">
+                    <div class="mini-swatch" id="swLab"></div>
+                </div>
+            </div>
+
+            <!-- XYZ -->
+            <div class="space-row" data-space="xyz">
+                <span class="space-name">XYZ D50</span>
+                <div class="space-fields">
+                    <div class="field-group">
+                        <input type="number" id="fX" value="0.2034" step="0.0001" min="0" max="2">
+                        <span class="field-lbl">X</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fY" value="0.2140" step="0.0001" min="0" max="2">
+                        <span class="field-lbl">Y</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fZ" value="0.2330" step="0.0001" min="0" max="2">
+                        <span class="field-lbl">Z</span>
+                    </div>
+                </div>
+                <div class="space-meta">
+                    <div class="mini-swatch" id="swXyz"></div>
+                </div>
+            </div>
+
+            <!-- RGB -->
+            <div class="space-row" data-space="rgb">
+                <span class="space-name">RGB</span>
+                <div class="space-fields">
+                    <div class="field-group">
+                        <input type="number" id="fR" value="128" step="1" min="0" max="255">
+                        <span class="field-lbl">R</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fG" value="128" step="1" min="0" max="255">
+                        <span class="field-lbl">G</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fB" value="128" step="1" min="0" max="255">
+                        <span class="field-lbl">B</span>
+                    </div>
+                </div>
+                <div class="space-meta">
+                    <select id="rgbProfile">
+                        <option value="*sRGB">sRGB</option>
+                        <option value="*AdobeRGB">AdobeRGB</option>
+                        <option value="*ProPhotoRGB">ProPhoto RGB</option>
+                    </select>
+                    <div class="mini-swatch" id="swRgb"></div>
+                </div>
+            </div>
+
+            <!-- CMYK -->
+            <div class="space-row" data-space="cmyk">
+                <span class="space-name">CMYK</span>
+                <div class="space-fields">
+                    <div class="field-group">
+                        <input type="number" id="fC" value="0.00" step="0.01" min="0" max="100">
+                        <span class="field-lbl">C %</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fM" value="0.00" step="0.01" min="0" max="100">
+                        <span class="field-lbl">M %</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fY2" value="0.00" step="0.01" min="0" max="100">
+                        <span class="field-lbl">Y %</span>
+                    </div>
+                    <div class="field-group">
+                        <input type="number" id="fK" value="50.20" step="0.01" min="0" max="100">
+                        <span class="field-lbl">K %</span>
+                    </div>
+                </div>
+                <div class="space-meta">
+                    <select id="cmykProfile">
+                        <option value="profiles/CoatedGRACoL2006.icc">GRACoL 2006</option>
+                        <option value="profiles/ISOcoated_v2_eci.icc">ISO Coated v2</option>
+                        <option value="profiles/eciCMYK_v2.icc">eciCMYK v2</option>
+                    </select>
+                    <div class="mini-swatch" id="swCmyk"></div>
+                </div>
+            </div>
+
+        </div><!-- /.fields-panel -->
+    </div><!-- /.calc-wrap -->
+
+    <div class="controls-row">
+        <span style="font-family:var(--mono);font-size:12px;color:var(--text-muted)">Intent:</span>
+        <div class="intent-group">
+            <button class="intent-btn active" id="btnRCM" data-intent="1">Relative</button>
+            <button class="intent-btn" id="btnACM" data-intent="3">Absolute</button>
+        </div>
+        <button class="update-btn" id="btnUpdate">↺ Update</button>
+        <span class="de-readout" id="deReadout"></span>
+    </div>
+
+    <div class="status-line" id="statusLine">Loading profiles…</div>
+</section>
+
+</main>
+
+<script type="module">
+    const { Transform, Profile, eIntent, convert, eColourType } = window.jsColorEngine;
+
+    // ── DOM refs ─────────────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const swatchMain  = $('swatchMain');
+    const swatchHex   = $('swatchHex');
+    const statusLine  = $('statusLine');
+    const deReadout   = $('deReadout');
+    const rgbSel      = $('rgbProfile');
+    const cmykSel     = $('cmykProfile');
+
+    // Field refs
+    const F = {
+        L: $('fL'), a: $('fa'), b: $('fb'),
+        X: $('fX'), Y: $('fY'), Z: $('fZ'),
+        R: $('fR'), G: $('fG'), B: $('fB'),
+        C: $('fC'), M: $('fM'), Y2: $('fY2'), K: $('fK'),
+    };
+    const swatches = { lab: $('swLab'), xyz: $('swXyz'), rgb: $('swRgb'), cmyk: $('swCmyk') };
+
+    // ── State ─────────────────────────────────────────────────────────────
+    let currentIntent = eIntent.relative;
+    let sourceSpace   = 'lab';    // which space the user last edited
+    let cmykProfile   = null;
+    let cmykBytes     = null;
+    let profileCache  = {};       // url → Profile object
+    let transforms    = null;     // rebuilt on profile/intent change
+
+    // ── Profile loading ───────────────────────────────────────────────────
+
+    async function loadCmykProfile(url) {
+        if (profileCache[url]) return profileCache[url];
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('Profile fetch failed: ' + url);
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        const p = new Profile();
+        await p.loadPromise(bytes);
+        if (!p.loaded) throw new Error('Profile parse failed: ' + url);
+        profileCache[url] = p;
+        return p;
+    }
+
+    // ── Transform set ─────────────────────────────────────────────────────
+    // Uses the OBJECT pipeline — transform.transform(colorObj) — full f64,
+    // no LUT. Each colour is a convert.* object with typed channels.
+
+    function buildTransforms(cmyk, intent) {
+        const rgbVirtual = rgbSel.value;   // '*sRGB', '*AdobeRGB', etc.
+        return {
+            // Lab (D50) ↔ RGB   — virtual profiles, no file I/O
+            labToRgb: (function() {
+                const t = new Transform({ dataFormat: 'objectFloat' });
+                t.create('*Lab', rgbVirtual, intent);
+                return t;
+            })(),
+            rgbToLab: (function() {
+                const t = new Transform({ dataFormat: 'objectFloat' });
+                t.create(rgbVirtual, '*Lab', intent);
+                return t;
+            })(),
+
+            // Lab (D50) ↔ CMYK  — loaded ICC profile
+            labToCmyk: (function() {
+                const t = new Transform({ dataFormat: 'object' });
+                t.create('*Lab', cmyk, intent);
+                return t;
+            })(),
+            cmykToLab: (function() {
+                const t = new Transform({ dataFormat: 'object' });
+                t.create(cmyk, '*Lab', intent);
+                return t;
+            })(),
+        };
+    }
+
+    // ── XYZ ↔ Lab (pure math — no profile) ───────────────────────────────
+    // Showcases convert.Lab2XYZ and convert.XYZ2Lab
+
+    function labToXyz(L, a, b) {
+        const lab = convert.Lab(L, a, b);
+        return convert.Lab2XYZ(lab);   // returns {type:XYZ, X, Y, Z}
+    }
+
+    function xyzToLab(X, Y, Z) {
+        const xyz = convert.XYZ(X, Y, Z);
+        return convert.XYZ2Lab(xyz);   // returns {type:Lab, L, a, b}
+    }
+
+    // ── Swatch helpers ────────────────────────────────────────────────────
+
+    function rgbCss(R, G, B) {
+        const r = Math.max(0, Math.min(255, Math.round(R)));
+        const g = Math.max(0, Math.min(255, Math.round(G)));
+        const b = Math.max(0, Math.min(255, Math.round(B)));
+        return { css: `rgb(${r},${g},${b})`, hex: '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('') };
+    }
+
+    function setSwatches(R, G, B) {
+        const { css, hex } = rgbCss(R, G, B);
+        swatchMain.style.background = css;
+        swatchHex.textContent = hex.toUpperCase();
+        Object.values(swatches).forEach(s => s.style.background = css);
+    }
+
+    // ── Core update ───────────────────────────────────────────────────────
+    // Lab is the canonical bridge. Whatever the source space, always
+    // reduce to Lab first, then fan out.
+
+    function updateAll(source) {
+        if (!transforms) return;
+        let labOut;
+
+        try {
+            if (source === 'lab') {
+                // Already in Lab — just read
+                labOut = convert.Lab(
+                    parseFloat(F.L.value) || 0,
+                    parseFloat(F.a.value) || 0,
+                    parseFloat(F.b.value) || 0,
+                );
+            } else if (source === 'xyz') {
+                // XYZ → Lab via pure math (convert module)
+                labOut = xyzToLab(
+                    parseFloat(F.X.value) || 0,
+                    parseFloat(F.Y.value) || 0,
+                    parseFloat(F.Z.value) || 0,
+                );
+            } else if (source === 'rgb') {
+                // RGB → Lab via transform.transform(colorObj) — object pipeline
+                const rgbIn = convert.RGB(
+                    parseInt(F.R.value) || 0,
+                    parseInt(F.G.value) || 0,
+                    parseInt(F.B.value) || 0,
+                );
+                // transform() is the ACCURACY PATH — single colour, full f64
+                const labF = transforms.rgbToLab.transform(rgbIn);
+                labOut = convert.Lab(labF.L || 0, labF.a || 0, labF.b || 0);
+            } else if (source === 'cmyk') {
+                // CMYK → Lab via transform.transform(colorObj)
+                const cmykIn = convert.CMYK(
+                    parseFloat(F.C.value) || 0,
+                    parseFloat(F.M.value) || 0,
+                    parseFloat(F.Y2.value) || 0,
+                    parseFloat(F.K.value) || 0,
+                );
+                labOut = transforms.cmykToLab.transform(cmykIn);
+            }
+
+            if (!labOut) return;
+
+            // Lab → XYZ (pure math — no profile)
+            const xyzOut = labToXyz(labOut.L, labOut.a, labOut.b);
+
+            // Lab → RGB (via transform object pipeline)
+            const rgbFOut = transforms.labToRgb.transform(labOut);
+            const R = Math.max(0, Math.min(255, Math.round((rgbFOut.Rf ?? rgbFOut.R ?? 0) * 255)));
+            const G = Math.max(0, Math.min(255, Math.round((rgbFOut.Gf ?? rgbFOut.G ?? 0) * 255)));
+            const B = Math.max(0, Math.min(255, Math.round((rgbFOut.Bf ?? rgbFOut.B ?? 0) * 255)));
+
+            // Lab → CMYK (via transform object pipeline)
+            const cmykOut = transforms.labToCmyk.transform(labOut);
+
+            // Populate fields (skip the source field group — it was the user's input)
+            if (source !== 'lab') {
+                F.L.value = labOut.L.toFixed(2);
+                F.a.value = labOut.a.toFixed(2);
+                F.b.value = labOut.b.toFixed(2);
+            }
+            if (source !== 'xyz') {
+                F.X.value = xyzOut.X.toFixed(4);
+                F.Y.value = xyzOut.Y.toFixed(4);
+                F.Z.value = xyzOut.Z.toFixed(4);
+            }
+            if (source !== 'rgb') {
+                F.R.value = R;
+                F.G.value = G;
+                F.B.value = B;
+            }
+            if (source !== 'cmyk') {
+                F.C.value  = (cmykOut.C  ?? 0).toFixed(2);
+                F.M.value  = (cmykOut.M  ?? 0).toFixed(2);
+                F.Y2.value = (cmykOut.Y  ?? 0).toFixed(2);
+                F.K.value  = (cmykOut.K  ?? 0).toFixed(2);
+            }
+
+            setSwatches(R, G, B);
+
+            // Round-trip ΔE: Lab → CMYK → Lab, using convert.deltaE76
+            const labBack = transforms.cmykToLab.transform(cmykOut);
+            if (labBack && convert.deltaE76) {
+                const de76 = convert.deltaE76(labOut, labBack);
+                const de00 = convert.deltaE2000 ? convert.deltaE2000(labOut, labBack) : null;
+                deReadout.textContent = 'Round-trip ΔE76: ' + de76.toFixed(2)
+                    + (de00 !== null ? '  ΔE2000: ' + de00.toFixed(2) : '');
+            }
+
+        } catch (e) {
+            statusLine.textContent = 'Error: ' + e.message;
+            console.error(e);
+        }
+    }
+
+    // ── Source tracking ───────────────────────────────────────────────────
+
+    function markSource(space) {
+        sourceSpace = space;
+        document.querySelectorAll('.field-group input').forEach(el => el.classList.remove('source'));
+        const row = document.querySelector(`[data-space="${space}"]`);
+        if (row) row.querySelectorAll('input').forEach(el => el.classList.add('source'));
+    }
+
+    document.querySelectorAll('.space-row input').forEach(input => {
+        const space = input.closest('[data-space]')?.dataset.space;
+        if (space) {
+            input.addEventListener('focus', () => markSource(space));
+            input.addEventListener('input', () => {
+                markSource(space);
+                scheduleUpdate();
+            });
+        }
+    });
+
+    // Intent buttons
+    document.querySelectorAll('.intent-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.intent-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentIntent = parseInt(btn.dataset.intent);
+            rebuildTransforms();
+        });
+    });
+
+    // Update button
+    $('btnUpdate').addEventListener('click', () => updateAll(sourceSpace));
+
+    // Profile selectors — rebuild transforms on change
+    rgbSel.addEventListener('change', rebuildTransforms);
+    cmykSel.addEventListener('change', async () => {
+        statusLine.textContent = 'Loading profile…';
+        cmykProfile = await loadCmykProfile(cmykSel.value).catch(e => {
+            statusLine.textContent = 'Profile load error: ' + e.message;
+            return null;
+        });
+        if (cmykProfile) rebuildTransforms();
+    });
+
+    // ── Debounce ──────────────────────────────────────────────────────────
+    let debTimer = null;
+    function scheduleUpdate() {
+        clearTimeout(debTimer);
+        debTimer = setTimeout(() => updateAll(sourceSpace), 300);
+    }
+
+    // ── Rebuild transforms when intent or profiles change ─────────────────
+    function rebuildTransforms() {
+        if (!cmykProfile) return;
+        try {
+            transforms = buildTransforms(cmykProfile, currentIntent);
+            statusLine.textContent = 'Ready — object pipeline, f64 precision.';
+            updateAll(sourceSpace);
+        } catch (e) {
+            statusLine.textContent = 'Transform build error: ' + e.message;
+            console.error(e);
+        }
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────
+    (async () => {
+        try {
+            cmykProfile = await loadCmykProfile(cmykSel.value);
+            rebuildTransforms();
+            markSource('lab');
+        } catch (e) {
+            statusLine.textContent = 'Boot error: ' + e.message;
+            console.error(e);
+        }
+    })();
+</script>
+
+</body>
+</html>

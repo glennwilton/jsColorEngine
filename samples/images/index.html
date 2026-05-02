@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ICC Color Management Test Images</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;display=swap');
+        
+        :root {
+            --bg: #0a0a0a;
+            --card: #111111;
+            --accent: #3b82f6;
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: #e5e5e5;
+            font-family: 'Inter', system_ui, sans-serif;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1a1a1a, #111111);
+            padding: 3rem 2rem;
+            text-align: center;
+            border-bottom: 1px solid #222;
+        }
+        
+        .header h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 2.5rem;
+            font-weight: 600;
+            margin: 0 0 0.5rem 0;
+            background: linear-gradient(90deg, #fff, #a1a1aa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .header p {
+            color: #888;
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            margin-bottom: 4rem;
+        }
+        
+        .card {
+            background: var(--card);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid #222;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+        }
+        
+        .card img {
+            width: 100%;
+            height: auto;
+            display: block;
+            aspect-ratio: 1 / 1;
+            object-fit: cover;
+            background: #000;
+        }
+        
+        .card-content {
+            padding: 1.5rem;
+        }
+        
+        .card h3 {
+            margin: 0 0 0.75rem 0;
+            font-size: 1.25rem;
+            color: #fff;
+        }
+        
+        .card .label {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            margin-bottom: 1rem;
+        }
+        
+        .label-bw { background: #374151; color: #d1d5db; }
+        .label-color { background: #166534; color: #86efac; }
+        .label-skin { background: #854d0e; color: #fde68a; }
+        
+        .card p {
+            color: #a3a3a3;
+            font-size: 0.95rem;
+            margin: 0 0 1rem 0;
+        }
+        
+        .meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.8rem;
+            color: #666;
+        }
+        
+        .meta span {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        
+        .section {
+            margin-bottom: 4rem;
+        }
+        
+        .section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+        
+        .usage-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .usage-card {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+        
+        .usage-card h4 {
+            margin: 0 0 0.75rem 0;
+            color: #60a5fa;
+            font-size: 1rem;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: #666;
+            font-size: 0.9rem;
+            border-top: 1px solid #222;
+        }
+        
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: #1f2937;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="badge">
+            <span style="color:#22c55e">●</span> 
+            <span>JSColorEngine</span>
+        </div>
+        <h1>ICC Test Image Set</h1>
+        <p>Three example AI Generated free to use reference images for evaluating color management systems, ICC profiles, and gamut mapping algorithms.</p>
+    </div>
+
+    <div class="container">
+        
+        <!-- Image Grid -->
+        <div class="grid">
+            
+            <!-- B&W Portrait -->
+            <div class="card">
+                <img src="face.png" alt="High-contrast black and white portrait of elderly man with deep wrinkles">
+                <div class="card-content">
+                    <span class="label label-bw">HIGH CONTRAST B&amp;W</span>
+                    <h3>01. Elderly Portrait</h3>
+                    <p>Extreme contrast test case with rich skin texture, deep shadows, and specular highlights. Ideal for black point, detail preservation, and monochrome workflow validation.</p>
+                    <div class="meta">
+                        <span>960×960</span>
+                        <span>Grayscale</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Fruit -->
+            <div class="card">
+                <img src="fruit.png" alt="Vibrant colorful fruit still life with apples, strawberries, kiwis, watermelon, grapes, bananas and oranges">
+                <div class="card-content">
+                    <span class="label label-color">WIDE GAMUT COLOR</span>
+                    <h3>02. Colorful Fruit</h3>
+                    <p>Highly saturated memory colors across the full spectrum. Perfect for testing gamut coverage, hue accuracy, saturation handling, and color separation.</p>
+                    <div class="meta">
+                        <span>960×960</span>
+                        <span>sRGB</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Skin Tones -->
+            <div class="card">
+                <img src="skin.png" alt="Three women with different skin tones smiling - light Caucasian, deep Sub-Saharan African, and East Asian">
+                <div class="card-content">
+                    <span class="label label-skin">SKIN TONES</span>
+                    <h3>03. Diverse Skin Tones</h3>
+                    <p>Three distinct skin tones in one frame for direct comparison. Critical for testing memory color reproduction, preferred skin rendering, and cross-cultural accuracy.</p>
+                    <div class="meta">
+                        <span>960×960</span>
+                        <span>sRGB</span>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+        
+        
+    </div>
+    
+    <div class="footer">
+        <p>Generated with Grok Imagine • Free for open-source color management projects • 2026</p>
+    </div>
+    
+</body>
+</html>

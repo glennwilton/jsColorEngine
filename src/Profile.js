@@ -1016,11 +1016,37 @@ class Profile {
         var header = {};
         header.profileSize = decode.uint32(binary, 0);
         header.cmmType = decode.chars(binary, 4, 4);
-        header.version = decode.array(binary, 8, 4);
+        // ICC version — 4 bytes at offset 8. ICC v4 §7.2.4:
+        //   byte[0]: major version (binary)
+        //   byte[1]: minor (high nibble) + bug fix (low nibble) — packed BCD
+        //   byte[2..3]: reserved (zero)
+        // Stored as a "M.m.b" string for human/JSON readability. The integer
+        // major is also exposed as `header.versionMajor` for engine routing
+        // (v2 vs v4 PCS encoding).
+        header.versionMajor = binary[8];
+        var _vb = binary[9];
+        header.version = header.versionMajor + '.' + ((_vb >> 4) & 0x0F) + '.' + (_vb & 0x0F);
         header.pClass = decode.chars(binary, 12, 4);
         header.space = decode.chars(binary, 16, 4);
         header.pcs = decode.chars(binary, 20, 4);
-        header.date = decode.array(binary, 24, 12);
+        // ICC date — 12 bytes at offset 24, six big-endian u16 fields:
+        //   [year][month][day][hour][minute][second]   (UTC, ICC v4 §7.2.10)
+        // Older code stored the raw byte array, which serialised to JSON as
+        // unreadable [7,217,0,6,...]. Now: parse to a JS Date — JSON.stringify
+        // emits an ISO string. Year 0 → null (some profiles leave date unset).
+        var _dY = decode.uint16(binary, 24);
+        if(_dY === 0){
+            header.date = null;
+        } else {
+            header.date = new Date(Date.UTC(
+                _dY,
+                decode.uint16(binary, 26) - 1,   // month 0-indexed in JS
+                decode.uint16(binary, 28),
+                decode.uint16(binary, 30),
+                decode.uint16(binary, 32),
+                decode.uint16(binary, 34)
+            ));
+        }
         header.signature = decode.chars(binary, 36, 4);
         header.platform = decode.chars(binary, 40, 4);
         header.flags = decode.array(binary, 44, 4);
@@ -1085,7 +1111,7 @@ class Profile {
         this.unsupportedTags = this.unsuportedTags;
 
         // copy down important header values
-        this.version = this.header.version[0];
+        this.version = this.header.versionMajor;
         this.pcs = this.header.pcs.trim().toUpperCase();
         this.colorSpace = this.header.space.trim().toUpperCase();
 

@@ -202,7 +202,7 @@ with adaptation, use `convert.Lab2Lab(...)` from
 | `lastError` | Object | Set when loading fails. Contains a code + human-readable message. |
 | `type` | Integer | Profile type — see `eProfileType` (Lab, RGBMatrix, RGBLut, CMYK, Gray, Duo, XYZ). |
 | `name` | String | Profile name (set from your input or extracted from the profile description). |
-| `header` | Object | Decoded ICC header (version, device class, colour space, PCS, render intent, primary platform, etc.). |
+| `header` | Object | Decoded ICC header. Notable fields: `header.pClass` (device class: `'mntr'`, `'prtr'`, `'scnr'`, …), `header.space` (device colour space, e.g. `'rgb'`, `'CMYK'`), `header.pcs` (`'XYZ'` or `'LAB'`), `header.intent` (default rendering intent), `header.date` (profile creation date as a JS `Date` — JSON-serialises to ISO string), `header.version` (ICC version string, e.g. `"2.1.0"` or `"4.3.0"`), `header.versionMajor` (integer major — 2 or 4, same as `profile.version`). |
 | `intent` | Integer | Default rendering intent declared by the profile. |
 | `description` | String | Human-readable profile description (`desc` v2 / `mluc` v4). |
 | `copyright` | String | Copyright text from the profile. |

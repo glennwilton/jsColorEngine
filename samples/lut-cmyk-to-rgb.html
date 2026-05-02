@@ -1,0 +1,779 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+
+  Demo: CMYK → RGB via LUT — emulation mode.
+
+  Real-world use case: you have CMYK images and need RGB on screen for display.
+  In production, you don't want to ship ICC profiles or run a full ICC pipeline
+  per pixel. You want one pre-baked LUT and a fast kernel.
+
+  This demo builds two CMYK → RGB LUTs at page load:
+    1. jsCE LUT      — engine pipeline (perceptual + BPC) → toJSON → fromJSON
+    2. lcms LUT      — sampled from lcms-wasm transform via LutBuilder.createFromLCMS
+
+  Then for each input image:
+    1. Convert sRGB master → CMYK using the jsCE live transform (the master)
+    2. Convert that CMYK back to RGB three ways:
+       a) jsCE live transform (full pipeline, no LUT) — ground truth
+       b) jsCE LUT (rebuilt from JSON, no ICC profile loaded at conversion time)
+       c) lcms LUT (jsCE kernel, lcms colour math — emulation mode)
+    3. Compute ΔP (per-pixel device distance) between each pair
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; CMYK → RGB via LUT</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    .canvas-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+        margin-top: 16px;
+    }
+    @media (max-width: 1100px) {
+        .canvas-grid { grid-template-columns: 1fr; }
+    }
+    .canvas-cell {
+        background: var(--bg-card-deep, #14181d);
+        border: 1px solid var(--border, #2a2f36);
+        border-radius: 8px;
+        padding: 10px;
+    }
+    .canvas-cell h3 {
+        font-size: 13px;
+        margin: 0 0 4px 0;
+        color: var(--accent, #6cf);
+        font-family: var(--mono, monospace);
+    }
+    .canvas-cell .sub {
+        font-size: 11px;
+        color: var(--text-muted, #888);
+        margin-bottom: 8px;
+        font-family: var(--mono, monospace);
+    }
+    .canvas-cell canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #222;
+        border-radius: 4px;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+    }
+    .stat {
+        background: var(--bg-card-deep, #14181d);
+        border: 1px solid var(--border-soft, #1d2228);
+        border-radius: 6px;
+        padding: 8px 10px;
+    }
+    .stat .lbl {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted, #888);
+        font-family: var(--mono, monospace);
+    }
+    .stat .val {
+        font-size: 14px;
+        font-family: var(--mono, monospace);
+        color: var(--text, #ddd);
+        margin-top: 2px;
+    }
+    .stat .val.accent  { color: var(--accent-2, #5d8); }
+    .stat .val.warn    { color: var(--warn, #fc6); }
+    .stat .val.muted   { color: var(--text-muted, #888); font-size: 11px; }
+
+    .controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 12px;
+    }
+    /*.controls select, .controls button {*/
+    /*    background: var(--bg-card, #1a1e23);*/
+    /*    border: 1px solid var(--border, #2a2f36);*/
+    /*    color: var(--text, #ddd);*/
+    /*    padding: 6px 10px;*/
+    /*    border-radius: 5px;*/
+    /*    font-family: var(--mono, monospace);*/
+    /*    font-size: 12px;*/
+    /*    cursor: pointer;*/
+    /*}*/
+    .controls button:hover { border-color: var(--accent, #6cf); }
+    .controls button:disabled { opacity: 0.4; cursor: wait; }
+
+    .timing-inline {
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        color: var(--accent-2, #5d8);
+        margin-left: 8px;
+    }
+    .timing-inline.is-busy { color: var(--accent, #6cf); }
+
+    .delta-table {
+        width: 100%;
+        margin-top: 12px;
+        font-family: var(--mono, monospace);
+        font-size: 12px;
+        border-collapse: collapse;
+    }
+    .delta-table th, .delta-table td {
+        padding: 6px 10px;
+        text-align: left;
+        border-bottom: 1px solid var(--border-soft, #1d2228);
+    }
+    .delta-table th {
+        color: var(--text-muted, #888);
+        text-transform: uppercase;
+        font-size: 10px;
+        letter-spacing: 0.06em;
+    }
+    .delta-table td.num { font-family: var(--mono, monospace); }
+    .delta-good   { color: var(--accent-2, #5d8); }
+    .delta-warn   { color: var(--warn, #fc6); }
+    .delta-bad    { color: var(--error, #f76); }
+</style>
+<script src="../browser/jsColorEngineWeb.js"></script>
+<script src="LutBuilder.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">samples</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html" class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
+        </nav>
+    </div>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="lut-cmyk-to-rgb.html" class="is-active">CMYK → RGB LUT</a>
+        <a href="lut-tiff-builder.html">LUT TIFF Builder</a>
+        <a href="colour-calculator.html">Colour Calculator</a>
+    </nav>
+</header>
+
+<main>
+
+<!-- INTRO ================================================================== -->
+<section class="card">
+    <h2>CMYK → RGB via LUT &mdash; emulation mode</h2>
+    <p class="lead">
+        Real-world use case: your app has CMYK images (proofs, prepress
+        previews, archival scans) and needs to display them as RGB on screen.
+        In production you don&rsquo;t want to ship ICC profiles or run a full
+        ICC pipeline per pixel. You want <em>one pre-baked LUT</em> and a fast
+        kernel.
+    </p>
+    <p class="lead">
+        This page builds two CMYK&rarr;RGB LUTs at load time, serialises them
+        to JSON (the portable handshake format), then rebuilds Transforms from
+        the JSON and converts a CMYK master image three ways. The
+        <strong>jsCE LUT</strong> column shows what production looks like
+        &mdash; no ICC profile loaded, just a JSON file and the engine.
+        The <strong>lcms LUT</strong> column shows
+        emulation: jsCE&rsquo;s WASM-SIMD kernels with lcms&rsquo;s colour
+        math sampled into the grid.
+
+        <br>
+        <br>
+        <strong>
+            Important: Once you build and save the LUT from Lcms or jsCE, you no
+            longer need to load lcms or the profile, only the LUT and jsCE&rsquo;s Transform.fromJSON() to load it.
+        </strong>
+        <br>
+    </p>
+
+
+    <p class="muted">
+        Profile: <code>GRACoL2006_Coated1v2.icc</code> &middot;
+        Intent: relative colorimetric + BPC (lcms&rsquo;s perceptual disables BPC) &middot;
+        Grid: 17<sup>4</sup> (4D) &middot;
+        Source: <a href="lut-cmyk-to-rgb.html">view source</a> &middot;
+        API guide: <a href="lutbuilder.md"><code>lutbuilder.md</code></a>
+    </p>
+    <div style="margin-top:8px; padding:10px; background:rgba(96,220,160,0.08); border-left:3px solid var(--accent-2,#5d8); border-radius:4px; font-size:13px;">
+        <strong>What you should see in practice:</strong> the two LUTs (jsCE-built and lcms-built) agree on raw u16 grid data to <strong>~0.1 ΔP per channel</strong> &mdash; effectively the same colour math. Pixel ΔP between live (no LUT) and the LUT path is &lt;&nbsp;1 on average, with occasional pixels at K-generation transitions or gamut boundaries where 17-pt grid interpolation diverges from the f64 pipeline. <strong>jsCE LUT and lcms LUT are interchangeable as runtime artefacts.</strong>
+    </div>
+</section>
+
+<!-- BUILD STATS =========================================================== -->
+<section class="card">
+    <h2>LUT build &mdash; one-time, at page load</h2>
+    <p class="muted" id="buildStatus">Idle.</p>
+
+    <div class="stats-grid">
+        <div class="stat">
+            <div class="lbl">jsCE LUT</div>
+            <div class="val accent" id="jsceBuildTime">&mdash;</div>
+            <div class="val muted">build (engine + buildLut)</div>
+        </div>
+        <div class="stat">
+            <div class="lbl">jsCE JSON size</div>
+            <div class="val accent" id="jsceJsonSize">&mdash;</div>
+            <div class="val muted" id="jsceSig">&mdash;</div>
+        </div>
+        <div class="stat">
+            <div class="lbl">lcms LUT</div>
+            <div class="val accent" id="lcmsBuildTime">&mdash;</div>
+            <div class="val muted">build (sample lcms grid)</div>
+        </div>
+        <div class="stat">
+            <div class="lbl">lcms JSON size</div>
+            <div class="val accent" id="lcmsJsonSize">&mdash;</div>
+            <div class="val muted" id="lcmsSig">&mdash;</div>
+        </div>
+        <div class="stat">
+            <div class="lbl">fromJSON cost</div>
+            <div class="val accent" id="fromJsonTime">&mdash;</div>
+            <div class="val muted">parse + setLut + intLut</div>
+        </div>
+        <div class="stat">
+            <div class="lbl">LUT delta (jsCE vs lcms)</div>
+            <div class="val accent" id="lutDelta">&mdash;</div>
+            <div class="val muted">u16 grid bytes, mean ΔP</div>
+        </div>
+    </div>
+</section>
+
+<!-- DEMO ================================================================== -->
+<section class="card">
+    <h2>CMYK image &rarr; three RGB conversions</h2>
+    <div class="controls">
+        <label>Image:
+            <select id="imageSelect">
+                <optgroup label="Portrait (1200&times;800)">
+                    <option value="https://picsum.photos/id/23/800/1200">Forks</option>
+                    <option value="https://picsum.photos/id/355/800/1200">Cameras</option>
+                    <option value="https://picsum.photos/id/376/800/1200">New York</option>
+                    <option value="https://picsum.photos/id/454/800/1200">Holding Camera</option>
+                    <option value="https://picsum.photos/id/766/800/1200">Coffee Beans</option>
+                    <option value="https://picsum.photos/id/838/800/1200">Woman and Child</option>
+                    <option value="https://picsum.photos/id/870/800/1200">Lighthouse</option>
+                    <option value="https://picsum.photos/id/981/800/1200">Stars</option>
+                    <option value="https://picsum.photos/id/631/800/1200">Leaf</option>
+                </optgroup>
+                <optgroup label="Landscape (1200&times;800)">
+                    <option value="https://picsum.photos/id/1069/1200/800">Jellyfish</option>
+                    <option value="https://picsum.photos/id/1015/1200/800">Mountain lake</option>
+                    <option value="https://picsum.photos/id/237/1200/800">Black Dog</option>
+                    <option value="https://picsum.photos/id/287/1200/800">Landscape</option>
+                    <option value="https://picsum.photos/id/292/1200/800">Vegetables</option>
+                    <option value="https://picsum.photos/id/323/1200/800">Coastline</option>
+                    <option value="https://picsum.photos/id/502/1200/800">Forest</option>
+                    <option value="https://picsum.photos/id/871/1200/800">Cove</option>
+                    <option value="https://picsum.photos/id/553/1200/800">Autumn</option>
+                    <option value="https://picsum.photos/id/1074/1200/800">Lioness</option>
+                </optgroup>
+            </select>
+        </label>
+        <div style="margin-top:18px;">
+            <button class="btn-primary" id="runBtn" disabled>Run</button>
+            <span class="timing-inline" id="timingInline">&mdash;</span>
+        </div>
+
+    </div>
+
+    <div class="canvas-grid" style="margin-top:16px">
+        <div class="canvas-cell">
+            <h3>(a) jsCE live transform</h3>
+            <div class="sub">CMYK&rarr;RGB through the full ICC pipeline.
+                Ground truth, built at runtime (just now). No LUT.</div>
+            <canvas id="cvLive"></canvas>
+        </div>
+        <div class="canvas-cell">
+            <h3>(b) jsCE LUT &mdash; from JSON</h3>
+            <div class="sub">No ICC profile at runtime. JSON parsed, setLut, kernel.
+                <strong>Production deployment path: ship JSON, no profiles.</strong></div>
+            <canvas id="cvLutJsce"></canvas>
+        </div>
+        <div class="canvas-cell">
+            <h3>(c) lcms LUT &mdash; emulation</h3>
+            <div class="sub">lcms colour math, jsCE kernel speed.
+                <strong>If you need exact LittleCMS output at WASM-SIMD speed, this is the path.</strong></div>
+            <canvas id="cvLutLcms"></canvas>
+        </div>
+    </div>
+
+    <table class="delta-table">
+        <thead>
+            <tr><th>pair</th><th>mean ΔP</th><th>p95 ΔP</th><th>max ΔP</th><th>note</th></tr>
+        </thead>
+        <tbody id="deltaBody">
+            <tr><td colspan="5" class="muted">Run a conversion to populate.</td></tr>
+        </tbody>
+    </table>
+    <p class="muted" style="margin-top: 8px; font-size: 11px;">
+        ΔP = per-pixel Euclidean distance on RGB in 0&ndash;255 scale (per-channel
+        difference, not perceptual ΔE). ΔP&nbsp;&lt;&nbsp;1 means
+        &ldquo;sub-LSB at 8-bit, indistinguishable on screen&rdquo;.
+        Mean and p95 are the meaningful numbers &mdash; the typical pixel.
+        Max is usually a single pixel at a profile &ldquo;kink&rdquo;:
+        K-generation transitions, gamut-boundary crossings, or TAC clamp
+        regions where the CMYK profile is non-smooth and 17-pt linear
+        interpolation diverges from the f64 curve. Going to a 33-pt grid
+        (4&times; the cells, 4&times; the JSON size) shrinks the max
+        substantially. For most production work the 17-pt budget is fine.
+    </p>
+</section>
+
+<!-- JSON VIEWER ============================================================ -->
+<section class="card">
+    <h2>What&rsquo;s actually in the JSON?</h2>
+    <p class="muted">
+        The portable handshake format. CLUT bytes are elided
+        (<code>"&lt;data&gt;"</code>) so you can see the chain, grid shape,
+        and signature. This is what <code>JSON.stringify(transform)</code>
+        produces and what <code>Transform.fromJSON()</code> consumes.
+    </p>
+    <div class="controls" style="margin-top:8px">
+        <label>Show:
+            <select id="jsonSelect">
+                <option value="jsce">jsCE LUT</option>
+                <option value="lcms">lcms LUT</option>
+            </select>
+        </label>
+    </div>
+    <pre id="jsonPreview" style="background:var(--bg-card-deep,#14181d); border:1px solid var(--border-soft,#1d2228); border-radius:6px; padding:12px; margin-top:10px; font-family:var(--mono,monospace); font-size:11px; line-height:1.5; max-height:520px; overflow:auto; white-space:pre-wrap; word-break:break-word;">Build LUTs first.</pre>
+</section>
+
+</main>
+
+<script type="module">
+    const { Transform, Profile, eIntent } = window.jsColorEngine;
+    const { LutBuilder, virtualCMYK, virtualRGB } = window;
+
+    const LCMS_DIST = './lcms-wasm-dist/';
+    const PROFILE_URL = './profiles/CoatedGRACoL2006.icc';
+    const GRID_SIZE = 17;   // 17⁴ = ~83K cells × 3 channels = ~500 KB raw u16
+
+    // ── DOM refs ─────────────────────────────────────────────────────────
+    const $ = (id) => document.getElementById(id);
+    const buildStatus    = $('buildStatus');
+    const jsceBuildTime  = $('jsceBuildTime');
+    const jsceJsonSize   = $('jsceJsonSize');
+    const jsceSig        = $('jsceSig');
+    const lcmsBuildTime  = $('lcmsBuildTime');
+    const lcmsJsonSize   = $('lcmsJsonSize');
+    const lcmsSig        = $('lcmsSig');
+    const fromJsonTime   = $('fromJsonTime');
+    const lutDelta       = $('lutDelta');
+    const imageSel       = $('imageSelect');
+    const runBtn         = $('runBtn');
+    const timingInline   = $('timingInline');
+    const cvLive         = $('cvLive');
+    const cvLutJsce      = $('cvLutJsce');
+    const cvLutLcms      = $('cvLutLcms');
+    const deltaBody      = $('deltaBody');
+    const jsonSelect     = $('jsonSelect');
+    const jsonPreview    = $('jsonPreview');
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    const fmtMs    = (ms) => ms < 1 ? ms.toFixed(2) + ' ms' : ms.toFixed(1) + ' ms';
+    const fmtKB    = (bytes) => bytes >= 1024 ? (bytes / 1024).toFixed(1) + ' KB' : bytes + ' B';
+    const fmtSig   = (sig) => sig ? '<sig>' + sig + '</sig>'.replace('<sig>', '').replace('</sig>', '') : '';
+
+    function timeIt(fn) {
+        const t0 = performance.now();
+        const r = fn();
+        return { result: r, ms: performance.now() - t0 };
+    }
+    async function timeItAsync(fn) {
+        const t0 = performance.now();
+        const r = await fn();
+        return { result: r, ms: performance.now() - t0 };
+    }
+
+    async function fetchBytes(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('Fetch failed: ' + url);
+        return new Uint8Array(await r.arrayBuffer());
+    }
+
+    function loadImageBitmap(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                const cv = document.createElement('canvas');
+                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                cv.getContext('2d').drawImage(img, 0, 0);
+                const data = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height);
+                resolve(data);
+            };
+            img.onerror = () => reject(new Error('Image load: ' + url));
+            img.src = url;
+        });
+    }
+
+    function rgbaToRGB(rgba) {
+        const n = rgba.length / 4;
+        const out = new Uint8ClampedArray(n * 3);
+        for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+            out[j]   = rgba[i];
+            out[j+1] = rgba[i+1];
+            out[j+2] = rgba[i+2];
+        }
+        return out;
+    }
+
+    function rgbToRgba(rgb, w, h) {
+        const out = new Uint8ClampedArray(w * h * 4);
+        for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
+            out[j]   = rgb[i];
+            out[j+1] = rgb[i+1];
+            out[j+2] = rgb[i+2];
+            out[j+3] = 255;
+        }
+        return out;
+    }
+
+    function deltaP(a, b) {
+        // Per-pixel Euclidean distance on RGB triples
+        const n = a.length / 3;
+        let sum = 0, max = 0;
+        const arr = new Float32Array(n);
+        for (let i = 0, p = 0; i < a.length; i += 3, p++) {
+            const dr = a[i]   - b[i];
+            const dg = a[i+1] - b[i+1];
+            const db = a[i+2] - b[i+2];
+            const d = Math.sqrt(dr*dr + dg*dg + db*db);
+            arr[p] = d;
+            sum += d;
+            if (d > max) max = d;
+        }
+        // p95 via sort
+        const sorted = arr.slice().sort();
+        const p95 = sorted[Math.floor(sorted.length * 0.95)];
+        return { mean: sum / n, p95: p95, max: max };
+    }
+
+    function gradeDelta(v) {
+        if (v < 1)   return 'delta-good';
+        if (v < 2.5) return 'delta-warn';
+        return 'delta-bad';
+    }
+
+    function renderToCanvas(canvas, rgb, w, h) {
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(w, h);
+        img.data.set(rgbToRgba(rgb, w, h));
+        ctx.putImageData(img, 0, 0);
+    }
+
+    // ── lcms-wasm init ───────────────────────────────────────────────────
+    let lcms = null, lcmsConsts = null;
+    async function initLcms() {
+        if (lcms) return;
+        const mod = await import(LCMS_DIST + 'lcms.js');
+        lcms = await mod.instantiate({ locateFile: (n) => LCMS_DIST + n });
+        lcmsConsts = {
+            TYPE_RGB_8: mod.TYPE_RGB_8,
+            TYPE_CMYK_8: mod.TYPE_CMYK_8,
+            TYPE_RGB_16: mod.TYPE_RGB_16,
+            TYPE_CMYK_16: mod.TYPE_CMYK_16,
+            INTENT_PERCEPTUAL: mod.INTENT_PERCEPTUAL,
+            INTENT_RELATIVE_COLORIMETRIC: mod.INTENT_RELATIVE_COLORIMETRIC,
+            INTENT_SATURATION: mod.INTENT_SATURATION,
+            INTENT_ABSOLUTE_COLORIMETRIC: mod.INTENT_ABSOLUTE_COLORIMETRIC,
+            cmsFLAGS_BLACKPOINTCOMPENSATION: mod.cmsFLAGS_BLACKPOINTCOMPENSATION,
+            cmsFLAGS_HIGHRESPRECALC: mod.cmsFLAGS_HIGHRESPRECALC,
+        };
+    }
+
+    // Build a CMYK → RGB LUT by sampling lcms-wasm at every grid cell.
+    // LutBuilder.createFromLCMS auto-detects Emscripten lcms-wasm (with _malloc
+    // + _cmsDoTransform + HEAPU8) and uses one batched _cmsDoTransform call —
+    // ~80× faster than per-cell because it crosses the JS↔WASM boundary once
+    // instead of 17⁴ ≈ 83K times. The demo just opens the profiles, creates
+    // the lcms transform, and hands them to LutBuilder.
+    function buildLcmsLut(profileBytes, gridSize, intent, flags) {
+        const C = lcmsConsts;
+        const srcProfile = lcms.cmsOpenProfileFromMem(profileBytes, profileBytes.byteLength);
+        const dstProfile = lcms.cmsCreate_sRGBProfile();
+        const xform = lcms.cmsCreateTransform(
+            srcProfile, C.TYPE_CMYK_16, dstProfile, C.TYPE_RGB_16, intent, flags,
+        );
+
+        const builder = new LutBuilder()
+            .createFromLCMS(lcms, xform, {
+                inChannels:  4,
+                outChannels: 3,
+                size:        gridSize,
+                chain: [
+                    virtualCMYK('GRACoL2006 (lcms)'),
+                    eIntent.relative,
+                    virtualRGB('sRGB (lcms emulation)'),
+                ],
+            })
+            .addMeta({ source: 'lcms-wasm', intent: 'relative+BPC', engine: 'jsColorEngine kernel' });
+
+        // Tear down lcms — the LUT no longer needs it
+        lcms.cmsDeleteTransform(xform);
+        lcms.cmsCloseProfile(srcProfile);
+        lcms.cmsCloseProfile(dstProfile);
+
+        return builder.toLut();
+    }
+
+    // ── Build the two LUTs at page load ──────────────────────────────────
+    let jsceLutJson = null;
+    let lcmsLutJson = null;
+    let cachedProfile = null;
+    let cachedProfileBytes = null;
+
+    async function buildAllLuts() {
+        buildStatus.textContent = 'Loading GRACoL profile…';
+
+        const profileBytes = await fetchBytes(PROFILE_URL);
+        cachedProfileBytes = profileBytes;
+
+        const cmyk = new Profile();
+        await cmyk.loadPromise(profileBytes);
+        if (!cmyk.loaded) throw new Error('GRACoL profile failed to parse');
+        cachedProfile = cmyk;
+
+        // ── jsCE LUT: build from engine pipeline ─────────────────────────
+        // Relative colorimetric + BPC, because lcms's INTENT_PERCEPTUAL
+        // disables BPC by default. To compare apples-to-apples on the
+        // emulation side, both LUTs are built with the same intent + BPC.
+        buildStatus.textContent = 'Building jsCE LUT (engine pipeline + buildLut)…';
+        const jsceBuilt = timeIt(() => {
+            const t = new Transform({
+                dataFormat: 'int8',
+                buildLut: true,
+                BPC: true,
+                lutGridPoints4D: GRID_SIZE,
+            });
+            t.create(cmyk, '*srgb', eIntent.relative);
+            return t;
+        });
+        jsceBuildTime.textContent = fmtMs(jsceBuilt.ms);
+
+        // Serialise to JSON (this is what you'd write to a file)
+        const jsceJsonObj = jsceBuilt.result.toJSON();
+        const jsceJsonStr = JSON.stringify(jsceJsonObj);
+        jsceJsonSize.textContent = fmtKB(jsceJsonStr.length);
+        jsceSig.innerHTML = jsceJsonObj.originalSignature || '—';
+
+        jsceLutJson = jsceJsonStr;
+
+        // ── lcms LUT: sample lcms transform at every grid point ──────────
+        buildStatus.textContent = 'Loading lcms-wasm…';
+        await initLcms();
+        buildStatus.textContent = 'Building lcms LUT (sample lcms grid)…';
+
+        const lcmsBuilt = timeIt(() => buildLcmsLut(
+            profileBytes, GRID_SIZE,
+            lcmsConsts.INTENT_RELATIVE_COLORIMETRIC,
+            lcmsConsts.cmsFLAGS_BLACKPOINTCOMPENSATION | lcmsConsts.cmsFLAGS_HIGHRESPRECALC,
+        ));
+        lcmsBuildTime.textContent = fmtMs(lcmsBuilt.ms);
+
+        const lcmsJsonObj = Transform.lutToJSON(lcmsBuilt.result);
+        const lcmsJsonStr = JSON.stringify(lcmsJsonObj);
+        lcmsJsonSize.textContent = fmtKB(lcmsJsonStr.length);
+        lcmsSig.innerHTML = lcmsJsonObj.originalSignature || '—';
+
+        lcmsLutJson = lcmsJsonStr;
+
+        // ── Measure fromJSON cost (the runtime path) ─────────────────────
+        const fromJsonRun = timeIt(() => {
+            const t = Transform.fromJSON(jsceLutJson, { dataFormat: 'int8' });
+            return t;
+        });
+        fromJsonTime.textContent = fmtMs(fromJsonRun.ms);
+
+        // ── LUT delta: how different are the two grids? ─────────────────
+        const jsceClut = jsceJsonObj.CLUT;
+        const lcmsClut = lcmsJsonObj.CLUT;
+        if (jsceClut.length === lcmsClut.length) {
+            // Decoded u16 view via base64 → Uint16Array
+            const jsceU16 = base64ToU16(jsceClut);
+            const lcmsU16 = base64ToU16(lcmsClut);
+            let sum = 0;
+            const samples = jsceU16.length;
+            for (let i = 0; i < samples; i++) {
+                const d = Math.abs(jsceU16[i] - lcmsU16[i]) / 65535 * 255;
+                sum += d;
+            }
+            lutDelta.textContent = (sum / samples).toFixed(2) + ' ΔP';
+        } else {
+            lutDelta.textContent = 'shape mismatch';
+        }
+
+        // Populate the JSON viewer (clip CLUT bytes for readability)
+        renderJsonPreview();
+
+        // ── Warmup pass ──────────────────────────────────────────────────
+        // Warming JavaScript to ensure accurate speed comparisons.
+        // Without this, the first transformArray() on each Transform pays
+        // V8 JIT compilation + WASM module icache + LUT data L2/L3 fill
+        // costs — typically 1.5-2× slower than steady-state. We do two
+        // priming runs on a small synthetic buffer so the timings reported
+        // in the table reflect kernel dispatch speed, not warmup overhead.
+        buildStatus.textContent = 'Warming up JavaScript to ensure accurate speed comparisons…';
+        await new Promise(r => requestAnimationFrame(r));
+
+        const warmupCmyk = new Uint8ClampedArray(1024 * 4);
+        for (let i = 0; i < warmupCmyk.length; i++) warmupCmyk[i] = (i * 13 + 7) & 0xff;
+
+        const warmupLive = new Transform({ dataFormat: 'int8', BPC: true });
+        warmupLive.create(cachedProfile, '*srgb', eIntent.relative);
+        const warmupJsce = Transform.fromJSON(jsceLutJson, { dataFormat: 'int8' });
+        const warmupLcms = Transform.fromJSON(lcmsLutJson, { dataFormat: 'int8' });
+
+        for (let pass = 0; pass < 2; pass++) {
+            warmupLive.transformArray(warmupCmyk);
+            warmupJsce.transformArray(warmupCmyk);
+            warmupLcms.transformArray(warmupCmyk);
+        }
+
+        buildStatus.innerHTML = '<span class="delta-good">Ready.</span> Both LUTs built and serialised, kernels warmed. Pick an image and hit Run.';
+        runBtn.disabled = false;
+    }
+
+    function renderJsonPreview() {
+        const which = jsonSelect.value;
+        const src   = (which === 'lcms') ? lcmsLutJson : jsceLutJson;
+        if (!src) return;
+        const parsed = JSON.parse(src);
+        // Truncate the CLUT base64 for display — first 16 + "…<n>chars"
+        const fullClut = parsed.CLUT;
+        parsed.CLUT = '<' + (fullClut.length / 1024).toFixed(0) + ' KB base64 — truncated for display: '
+                    + fullClut.slice(0, 16) + '…' + fullClut.slice(-8) + '>';
+        jsonPreview.textContent = JSON.stringify(parsed, null, 2);
+    }
+    if (jsonSelect) jsonSelect.addEventListener('change', renderJsonPreview);
+
+    function base64ToU16(b64) {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+    }
+
+    // ── Conversion run ───────────────────────────────────────────────────
+    async function runConversion() {
+        runBtn.disabled = true;
+        timingInline.classList.add('is-busy');
+        timingInline.textContent = 'loading image…';
+
+        try {
+            const url = imageSel.value;
+            const imageData = await loadImageBitmap(url);
+            const w = imageData.width, h = imageData.height;
+            const srgbRGB = rgbaToRGB(imageData.data);
+
+            // Step 1: convert sRGB → CMYK using jsCE live transform (master)
+            timingInline.textContent = 'sRGB → CMYK (master) …';
+            await new Promise(r => requestAnimationFrame(r));
+            const tToCmyk = new Transform({ dataFormat: 'int8', BPC: true });
+            tToCmyk.create('*srgb', cachedProfile, eIntent.relative);
+            const cmykMaster = tToCmyk.transformArray(srgbRGB);
+
+            // Sanity: CMYK (0,0,0,0) — white paper — should produce near-white sRGB.
+            // This is the smoke test that catches inverted / wrong-direction LUT bugs.
+            const tSanity = new Transform({ dataFormat: 'int8', BPC: true });
+            tSanity.create(cachedProfile, '*srgb', eIntent.relative);
+            const whiteSrgb = tSanity.transformArray(new Uint8ClampedArray([0, 0, 0, 0]));
+            console.log('CMYK (0,0,0,0) →  sRGB:', whiteSrgb[0], whiteSrgb[1], whiteSrgb[2],
+                whiteSrgb[0] > 240 ? '✓ near-white' : '✗ NOT WHITE — likely a LUT direction bug');
+
+            // Step 2a: jsCE live (CMYK → RGB, full pipeline) — ground truth
+            timingInline.textContent = '(a) jsCE live transform…';
+            await new Promise(r => requestAnimationFrame(r));
+            const tLive = new Transform({ dataFormat: 'int8', BPC: true });
+            tLive.create(cachedProfile, '*srgb', eIntent.relative);
+            const liveRun = timeIt(() => tLive.transformArray(cmykMaster));
+            renderToCanvas(cvLive, liveRun.result, w, h);
+
+            // Step 2b: jsCE LUT — load from JSON, no profile at runtime
+            timingInline.textContent = '(b) jsCE LUT (from JSON)…';
+            await new Promise(r => requestAnimationFrame(r));
+            const tLutJsce = Transform.fromJSON(jsceLutJson, { dataFormat: 'int8' });
+            const lutJsceRun = timeIt(() => tLutJsce.transformArray(cmykMaster));
+            renderToCanvas(cvLutJsce, lutJsceRun.result, w, h);
+
+            // Step 2c: lcms LUT — load from JSON, run through jsCE kernel
+            timingInline.textContent = '(c) lcms LUT (from JSON)…';
+            await new Promise(r => requestAnimationFrame(r));
+            const tLutLcms = Transform.fromJSON(lcmsLutJson, { dataFormat: 'int8' });
+            const lutLcmsRun = timeIt(() => tLutLcms.transformArray(cmykMaster));
+            renderToCanvas(cvLutLcms, lutLcmsRun.result, w, h);
+
+            // Step 3: ΔP comparisons
+            const dAB = deltaP(liveRun.result,    lutJsceRun.result);
+            const dAC = deltaP(liveRun.result,    lutLcmsRun.result);
+            const dBC = deltaP(lutJsceRun.result, lutLcmsRun.result);
+
+            const fmtDP = (d) => '<span class="' + gradeDelta(d) + '">' + d.toFixed(2) + '</span>';
+            deltaBody.innerHTML = `
+                <tr>
+                    <td>(a) live &rarr; (b) jsCE LUT</td>
+                    <td class="num">${fmtDP(dAB.mean)}</td>
+                    <td class="num">${fmtDP(dAB.p95)}</td>
+                    <td class="num">${fmtDP(dAB.max)}</td>
+                    <td>f64 per-pixel math vs LUT &mdash; difference is grid interpolation noise (same colour math)</td>
+                </tr>
+                <tr>
+                    <td>(a) live &rarr; (c) lcms LUT</td>
+                    <td class="num">${fmtDP(dAC.mean)}</td>
+                    <td class="num">${fmtDP(dAC.p95)}</td>
+                    <td class="num">${fmtDP(dAC.max)}</td>
+                    <td>f64 jsCE pipeline vs lcms-sampled LUT &mdash; engine architectural divergence + grid noise</td>
+                </tr>
+                <tr>
+                    <td>(b) jsCE LUT &rarr; (c) lcms LUT</td>
+                    <td class="num">${fmtDP(dBC.mean)}</td>
+                    <td class="num">${fmtDP(dBC.p95)}</td>
+                    <td class="num">${fmtDP(dBC.max)}</td>
+                    <td>cross-engine LUT comparison &mdash; both grid-sampled, engines agree to &lt;&nbsp;1 ΔP mean</td>
+                </tr>
+            `;
+
+            const totalMs = liveRun.ms + lutJsceRun.ms + lutLcmsRun.ms;
+            const px = w * h;
+            timingInline.classList.remove('is-busy');
+            timingInline.innerHTML = `
+                live ${fmtMs(liveRun.ms)} · jsCE LUT ${fmtMs(lutJsceRun.ms)} · lcms LUT ${fmtMs(lutLcmsRun.ms)}
+                · ${(px / 1000).toFixed(0)} K pixels
+            `;
+        } catch (e) {
+            timingInline.classList.remove('is-busy');
+            timingInline.innerHTML = '<span class="delta-bad">Error: ' + e.message + '</span>';
+            console.error(e);
+        } finally {
+            runBtn.disabled = false;
+        }
+    }
+
+    runBtn.addEventListener('click', runConversion);
+
+    // ── Boot ─────────────────────────────────────────────────────────────
+    buildAllLuts().catch(err => {
+        buildStatus.innerHTML = '<span class="delta-bad">Build failed: ' + err.message + '</span>';
+        console.error(err);
+    });
+</script>
+
+</body>
+</html>

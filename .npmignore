@@ -16,3 +16,4 @@ samples/
 http/
 .gitignore
 .github/
+.claude/

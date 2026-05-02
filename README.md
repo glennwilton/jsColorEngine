@@ -43,6 +43,16 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   WebAssembly engine runs (which is everywhere, including headless
   containers with no display hardware). No native bindings, no
   compile step, no platform-specific binaries.<br><br>
+- **Portable LUTs — build once, ship anywhere.** Bake a transform
+  to JSON at deploy time; `Transform.fromJSON(json)` reconstructs 
+  it at runtime with no profiles, no lcms, no pipeline build cost. 
+  Supports LittleCMS emulation mode — sample lcms colour math into 
+  the grid once, then drop lcms entirely; jsCE kernels take it from 
+  there at full WASM-SIMD speed. LUTs carry a chain and a content 
+  fingerprint so you always know what profile, intent, and version 
+  produced the file. See [Portable LUTs](#portable-luts--lutbuilder) ·
+  [`LutBuilder`](./samples/lutbuilder.md) ·
+  [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).<br><br>
 - **Two APIs, one `Transform`.** `transform(colorObj)` for single
   colours (µs/call, always LUT-free). `transformArray(typedArray)`
   for bulk — pre-baked LUT at **45–270 MPx/s** (x86_64 → Apple
@@ -56,6 +66,7 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
 - [Why compare against LittleCMS?](#why-compare-against-littlecms)
 - [It's fast, don't believe us? — run it yourself](#dont-believe-us--run-it-yourself)
 - [Two paths, one Transform](#two-paths-one-transform)
+- [Portable LUTs / LutBuilder](#portable-luts--lutbuilder)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Features at a glance](#features-at-a-glance)
@@ -206,6 +217,60 @@ one-off conversions.
 
 Architectural detail and the "don't do this" anti-pattern warning
 live in [deep dive / Architecture](./docs/deepdive/Architecture.md).
+
+---
+
+## Portable LUTs / LutBuilder
+
+Bake a colour transform to a self-describing JSON file at deploy time — no ICC profiles, no lcms, no pipeline build cost at the consumer.
+
+```js
+// Producer (build time — has profiles)
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+t.create(cmykProfile, '*srgb', eIntent.relative);
+fs.writeFileSync('lut.json', JSON.stringify(t));
+
+// Consumer (runtime — profiles not needed)
+const t = Transform.fromJSON(fs.readFileSync('lut.json'), { dataFormat: 'int8' });
+t.transformArray(cmykPixels);
+```
+
+Key features:
+
+| | |
+|---|---|
+| **Build sources** | Engine ICC pipeline, custom callback, or lcms-wasm bridge |
+| **lcms emulation** | Sample LittleCMS into the grid once — jsCE kernels at runtime, lcms colour math baked in (jsCE ↔ lcms agree to < 0.1 ΔP per channel) |
+| **Auditable** | Every LUT is content-signed (`"FNV1A:xxxxxxxx"` over chain + grid + pixel data); `Transform.fromJSON(json, { verify: true })` throws on tamper |
+| **Size** | ~650 KB JSON for a 4D CMYK LUT (17-pt); parses + dispatches in ~6 ms |
+| **Speed** | ~6× faster per frame than the f64 live pipeline on typical images; < 1 ΔP mean error |
+| **Editable** | `editLut()` for per-cell mutations (TAC limits, ink substitution), `clone()` for variants, `toJSON()` to re-export |
+
+### TIFF visual editing — capture any CMS as a reusable LUT
+
+Export an identity LUT as a TIFF image, edit it in Photoshop (or any ICC-aware editor), reimport. The editor's colour engine becomes your LUT — captured at the grid's resolution, dispatched at WASM-SIMD speed.
+
+```
+--create  →  open in Photoshop  →  apply conversion/grade  →  --import  →  LUT JSON
+```
+
+**Captured so far:** sRGB → SWOP CMYK (Adobe CMM) at N=33 gives **mean ΔP 0.76** vs Photoshop ground truth — sub-LSB at 8-bit output. Any conversion Photoshop (or GIMP, Affinity, ColorSync) can perform can be captured: profile conversions, TAC-limited device links, creative grades, grayscale tone curves.
+
+```bash
+# Create a TIFF identity, open in Photoshop, convert to CMYK, save, reimport:
+node samples/lut-tiff-cli.js --create --channels 3 --size 33 --out srgb.tiff
+node samples/lut-tiff-cli.js --import --in edited_cmyk.tiff --out my_lut.json
+node samples/lut-tiff-cli.js --validate --original srgb.tiff --edited edited_cmyk.tiff --lut my_lut.json
+# → Grade: EXCELLENT (mean ΔP 0.756 / threshold 1)
+```
+
+**Metadata survives Photoshop.** Grid parameters are stored in both a private TIFF tag (tag 32768) and XMP (`jsce:LutMeta`) — Photoshop strips the private tag but always preserves unknown XMP namespaces. The embedded ICC profile (tag 34675, written by Photoshop) is extracted on import and placed in the LUT chain as the output descriptor. The text strip in the image is a human-readable last-resort fallback.
+
+**Validate and compare.** `builder.analyze()` and `LutBuilder.comparePixels()` produce ΔP reports (mean, max, RMSE, p95/p99, per-channel, grade) and optional amplified delta TIFF images for visual diagnosis. Use `--compare` to benchmark jsCE vs lcms vs Photoshop conversions of the same source.
+
+The [`LutBuilder`](./samples/lutbuilder.md) guide covers the full lifecycle, CLI reference, and error handling.
+Format spec, emulation architecture, and the reasoning behind the design are in [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).
+The [`samples/lut-cmyk-to-rgb.html`](./samples/lut-cmyk-to-rgb.html) demo shows the build-once / ship-anywhere workflow end-to-end with measured numbers.
 
 ---
 

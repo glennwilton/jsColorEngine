@@ -1,0 +1,835 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License
+
+  LUT TIFF Builder — generate identity LUT TIFFs for visual editing in
+  Photoshop (or any colour-managed editor), then import the edited TIFF
+  back as a ready-to-use LUT JSON file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; LUT TIFF Builder</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+    .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        align-items: start;
+    }
+    @media (max-width: 960px) { .two-col { grid-template-columns: 1fr; } }
+
+    .controls input[type=text] {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 6px 10px;
+        border-radius: 4px;
+        font: inherit;
+        font-size: 13px;
+        width: 100%;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+    .controls input[type=text]:focus { outline: none; border-color: var(--accent); }
+
+    .controls label.check {
+        flex-direction: row;
+        align-items: center;
+        gap: 7px;
+        cursor: pointer;
+        text-transform: none;
+        letter-spacing: 0;
+        font-size: 13px;
+        color: var(--text-dim);
+    }
+    .controls label.check input[type=checkbox] { cursor: pointer; accent-color: var(--accent); }
+
+    .upload-zone {
+        border: 2px dashed var(--border);
+        border-radius: 8px;
+        padding: 32px 20px;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+        background: var(--bg-card-2);
+        color: var(--text-dim);
+        user-select: none;
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+        border-color: var(--accent);
+        background: var(--bg-card-3);
+        color: var(--text);
+    }
+    .upload-zone .upload-icon { font-size: 28px; margin-bottom: 8px; }
+    .upload-zone .upload-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+    .json-preview {
+        background: var(--bg);
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        padding: 12px 14px;
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.55;
+        color: var(--text-dim);
+        max-height: 260px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 10px;
+    }
+
+    .status-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 5px;
+        font-size: 12px;
+        margin-top: 10px;
+        min-height: 36px;
+        background: var(--bg-card-2);
+        border: 1px solid var(--border-soft);
+        color: var(--text-dim);
+    }
+    .status-bar.ok    { border-color: var(--accent-2); color: var(--accent-2); }
+    .status-bar.err   { border-color: var(--error);    color: var(--error); }
+    .status-bar.busy  { border-color: var(--warn);     color: var(--warn); }
+
+    .img-thumbs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+    }
+    .img-thumbs img {
+        width: 60px;
+        height: 60px;
+        object-fit: cover;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        opacity: 0.7;
+    }
+    .img-thumbs img.loaded { opacity: 1; }
+
+    .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-family: var(--mono);
+        background: var(--bg-card-2);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+    }
+    .pill.ok { border-color: var(--accent-2); color: var(--accent-2); }
+
+    .flow-steps {
+        display: flex;
+        gap: 0;
+        flex-wrap: wrap;
+        counter-reset: step;
+        margin: 16px 0;
+    }
+    .flow-step {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: var(--bg-card-2);
+        border: 1px solid var(--border-soft);
+        font-size: 12px;
+        line-height: 1.4;
+        flex: 1;
+        min-width: 160px;
+        position: relative;
+    }
+    .flow-step:not(:last-child)::after {
+        content: '›';
+        position: absolute;
+        right: -10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        z-index: 1;
+        font-size: 18px;
+    }
+    .flow-step-num {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #0a0e12;
+        font-weight: 700;
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .warn-box {
+        padding: 10px 14px;
+        border-radius: 5px;
+        border: 1px solid var(--warn);
+        background: rgba(251,191,36,0.06);
+        color: var(--warn);
+        font-size: 12px;
+        margin-top: 12px;
+    }
+    .note-box {
+        padding: 10px 14px;
+        border-radius: 5px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card-2);
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-top: 10px;
+        line-height: 1.55;
+    }
+</style>
+<script src="pako.js"></script>
+<script src="utif.js"></script>
+<script src="../browser/jsColorEngineWeb.js"></script>
+<script src="LutBuilder.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">samples</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html" class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
+        </nav>
+    </div>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
+        <a href="live-video-softproof.html">Live Video</a>
+        <a href="softproof.html">Soft Proof</a>
+        <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="lut-cmyk-to-rgb.html">CMYK → RGB LUT</a>
+        <a href="lut-tiff-builder.html" class="is-active">LUT TIFF Builder</a>
+        <a href="colour-calculator.html">Colour Calculator</a>
+    </nav>
+</header>
+
+<main>
+
+<!-- INTRO ================================================================== -->
+<section class="card">
+    <h2>LUT TIFF Builder</h2>
+    <p class="lead">
+        Generate an identity LUT as a TIFF image, edit it in any colour-managed application
+        (Photoshop, Affinity, GIMP), then import the result as a portable LUT JSON file.
+        Any colour operation the editor can perform — profile conversions, tone curves,
+        creative grades, CMYK separations — gets captured as a reusable, high-speed LUT.
+    </p>
+    <div class="note-box" style="border-color:var(--accent-2); background:rgba(74,222,128,0.04); color:var(--text-dim); font-size:12px; line-height:1.65">
+        <strong style="color:var(--text)">Accurate colour management — not Hald CLUT.</strong>
+        This tool is designed for <em>ICC-accurate colour transforms</em>: capturing press profiles,
+        cross-space conversions (sRGB&nbsp;→&nbsp;CMYK, AdobeRGB&nbsp;→&nbsp;sRGB, etc.), and
+        device-link LUTs that preserve colour intent and process provenance.
+        It supports 1D tone curves, 3D&nbsp;RGB, and 4D&nbsp;CMYK grids — channel counts
+        that Hald CLUT does not support.<br>
+        <span style="color:var(--text-muted)">
+        Hald CLUT is an RGB-only creative grading format with no metadata, no colour space identity,
+        and no cross-space capability. The LUT format here carries a full ICC chain,
+        content signature, and is interoperable with jsColorEngine's WASM-SIMD pipeline.
+        </span>
+    </div>
+
+    <div class="flow-steps">
+        <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <div><strong>Generate</strong><br>Pick type &amp; settings, download identity TIFF</div>
+        </div>
+        <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <div><strong>Edit</strong><br>Open in Photoshop, assign profile, apply adjustments</div>
+        </div>
+        <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <div><strong>Save</strong><br>File → Save As → TIFF &mdash; LZW compression, <em>not</em> JPEG</div>
+        </div>
+        <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <div><strong>Import</strong><br>Upload the edited TIFF &rarr; get LUT JSON</div>
+        </div>
+    </div>
+</section>
+
+<!-- TWO COLUMNS ============================================================ -->
+<div class="two-col">
+
+<!-- ── LEFT: GENERATE ─────────────────────────────────────────────────────── -->
+<section class="card">
+    <h2>① Generate identity TIFF</h2>
+    <p class="muted">Creates a neutral starting LUT. Every pixel is its own input value — edit it in Photoshop to bake in colour transforms.</p>
+
+    <div class="controls" style="margin-top:14px">
+
+        <label>
+            LUT Type
+            <select id="lutType" onchange="onTypeChange()">
+                <optgroup label="1D — Tone curve">
+                    <option value="1d-gray">Gray tone curve (N=255)</option>
+                </optgroup>
+                <optgroup label="3D — RGB">
+                    <option value="3d-srgb" selected>sRGB identity</option>
+                    <option value="3d-adobe">AdobeRGB 1998 identity</option>
+                    <option value="3d-prophoto">ProPhoto RGB identity</option>
+                    <option value="3d-generic">Generic RGB</option>
+                </optgroup>
+                <optgroup label="4D — CMYK (needs a press profile for image preview)">
+                    <option value="4d-generic">Generic CMYK (untagged)</option>
+                    <option value="4d-gracol">GRACoL 2006 Coated</option>
+                    <option value="4d-iso">ISO Coated v2 (ECI)</option>
+                    <option value="4d-eci">eciCMYK v2</option>
+                </optgroup>
+            </select>
+        </label>
+
+        <label>
+            Grid size
+            <select id="gridSize" onchange="onTypeChange()">
+                <option value="auto" selected>Auto</option>
+                <option value="9">9 (quick test)</option>
+                <option value="17">17</option>
+                <option value="33">33</option>
+                <option value="48">48</option>
+                <option value="65">65</option>
+            </select>
+        </label>
+
+        <label>
+            Bit depth
+            <select id="bitDepth">
+                <option value="16" selected>16-bit (lossless)</option>
+                <option value="8">8-bit (half size)</option>
+            </select>
+        </label>
+
+        <div style="width:100%">
+            <span id="lutSummary" class="pill"></span>
+        </div>
+    </div>
+    <div id="sizeWarning" class="warn-box" style="display:none"></div>
+
+    <!-- Preview images -->
+    <h3>Preview images <span class="muted">(drawn next to the LUT grid)</span></h3>
+    <div class="controls">
+        <label class="check">
+            <input type="checkbox" id="img0" value="images/face.png" checked>
+            Portrait
+        </label>
+        <label class="check">
+            <input type="checkbox" id="img1" value="images/fruit.png" checked>
+            Fruit (wide gamut)
+        </label>
+        <label class="check">
+            <input type="checkbox" id="img2" value="images/skin.png" checked>
+            Skin tones
+        </label>
+    </div>
+    <div class="img-thumbs">
+        <img id="thumb0" src="images/face.png"  alt="portrait"    onload="this.classList.add('loaded')">
+        <img id="thumb1" src="images/fruit.png" alt="fruit"       onload="this.classList.add('loaded')">
+        <img id="thumb2" src="images/skin.png"  alt="skin tones"  onload="this.classList.add('loaded')">
+    </div>
+    <div id="cmykNote" class="note-box" style="display:none">
+        CMYK preview images require a press profile to be loaded &mdash; using the
+        selected profile above. Without images the TIFF still contains the full
+        LUT grid and gradient bars.
+    </div>
+
+    <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap">
+        <button class="btn-primary" id="btnGenerate" onclick="generateTIFF()">⬇ Download TIFF</button>
+    </div>
+    <div class="status-bar" id="genStatus">Ready — choose settings and click Download TIFF.</div>
+</section>
+
+<!-- ── RIGHT: IMPORT ──────────────────────────────────────────────────────── -->
+<section class="card">
+    <h2>② Import edited TIFF</h2>
+    <p class="muted">Upload the TIFF you saved from Photoshop. The LUT parameters are read from embedded XMP metadata, and the chain output descriptor is updated from the embedded ICC profile.</p>
+
+    <input type="file" id="tiffFile" accept=".tif,.tiff" style="display:none" onchange="importTIFF(this)">
+    <div class="upload-zone" id="uploadZone"
+         onclick="document.getElementById('tiffFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="onDrop(event)">
+        <div class="upload-icon">📂</div>
+        <div>Click or drag &amp; drop an edited TIFF</div>
+        <div class="upload-hint">Supports LZW, ZIP, and uncompressed · 8-bit and 16-bit · RGB and CMYK</div>
+    </div>
+
+    <div class="status-bar" id="importStatus">Upload an edited TIFF to begin.</div>
+
+    <!-- LUT Info grid (hidden until imported) -->
+    <div id="importInfo" style="display:none">
+        <h3>LUT metadata</h3>
+        <div class="info-grid">
+            <div class="info-cell"><span class="lbl">Input</span><span class="val" id="iInCS">—</span></div>
+            <div class="info-cell"><span class="lbl">Intent</span><span class="val" id="iIntent">—</span></div>
+            <div class="info-cell"><span class="lbl">Output</span><span class="val" id="iOutCS">—</span></div>
+            <div class="info-cell"><span class="lbl">Grid N</span><span class="val" id="iSize">—</span></div>
+            <div class="info-cell"><span class="lbl">inCh → outCh</span><span class="val" id="iChans">—</span></div>
+            <div class="info-cell"><span class="lbl">Scale</span><span class="val" id="iScale">—</span></div>
+            <div class="info-cell"><span class="lbl">Bit depth</span><span class="val" id="iBps">—</span></div>
+            <div class="info-cell"><span class="lbl">Cells</span><span class="val" id="iCells">—</span></div>
+        </div>
+
+        <!-- Notes embedded in the TIFF (read back on import) -->
+        <div id="importNotesBlock" style="display:none">
+            <h3>Context notes from TIFF</h3>
+            <div id="importNotes" class="note-box"></div>
+        </div>
+
+        <!-- Conversion intent — only shown when colour space changed ────────── -->
+        <div id="intentBlock" style="display:none">
+            <div class="warn-box" id="intentWarning">
+                ⚠ <strong>Colour space changed</strong> — the output profile differs from the input.
+                Record the rendering intent and black point compensation setting used in Photoshop
+                so the LUT chain is fully documented.
+            </div>
+            <h3>Conversion details <span class="muted">(required when colour space changed)</span></h3>
+            <div class="controls" style="flex-wrap:wrap; gap:12px">
+                <label>
+                    Rendering intent
+                    <select id="importIntent">
+                        <option value="1" selected>Relative Colorimetric</option>
+                        <option value="0">Perceptual</option>
+                        <option value="2">Saturation</option>
+                        <option value="3">Absolute Colorimetric</option>
+                    </select>
+                </label>
+                <label class="check" style="align-self:flex-end; padding-bottom:6px">
+                    <input type="checkbox" id="importBPC" checked>
+                    Black Point Compensation (BPC)
+                </label>
+            </div>
+            <p class="muted" style="font-size:11px; margin:4px 0 0">
+                In Photoshop: <em>Edit → Convert to Profile → Intent</em> &amp; <em>Use Black Point Compensation</em>.
+                For Curves/Hue adjustments (no space conversion) leave intent as-is.
+            </p>
+        </div>
+
+        <!-- What the user did in the editor — recorded in the LUT adjustment history -->
+        <h3>What did you do? <span class="muted">(added to LUT adjustment history)</span></h3>
+        <p class="muted" style="font-size:12px; margin:0 0 8px">
+            Describe the edits you made in Photoshop. Each line is one entry in the adjustment history — the audit trail inside the LUT JSON.
+        </p>
+        <div class="controls" style="flex-direction:column; gap:7px">
+            <input type="text" id="adjNote0" placeholder="e.g. Converted to CMYK — GRACoL 2006 Coated, perceptual">
+            <input type="text" id="adjNote1" placeholder="e.g. Curves adjustment — warmer highlights, shadow lift">
+            <input type="text" id="adjNote2" placeholder="e.g. TAC limit: 300%">
+        </div>
+
+        <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+            <button class="btn-primary" id="btnCreateJson" onclick="createJSON()">✓ Create LUT JSON</button>
+            <span id="jsonReadyBadge" class="pill" style="display:none">JSON ready</span>
+        </div>
+
+        <!-- Download / copy (shown after Create JSON is clicked) -->
+        <div id="jsonActions" style="display:none; margin-top:12px">
+            <div style="display:flex; gap:10px; flex-wrap:wrap">
+                <button class="btn-primary" id="btnDownloadJson" onclick="downloadJSON()">⬇ Download LUT JSON</button>
+                <button id="btnCopyJson" onclick="copyJSON()">⎘ Copy JSON</button>
+            </div>
+            <h3>JSON preview</h3>
+            <div class="json-preview" id="jsonPreview"></div>
+        </div>
+    </div>
+
+</section>
+
+</div><!-- /two-col -->
+
+<!-- WORKFLOW EXPLAINER ====================================================== -->
+<section class="card">
+    <h2>Photoshop workflow guide</h2>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px">
+        <div>
+            <h3>Editing the identity TIFF</h3>
+            <ol style="color:var(--text-dim); line-height:1.8; padding-left:18px; margin:0">
+                <li>Open the downloaded TIFF in Photoshop.</li>
+                <li>Check that the correct colour profile is assigned (<em>Edit → Assign Profile</em>).</li>
+                <li>Apply your adjustments: Curves, Hue/Saturation, selective colour, or<br>
+                    convert to a different colour space (<em>Image → Mode → Convert to…</em>).</li>
+                <li>Save as TIFF: <em>File → Save As → TIFF</em>.</li>
+                <li>In the TIFF options, choose <strong>LZW</strong> compression — smaller file, lossless.<br>
+                    <strong>Never use JPEG compression</strong> — it corrupts the solid pixel blocks.</li>
+            </ol>
+        </div>
+        <div>
+            <h3>What the TIFF captures</h3>
+            <ul style="color:var(--text-dim); line-height:1.8; padding-left:18px; margin:0">
+                <li><strong>Curves adjustment</strong> — tone response modification</li>
+                <li><strong>Hue/Saturation</strong> — selective colour shifts</li>
+                <li><strong>Convert to CMYK</strong> — captures Adobe's CMM exactly</li>
+                <li><strong>Convert to Greyscale</strong> — creates an RGB→Gray LUT</li>
+                <li><strong>Photoshop Action</strong> — any automated pipeline</li>
+                <li><strong>Any other colour op</strong> — the editor's math is the LUT</li>
+            </ul>
+            <div class="warn-box">
+                ⚠ <strong>Always use TIFF + LZW, never JPEG.</strong><br>
+                JPEG compression adds artefacts to the solid pixel blocks and will cause
+                the import to fail the spread-validation check.
+            </div>
+            <div class="note-box">
+                💡 You can change the preview images in Photoshop — they are for visual
+                reference only and are ignored on import. Only the LUT grid region
+                (top-left of the TIFF) is read back.
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<script>
+'use strict';
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+// All of the following are globals set by LutBuilder.js / jsColorEngineWeb.js:
+//   eIntent, virtualProfile, virtualRGB, virtualCMYK, virtualGray, virtualLab,
+//   LutBuilder, Profile, Transform
+// Do NOT re-declare them with const/let — they are already top-level vars/functions.
+
+let importedBuilder = null;   // holds the last successfully imported LutBuilder
+
+// Profile cache — loaded on demand
+const profileCache = {};
+const PROFILE_URLS = {
+    '4d-gracol':  'profiles/CoatedGRACoL2006.icc',
+    '4d-iso':     'profiles/ISOcoated_v2_eci.icc',
+    '4d-eci':     'profiles/eciCMYK_v2.icc',
+};
+
+// ─── Type / size helpers ─────────────────────────────────────────────────────
+
+function lutTypeInfo(type) {
+    const map = {
+        '1d-gray':   { inCh: 1, outCh: 1, defN: 255, scale: 3, label: '1D Gray',       chain: () => [virtualGray('Gray'), eIntent.perceptual, virtualGray('Gray')] },
+        '3d-srgb':   { inCh: 3, outCh: 3, defN: 33,  scale: 3, label: '3D sRGB',       chain: () => [virtualProfile('*sRGB'),       eIntent.perceptual, virtualProfile('*sRGB')] },
+        '3d-adobe':  { inCh: 3, outCh: 3, defN: 33,  scale: 3, label: '3D AdobeRGB',   chain: () => [virtualProfile('*AdobeRGB'),   eIntent.perceptual, virtualProfile('*AdobeRGB')] },
+        '3d-prophoto':{ inCh:3, outCh: 3, defN: 33,  scale: 3, label: '3D ProPhoto',   chain: () => [virtualProfile('*ProPhotoRGB'),eIntent.perceptual, virtualProfile('*ProPhotoRGB')] },
+        '3d-generic':{ inCh: 3, outCh: 3, defN: 33,  scale: 3, label: '3D Generic RGB',chain: () => [virtualRGB('RGB'),            eIntent.perceptual, virtualRGB('RGB')] },
+        '4d-generic':{ inCh: 4, outCh: 4, defN: 17,  scale: 2, label: '4D Generic CMYK', chain: () => [virtualCMYK('Generic CMYK'), eIntent.perceptual, virtualCMYK('Generic CMYK')] },
+        '4d-gracol': { inCh: 4, outCh: 4, defN: 17,  scale: 2, label: '4D GRACoL 2006',  chain: () => [virtualCMYK('GRACoL 2006 Coated'), eIntent.perceptual, virtualCMYK('GRACoL 2006 Coated')] },
+        '4d-iso':    { inCh: 4, outCh: 4, defN: 17,  scale: 2, label: '4D ISO Coated v2', chain: () => [virtualCMYK('ISO Coated v2'), eIntent.perceptual, virtualCMYK('ISO Coated v2')] },
+        '4d-eci':    { inCh: 4, outCh: 4, defN: 17,  scale: 2, label: '4D eciCMYK v2',   chain: () => [virtualCMYK('eciCMYK v2'),  eIntent.perceptual, virtualCMYK('eciCMYK v2')] },
+    };
+    return map[type] || map['3d-srgb'];
+}
+
+function resolvedN() {
+    const sel = document.getElementById('gridSize').value;
+    const type = document.getElementById('lutType').value;
+    if (sel !== 'auto') return parseInt(sel, 10);
+    return lutTypeInfo(type).defN;
+}
+
+function estimatedMB(inCh, N, scale, outCh, bps) {
+    // Browser exports uncompressed TIFF (no zlib). bps=16 doubles the size.
+    const numSlices = inCh < 2 ? 1 : Math.pow(N, inCh - 2);
+    const spr = Math.ceil(Math.sqrt(numSlices));
+    const spc = Math.ceil(numSlices / spr);
+    const lutW = Math.max(spr * N * scale, 6 * 33 * scale);
+    const lutH = Math.max(spc * (inCh < 2 ? 1 : N) * scale, 6 * 33 * scale);
+    const canvasW = lutW + outCh * Math.max(20, scale * 7) + 60;
+    const canvasH = lutH + 100;
+    const bytesPerSample = (bps === 16) ? 2 : 1;
+    const raw = canvasW * canvasH * outCh * bytesPerSample;
+    return (raw / 1024 / 1024).toFixed(0);
+}
+
+function onTypeChange() {
+    const type  = document.getElementById('lutType').value;
+    const info  = lutTypeInfo(type);
+    const N     = resolvedN();
+    const isCMYK = type.startsWith('4d');
+    document.getElementById('cmykNote').style.display  = isCMYK ? '' : 'none';
+    const cells = Math.round(Math.pow(N, info.inCh));
+    const scale = info.scale;
+    const bps   = parseInt(document.getElementById('bitDepth').value, 10);
+    const estMB = parseInt(estimatedMB(info.inCh, N, scale, info.outCh, bps), 10);
+
+    document.getElementById('lutSummary').textContent =
+        `${info.label}  ·  N=${N}  ·  scale=${scale}  ·  ${cells.toLocaleString()} cells  ·  ~${estMB || '<1'} MB`;
+
+    const warn = document.getElementById('sizeWarning');
+    if (estMB >= 30) {
+        warn.style.display = '';
+        const rec = info.inCh >= 4
+            ? '4D CMYK LUTs grow as N⁴. <strong>N=17 (~5 MB) is recommended for CMYK</strong> — it gives excellent press accuracy. N=33 ≈ 50 MB · N=48 ≈ 200 MB.'
+            : 'Consider a smaller grid size or 8-bit depth.';
+        warn.innerHTML = '⚠ <strong>Large uncompressed export (~' + estMB + ' MB).</strong><br>' + rec;
+    } else {
+        warn.style.display = 'none';
+    }
+}
+
+onTypeChange();  // initialise on load
+
+// ─── Profile loader ──────────────────────────────────────────────────────────
+
+async function loadProfile(type) {
+    const url = PROFILE_URLS[type];
+    if (!url) return null;
+    if (profileCache[url]) return profileCache[url];
+    const p = new Profile();
+    await p.loadPromise(url);
+    if (!p.loaded) throw new Error('Failed to load profile: ' + url);
+    profileCache[url] = p;
+    return p;
+}
+
+// ─── Generate ────────────────────────────────────────────────────────────────
+
+async function generateTIFF() {
+    const btn = document.getElementById('btnGenerate');
+    const status = document.getElementById('genStatus');
+    btn.disabled = true;
+    setStatus(status, 'busy', 'Building LUT…');
+
+    try {
+        const type  = document.getElementById('lutType').value;
+        const info  = lutTypeInfo(type);
+        const N     = resolvedN();
+        const bps   = parseInt(document.getElementById('bitDepth').value, 10);
+        const scale = info.scale;
+        const isCMYK = type.startsWith('4d');
+
+        // Build LUT
+        const b = new LutBuilder().createIdentity(info.inCh, N);
+        b.setChain(info.chain());
+
+        // Collect preview image URLs
+        const imgs = [0,1,2]
+            .filter(i => document.getElementById('img'+i).checked)
+            .map(i => document.getElementById('img'+i).value);
+
+        // Load press profile for CMYK (needed to convert preview images)
+        let outputProfile = null;
+        if (isCMYK && PROFILE_URLS[type]) {
+            try {
+                setStatus(status, 'busy', 'Loading press profile…');
+                outputProfile = await loadProfile(type);
+            } catch(e) {
+                // fall through — preview images will be skipped with a console warning
+            }
+        }
+
+        setStatus(status, 'busy', `Exporting TIFF (N=${N}, ${bps}-bit)…`);
+        const desc = info.label + ' identity LUT — edit in Photoshop, reimport as LUT';
+        const bytes = await b.exportTIFF({
+            scale, bitDepth: bps,
+            previewImages: imgs,
+            outputProfile,
+            description: desc,
+        });
+
+        // Trigger download
+        const name = `${type.replace(/[^a-z0-9]/g, '_')}_n${N}_${bps}bit.tiff`;
+        downloadBytes(bytes, name);
+        setStatus(status, 'ok', `✓ Downloaded ${name} (${(bytes.length/1024).toFixed(0)} KB)`);
+    } catch(e) {
+        setStatus(status, 'err', '✗ ' + (e.message || e));
+        console.error(e);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ─── Import ──────────────────────────────────────────────────────────────────
+
+function onDrop(ev) {
+    ev.preventDefault();
+    document.getElementById('uploadZone').classList.remove('drag-over');
+    const file = ev.dataTransfer.files[0];
+    if (file) readTIFF(file);
+}
+
+function importTIFF(input) {
+    const file = input.files[0];
+    if (file) readTIFF(file);
+    input.value = '';
+}
+
+function readTIFF(file) {
+    const status = document.getElementById('importStatus');
+    setStatus(status, 'busy', 'Reading ' + file.name + '…');
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const b = LutBuilder.fromTIFF(e.target.result);
+            importedBuilder = b;
+            renderImportInfo(b, file.name);
+            setStatus(status, 'ok', '✓ ' + file.name + ' imported successfully');
+        } catch(err) {
+            importedBuilder = null;
+            setStatus(status, 'err', '✗ ' + (err.message || err));
+            document.getElementById('importInfo').style.display = 'none';
+            console.error(err);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function chainCS(desc) {
+    if (!desc) return null;
+    const h = desc.header || {};
+    return (h.colorSpace || (h.space && h.space.toUpperCase())) || null;
+}
+
+function renderImportInfo(b, filename) {
+    const chain   = b._chain || [];
+    const inDesc  = chain[0];
+    const outDesc = chain[2];
+    const intentLabel = { 0:'perceptual', 1:'relative', 2:'saturation', 3:'absolute' };
+    const intentVal   = intentLabel[chain[1]] || String(chain[1]);
+
+    const inName  = (inDesc  && (inDesc.name  || chainCS(inDesc)))  || '—';
+    const outName = (outDesc && (outDesc.name || chainCS(outDesc))) || '—';
+
+    setText('iInCS',  inName);
+    setText('iIntent', intentVal);
+    setText('iOutCS', outName);
+    setText('iSize',  b._size);
+    setText('iChans', b._inCh + ' → ' + b._outCh);
+    setText('iScale', (b._meta && b._meta.scale) || (b._inCh >= 4 ? 2 : 3));
+    setText('iBps',   '16-bit (stored as u16)');
+    setText('iCells', Math.round(Math.pow(b._size, b._inCh)).toLocaleString());
+
+    // Detect colour space change — show intent/BPC section if so
+    const inCS  = chainCS(inDesc);
+    const outCS = chainCS(outDesc);
+    const spaceChanged = inCS && outCS && inCS !== outCS;
+    document.getElementById('intentBlock').style.display = spaceChanged ? '' : 'none';
+    if (spaceChanged) {
+        // Default intent to perceptual for cross-space; user should confirm
+        document.getElementById('importIntent').value = '0';
+    }
+
+    // Notes from meta
+    const meta = b._meta || {};
+    const hasMeta = meta.description || (meta.adjustments && meta.adjustments.length);
+    if (hasMeta) {
+        const lines = [meta.description, ...(meta.adjustments||[])].filter(Boolean);
+        document.getElementById('importNotes').innerHTML = lines.map(l=>'<div>'+escHtml(l)+'</div>').join('');
+        document.getElementById('importNotesBlock').style.display = '';
+    } else {
+        document.getElementById('importNotesBlock').style.display = 'none';
+    }
+
+    // Reset JSON creation state on new import
+    document.getElementById('jsonActions').style.display    = 'none';
+    document.getElementById('jsonReadyBadge').style.display = 'none';
+    document.getElementById('jsonPreview').textContent      = '';
+    ['adjNote0','adjNote1','adjNote2'].forEach(id => { document.getElementById(id).value = ''; });
+
+    document.getElementById('importInfo').style.display = '';
+}
+
+function createJSON() {
+    if (!importedBuilder) return;
+    applyImportNotes();
+
+    // If colour space changed, apply the user-specified intent and BPC to the chain
+    const intentBlock = document.getElementById('intentBlock');
+    if (intentBlock.style.display !== 'none') {
+        const intentVal = parseInt(document.getElementById('importIntent').value, 10);
+        const bpc       = document.getElementById('importBPC').checked;
+        if (importedBuilder._chain && importedBuilder._chain.length >= 3) {
+            importedBuilder._chain[1] = intentVal;
+        }
+        if (bpc) {
+            if (!importedBuilder._meta) importedBuilder._meta = {};
+            importedBuilder._meta.bpc = true;
+        }
+    }
+
+    const json = importedBuilder.toJSON();
+    const text = JSON.stringify(json, null, 2);
+    const lines = text.split('\n');
+    const preview = lines.slice(0, 40).join('\n') +
+        (lines.length > 40 ? '\n  …(' + (lines.length-40) + ' more lines)' : '');
+    document.getElementById('jsonPreview').textContent      = preview;
+    document.getElementById('jsonActions').style.display    = '';
+    document.getElementById('jsonReadyBadge').style.display = '';
+    document.getElementById('jsonReadyBadge').className     = 'pill ok';
+    const status = document.getElementById('importStatus');
+    setStatus(status, 'ok', '✓ LUT JSON created — ready to download.');
+}
+
+function applyImportNotes() {
+    if (!importedBuilder) return;
+    const adjs = [0,1,2].map(i => document.getElementById('adjNote'+i).value.trim()).filter(Boolean);
+    if (adjs.length) {
+        if (!importedBuilder._meta) importedBuilder._meta = {};
+        importedBuilder._meta.adjustments = adjs;
+    }
+}
+
+function downloadJSON() {
+    if (!importedBuilder) return;
+    applyImportNotes();
+    const json = JSON.stringify(importedBuilder.toJSON(), null, 2);
+    const type = document.getElementById('lutType')?.value || 'lut';
+    const name = 'lut_n' + importedBuilder._size + '_' + importedBuilder._inCh + 'to' + importedBuilder._outCh + '.json';
+    downloadBytes(new TextEncoder().encode(json), name, 'application/json');
+}
+
+function copyJSON() {
+    if (!importedBuilder) return;
+    applyImportNotes();
+    const json = JSON.stringify(importedBuilder.toJSON(), null, 2);
+    navigator.clipboard.writeText(json).then(() => {
+        const btn = document.getElementById('btnCopyJson');
+        const prev = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => btn.textContent = prev, 1800);
+    });
+}
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+
+function downloadBytes(bytes, filename, mimeType) {
+    const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function setStatus(el, cls, msg) {
+    el.className = 'status-bar ' + cls;
+    el.textContent = msg;
+}
+
+function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+}
+
+function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Recompute summary + size warning when any export setting changes
+document.getElementById('gridSize').addEventListener('change', onTypeChange);
+document.getElementById('bitDepth').addEventListener('change', onTypeChange);
+</script>
+</body>
+</html>

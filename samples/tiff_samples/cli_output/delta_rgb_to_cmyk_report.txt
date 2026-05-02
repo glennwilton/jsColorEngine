@@ -1,0 +1,19 @@
+=== ΔP Analysis Report ===
+Date     : 2026-05-02T03:37:33.914Z
+Grade    : EXCELLENT
+Pixels   : 612802
+
+ΔP overall
+  Mean  : 0.7558
+  Max   : 8.72
+  RMSE  : 1.0417
+  p95   : 1.732
+  p99   : 2.449
+
+Channel breakdown:
+  C    mean=0.270  max=3  rmse=0.522
+  M    mean=0.294  max=5  rmse=0.551
+  Y    mean=0.282  max=7  rmse=0.586
+  K    mean=0.165  max=3  rmse=0.407
+
+Pass   : NO — 178358 pixels exceed threshold 1

@@ -29,6 +29,9 @@
         <a href="live-video-softproof.html">Live Video</a>
         <a href="softproof.html">Soft Proof</a>
         <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
+        <a href="lut-cmyk-to-rgb.html">CMYK → RGB LUT</a>
+        <a href="lut-tiff-builder.html">LUT TIFF Builder</a>
+        <a href="colour-calculator.html">Colour Calculator</a>
     </nav>
 </header>
 
@@ -79,14 +82,38 @@
                 Accuracy + speed in one view, with amplified diff slider.
             </span>
         </a>
-        <div class="info-cell">
-            <span class="lbl">Planned</span>
-            <span class="val" style="color:var(--text-muted)">Colour Calculator</span>
+        <a href="lut-cmyk-to-rgb.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">Ready</span>
+            <span class="val" style="color:var(--accent)">CMYK → RGB via LUT</span>
             <span class="muted" style="margin-top:4px">
-                Per-pixel readout via <code>pixel(x, y)</code> &mdash;
-                Lab + sRGB + device values. No-LUT accuracy path.
+                Real-world LUT workflow: build once with profiles, ship JSON,
+                run anywhere. Builds two CMYK&rarr;RGB LUTs (jsCE + lcms),
+                serialises to JSON, rebuilds Transforms from the JSON,
+                shows the three-way comparison + ΔP table.
+                Demonstrates emulation mode (jsCE kernel + lcms math).
             </span>
-        </div>
+        </a>
+        <a href="lut-tiff-builder.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">New — v1.4.4</span>
+            <span class="val" style="color:var(--accent)">LUT TIFF Builder</span>
+            <span class="muted" style="margin-top:4px">
+                Generate identity LUT TIFFs for visual editing in Photoshop, Affinity,
+                or GIMP. Edit in your colour-managed editor, save as TIFF, reimport as
+                a portable LUT JSON. Captures any CMS transform — profile conversions,
+                tone curves, CMYK separations. Supports 1D Gray, 3D RGB, 4D CMYK.
+            </span>
+        </a>
+        <a href="colour-calculator.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">Ready</span>
+            <span class="val" style="color:var(--accent)">Colour Calculator</span>
+            <span class="muted" style="margin-top:4px">
+                ICC-aware space converter — Lab, XYZ, RGB, CMYK.
+                Uses the <strong>object pipeline</strong>
+                (<code>transform.transform(colorObj)</code>) and
+                <code>convert.Lab2XYZ()</code> / <code>XYZ2Lab()</code>.
+                Real press profiles for CMYK. Round-trip &Delta;E readout.
+            </span>
+        </a>
         <div class="info-cell">
             <span class="lbl">Planned</span>
             <span class="val" style="color:var(--text-muted)">Intent Comparison</span>

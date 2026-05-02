@@ -42,7 +42,8 @@ future-facing only.
 - [Shipped so far](#shipped-so-far)
 - [v1.4 — Image helper + browser samples (shipped)](#v14--image-helper--browser-samples)
     - [Browser samples](#browser-samples)
-- [v1.4.2 — Polishing pass (planned)](#v145--polishing-pass-planned)
+- [v1.4.2 — Polishing pass (shipped)](#v142--polishing-pass-shipped)
+- [v1.4.3 — Portable LUTs + LutBuilder (shipped)](#v143--portable-luts--lutbuilder-shipped)
 - [v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`](#v15--n-channel-float-inputs--compiled-non-lut-pipeline--tomodule)
     - [N-channel float inputs (5 / 6 / 7 / 8-channel input profiles)](#n-channel-float-inputs-5--6--7--8-channel-input-profiles)
     - [Dependency hygiene — Dependabot triage + devDependency bumps](#dependency-hygiene--dependabot-triage--devdependency-bumps)
@@ -52,7 +53,8 @@ future-facing only.
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [DROPPED — float-WASM tier (was: float-wasm-scalar / f32 CLUT / float-wasm-simd)](#dropped--float-wasm-tier-was-float-wasm-scalar--f32-clut--float-wasm-simd)
-- [v1.6 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity](#v16-optional--lutmode-int-pipeline--s1516-for-lcms-parity)
+- [v1.4.4 — LutBuilder TIFF workflow + CLI tool (shipped)](#v144--lutbuilder-tiff-workflow--cli-tool-shipped-2026-05-02)
+- [~~v1.6 — `lutMode: 'int-pipeline'`~~ DROPPED](#v16-dropped)
 - [v1.7 (optional) — Hardened profile decode](#v17-optional--hardened-profile-decode)
 - [v2 — Separation of concerns: split Transform + Pipeline + Interpolator](#v2--separation-of-concerns-split-transform--pipeline--interpolator)
 - [What we are explicitly NOT doing](#what-we-are-explicitly-not-doing)
@@ -109,6 +111,10 @@ bit-exactness across all three siblings. Kernels are
 **feature-complete** for the workloads jsColorEngine is targeted
 at (3-channel and 4-channel input device profiles, 3- and 4-channel
 output, both u8 and u16 I/O).
+
+**v1.4.2** — polishing pass: WASM memory management (`wasmMaxMemory`, `wasmShrinkRatio`, `compactWasmMemory`), reusable output buffers, relative sample links, Lab ↔ int16 helpers (`convert.lab2Int16` / `int162Lab`), LUT build hooks (`lutInputHook` / `lutOutputHook`). See [CHANGELOG.md](../CHANGELOG.md#1.4.2).
+
+**v1.4.3** — portable LUT JSON format + LutBuilder. `Transform.toJSON()` / `Transform.fromJSON()` / `lutToJSON` / `jsonToLut` as the wire format authority; `Transform.setLut()` rewritten as the LUT authority (normalises CLUT, re-resolves kernel, regenerates strides); FNV-1a content signatures for audit / tamper-detection; `LutBuilder` (MIT, `samples/`) covering the full LUT lifecycle including lcms-wasm bridge with auto-detected Emscripten batched path; bugfix for `create4DDeviceLUT` pipeline-chaining (inverted CMYK→RGB LUT output); ICC header `date` → ISO string and `version` → `"M.m.b"` string; `CMYK → RGB via LUT` demo showing the build-once / ship-anywhere workflow with ~0.1 ΔP cross-engine agreement. See [CHANGELOG.md](../CHANGELOG.md#1.4.3).
 
 **v1.4** — showcase release + license change. Puts the v1.3 perf
 story in front of users with runnable browser demos, a small
@@ -583,7 +589,7 @@ tuning guide** (when it lands) — each one is the "working copy" of
 a code block in the guide, checked for drift by a tiny sync script.
 
 ---
-## v1.4.2 — Polishing pass (planned)
+## v1.4.2 — Polishing pass (shipped)
 
 Small, high-impact cleanup release focused on allocation hygiene and
 sample portability while v1.5 centrepiece work is in flight.
@@ -1072,6 +1078,34 @@ the escape hatch for the few callers who legitimately don't have a
 LUT in scope.
 
 ---
+
+## v1.4.3 — Portable LUTs + LutBuilder (shipped)
+
+Build a colour transform once; ship a JSON file; reconstruct at runtime with no profiles and no lcms.
+
+- **DONE — Portable LUT JSON format.** `transform.toJSON()` (instance, auto-called by `JSON.stringify`), `Transform.fromJSON(input, opts)` (static factory), `Transform.lutToJSON(lut, opts)` / `Transform.jsonToLut(input)` (static encode/decode helpers). Default `dataType: 'u16'` (lossless ~650 KB for a 4D LUT); `dataType: 'u8'` halves the size. `opts.verify: true` on `setLut`/`fromJSON` checks the content signature.
+- **DONE — `Transform.setLut()` as LUT authority.** Re-resolves `lutMode`, normalises any CLUT type (Uint16Array, Uint8Array, Float64Array, base64) to canonical f64 [0..1], regenerates strides from `gridPoints + outputChannels`. No longer requires `buildLut: true` in the constructor.
+- **DONE — Content signatures.** FNV-1a 32-bit (`Math.imul`-based, ~1.3 ms for a 33-pt 3D LUT) over chain + grid + u16 pixel data. Format `"FNV1A:<8 hex>"` — algorithm-prefixed for future upgradability. Lazy-stamped at `toJSON()` time; hot-path unchanged. `Transform.signLut` / `verifyLut` static + instance methods.
+- **DONE — `LutBuilder` helper** (`samples/LutBuilder.js`, MIT). Full lifecycle — `create()` (callback), `createIdentity()`, `createFromLCMS()` (auto-detects Emscripten batch API: one `_cmsDoTransform` call over the whole grid, ~80× faster than per-cell), `editLut()` (per-cell mutation, auto-appends timestamped breadcrumb), `clone()`, `toJSON()`, `fromJSON()`. Dual CJS/browser-global export. Deep-dive: [`docs/deepdive/Luts.md`](./deepdive/Luts.md). User guide: [`samples/lutbuilder.md`](../samples/lutbuilder.md).
+- **DONE — Bugfix: `create4DDeviceLUT` pipeline chaining.** Each pipeline stage was fed the original `src` instead of the previous stage's output — caused CMYK white paper to render as black RGB (inverted output) for any real ICC CMYK profile. Fixed by replacing the broken inline loop with `this.forward(src)` (matches `create3DDeviceLUT`). Regression test added.
+- **DONE — ICC header `date` / `version` parsing.** `header.date` now parses ICC 12-byte date to a JS `Date` (JSON → ISO string). `header.version` now parses to `"M.m.b"` string (e.g. `"2.1.0"`) with `header.versionMajor` integer for engine routing.
+- **DONE — JSON wire format cleanup.** Strides removed from serialised form (derived, regenerated on decode). `inputScale`/`outputScale` forced to canonical 1/1 (were leaking kernel-internal u8 scaling values into the wire).
+- **DONE — `samples/lut-cmyk-to-rgb.html` demo.** Builds jsCE and lcms LUTs, serialises to JSON, shows 3-up comparison (live vs jsCE LUT vs lcms LUT) with ΔP table and JSON inspector. Headline: jsCE ↔ lcms grids agree to 0.10 ΔP per channel; LUT path is ~6× faster than live per frame.
+
+---
+
+## v1.4.4 — LutBuilder TIFF workflow + CLI tool (shipped 2026-05-02)
+
+- **LutBuilder Stage 3 — TIFF visual editing workflow.** Export an identity LUT as a TIFF image (ZIP-compressed, embedded ICC, XMP metadata), edit in any colour-managed application (Photoshop, Affinity, GIMP, macOS Preview), reimport the edited pixels as a modified LUT. The editor's CMS becomes your LUT's colour math, captured at grid resolution and dispatched at WASM-SIMD speed. Mean ΔP < 1 u8 unit vs Photoshop ground truth on a real sRGB→CMYK conversion. See [`docs/deepdive/Luts.md` §4](./deepdive/Luts.md#4-the-tiff-workflow--visual-lut-editing).
+- **`lut-tiff-cli.js`** — CLI tool (`--create`, `--import`, `--validate`, `--compare`, `--apply`, `--make-samples`). Builds and imports LUT TIFFs, runs accuracy validation with ΔP reporting and delta image output, applies LUTs to arbitrary images. See [`samples/lutbuilder.md`](../samples/lutbuilder.md) CLI quick reference.
+- **`builder.analyze()` / `LutBuilder.comparePixels()`** — pixel-level accuracy analysis. ΔP report (mean, max, RMSE, p95, p99, per-channel, grade), optional amplified delta TIFF images and plain-text report file.
+- **`LutBuilder.pixelsToTIFF()`** — static helper to write raw pixel buffers as TIFF files.
+- **Three sample TIFFs** (`npm run tiff-samples`): sRGB N=33, GRACoL CMYK N=17, Gray tone curve N=255. All with embedded ICC profiles and Photoshop-compatible XMP metadata.
+- **32-test TIFF suite** (`__tests__/lutbuilder_tiff.tests.js`): LZW/ZIP/uncompressed decode, CMYK/RGB output-channel auto-detection, embedded ICC extraction, planar-format rejection, damaged-cell spread detection, dot-gain tone curve import, CLI pipeline tests.
+- **Dependency hygiene (deferred to v1.5).** Webpack bumps moved to v1.5 to keep this release focused on the TIFF workflow.
+
+---
+
 ## v1.5 — N-channel float inputs + compiled non-LUT pipeline + `toModule()`
 
 > **Scope reframe (Apr 2026).** v1.5 was originally "compiled
@@ -1859,12 +1893,9 @@ on the LUT indicating "3D-pre-biased" vs "4D-raw").
 ---
 
 
-## v1.6 (optional) — `lutMode: 'int-pipeline'` — S15.16 for lcms parity
+## v1.6 — DROPPED — `lutMode: 'int-pipeline'` (was: S15.16 for lcms parity)
 
-Status: **captured for record, no current commitment.** Included
-because the question will come up ("can jsColorEngine be a drop-in
-replacement for lcms with byte-for-byte parity?") and we want the
-answer documented.
+**Reason dropped:** `LutBuilder.createFromLCMS()` in v1.4.3 solves the problem more cleanly. Instead of reimplementing lcms's S15.16 fixed-point pipeline inside jsCE, you sample the lcms transform into a LUT once and dispatch it through jsCE's WASM-SIMD kernels — lcms colour math at jsCE speed, with zero ongoing lcms dependency at runtime. The v1.4.3 demo shows jsCE and lcms agree to < 0.1 ΔP per channel on real profiles. There is no use case left that requires bit-exact S15.16 emulation inside the engine itself.
 
 **The question.** lcms2 uses an S15.16 fixed-point internal
 pipeline for its integer paths (see `cmsFixed1415` and friends in

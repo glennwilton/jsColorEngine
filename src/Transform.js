@@ -797,46 +797,142 @@
      * @param {Object} lut  Prebuilt LUT object with chain, CLUT, precision, etc.
      * @throws {string} If chain structure is invalid.
      */
-    setLut(lut){
+    setLut(lut, opts){
         this.lut = lut;
 
-        if(lut.chain.length < 3){
-            throw 'Invalid LUT - chain is too short';
+        if(!Array.isArray(lut.chain) || lut.chain.length < 3 || lut.chain.length % 2 === 0){
+            throw 'Invalid LUT - chain must be [profile, intent, profile, ...] with odd length >= 3';
         }
 
-        if(!lut.chain[0].hasOwnProperty('profile')){
-            throw 'Invalid LUT - First link is not a profile';
-        }
-
-        if(!lut.chain[lut.chain.length - 2].hasOwnProperty('intent')){
-            throw 'Invalid LUT - Intent is missing';
-        }
-
-        if(!lut.chain[lut.chain.length - 1].hasOwnProperty('profile')){
-            throw 'Invalid LUT - Last link is not a profile';
-        }
-
-        var inputProfile = lut.chain[0];
-
-        // Intent is the second to last one used on output profile
-        var intent = lut.chain[lut.chain.length - 2].intent;
-
-        var outputProfile = lut.chain[lut.chain.length - 1];
-
-        this.chain = lut.chain;
-
-        // Decode if as b64
-        if(this.lut.encoding === 'base64'){
-            if(this.lut.precision === 16){
-                this.lut.CLUT = base64ToUint16Array(this.lut.CLUT);
+        // Normalise chain to canonical format: [profileDescriptor, intentNumber, profileDescriptor, ...]
+        // Accepts legacy {profile:...}/{intent:N} objects and converts to profile2Obj shape + raw numbers.
+        var chain = [];
+        for(var i = 0; i < lut.chain.length; i++){
+            var slot = lut.chain[i];
+            if(i % 2 === 0){
+                // Profile slot — accept profile2Obj shape (has header) or legacy wrapper (has profile)
+                if(slot && typeof slot === 'object' && slot.hasOwnProperty('header')){
+                    chain.push(slot);
+                } else if(slot && typeof slot === 'object' && slot.hasOwnProperty('profile')){
+                    chain.push(slot.profile);
+                } else {
+                    throw 'Invalid LUT - chain[' + i + '] is not a profile descriptor';
+                }
             } else {
-                this.lut.CLUT = base64ToUint8Array(this.lut.CLUT);
+                // Intent slot — accept raw number or legacy {intent: N}
+                if(typeof slot === 'number'){
+                    chain.push(slot);
+                } else if(slot && typeof slot === 'object' && slot.hasOwnProperty('intent')){
+                    chain.push(slot.intent);
+                } else {
+                    throw 'Invalid LUT - chain[' + i + '] is not an intent';
+                }
             }
-            this.lut.encoding = 'number';
         }
 
+        lut.chain = chain;
+        this.chain = chain;
+
+        var inputProfile = chain[0];
+        var intent = chain[chain.length - 2];
+        var outputProfile = chain[chain.length - 1];
+
+        // Decode b64 (if any) and normalise CLUT to Float64Array [0..1].
+        // _decodeLutCLUT is the single source of truth for the portable-LUT
+        // input format — also called by Transform.jsonToLut (no Transform needed).
+        // After this, the engine internals always work with Float64Array CLUT in
+        // [0..1]; the kernel-specific intLut is built fresh by buildIntLut().
+        _decodeLutCLUT(this.lut);
+
+        // Optional signature verification — opt-in via { verify: true } since
+        // recomputing the hash costs a u16-bytes pass. Throws on mismatch so
+        // the caller can react before any pixel is transformed.
+        if(opts && opts.verify === true && this.lut.originalSignature){
+            var computed = _computeSignature(this.lut);
+            if(computed !== this.lut.originalSignature){
+                throw 'Transform.setLut: signature mismatch — LUT has been mutated since it was stamped. ' +
+                      'Expected ' + this.lut.originalSignature + ', got ' + computed + '. ' +
+                      'See `lut.meta.adjustments` for the edit history (if recorded).';
+            }
+        }
+
+        // The LUT is now the authority. Re-resolve cached state that the
+        // constructor set based on the (then-empty) buildLut flag, so that:
+        //   1. builtLut reflects reality (we now have a LUT)
+        //   2. 'auto' lutMode picks the int8/int16 kernel matching dataFormat
+        //      (without this, lutMode stays 'float' and the LUT dispatch
+        //       allocates Uint8ClampedArray output even in int16 mode)
+        // Downstream caches (_expectsU16, _isIntegerMode) are reset by
+        // this.create() below based on the new lutMode.
+        this.builtLut = true;
+        if(this.lutModeRequested === 'auto'){
+            if(this.dataFormat === 'int8'){
+                this.lutMode = 'int-wasm-simd';
+            } else if(this.dataFormat === 'int16'){
+                this.lutMode = 'int16-wasm-simd';
+            } else {
+                this.lutMode = 'float';
+            }
+        }
 
         this.create(inputProfile, outputProfile, intent);
+    }
+
+    /**
+     * Serialise this Transform's LUT to a portable JSON-compatible object.
+     *
+     * The result is the JSON handshake format — directly consumable by
+     * `Transform.fromJSON()`, `Transform.setLut()`, or `LutBuilder.fromJSON()`.
+     * Defaults to u16 base64 (lossless for the canonical f64 ↔ u16 boundary).
+     *
+     *     const json = transform.toJSON();
+     *     fs.writeFileSync('lut.json', JSON.stringify(json));
+     *     // ...later, on a server with no ICC profiles:
+     *     const t = Transform.fromJSON(fs.readFileSync('lut.json'));
+     *
+     * Because this method is named `toJSON`, `JSON.stringify(transform)` will
+     * call it automatically (JS protocol).
+     *
+     * @param {object} [opts]
+     * @param {'u16'|'u8'} [opts.dataType='u16'] u8 halves CLUT size, lossy.
+     * @param {string}     [opts.generator]      override the generator field.
+     * @returns {object} JSON-compatible plain object.
+     */
+    toJSON(opts){
+        if(!this.lut || !this.lut.CLUT){
+            throw 'Transform.toJSON: no LUT to serialise. ' +
+                  'Construct the Transform with `buildLut: true` so a LUT is built during create(), ' +
+                  'or call setLut() to install one. ' +
+                  'Auto-building on demand is intentionally not supported — it would silently swap ' +
+                  'the f64 pipeline (lossless) for a grid-sampled LUT path (~0.06 ΔE76 grid error).';
+        }
+        return _lutToJSONShape(this.lut, opts);
+    }
+
+    /**
+     * Verify that this Transform's LUT data matches its stamped
+     * `originalSignature`. Returns:
+     *   true   — signature matches (LUT unmutated since extraction)
+     *   false  — signature differs (LUT has been edited or corrupted)
+     *   null   — no signature stamped (nothing to verify)
+     *
+     * @returns {boolean|null}
+     */
+    verifyLut(){
+        if(!this.lut) return null;
+        return Transform.verifyLut(this.lut);
+    }
+
+    /**
+     * Compute and return the current LUT signature (`"FNV1A:<hex>"`).
+     * Useful for diagnostics — compare to `lut.originalSignature` to see if
+     * the data has changed since stamping.
+     *
+     * @returns {string|null} signature, or null if no LUT
+     */
+    signLut(){
+        if(!this.lut) return null;
+        return _computeSignature(this.lut);
     }
 
     /**
@@ -1152,6 +1248,11 @@
 
                 // create the prebuilt Lut
                 this.lut = this.createLut();
+                // Signature is NOT stamped here — for speed. The hot path
+                // (create + transformArray) shouldn't pay the hash cost.
+                // toJSON() lazy-computes a signature on demand, and explicit
+                // extraction paths (LutBuilder.fromTransform / createFromLCMS)
+                // stamp at extraction time when audit semantics are wanted.
             }
 
             // rebuild pipeline to use LUT and the LUTinterpolation method, seriously just stay with tetrahedral
@@ -2304,13 +2405,10 @@
 
         var position = 0;
         var step = 1 / (gridPoints - 1);
-        var c,m,y,k,o;
-        var cv,mv,yv
+        var c, m, y, k, o;
+        var cv, mv, yv;
         var count = 0;
-        var i;
-        var pipeline = this.pipeline;
-        var len = pipeline.length;
-        var device = [0,0,0,0];
+        var device;
         var inHooks  = this._lutInputHooks;
         var outHooks = this._lutOutputHooks;
         var hasIn  = inHooks.length  > 0;
@@ -2320,14 +2418,16 @@
             cv = c * step;
             for(m = 0; m < gridPoints; m++){
                 mv = m * step;
-                for( y = 0; y < gridPoints; y++){
+                for(y = 0; y < gridPoints; y++){
                     yv = y * step;
-                    for( k = 0; k < gridPoints; k++){
+                    for(k = 0; k < gridPoints; k++){
                         let src = [cv, mv, yv, k * step];
                         if (hasIn) src = this._applyLutHooks(inHooks, src);
-                        for(i = 0; i < len; i++){
-                            device = pipeline[i].funct.call(this, src, pipeline[i].stageData, pipeline[i]);
-                        }
+                        // Chain stages via this.forward() — matches create3DDeviceLUT.
+                        // Previous inline loop incorrectly passed `src` to every stage
+                        // instead of chaining outputs, producing wrong CLUT data for
+                        // any chain longer than one stage.
+                        device = this.forward(src);
                         if (hasOut) device = this._applyLutHooks(outHooks, device, src);
 
                         if(this.lutGamutMode !== 'none'){
@@ -14754,6 +14854,225 @@ function base64ToUint8Array(base64String) {
 }
 
 
+// ─── JSON LUT format helpers ─────────────────────────────────────────────────
+//
+// The portable JSON shape:
+//   { ..., dataType: 'u16'|'u8', precision: 16|8, encoding: 'base64', CLUT: '<b64>' }
+//
+// _decodeLutCLUT mutates `lut.CLUT` in place: base64 → typed array → f64 [0..1].
+// Both Transform.setLut and Transform.jsonToLut call this. Single source of
+// truth for what "decoded LUT" means.
+
+function _decodeLutCLUT(lut){
+    // Decode base64 if needed
+    if(lut.encoding === 'base64'){
+        if(lut.precision === 16 || lut.dataType === 'u16'){
+            lut.CLUT = base64ToUint16Array(lut.CLUT);
+        } else {
+            lut.CLUT = base64ToUint8Array(lut.CLUT);
+        }
+        lut.encoding = 'number';
+    }
+    // Normalise to Float64Array [0..1]
+    var clut = lut.CLUT;
+    if(clut instanceof Uint16Array){
+        var f64 = new Float64Array(clut.length);
+        for(var i = 0; i < clut.length; i++) f64[i] = clut[i] / 65535;
+        lut.CLUT = f64;
+    } else if(clut instanceof Uint8Array || clut instanceof Uint8ClampedArray){
+        var f64 = new Float64Array(clut.length);
+        for(var i = 0; i < clut.length; i++) f64[i] = clut[i] / 255;
+        lut.CLUT = f64;
+    }
+    lut.dataType = 'f64';
+
+    // Regenerate strides from gridPoints + outputChannels (spec §5.2: strides
+    // are derived, not serialised — recomputing avoids stale strides if the
+    // JSON was hand-edited or produced by an older format version).
+    if(lut.gridPoints && lut.outputChannels !== undefined){
+        var gp = lut.gridPoints;
+        var oc = lut.outputChannels;
+        var g1 = gp[0];
+        var g2 = (gp.length >= 2) ? g1 * gp[1] : 0;
+        var g3 = (gp.length >= 3) ? g2 * gp[2] : 0;
+        lut.g1  = g1;
+        lut.g2  = g2;
+        lut.g3  = g3;
+        lut.go0 = oc;
+        lut.go1 = g1 * oc;
+        lut.go2 = g2 * oc;
+        lut.go3 = g3 * oc;
+    }
+    return lut;
+}
+
+// Encode an f64 LUT object to portable JSON shape with u16 (default) or u8
+// base64 CLUT. `intLut` is stripped (kernel-internal artifact, not portable).
+// Output is a plain object — caller stringifies (or hands to JSON.stringify).
+function _lutToJSONShape(lutObj, opts){
+    if(!lutObj || !lutObj.CLUT) throw 'lutToJSON: input has no CLUT';
+    opts = opts || {};
+    var dataType = opts.dataType || 'u16';
+    if(dataType !== 'u16' && dataType !== 'u8')
+        throw 'lutToJSON: dataType must be "u16" or "u8", got "' + dataType + '"';
+
+    var src = lutObj.CLUT;
+    var n   = src.length;
+    var encoded, precision;
+
+    if(dataType === 'u16'){
+        // Quantise from whatever the source is to u16 [0..65535]
+        var u16 = new Uint16Array(n);
+        if(src instanceof Uint16Array){
+            u16.set(src);
+        } else if(src instanceof Uint8Array || src instanceof Uint8ClampedArray){
+            for(var i = 0; i < n; i++) u16[i] = src[i] * 257; // lossless 0..255 → 0..65535
+        } else {
+            // Float64Array / Float32Array / plain Array — assume [0..1]
+            for(var i = 0; i < n; i++) u16[i] = Math.round(Math.min(1, Math.max(0, src[i])) * 65535);
+        }
+        encoded = uint16ArrayToBase64(u16);
+        precision = 16;
+    } else {
+        // u8 — lossy re-quantisation
+        var u8 = new Uint8Array(n);
+        if(src instanceof Uint8Array || src instanceof Uint8ClampedArray){
+            u8.set(src);
+        } else if(src instanceof Uint16Array){
+            for(var i = 0; i < n; i++) u8[i] = Math.round(src[i] / 65535 * 255);
+        } else {
+            for(var i = 0; i < n; i++) u8[i] = Math.round(Math.min(1, Math.max(0, src[i])) * 255);
+        }
+        encoded = uint8ArrayToBase64(u8);
+        precision = 8;
+    }
+
+    // Output: metadata, then everything from the lut except CLUT/intLut,
+    // strides (g1-3, go0-3, derived), and inputScale/outputScale (kernel
+    // helpers — see below). Strides are regenerated on decode (spec §5.2).
+    //
+    // inputScale/outputScale are stripped from `lutObj` and forced to canonical
+    // 1/1 in the output: the encoded CLUT is canonical u16 full-scale
+    // [0..65535] which represents device [0..1], so the portable format always
+    // says 1/1. The engine may set these to non-1 values internally during u8
+    // dispatch (e.g. outputScale=255 for u8 output, inputScale=1/255 for u8
+    // input), but those are kernel-internal scaling parameters and don't
+    // belong in the wire format.
+    var SKIP_FIELDS = {
+        g1:1, g2:1, g3:1, go0:1, go1:1, go2:1, go3:1,
+        inputScale:1, outputScale:1,
+    };
+    var out = {
+        created:   new Date().toISOString(),
+        generator: opts.generator || 'jsColorEngine',
+    };
+    for(var k in lutObj){
+        if(k !== 'CLUT' && k !== 'intLut' && !SKIP_FIELDS[k]) out[k] = lutObj[k];
+    }
+    out.dataType    = dataType;
+    out.precision   = precision;
+    out.encoding    = 'base64';
+    out.inputScale  = 1;   // canonical — the encoded CLUT is canonical full-scale
+    out.outputScale = 1;
+    out.CLUT        = encoded;
+
+    // Sign on export — lazy. If the lut already has an originalSignature
+    // (LutBuilder.fromTransform / createFromLCMS stamp at extraction), preserve
+    // it. Otherwise compute from current data so the JSON has a valid integrity
+    // marker for transit verification (setLut({ verify: true }) on the consumer).
+    out.originalSignature = lutObj.originalSignature || _computeSignature(lutObj);
+    return out;
+}
+
+
+// ─── LUT signature (FNV-1a 32-bit fingerprint) ────────────────────────────────
+//
+// A lightweight content fingerprint over (inCh, outCh, gridPoints, chain,
+// u16 CLUT bytes). Lets callers detect whether a LUT has been mutated since
+// it was extracted (LutBuilder.fromTransform / createFromLCMS) or in transit
+// from one process to another (toJSON → fromJSON with verify: true).
+//
+// Algorithm-prefixed format ("FNV1A:<8 hex>") so we can swap to a stronger
+// hash later (e.g. "SHA256:...") without breaking the wire format. Not
+// cryptographic — fingerprint only. For adversarial tamper-evidence, sign
+// JSON.stringify(json) externally with crypto.
+//
+// Implementation note: 32-bit Math.imul-based FNV-1a is the fastest pure-JS
+// option (single CPU instruction per byte in V8). 4B collision space is plenty
+// for content hashing — collisions in practice are zero. Avoids BigInt, which
+// is 10×+ slower for byte-stream hashing.
+
+function _fnv1a32(bytes){
+    var h = 0x811c9dc5;          // FNV-1a 32-bit offset basis
+    var prime = 0x01000193;      // FNV-1a 32-bit prime
+    for(var i = 0; i < bytes.length; i++){
+        h = Math.imul(h ^ bytes[i], prime);
+    }
+    return ((h >>> 0).toString(16)).padStart(8, '0');
+}
+
+function _stringToBytes(s){
+    // ASCII-fast path. Chain entries / shape fields are well within ASCII;
+    // any non-ASCII byte gets truncated to the low 8 bits — stable but lossy.
+    var bytes = new Uint8Array(s.length);
+    for(var i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xff;
+    return bytes;
+}
+
+function _signatureBytes(lut){
+    // Canonical chain serialisation — only routing-critical fields (name|type|version)
+    // and intent numbers. Avoids JSON object-key ordering instability.
+    var chainSig = '';
+    if(Array.isArray(lut.chain)){
+        var parts = [];
+        for(var i = 0; i < lut.chain.length; i++){
+            var s = lut.chain[i];
+            if(typeof s === 'number'){
+                parts.push('I' + s);
+            } else if(s && (s.header || s.name)){
+                parts.push((s.name || '') + '|' + (s.type|0) + '|' + (s.version|0));
+            }
+        }
+        chainSig = parts.join('::');
+    }
+
+    var prefix = 'IO:' + (lut.inputChannels|0) + ':' + (lut.outputChannels|0)
+               + ';GP:' + (lut.gridPoints ? lut.gridPoints.join(',') : '')
+               + ';CH:' + chainSig
+               + ';CLUT:';
+    var prefixBytes = _stringToBytes(prefix);
+
+    // CLUT as u16 full-scale bytes — same canonical form regardless of how
+    // the lut was originally stored (f64, u16, u8, base64).
+    var clut = lut.CLUT;
+    var clutBytes;
+    if(clut instanceof Uint16Array){
+        clutBytes = new Uint8Array(clut.buffer, clut.byteOffset, clut.byteLength);
+    } else if(clut instanceof Uint8Array || clut instanceof Uint8ClampedArray){
+        // u8 [0..255] → u16 [0..65535] via lossless bit-stretch
+        var u16a = new Uint16Array(clut.length);
+        for(var i = 0; i < clut.length; i++) u16a[i] = clut[i] * 257;
+        clutBytes = new Uint8Array(u16a.buffer);
+    } else {
+        // Float64Array [0..1] → u16 [0..65535]
+        var u16b = new Uint16Array(clut.length);
+        for(var i = 0; i < clut.length; i++){
+            u16b[i] = Math.round(Math.min(1, Math.max(0, clut[i])) * 65535);
+        }
+        clutBytes = new Uint8Array(u16b.buffer);
+    }
+
+    var combined = new Uint8Array(prefixBytes.length + clutBytes.length);
+    combined.set(prefixBytes, 0);
+    combined.set(clutBytes, prefixBytes.length);
+    return combined;
+}
+
+function _computeSignature(lut){
+    return 'FNV1A:' + _fnv1a32(_signatureBytes(lut));
+}
+
+
 function data2String(color, format, precision){
     if(typeof precision === 'undefined'){
         precision = 6;
@@ -14820,6 +15139,113 @@ function data2String(color, format, precision){
 // escape hatch for pathological test cases that want to force WASM on
 // single-pixel loops.
 Transform.WASM_DISPATCH_MIN_PIXELS = 256;
+
+
+// ---------------------------------------------------------------------------
+// Portable JSON LUT format — static helpers
+// ---------------------------------------------------------------------------
+//
+// `lutToJSON` and `jsonToLut` are the format authority. Both `Transform.toJSON`
+// and `LutBuilder.toJSON` call `Transform.lutToJSON` so the wire format has a
+// single source of truth; `Transform.setLut` calls the same decode helper as
+// `Transform.jsonToLut`. Two APIs, one format.
+
+/**
+ * Encode an f64 LUT object (with CLUT in [0..1]) to portable JSON shape.
+ *
+ * @param {object} lutObj   LUT with CLUT (Float64Array, Uint16Array, or Uint8Array)
+ * @param {object} [opts]   { dataType: 'u16'|'u8', generator?: string }
+ * @returns {object} JSON-compatible plain object (caller may JSON.stringify)
+ */
+Transform.lutToJSON = function(lutObj, opts){
+    return _lutToJSONShape(lutObj, opts);
+};
+
+/**
+ * Decode a portable JSON LUT shape to an f64 LUT object.
+ *
+ * Accepts a JSON string or already-parsed object. Returns a clean LUT object
+ * with `CLUT` as Float64Array in [0..1] — directly consumable by `setLut()` or
+ * by tools that want the decoded numerical data.
+ *
+ * @param {string|object} input  JSON string or parsed object
+ * @returns {object} LUT object with f64 CLUT
+ */
+Transform.jsonToLut = function(input){
+    if(input == null) throw 'Transform.jsonToLut: input is required';
+    var json = (typeof input === 'string') ? JSON.parse(input) : input;
+    if(!json.CLUT) throw 'Transform.jsonToLut: input has no CLUT';
+    var lut = Object.assign({}, json);
+    _decodeLutCLUT(lut);
+    return lut;
+};
+
+/**
+ * Build a ready-to-use Transform from a portable JSON LUT.
+ *
+ * Equivalent to `new Transform(opts).setLut(JSON.parse(json))` but returns the
+ * Transform directly. This is the consumer-side counterpart to `toJSON()`:
+ *
+ *     // Producer (build-time, with ICC profiles):
+ *     const t = new Transform({ dataFormat: 'int8', buildLut: true });
+ *     t.create(srgbProfile, cmykProfile, eIntent.perceptual);
+ *     fs.writeFileSync('lut.json', JSON.stringify(t));
+ *
+ *     // Consumer (runtime, no profiles needed):
+ *     const t = Transform.fromJSON(fs.readFileSync('lut.json'),
+ *                                  { dataFormat: 'int8' });
+ *     const out = t.transformArray(pixels);
+ *
+ * @param {string|object} input  JSON string or parsed object
+ * @param {object} [opts]        Transform constructor options (dataFormat, lutMode, ...)
+ * @returns {Transform} ready-to-use Transform with the LUT loaded
+ */
+Transform.fromJSON = function(input, opts){
+    if(input == null) throw 'Transform.fromJSON: input is required';
+    var json = (typeof input === 'string') ? JSON.parse(input) : input;
+    // setLut mutates lut.CLUT in place (decodes base64) and normalises chain.
+    // Defensive shallow-clone here so the caller's object survives unchanged
+    // and a JSON object can be reused across multiple fromJSON() calls.
+    var lut = Object.assign({}, json);
+    var t = new Transform(opts || {});
+    t.setLut(lut, opts);   // forward verify option if present
+    return t;
+};
+
+/**
+ * Compute the LUT signature ("FNV1A:<hex>") over the canonical content:
+ * input/output channel counts, grid points, chain (name|type|version per
+ * entry), and the u16 full-scale CLUT bytes. Stable across f64/u16/u8 CLUT
+ * forms — the function normalises to u16 internally before hashing.
+ *
+ * Not cryptographic — for mutation detection and provenance only.
+ *
+ * @param {object} lut LUT object (any CLUT type)
+ * @returns {string} signature, e.g. "FNV1A:1f4e8a3c2b9d7e60"
+ */
+Transform.signLut = function(lut){
+    return _computeSignature(lut);
+};
+
+/**
+ * Verify a LUT against its stamped `originalSignature`.
+ *
+ * @param {string|object} lutOrJson  LUT object, JSON object, or JSON string
+ * @returns {boolean|null} true if signature matches data, false if mismatch,
+ *                         null if no `originalSignature` present (nothing to verify)
+ */
+Transform.verifyLut = function(lutOrJson){
+    if(lutOrJson == null) return null;
+    var input = (typeof lutOrJson === 'string') ? JSON.parse(lutOrJson) : lutOrJson;
+    if(!input.originalSignature) return null;
+
+    // If the input is still in JSON form (base64), decode to f64 first.
+    var lut = (input.encoding === 'base64')
+        ? Transform.jsonToLut(Object.assign({}, input))
+        : input;
+
+    return _computeSignature(lut) === input.originalSignature;
+};
 
 
 module.exports = Transform;

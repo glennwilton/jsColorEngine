@@ -32,6 +32,8 @@ profile shipped with the repo works for every CMYK example here.
 - [LUT hook — TAC limiter (output hook)](#lut-hook--tac-limiter-output-hook)
 - [LUT hook — debug logger (output hook with source context)](#lut-hook--debug-logger-output-hook-with-source-context)
 - [LUT hook — chaining multiple hooks](#lut-hook--chaining-multiple-hooks)
+- [ΔE analysis — measuring colour accuracy of a conversion](#δe-analysis--measuring-colour-accuracy-of-a-conversion)
+- [16-bit Lab helpers — decoding int16 Lab output](#16-bit-lab-helpers--decoding-int16-lab-output)
 
 ---
 
@@ -320,6 +322,155 @@ t.create('*srgb', cmykProfile, eIntent.perceptual);
 Hooks must be added **after** `new Transform()` and **before**
 `create()` — `create()` is when the LUT is built and the hooks fire.
 Use `clearLutHooks()` if you need to rebuild with different hooks.
+
+---
+
+## ΔE analysis — measuring colour accuracy of a conversion
+
+This example uses the accuracy path (`transform()` per colour) to
+convert a set of test colours through RGB→CMYK and back to Lab,
+then measures the colour difference (ΔE2000) introduced by the
+round-trip. This is the right tool for colour analysis — single
+colours, full f64 precision, no LUT quantisation.
+
+```js
+const { Profile, Transform, eIntent, convert, color } = require('jscolorengine');
+
+(async () => {
+    const cmykProfile = new Profile();
+    await cmykProfile.loadPromise('./profiles/GRACoL2006_Coated1v2.icc');
+
+    // Three accuracy-path transforms (no buildLut — full f64 pipeline)
+    const rgb2cmyk = new Transform();
+    rgb2cmyk.create('*srgb', cmykProfile, eIntent.relative);
+
+    const rgb2lab = new Transform();
+    rgb2lab.create('*srgb', '*lab', eIntent.relative);
+
+    const cmyk2lab = new Transform();
+    cmyk2lab.create(cmykProfile, '*lab', eIntent.relative);
+
+    // Test colours as RGB byte values
+    const testColours = [
+        { name: 'White',      rgb: color.RGB(255, 255, 255) },
+        { name: 'Mid grey',   rgb: color.RGB(128, 128, 128) },
+        { name: 'Red',        rgb: color.RGB(255, 0, 0) },
+        { name: 'Green',      rgb: color.RGB(0, 255, 0) },
+        { name: 'Blue',       rgb: color.RGB(0, 0, 255) },
+        { name: 'Skin tone',  rgb: color.RGB(230, 180, 153) },
+        { name: 'Deep cyan',  rgb: color.RGB(0, 128, 192) },
+        { name: 'Rich black', rgb: color.RGB(5, 5, 5) },
+    ];
+
+    const pad = (s, n) => (s + ' '.repeat(n)).slice(0, n);
+    const num = (v, w, d) => v.toFixed(d).padStart(w);
+
+    console.log('RGB → CMYK round-trip ΔE2000 analysis\n');
+    console.log(pad('Name', 12) + '  Source Lab                 Round-trip Lab           CMYK                    ΔE2000');
+    console.log('-'.repeat(100));
+
+    for (const { name, rgb } of testColours) {
+        // RGB → Lab (source reference in Lab)
+        const labSrc = rgb2lab.transform(rgb);
+
+        // RGB → CMYK (the conversion under test)
+        const cmyk = rgb2cmyk.transform(rgb);
+
+        // CMYK → Lab (round-trip: how well does the CMYK reproduce the original?)
+        const labDst = cmyk2lab.transform(cmyk);
+
+        // ΔE2000 — perceptual colour difference
+        const dE = convert.deltaE2000(labSrc, labDst);
+
+        const srcStr = `L=${num(labSrc.L,6,2)} a=${num(labSrc.a,7,2)} b=${num(labSrc.b,7,2)}`;
+        const dstStr = `L=${num(labDst.L,6,2)} a=${num(labDst.a,7,2)} b=${num(labDst.b,7,2)}`;
+        const cmykStr = `C=${num(cmyk.C,3,0)} M=${num(cmyk.M,3,0)} Y=${num(cmyk.Y,3,0)} K=${num(cmyk.K,3,0)}`;
+        console.log(`${pad(name,12)}  ${srcStr}  ${dstStr}  ${cmykStr}  ${num(dE,6,2)}`);
+    }
+})();
+```
+
+**What this demonstrates:**
+
+- **`transform()`** is the accuracy path — f64 throughout, no LUT
+  quantisation. Use it for colour analysis, ΔE calculations, and
+  any workflow where you care about the last 0.01 ΔE.
+- **`convert.deltaE2000()`** computes CIEDE2000 — the
+  industry-standard perceptual colour difference metric.
+- In-gamut colours (mid grey, skin tone) should show very low ΔE
+  (< 1.0). Out-of-gamut colours (saturated blue, deep cyan) will
+  show higher ΔE because the CMYK gamut can't reproduce them
+  exactly — that's gamut mapping at work, not an engine error.
+
+---
+
+## 16-bit Lab helpers — decoding int16 Lab output
+
+When you use `dataFormat: 'int16'` with a Lab output profile, the
+`transformArray()` result contains ICC-encoded u16 Lab values — not
+human-readable `L 0–100, a/b -128..+127`. The `outputInt162Lab()`
+helper on the Transform decodes them back to float Lab, respecting
+whichever PCS encoding (v2 or v4) the profile uses.
+
+This example bulk-converts an array of RGB pixels to Lab via the
+int16 fast path, then decodes a few representative values to float
+Lab for inspection.
+
+```js
+const { Profile, Transform, eIntent } = require('jscolorengine');
+
+(async () => {
+    // Build an int16 RGB → Lab transform (image-grade speed)
+    const rgb2lab = new Transform({ dataFormat: 'int16', buildLut: true });
+    rgb2lab.create('*srgb', '*lab', eIntent.relative);
+
+    // Bulk convert — 4 pixels as u16 RGB
+    const input = new Uint16Array([
+        65535, 0, 0,            // red
+        0, 65535, 0,            // green
+        0, 0, 65535,            // blue
+        32768, 32768, 32768,    // mid grey
+    ]);
+    const labU16 = rgb2lab.transformArray(input, false, false);
+
+    // labU16 is a Uint16Array of ICC-encoded Lab values.
+    // Decode each pixel to float Lab for human consumption:
+    for (let i = 0; i < 4; i++) {
+        const off = i * 3;
+        const lab = rgb2lab.outputInt162Lab(labU16[off], labU16[off + 1], labU16[off + 2]);
+        console.log(`Pixel ${i}: L=${lab.L.toFixed(2)}, a=${lab.a.toFixed(2)}, b=${lab.b.toFixed(2)}`);
+    }
+    // Pixel 0: L=53.23, a=80.11, b=67.22   (red)
+    // Pixel 1: L=87.74, a=-86.18, b=83.18  (green)
+    // Pixel 2: L=32.30, a=79.20, b=-107.86 (blue)
+    // Pixel 3: L=53.59, a=0.00, b=-0.01    (grey)
+})();
+```
+
+**The four Lab helpers on Transform:**
+
+These live on the Transform instance because they know which PCS
+encoding (ICC v2 or v4) the profile uses — you don't have to.
+
+- **`inputLab2Int16(L, a, b)`** — encode float Lab → u16 using the
+  *input* profile's PCS. Use when building u16 Lab input values to
+  feed into `transformArray()`.
+- **`outputLab2Int16(L, a, b)`** — encode float Lab → u16 using the
+  *output* profile's PCS. Use when you need to construct expected
+  output values for comparison.
+- **`inputInt162Lab(uL, ua, ub)`** — decode u16 → float Lab using
+  the *input* profile's PCS. Use when inspecting u16 input values.
+- **`outputInt162Lab(uL, ua, ub)`** — decode u16 → float Lab using
+  the *output* profile's PCS. Use when inspecting u16 output from
+  `transformArray()`, as shown above.
+
+All four throw if the relevant profile's PCS is not Lab.
+
+For the general-case encoding helpers (when you're not working
+through a Transform), see `convert.lab2Int16(L, a, b, encoding)`
+and `convert.int162Lab(uL, ua, ub, encoding)` — these take an
+explicit encoding parameter (`'v2'`, `'v4'`, or an encoding
+object from `convert.labEncoding`).
 
 ---
 

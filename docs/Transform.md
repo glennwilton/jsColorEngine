@@ -36,6 +36,7 @@ colours / pixels as you like.
 * [Methods](#methods)
 * [Properties](#properties)
 * [LUT build hooks](#lut-build-hooks)
+* [Portable LUT JSON — `toJSON` / `fromJSON` / signatures](#portable-lut-json--tojson--fromjson--signatures)
 * [Notes about prebuilt LUT size](#notes-about-prebuilt-lut-size)
 * [Misread-prone option names](#misread-prone-option-names)
 
@@ -323,6 +324,17 @@ retain the high-water mark of the largest image unless explicitly
 reclaimed — see [WASM memory management](#wasm-memory-management)
 below.
 
+### LUT access and loading
+
+| Method | Returns | Notes |
+|---|---|---|
+| `transform.getLut()` | LUT object | The pre-built f64 CLUT. Strides, gamut mode, chain, and Lab encoding metadata included. Throws if no LUT. |
+| `transform.getLut16()` | LUT object | Same shape, CLUT as base64 Uint16Array (u16 full-scale `[0..65535]`). `precision: 16`, `outputScale: 1/65535`. |
+| `transform.getLut8()` | LUT object | CLUT as base64 Uint8Array (u8 full-scale `[0..255]`). `precision: 8`, `outputScale: 1/255`. |
+| `transform.setLut(lut, opts?)` | — | Install an externally-built LUT (from `LutBuilder.toLut()`, `Transform.jsonToLut()`, or a previous `getLut()`). LUT is the authority: `setLut()` re-resolves `dataFormat`, `lutMode`, `_expectsU16`, and `buildIntLut` automatically. `opts.verify: true` checks the `originalSignature` and throws on mismatch. |
+
+> **Prefer `transform.toJSON()` / `Transform.fromJSON()` for persistence.** The raw `getLut` / `setLut` primitives are in-memory transfers (typed arrays). For file/wire portability use the [JSON API](#portable-lut-json--tojson--fromjson--signatures) which also handles base64 encoding, stride regeneration, and scale normalisation.
+
 ### WASM memory management
 
 When using WASM `lutMode` variants (`'int-wasm-scalar'`,
@@ -475,6 +487,51 @@ xf.create(sRGB, graCoL, eIntent.relative);
 A 33³ grid calls each hook 35 937 times; a 17⁴ grid 83 521 times.
 Build cost increases by the hook's complexity; transform cost is
 unchanged.
+
+### Portable LUT JSON — `toJSON` / `fromJSON` / signatures
+
+Bake a transform to a self-describing JSON file at deploy time; reconstruct it at runtime with no profiles.
+
+```js
+// Producer (build time)
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+t.create(cmykProfile, '*srgb', eIntent.relative);
+fs.writeFileSync('lut.json', JSON.stringify(t));   // calls t.toJSON() automatically
+
+// Consumer (runtime — no profiles, no lcms)
+const t = Transform.fromJSON(fs.readFileSync('lut.json'), { dataFormat: 'int8' });
+t.transformArray(pixels);
+```
+
+**Instance method**
+
+| Method | Returns | Notes |
+|---|---|---|
+| `transform.toJSON(opts?)` | plain object | Auto-called by `JSON.stringify(transform)` (JS protocol). `opts.dataType: 'u16'` (default, lossless) or `'u8'` (half size, lossy). Throws if no LUT — construct with `buildLut: true`. |
+
+**Static methods**
+
+| Method | Returns | Notes |
+|---|---|---|
+| `Transform.fromJSON(input, opts?)` | Transform | Accepts JSON string or parsed object. `opts` = constructor options (`dataFormat`, `lutMode`); `opts.verify: true` throws on signature mismatch. |
+| `Transform.lutToJSON(lut, opts?)` | plain object | Format authority — encodes any LUT object. Strips strides (regenerated on decode) and forces canonical `inputScale`/`outputScale` to 1. |
+| `Transform.jsonToLut(input)` | LUT object | Decodes JSON → normalised f64 CLUT in `[0..1]`. |
+
+**Signature / verification**
+
+Every LUT produced by `buildLut: true` carries `lut.originalSignature` (`"FNV1A:<8 hex>"`) over chain + grid + u16 pixel data, stamped lazily at `toJSON()` time (the hot transform path pays nothing).
+
+| Method | Returns | Notes |
+|---|---|---|
+| `transform.signLut()` | string \| null | Current data signature. |
+| `transform.verifyLut()` | boolean \| null | `true` = data matches stamped signature; `false` = mutated; `null` = no signature. |
+| `Transform.signLut(lut)` | string | Static — compute signature for any LUT object. |
+| `Transform.verifyLut(input)` | boolean \| null | Static — accepts LUT object, JSON string, or parsed object. |
+| `transform.setLut(lut, opts?)` | — | `opts.verify: true` throws on signature mismatch at load time. |
+
+> **`false` after `editLut()` is expected and correct.** `originalSignature` is a *source-of-trust marker* — it intentionally survives edits so recipients know what produced the original grid. `false` means the grid was modified after stamping, which is the normal outcome of an intentional edit (TAC limit, saturation tweak, etc.). Check `lut.meta.adjustments[]` to see what was applied. Only treat `false` as an error if the LUT is meant to be unmodified — for example, validating a received file against a known-good published signature.
+
+---
 
 ### Diagnostics
 

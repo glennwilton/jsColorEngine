@@ -7,6 +7,301 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.4.4] — 2026-05-02
+
+### Added — TIFF visual editing workflow (`LutBuilder` Stage 3)
+
+Any ICC-aware image editor (Photoshop, Affinity, GIMP, ColorSync) can now act as a LUT authoring tool. Export an identity LUT as a TIFF image, apply any colour conversion or grade in the editor, reimport. The editor's CMS is captured at grid resolution and dispatched at WASM-SIMD speed.
+
+**TIFF export (`builder.exportTIFF(opts)`)** — writes a self-documenting TIFF:
+- LUT grid packed as `scale×scale` solid pixel blocks (default scale=3; scale=2 for 4D)
+- Preview images (optional, drawn right of the LUT region, colour-space-converted when outputProfile is supplied)
+- Per-channel gradient bars (native output-space values — CMYK bars are true single-channel ink ramps)
+- Text strip with creation metadata (human-readable parameter fallback if all tags are stripped)
+- ZIP compression (Node.js via zlib) — 4–9× size reduction vs uncompressed; utif decodes transparently
+- Metadata in three layers: private tag 32768 (direct), XMP `jsce:LutMeta` (survives Photoshop round-trip), text strip (human fallback)
+- Optional ICC profile embedding (tag 34675) via `iccProfileBytes`
+
+**TIFF import (`LutBuilder.fromTIFF(data, opts)`)** — robust parser:
+- Reads XMP `jsce:LutMeta` first (survives Photoshop), tag 32768 as fallback
+- Auto-detects output channel changes from TIFF `SamplesPerPixel` (e.g. RGB→CMYK conversion)
+- Extracts embedded ICC profile and sets it as the LUT chain output descriptor
+- Validates `scale×scale` block spread — rejects JPEG-compressed or painted-over cells
+- Rejects planar TIFFs (PlanarConfiguration=2) with a clear fix message
+- Handles LZW, ZIP, and uncompressed; 8-bit and 16-bit; 1–4 channels
+
+**Supported channel types:** 1D tone curves (Gray, N=255), 3D RGB, 4D CMYK, 2D Duo
+
+**TIFF layout for 1D:** strip width = `N × scale`, height = `max(6×33×scale, N×scale)` — gives room for preview images regardless of N
+
+**`LutBuilder.pixelsToTIFF(pixels, w, h, spp, bps, opts)`** — static helper to write raw pixel data as a TIFF (used by `--apply` and delta output)
+
+### Added — CLI tool (`samples/lut-tiff-cli.js`)
+
+A command-line interface for the full TIFF LUT workflow:
+
+| Mode | Command | Description |
+|---|---|---|
+| `--create` | `--channels 3 --size 33 --out lut.tiff` | Build identity TIFF (alias `--identity`) |
+| `--import` | `--in edited.tiff --out lut.json` | TIFF → LUT JSON; auto-detects all parameters |
+| `--validate` | `--original x.tiff --edited y.tiff --lut z.json` | LUT accuracy vs ground truth |
+| `--compare` | `--base a.tiff --test b.tiff` | Direct pixel diff, no LUT |
+| `--apply` | `--source x.tiff --lut z.json --out out.tiff` | Apply LUT to any image |
+| `--make-samples` | | Generate built-in RGB/CMYK/Gray sample TIFFs |
+
+### Added — Analysis and comparison (`builder.analyze` / `LutBuilder.comparePixels`)
+
+- **`builder.analyze(inputPixels, expectedPixels, opts)`** — applies the LUT to `inputPixels`, diffs against `expectedPixels` (ground truth). Returns ΔP report: mean, max, RMSE, p95, p99, per-channel breakdown, grade (SUB-LSB / EXCELLENT / GOOD / ACCEPTABLE / REVIEW), pass/fail vs threshold. Optional delta pixel arrays (`returnDelta: true`) for writing visualisation TIFFs
+- **`LutBuilder.comparePixels(a, b, channels, opts)`** — pure pixel comparison (no transform). Same report shape. Use to benchmark multiple CMS tools against a baseline
+- Both report `reportText` — a formatted text summary suitable for writing to a `.txt` file alongside delta images
+- `--delta-out` in CLI saves `_magnitude_amp{N}x.tiff` (1ch grayscale hotspot map) + `_channels_amp{N}x.tiff` (per-channel diff) + `_report.txt`
+
+### Added — Sample LUT TIFFs (`npm run tiff-samples`)
+
+Three ready-to-use TIFF identity grids in `samples/tiff_samples/`:
+
+| File | Size | Contents |
+|---|---|---|
+| `rgb_srgb_identity_n33.tiff` | 409 KB | 3D N=33 scale=3 16-bit, sRGB2014 ICC embedded |
+| `cmyk_gracol_identity_n17.tiff` | 1.2 MB | 4D N=17 scale=2 16-bit, CoatedGRACoL ICC embedded |
+| `gray_identity_tonecurve_n255.tiff` | 225 KB | 1D N=255 scale=3 16-bit, 255-step tone curve |
+
+### Added — TIFF test suite (`__tests__/lutbuilder_tiff.tests.js`)
+
+32 tests covering: LZW/ZIP/uncompressed decode, CMYK→RGB and RGB→CMYK output-channel detection, embedded ICC extraction, damaged-cell rejection, planar-format rejection, 1D dot-gain curve import, CLI pipeline tests that generate sample JSONs and delta TIFFs in `cli_output/`
+
+### Changed
+
+- `LutBuilder` internal `_readTiffCell` threshold for 8-bit: raised from 2 to 514 (2 u8 LSB × 257) to accommodate Photoshop-saved 8-bit TIFF quantisation without false-positive corruption errors
+- 1D LUT TIFF layout: height = `max(6×33×scale, N×scale)` — decoupled from N so N=255 at scale=3 gives a 765×765 LUT area instead of 12,240×12,240
+- Generic CMYK export (no `outputProfile`): now warns and silently skips preview images instead of throwing — enables "untagged CMYK" workflow
+- sRGB output detection: skips canvas→sRGB pixel conversion (canvas is already sRGB) when output profile is detected as sRGB by name
+
+---
+
+## [1.4.3] — 2026-05-01
+
+### Added — Portable LUT JSON format (`Transform.toJSON` / `fromJSON`)
+
+A complete handshake format for LUTs that travels between processes,
+machines, and runtimes. The producer builds once with ICC profiles;
+the consumer rebuilds a ready-to-use Transform from a JSON file with
+no profiles loaded.
+
+- **`transform.toJSON(opts)`** — instance method. Auto-called by
+  `JSON.stringify(transform)` (JS protocol). Defaults to u16 base64
+  (lossless for the f64 ↔ u16 boundary); `opts.dataType: 'u8'` halves
+  the size with ~1 LSB of u8 quantisation noise.
+- **`Transform.fromJSON(input, opts)`** — static factory. Accepts a
+  JSON string or already-parsed object; returns a Transform with the
+  LUT loaded and the right kernel resolved for the given `dataFormat`.
+- **`Transform.lutToJSON(lut, opts)`** / **`Transform.jsonToLut(input)`**
+  — static helpers; the format authority. Both `Transform.toJSON` and
+  `LutBuilder.toJSON` delegate here, so the wire format has a single
+  source of truth.
+- **`opts.verify: true`** on `setLut`/`fromJSON` — opt-in signature
+  check; throws on mismatch.
+
+For a 33-pt 3D RGB→CMYK LUT the JSON is ~370 KB (u16 b64) or ~190 KB
+(u8 b64), parses + dispatches in ~5 ms, and ships without ICC profiles
+or the lcms-wasm runtime. See the
+[`samples/lut-cmyk-to-rgb.html`](./samples/lut-cmyk-to-rgb.html) demo.
+
+### Added — `Transform.setLut()` is now LUT-authoritative
+
+Previously, `setLut(lut)` required the constructor to also be called
+with `buildLut: true`, otherwise the `lutMode` resolution stayed at
+`'float'` and the int8/int16 kernels were never selected. Now,
+`setLut(lut)` itself:
+
+- Sets `builtLut = true` (a LUT is present).
+- Re-resolves `lutMode` if the user requested `'auto'` — picks the
+  int8/int16 kernel matching `dataFormat`.
+- Decodes base64 (if present) and **normalises any CLUT type to
+  Float64Array `[0..1]`** — accepts `Uint16Array` (`[0..65535]`),
+  `Uint8Array` (`[0..255]`), or `Float64Array` directly. Previous
+  behaviour decoded base64 but left the CLUT as integer typed arrays,
+  giving wrong runtime output for the float kernel.
+- Regenerates strides (`g1, g2, g3, go0, go1, go2, go3`) from
+  `gridPoints + outputChannels` — strides are no longer serialised.
+
+A new `opts` argument accepts `{ verify: true }` to validate the LUT
+signature (see below) at load time.
+
+### Added — content signatures (`FNV1A:<hex>`)
+
+Lightweight content fingerprints for LUTs — detect mutation, validate
+data integrity over the wire, audit-trail the source of a LUT.
+
+- **`Transform.signLut(lut)`** / **`Transform.verifyLut(lutOrJson)`**
+  — static helpers. FNV-1a 32-bit (`Math.imul`-based, ~1.3 ms for
+  a 33-pt 3D LUT) over (`inCh`, `outCh`, `gridPoints`, chain
+  `name|type|version` per entry, full-scale u16 CLUT bytes).
+- **`transform.signLut()`** / **`transform.verifyLut()`** — instance
+  methods.
+- Algorithm-prefixed format (`"FNV1A:<8 hex>"`) so a stronger hash can
+  be added later (`"SHA256:..."`) without breaking the wire.
+- **Computed lazily** — engine `createLut()` does NOT stamp during
+  pipeline build; the hot path stays clean. `toJSON()` lazy-stamps on
+  export. `LutBuilder.fromTransform/createFromLCMS` stamp at extraction
+  time when source-marker semantics are wanted.
+
+Not cryptographic — for adversarial tamper-evidence, sign the JSON
+externally with crypto + a key.
+
+### Added — `LutBuilder` (samples)
+
+A small MIT-licensed helper at `samples/LutBuilder.js` for creating,
+mutating, and serialising LUTs on top of the engine. Stage 1 ships
+the core API:
+
+- `new LutBuilder()` / `LutBuilder.fromTransform(t)` /
+  `LutBuilder.fromJSON(json)` — builder entry points.
+- `.create(opts, callback)` — synthetic LUT from a colour function.
+- `.createIdentity(channels, size)` — blank canvas.
+- `.createFromLCMS(lcms, xform, opts)` — Tier 3 lcms-wasm bridge.
+  **Auto-detects** Emscripten lcms-wasm (`_malloc`, `_free`,
+  `_cmsDoTransform`, `HEAPU8`) and uses one batched `_cmsDoTransform`
+  call across the whole grid — ~80× faster than per-cell. Falls back
+  to `lcms.doTransformU16(xform, in, out)` for generic JS lcms wrappers.
+- `.editLut(callback)` — per-cell mutation. Auto-appends a
+  timestamped breadcrumb to `meta.adjustments[]`; preserves
+  `originalSignature` (the source-marker).
+- `.clone()` — deep copy.
+- `.addMeta()` / `.addCopyright()` / `.addAdjustment()` /
+  `.setChain()` — metadata.
+- `.toLut()` / `.toTransform(opts)` / `.toJSON(opts)` — output.
+- `virtualProfile()` / `virtualRGB/CMYK/Gray/Lab(name)` — chain
+  descriptor helpers. The `*` prefix (`virtualRGB('*sRGB')`) delegates
+  to the engine's built-in virtual profile builder for full
+  whitepoint/PCS metadata.
+
+LutBuilder.js is dual-mode (CJS for Node tests, browser globals for
+demos via `<script src="LutBuilder.js"></script>`).
+
+Storage is **u16 canonical** (`Uint16Array` in `[0..65535]`) — matches
+the ICC LUT precision ceiling, the 16-bit TIFF workflow, lcms-wasm u16
+output, and the engine's u16 kernel. Conversion to f64 happens at
+`toLut()` time (lossless).
+
+See [`samples/lutbuilder.md`](./samples/lutbuilder.md) for the user
+guide and [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md) for the
+deep dive.
+
+### Fixed — `create4DDeviceLUT` pipeline chaining (engine)
+
+`Transform.create4DDeviceLUT` was passing the original device-space
+input `src` to every pipeline stage instead of chaining each stage's
+output to the next stage's input. Concretely:
+
+```js
+// before
+for(i = 0; i < len; i++){
+    device = pipeline[i].funct.call(this, src, ...);   // ← `src`, never updated
+}
+
+// after — matches create3DDeviceLUT
+device = this.forward(src);   // properly chains stages
+```
+
+Symptom: for any CMYK-input LUT chain longer than one stage (i.e. all
+real ICC CMYK profiles), the LUT contained inverted output. CMYK
+white paper rendered as black RGB; max-ink CMYK rendered as white.
+The bug existed because no test compared live (no LUT) vs LUT-built
+output for 4D — only LUT-vs-LUT bit-exactness across kernels. Both
+LUTs were equally wrong, so the comparison passed.
+
+A new test in `__tests__/lutbuilder.tests.js` regression-checks live
+vs LUT-built CMYK→RGB pixel agreement, with explicit CMYK (0,0,0,0) →
+near-white sRGB sanity assertion.
+
+### Fixed — ICC header `date` parsing (Profile)
+
+`Profile.decodeHeader` previously stored the 12-byte ICC date field as
+a raw byte array (`[7, 217, 0, 6, ...]`), which serialised to JSON as
+unreadable noise. Now parses to a JavaScript `Date` (UTC) — JSON
+becomes `"2009-06-26T00:22:19.000Z"`. Mixed with virtual profiles
+(which already had ISO-string dates) the chain output is now uniform.
+
+### Fixed — ICC header `version` parsing (Profile)
+
+`header.version` previously stored the 4 raw bytes (`[2, 16, 0, 0]`).
+Now parses per ICC v4 §7.2.4: byte 0 = major, byte 1 = minor (high
+nibble) + bug fix (low nibble). Result is a `"M.m.b"` string
+(`"2.1.0"`). The integer major version (used for v2/v4 PCS routing
+throughout `Transform.js`) is preserved as `header.versionMajor` and
+`profile.version`.
+
+### Fixed — JSON wire format cleanup
+
+- **Strides removed** from JSON output (`g1, g2, g3, go0, go1, go2,
+  go3`) — derivable from `gridPoints + outputChannels`, regenerated
+  on decode by `_decodeLutCLUT`.
+- **`inputScale` / `outputScale` forced to canonical 1/1** in JSON
+  output. The engine modifies these to non-1 values internally during
+  u8 dispatch (`outputScale: 255`, `inputScale: 1/255`) — those are
+  kernel-internal scaling parameters and don't belong in the wire
+  format. Encoded CLUT is canonical full-scale u16 [0..65535] = device
+  [0..1], so portable scales are always 1.
+
+### Added — demo `samples/lut-cmyk-to-rgb.html`
+
+End-to-end CMYK → RGB workflow demo:
+
+- Builds two LUTs at page load: jsCE engine pipeline and lcms-wasm
+  (via `LutBuilder.createFromLCMS`).
+- Serialises both to JSON, rebuilds Transforms via `Transform.fromJSON`.
+- Three-up canvas: live (no LUT) vs jsCE LUT vs lcms LUT, plus ΔP
+  comparison table and JSON inspector (CLUT bytes elided).
+- Warmup pass before the timed comparisons primes V8 JIT, the WASM
+  module's icache, and the `intLut` data — the inline timings reflect
+  steady-state kernel speed.
+
+Representative numbers (Chrome on x86_64, 17⁴ 4D LUT, GRACoL2006 →
+sRGB relative+BPC):
+
+- Build: jsCE ~28 ms, lcms ~80 ms (one-time, page load).
+- JSON: ~654 KB each (u16 base64 over 250K values).
+- `Transform.fromJSON` cold start: ~6 ms.
+- Per-frame transform on 240K pixels: live ~41 ms, LUT ~5 ms (~6×).
+- jsCE LUT vs lcms LUT raw u16 grid agreement: **0.10 ΔP per channel**
+  — the engines produce essentially the same colour math.
+- Mean ΔP between live (f64 pipeline) and either LUT: < 1 — sub-LSB
+  at 8-bit, indistinguishable on screen.
+
+### Tests
+
+- New **`__tests__/lutbuilder.tests.js`** — 98 tests covering
+  `LutBuilder` API, `virtualProfile()` helpers (incl. `*` prefix to
+  engine built-ins), `create()` / `createIdentity()` / `createFromLCMS`,
+  `editLut()` audit trail, `clone()`, metadata, `toLut()` / `toJSON()`,
+  `fromJSON()`, the W1–W5 workflow tests (live vs LUT, edit + restore,
+  clone-and-diverge, custom callback, JSON portability), 4D
+  CMYK→RGB live-vs-LUT regression, and signature audit-trail (sign
+  on extract / preserve through edit / verify after restore).
+
+### Docs
+
+- New [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md) (renamed
+  from `LUTBuilder.md`) — deep-dive: design rationale, format spec,
+  lcms architecture, signature design, demo numbers.
+- New [`samples/lutbuilder.md`](./samples/lutbuilder.md) — practical
+  user guide with code examples for every API, common workflows
+  (TAC limit, pre-baked library, hybrid lcms fallback, JSON
+  portability), and the audit-trail story.
+- Updated `docs/deepdive/README.md` index entry.
+
+### Changed
+
+- `transform.lut.originalSignature` no longer eagerly stamped during
+  `createLut()`. The hot path (build + transformArray) pays nothing
+  for signatures; `toJSON()` lazy-stamps on export.
+- `LutBuilder.editLut()` auto-appends `"editLut() at <ISO timestamp>"`
+  to `meta.adjustments[]` — gives an audit breadcrumb without the
+  caller having to remember to call `addAdjustment()`.
+
+---
+
 ## [1.4.2] — 2026-04-28
 
 ### Added — WASM memory management

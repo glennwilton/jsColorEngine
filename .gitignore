@@ -38,3 +38,4 @@ speed_tests/
 # in v1.5 (deferred from v1.3 to keep the release scoped), at which
 # point this whole folder goes away.
 /bench/lcms_exposed/
+.claude/
