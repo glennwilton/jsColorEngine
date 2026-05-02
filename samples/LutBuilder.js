@@ -1212,6 +1212,8 @@ class LutBuilder {
     //   description   {string}   optional first line of text strip
     //
     // Returns Promise<Uint8Array> — raw TIFF bytes ready to write to disk or download.
+    // Async because export loads preview images and drives a Canvas context (both async APIs).
+    // Import (fromTIFF) is synchronous because it is pure byte parsing with no I/O.
 
     exportTIFF(options) {
         if (!this._u16) throw 'LutBuilder.exportTIFF: no LUT loaded';
@@ -1493,7 +1495,8 @@ class LutBuilder {
     // (threshold: 2 for 8-bit, 512 for 16-bit). High spread → throws, indicating
     // JPEG artefacts, wrong scale, or grid misalignment.
     //
-    // Returns a LutBuilder (synchronous).
+    // Returns a LutBuilder (synchronous — pure byte parsing, no I/O or async ops).
+    // Export (exportTIFF) is async because it drives a Canvas context and loads images.
     // Requires utif: npm install utif  |  <script src="utif.js"></script>
 
     static fromTIFF(data, options) {
