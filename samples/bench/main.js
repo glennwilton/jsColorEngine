@@ -1781,6 +1781,34 @@ function activateTab(testId) {
 
 // ============================================================ BOOT
 
+// ─── DevTools detection ──────────────────────────────────────────────────────
+// Chrome DevTools overrides timers, intercepts console, and slows JIT by 2-3×.
+// We detect it via the console object toString trick and warn loudly.
+(function detectDevtools() {
+    let open = false;
+    const el = new Image();
+    Object.defineProperty(el, 'id', { get: function() { open = true; } });
+    // This triggers the getter when DevTools formats the object in the console
+    /* eslint-disable no-console */
+    console.log('%c', el);
+    /* eslint-enable no-console */
+
+    if (open) {
+        const w = document.getElementById('devtools-warning');
+        if (w) w.style.display = '';
+    }
+
+    // Always blast warnings to the console so they appear prominently
+    /* eslint-disable no-console */
+    console.warn('╔════════════════════════════════════════════════════════════╗');
+    console.warn('║  jsColorEngine bench — for accurate results:               ║');
+    console.warn('║  CLOSE DEVTOOLS before running.                            ║');
+    console.warn('║  DevTools intercepts timers + slows JIT by 2–3×.           ║');
+    console.warn('║  Reload after closing DevTools, then run the bench.        ║');
+    console.warn('╚════════════════════════════════════════════════════════════╝');
+    /* eslint-enable no-console */
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
     // Tab handlers
     $$('.tab').forEach((btn) => {
