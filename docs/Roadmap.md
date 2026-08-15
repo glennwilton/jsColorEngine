@@ -49,10 +49,10 @@ future-facing only.
     - [Dependency hygiene — Dependabot triage + devDependency bumps (shipped)](#dependency-hygiene--dependabot-triage--devdependency-bumps-shipped)
     - [Pipeline validation — `validateOnCreate` option (shipped)](#pipeline-validation--validateoncreate-option-shipped)
     - [Transform identity / NOP detection (shipped)](#transform-identity--nop-detection-shipped)
-    - [Fully-bound `transformArrayFn` (dispatch optimisation) — shipped](#fully-bound-transformarrayfn-dispatch-optimisation--shipped)
-    - [Kernel modules by dimension — ✅ shipped](#kernel-modules-by-dimension---shipped-in-v150-2026-08-15)
-    - [DeviceLink profile support — ✅ shipped](#devicelink-profile-support---shipped-in-v150-2026-08-15)
-    - [N-channel LUT support (5CLR–15CLR) — ✅ shipped](#n-channel-lut-support-5clr15clr---shipped-in-v150-2026-08-15)
+    - [Fully-bound `transformArrayFn` dispatch optimisation — (shipped)](#fully-bound-transformarrayfn-dispatch-optimisation--shipped)
+    - [Kernel modules by dimension — (shipped)](#kernel-modules-by-dimension---shipped-in-v150-2026-08-15)
+    - [DeviceLink profile support — (shipped)](#devicelink-profile-support---shipped-in-v150-2026-08-15)
+    - [N-channel LUT support (5CLR–15CLR) — (shipped)](#n-channel-lut-support-5clr15clr---shipped-in-v150-2026-08-15)
 - [v1.5.5 — RGB matrix-shaper fast path + one-pixel cache](#v155--rgb-matrix-shaper-fast-path--one-pixel-cache)
     - [RGB matrix-shaper fast path — fused gamma + matrix + curves](#rgb-matrix-shaper-fast-path--fused-gamma--matrix--curves)
     - [One-pixel memo cache — performance experiment](#one-pixel-memo-cache-for-the-lut-kernels--performance-experiment)
@@ -1330,6 +1330,17 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 > descriptor and wiring matrix-shaper detection into `create()`.
 > **One-pixel cache**: an lcms-style memo cache to bench on real
 > images — experiment below.
+>
+> ✅ **Groundwork shipped (2026-08-16): Transform.js file split.** The
+> ~100 `stage_*` functions (+ their compile emitters and colour/matrix
+> helpers) moved verbatim to `src/stages.js`, and the single-colour
+> ACCURACY PATH interpolators to `src/interp.js` — both re-attached to
+> `Transform.prototype` exactly like the kernel loops, so no call site,
+> binding or behaviour changed (488 tests green, `mpx_summary` and
+> bake-time parity confirmed). Transform.js drops 12,690 → ~8,000 lines
+> and is now the pipeline builder + public API, which is the shape the
+> matrix-shaper kernel work (below) and the future v1.7 `stage2code`
+> emitter module plug into.
 
 ### RGB matrix-shaper fast path — fused gamma + matrix + curves
 

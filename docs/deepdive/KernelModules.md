@@ -244,7 +244,9 @@ gamma/matrix/gamma stub) is the other intended `provideLut` user — see
 - **Single-pixel stage interpolators** (`tetrahedralInterp3D_3Ch`,
   `tetrahedralInterp4D_NCh`, `tetrahedralInterpND_NCh`, `linearInterp1D_NCh`,
   …) — these are ICC pipeline stage functions called by the pipeline
-  walker, not by kernels.
+  walker, not by kernels. (Since the v1.5.5 file split their source lives
+  in `src/interp.js`, but they remain `Transform.prototype` methods —
+  attached at the bottom of Transform.js — so behaviourally nothing moved.)
 - **The no-LUT array loop** — dimension-generic pipeline walk.
 - **`transformArrayViaLUT()`** — kept as the public choke point (52 test
   call sites plus user code); it is preamble + `kernel.array(...)` and

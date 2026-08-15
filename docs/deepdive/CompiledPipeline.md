@@ -781,7 +781,7 @@ flag for full bit-exact `Math.pow`.
 ### Cons (the honest cost)
 
 1. **Stage emitter coverage is the real bill.** Quick inventory of
-   stages in `src/Transform.js`:
+   stages in `src/stages.js` (split out of Transform.js in v1.5.5):
    - **Input adapters** (~5): `stage_cmsLab_to_LabD50`,
      `stage_Int_to_Device`, `stage_RGB_to_Device`,
      `stage_Lab_to_PCS_v2/v4`, the encoding decoders

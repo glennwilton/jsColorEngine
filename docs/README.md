@@ -25,9 +25,12 @@ reasoning, and wrong turns — not just the API.
 **Current state (2026-08-16):** v1.5.0 committed but not yet released
 (kernel modules, DeviceLink, N-channel, v1.5 polish arc; 488 tests,
 audit clean). Native-lcms throughput tables are historical pending a
-re-run with upstream-corrected calls (issue #6, Marti Maria). In
-flight: v1.5.5 (matrix-shaper kernel, one-pixel-cache experiment) and
-the browser benchmark framework rewrite (uncommitted).
+re-run with upstream-corrected calls (issue #6, Marti Maria). v1.5.5
+groundwork landed: Transform.js split — `stage_*` functions now in
+`src/stages.js`, single-colour interpolators in `src/interp.js`, both
+still `Transform.prototype` methods (verbatim move, parity-benched).
+In flight: v1.5.5 (matrix-shaper kernel, one-pixel-cache experiment)
+and the browser benchmark framework rewrite (uncommitted).
 
 ## Documentation index — `docs/`
 
