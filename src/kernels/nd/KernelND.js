@@ -1,0 +1,74 @@
+// src/kernels/nd/KernelND.js
+//
+// N-channel catch-all kernel (5CLR-15CLR). Registered under the special 'ND'
+// key — Transform.setKernel() routes any inputChannels > 4 here.
+// Float-only: N-channel press profiles are a proof/measurement use case, not
+// a throughput path, so correctness over speed is the right trade-off.
+'use strict';
+
+var kernelUtils = require('../kernelUtils.js');
+var wasmLifecycle = require('../wasmLifecycle.js');
+
+module.exports = {
+    dimensions: 'ND',   // special key — setKernel maps inputChannels > 4 here
+
+    supports: {
+        float: true,
+        // No int8/int16 or WASM variants — proof/measurement path only
+    },
+
+    create: function(lutMode) {
+        // No ND WASM kernels exist, but the WASM settle still runs so a
+        // 'int-wasm-*' lutMode demotes exactly as it did in v1.5 (the init
+        // block ran for every input dimension). The design-doc "always
+        // return 'float'" demotion lands with the NChannel LUT work.
+        this._variant = 'float';
+        return wasmLifecycle.settleWasmStates(this.transform);
+    },
+
+    // ND never uses the lutKernelTable — the shared resolver no-ops for
+    // non-3/4-channel LUTs, leaving the run slots null by design.
+    resolveRuns: function(){
+        kernelUtils.resolveTableRuns(this);
+    },
+
+    array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve) {
+        const transform = this.transform;
+        const inCh  = transform.inputChannels;
+        const outCh = transform.outputChannels;
+        const outBPP = outCh + (outAlpha ? 1 : 0);
+        if (!outputArray) outputArray = new Uint8ClampedArray(pixelCount * outBPP);
+
+        var inputPos = 0, outputPos = 0;
+        for (var i = 0; i < pixelCount; i++) {
+            var pixel = new Array(inCh);
+            for (var c = 0; c < inCh; c++) pixel[c] = inputArray[inputPos++] / 255;
+            var result = transform.tetrahedralInterpND_NCh(pixel, lut);
+            for (var o = 0; o < outCh; o++) outputArray[outputPos++] = (result[o] * 255) | 0;
+            if (preserve)     { outputArray[outputPos++] = inputArray[inputPos++]; }
+            else { if (inAlpha) inputPos++; if (outAlpha) outputArray[outputPos++] = 255; }
+        }
+        return outputArray;
+    },
+
+    release: function() {
+        wasmLifecycle.releaseWasmStates(this.transform);
+    },
+
+    // N-channel INPUT LUT building is not implemented yet — a 5D+ CLUT bake
+    // needs the kernel-owned u16 N-D grid walk specified in
+    // docs/deepdive/KernelModules.md (memory grows as gridPoints^N, so u16 +
+    // reduced grid density is mandatory). Until that lands, decline the LUT:
+    // Transform.create() clears buildLut and uses the per-pixel pipeline —
+    // correct, just not image-rate. (N-channel OUTPUT profiles don't come
+    // through here — a Lab→7CLR transform has a 3-channel input and uses
+    // Kernel3D with the generic 3D→NCh loops.)
+    provideLut: function(lutMode) {
+        // Not silent — the caller asked for buildLut:true and is getting the
+        // (correct, slower) per-pixel pipeline instead.
+        console.warn('jsColorEngine: buildLut ignored for ' + this.transform.inputChannels
+            + '-channel input — an N-D CLUT bake is impractical (grid^N cells) and the '
+            + 'profile\'s own A2B grid is authoritative. Using the per-pixel pipeline.');
+        return false;
+    },
+};

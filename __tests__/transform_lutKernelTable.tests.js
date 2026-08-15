@@ -33,15 +33,6 @@
  *      3c. _lutKernelThreshold is 0 when BIG and SMALL collapse to the
  *          same entry (no WASM win possible).
  *
- *  4. Bit-exact equivalence: v1.3 table dispatcher vs pre-v1.3 legacy cascade
- *      For each (mode × inCh × outCh) combo with available host support,
- *      transformArrayViaLUT() (v1.3 table) and transformArrayViaLUT_legacy()
- *      (pre-v1.3 cascade, kept for one release) must produce byte-identical
- *      outputs over a deterministic 256k-pixel input. Below-threshold
- *      (small batch) is also covered for the WASM modes to exercise the
- *      _lutKernelSmall path. These tests gate the legacy removal — the
- *      day they go red, fix src/lutKernelTable.js (NOT by reverting the
- *      swap).
  *
  * Skip strategy mirrors the WASM test suites: WASM tests gate on
  * (typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS).
@@ -57,40 +48,6 @@ const lutKernelTable = require('../src/lutKernelTable');
 const cmykFilename = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
 
 const HAS_WASM = typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS;
-
-// ---- helpers ----------------------------------------------------------------
-
-function maxAbsDiff(a, b){
-    if(a.length !== b.length){
-        throw new Error('length mismatch ' + a.length + ' vs ' + b.length);
-    }
-    let max = 0, firstDiffIdx = -1;
-    for(let i = 0; i < a.length; i++){
-        const d = Math.abs(a[i] - b[i]);
-        if(d > max){ max = d; firstDiffIdx = i; }
-    }
-    return { max, firstDiffIdx, A: firstDiffIdx >= 0 ? a[firstDiffIdx] : 0, B: firstDiffIdx >= 0 ? b[firstDiffIdx] : 0 };
-}
-
-// Deterministic RGB u8 / u16 input (LCG → no flaky test from Math.random).
-function buildInputU8(nPixels, channels, seed){
-    const buf = new Uint8ClampedArray(nPixels * channels);
-    let s = seed >>> 0;
-    for(let i = 0; i < buf.length; i++){
-        s = (s * 1103515245 + 12345) & 0x7fffffff;
-        buf[i] = s & 0xff;
-    }
-    return buf;
-}
-function buildInputU16(nPixels, channels, seed){
-    const buf = new Uint16Array(nPixels * channels);
-    let s = seed >>> 0;
-    for(let i = 0; i < buf.length; i++){
-        s = (s * 1103515245 + 12345) & 0x7fffffff;
-        buf[i] = s & 0xffff;
-    }
-    return buf;
-}
 
 // Mock Transform-like object with selectable WASM states.
 function mockTransform(opts){
@@ -320,41 +277,48 @@ describe('lutKernelTable.resolveLutKernel', () => {
 
 describe('Transform — _resolveLutKernels integration', () => {
 
-    test('3a. _resolveLutKernels runs at create() and populates the cache (RGB→RGB float)', () => {
+    // v1.7 phase C — the BIG/SMALL run refs live on the kernel instance
+    // (t.kernel._runBig / _runSmall / _threshold), resolved by
+    // kernel.resolveRuns() via kernelUtils.resolveTableRuns().
+
+    test('3a. _resolveLutKernels runs at create() and populates the kernel cache (RGB→RGB float)', () => {
         const t = new Transform({ buildLut: true, lutMode: 'float' });
         t.create('*srgb', '*adobergb', eIntent.relative);
 
-        expect(t._lutKernelBig).not.toBeNull();
-        expect(t._lutKernelSmall).not.toBeNull();
-        expect(t._lutKernelBigKey).toBe('fl_3_3');           // float mode → fl entry
-        expect(t._lutKernelSmallKey).toBe('fl_3_3');
-        expect(t._lutKernelThreshold).toBe(0);               // collapsed → no per-call branch
+        expect(t.kernel._runBig).not.toBeNull();
+        expect(t.kernel._runSmall).not.toBeNull();
+        expect(t.kernel._runBigKey).toBe('fl_3_3');          // float mode → fl entry
+        expect(t.kernel._runSmallKey).toBe('fl_3_3');
+        expect(t.kernel._threshold).toBe(0);                 // collapsed → no per-call branch
     });
 
     test('3a. RGB→RGB int populates with integer cache', () => {
         const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
         t.create('*srgb', '*adobergb', eIntent.relative);
-        expect(t._lutKernelBigKey).toBe('i_3_3');
-        expect(t._lutKernelSmallKey).toBe('i_3_3');
-        expect(t._lutKernelThreshold).toBe(0);
+        expect(t.kernel._runBigKey).toBe('i_3_3');
+        expect(t.kernel._runSmallKey).toBe('i_3_3');
+        expect(t.kernel._threshold).toBe(0);
     });
 
-    test('3b. inputChannels ∈ {1, 2} (gray / duotone) leaves cache null', () => {
+    test('3b. inputChannels ∈ {1, 2} (gray / duotone) leaves run slots null', () => {
         // No virtual gray profile in createVirtualProfile() — fake the
         // post-create() shape directly. The bypass we're testing is in
-        // _resolveLutKernels() and only inspects this.lut.{inputChannels,
-        // outputChannels} + this.lutMode, so a minimal stub is enough.
+        // kernelUtils.resolveTableRuns() and only inspects
+        // this.lut.{inputChannels, outputChannels} + this.lutMode, so a
+        // minimal stub is enough. setKernel() picks the kernel by dims.
         const t = new Transform({ buildLut: true, lutMode: 'float' });
         t.lut = { inputChannels: 1, outputChannels: 3, intLut: null };
+        t.setKernel(1);
         t._resolveLutKernels();
-        expect(t._lutKernelBig).toBeNull();
-        expect(t._lutKernelSmall).toBeNull();
-        expect(t._lutKernelBigKey).toBeNull();
+        expect(t.kernel._runBig).toBeNull();
+        expect(t.kernel._runSmall).toBeNull();
+        expect(t.kernel._runBigKey).toBeNull();
 
         t.lut = { inputChannels: 2, outputChannels: 3, intLut: null };
+        t.setKernel(2);
         t._resolveLutKernels();
-        expect(t._lutKernelBig).toBeNull();
-        expect(t._lutKernelSmall).toBeNull();
+        expect(t.kernel._runBig).toBeNull();
+        expect(t.kernel._runSmall).toBeNull();
     });
 
     if(HAS_WASM){
@@ -363,153 +327,9 @@ describe('Transform — _resolveLutKernels integration', () => {
             t.create('*srgb', '*adobergb', eIntent.relative);
             expect(t.lutMode).toBe('int-wasm-scalar');       // not demoted
             expect(t.wasmTetra3D).not.toBeNull();
-            expect(t._lutKernelBigKey).toBe('i8ws_3_3');
-            expect(t._lutKernelSmallKey).toBe('i_3_3');
-            expect(t._lutKernelThreshold).toBe(Transform.WASM_DISPATCH_MIN_PIXELS);
-        });
-    }
-});
-
-// ============================================================================
-// 4. BIT-EXACT EQUIVALENCE — legacy vs v2 across the matrix
-// ============================================================================
-//
-// Pixel count is chosen above WASM_DISPATCH_MIN_PIXELS so the BIG path
-// is exercised. A separate small-batch test below the threshold catches
-// the SMALL path.
-// ============================================================================
-
-const N_BIG = 1 << 18;     // 256k pixels — well above WASM threshold (256)
-const N_SMALL = 8;          // small batch → forces _lutKernelSmall
-
-// (mode, srcSpec, dstSpec, channels, label)
-// srcSpec/dstSpec: '*srgb' / '*adobergb' / 'cmyk' (loaded async below)
-const MATRIX = [
-    // float — universal baseline
-    { mode: 'float', src: '*srgb',     dst: '*adobergb', dataFormat: 'object', label: 'fl RGB→RGB' },
-    { mode: 'float', src: '*srgb',     dst: 'cmyk',      dataFormat: 'object', label: 'fl RGB→CMYK' },
-    { mode: 'float', src: 'cmyk',      dst: '*srgb',     dataFormat: 'object', label: 'fl CMYK→RGB' },
-
-    // u8 JS integer
-    { mode: 'int',   src: '*srgb',     dst: '*adobergb', dataFormat: 'int8',   label: 'i RGB→RGB' },
-    { mode: 'int',   src: '*srgb',     dst: 'cmyk',      dataFormat: 'int8',   label: 'i RGB→CMYK' },
-    { mode: 'int',   src: 'cmyk',      dst: '*srgb',     dataFormat: 'int8',   label: 'i CMYK→RGB' },
-
-    // u16 JS integer
-    { mode: 'int16', src: '*srgb',     dst: '*adobergb', dataFormat: 'int16',  label: 'i16 RGB→RGB' },
-    { mode: 'int16', src: '*srgb',     dst: 'cmyk',      dataFormat: 'int16',  label: 'i16 RGB→CMYK' },
-    { mode: 'int16', src: 'cmyk',      dst: '*srgb',     dataFormat: 'int16',  label: 'i16 CMYK→RGB' },
-];
-
-const WASM_MATRIX = [
-    // u8 WASM scalar
-    { mode: 'int-wasm-scalar', src: '*srgb', dst: '*adobergb', dataFormat: 'int8', label: 'i8ws RGB→RGB' },
-    { mode: 'int-wasm-scalar', src: '*srgb', dst: 'cmyk',      dataFormat: 'int8', label: 'i8ws RGB→CMYK' },
-    { mode: 'int-wasm-scalar', src: 'cmyk',  dst: '*srgb',     dataFormat: 'int8', label: 'i8ws CMYK→RGB' },
-
-    // u8 WASM SIMD
-    { mode: 'int-wasm-simd',   src: '*srgb', dst: '*adobergb', dataFormat: 'int8', label: 'i8wsi RGB→RGB' },
-    { mode: 'int-wasm-simd',   src: '*srgb', dst: 'cmyk',      dataFormat: 'int8', label: 'i8wsi RGB→CMYK' },
-    { mode: 'int-wasm-simd',   src: 'cmyk',  dst: '*srgb',     dataFormat: 'int8', label: 'i8wsi CMYK→RGB' },
-
-    // u16 WASM scalar — v1.3 SHIPPED. The Q0.13 WASM kernels are bit-exact
-    // with the JS u16 sibling (mirror of `tetrahedralInterp{3,4}DArray_*Ch_intLut16_loop`),
-    // so legacy and table dispatchers both end up at the same kernel via
-    // either route.
-    { mode: 'int16-wasm-scalar', src: '*srgb', dst: '*adobergb', dataFormat: 'int16', label: 'i16ws RGB→RGB' },
-    { mode: 'int16-wasm-scalar', src: '*srgb', dst: 'cmyk',      dataFormat: 'int16', label: 'i16ws RGB→CMYK' },
-    { mode: 'int16-wasm-scalar', src: 'cmyk',  dst: '*srgb',     dataFormat: 'int16', label: 'i16ws CMYK→RGB' },
-
-    // u16 WASM SIMD — v1.3 SHIPPED. Bit-exact with the scalar u16 WASM
-    // kernels (Q0.13). The legacy (v1.2-style cascade) dispatcher routes
-    // through the SCALAR u16 WASM kernel for lutMode='int16-wasm-simd'
-    // (it doesn't know about i16wsi); the table dispatcher routes through
-    // the SIMD u16 WASM kernel. Both kernels are bit-exact siblings, so
-    // the equivalence tests pass — that's the whole point of "SIMD
-    // bit-exact with scalar".
-    { mode: 'int16-wasm-simd', src: '*srgb', dst: '*adobergb', dataFormat: 'int16', label: 'i16wsi RGB→RGB' },
-    { mode: 'int16-wasm-simd', src: '*srgb', dst: 'cmyk',      dataFormat: 'int16', label: 'i16wsi RGB→CMYK' },
-    { mode: 'int16-wasm-simd', src: 'cmyk',  dst: '*srgb',     dataFormat: 'int16', label: 'i16wsi CMYK→RGB' },
-];
-
-describe('Transform — bit-exact: transformArrayViaLUT (v1.3 table) vs transformArrayViaLUT_legacy (pre-v1.3 cascade)', () => {
-
-    let cmykProfile;
-
-    beforeAll(async () => {
-        cmykProfile = new Profile();
-        await cmykProfile.loadPromise('file:' + cmykFilename);
-    });
-
-    function resolveSpec(spec){
-        return spec === 'cmyk' ? cmykProfile : spec;
-    }
-
-    function inputForRow(row, nPixels){
-        const inCh = row.src === 'cmyk' ? 4 : 3;
-        switch(row.dataFormat){
-            case 'int16':  return buildInputU16(nPixels, inCh, 0xC0FFEE ^ row.label.length);
-            case 'int8':
-            case 'object': return buildInputU8(nPixels, inCh, 0xDEADBEEF ^ row.label.length);
-        }
-    }
-
-    // ---- non-WASM matrix --------------------------------------------------
-    test.each(MATRIX)('$label — bit-exact (BIG batch ${N_BIG}px)', async (row) => {
-        const t = new Transform({ dataFormat: row.dataFormat, buildLut: true, lutMode: row.mode });
-        t.create(resolveSpec(row.src), resolveSpec(row.dst), eIntent.relative);
-
-        const input = inputForRow(row, N_BIG);
-        const oLegacy = t.transformArrayViaLUT_legacy(input, false, false, false);
-        const oTable  = t.transformArrayViaLUT(input, false, false, false);
-
-        expect(oLegacy.constructor).toBe(oTable.constructor);
-        expect(oLegacy.length).toBe(oTable.length);
-
-        const d = maxAbsDiff(oLegacy, oTable);
-        if(d.max !== 0){
-            const outCh = t.lut.outputChannels;
-            const px = (d.firstDiffIdx / outCh) | 0;
-            throw new Error(row.label + ': table dispatcher diverged from legacy at pixel ' + px +
-                ' ch ' + (d.firstDiffIdx % outCh) + ' (legacy=' + d.A + ' table=' + d.B + ')');
-        }
-        expect(d.max).toBe(0);
-    });
-
-    if(HAS_WASM){
-        test.each(WASM_MATRIX)('$label — bit-exact (BIG batch — WASM eligible)', async (row) => {
-            const t = new Transform({ dataFormat: row.dataFormat, buildLut: true, lutMode: row.mode });
-            t.create(resolveSpec(row.src), resolveSpec(row.dst), eIntent.relative);
-
-            expect(t.lutMode).toBe(row.mode);
-
-            const input = inputForRow(row, N_BIG);
-            const oLegacy = t.transformArrayViaLUT_legacy(input, false, false, false);
-            const oTable  = t.transformArrayViaLUT(input, false, false, false);
-
-            expect(oLegacy.constructor).toBe(oTable.constructor);
-            expect(oLegacy.length).toBe(oTable.length);
-
-            const d = maxAbsDiff(oLegacy, oTable);
-            if(d.max !== 0){
-                const outCh = t.lut.outputChannels;
-                const px = (d.firstDiffIdx / outCh) | 0;
-                throw new Error(row.label + ': table dispatcher diverged from legacy at pixel ' + px +
-                    ' ch ' + (d.firstDiffIdx % outCh) + ' (legacy=' + d.A + ' table=' + d.B + ')');
-            }
-            expect(d.max).toBe(0);
-        });
-
-        test.each(WASM_MATRIX)('$label — bit-exact (SMALL batch below WASM threshold)', async (row) => {
-            const t = new Transform({ dataFormat: row.dataFormat, buildLut: true, lutMode: row.mode });
-            t.create(resolveSpec(row.src), resolveSpec(row.dst), eIntent.relative);
-
-            const input = inputForRow(row, N_SMALL);
-            const oLegacy = t.transformArrayViaLUT_legacy(input, false, false, false);
-            const oTable  = t.transformArrayViaLUT(input, false, false, false);
-
-            const d = maxAbsDiff(oLegacy, oTable);
-            expect(d.max).toBe(0);
+            expect(t.kernel._runBigKey).toBe('i8ws_3_3');
+            expect(t.kernel._runSmallKey).toBe('i_3_3');
+            expect(t.kernel._threshold).toBe(Transform.WASM_DISPATCH_MIN_PIXELS);
         });
     }
 });

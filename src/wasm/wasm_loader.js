@@ -109,14 +109,18 @@
 
 'use strict';
 
-var tetra3dNchBytes         = require('./tetra3d_nch.wasm.js');
-var tetra3dNchInt16Bytes    = require('./tetra3d_nch_int16.wasm.js');
-var tetra3dSimdBytes        = require('./tetra3d_simd.wasm.js');
-var tetra3dSimdInt16Bytes   = require('./tetra3d_simd_int16.wasm.js');
-var tetra4dNchBytes         = require('./tetra4d_nch.wasm.js');
-var tetra4dNchInt16Bytes    = require('./tetra4d_nch_int16.wasm.js');
-var tetra4dSimdBytes        = require('./tetra4d_simd.wasm.js');
-var tetra4dSimdInt16Bytes   = require('./tetra4d_simd_int16.wasm.js');
+// Compiled WASM bytes live beside the kernel module that owns them
+// (src/kernels/3d, src/kernels/4d) as of v1.7 phase B — co-located with the
+// .wat sources they are generated from. This loader stays in src/wasm/ as the
+// shared compile/instantiate/memory utility.
+var tetra3dNchBytes         = require('../kernels/3d/tetra3d_nch.wasm.js');
+var tetra3dNchInt16Bytes    = require('../kernels/3d/tetra3d_nch_int16.wasm.js');
+var tetra3dSimdBytes        = require('../kernels/3d/tetra3d_simd.wasm.js');
+var tetra3dSimdInt16Bytes   = require('../kernels/3d/tetra3d_simd_int16.wasm.js');
+var tetra4dNchBytes         = require('../kernels/4d/tetra4d_nch.wasm.js');
+var tetra4dNchInt16Bytes    = require('../kernels/4d/tetra4d_nch_int16.wasm.js');
+var tetra4dSimdBytes        = require('../kernels/4d/tetra4d_simd.wasm.js');
+var tetra4dSimdInt16Bytes   = require('../kernels/4d/tetra4d_simd_int16.wasm.js');
 
 var SCALAR_CACHE_KEY         = '__jsColorEngine_tetra3d_nch_module__';
 var SCALAR_INT16_CACHE_KEY   = '__jsColorEngine_tetra3d_nch_int16_module__';

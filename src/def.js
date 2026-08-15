@@ -154,6 +154,7 @@ var defs = {
         Gray: 4,
         Duo: 5,
         XYZ: 6,
+        NChannel: 31 // added at 31 in-case I want to add per channel types
     },
     eIntent: {
         perceptual: 0,

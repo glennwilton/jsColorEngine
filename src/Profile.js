@@ -239,6 +239,9 @@ class Profile {
         this.PCSWhitepoint = convert.d50;
         this.outputChannels = 0;
         this.lastError = {err: 0, text: 'No Error'};
+        this.binaryHash  = false;   // FNV-1a hex over raw ICC bytes, set by loadBinary()
+        this.virtualName = false;   // '*sRGB' etc., set by loadVirtualProfile()
+        this.sizeBytes   = 0;       // declared ICC profile size, set by decodeFile()
 
         // These are floating point but more
         // complicated and also additional to
@@ -335,6 +338,9 @@ class Profile {
     loadBinary(binary, afterLoad, searchForProfile) {
         this.loaded = this.readICCProfile(binary, searchForProfile);
         this.loadError = !this.loaded;
+        if(this.loaded && binary && binary.length){
+            this.binaryHash = _profileFnv1a32(binary, this.sizeBytes);
+        }
         if(typeof afterLoad === 'function'){
             afterLoad(this);
         }
@@ -437,6 +443,7 @@ class Profile {
      * @param {function(Profile):void} [afterLoad]
      */
     loadVirtualProfile(name, afterLoad) {
+        this.virtualName = (name.substring(0, 1) === '*') ? name : ('*' + name);
         if(name.substring(0, 1) === '*'){
             name = name.substring(1, name.length);
         }
@@ -903,18 +910,22 @@ class Profile {
 
             // this.mediaWhitePoint = convert.getWhitePointFromIlluminant(this.mediaWhitePoint);
 
-            // pre-calculate adaptation matrixV4 values
-            this.absoluteAdaptationIn = {
-                Xa: this.mediaWhitePoint.X / this.header.PCSilluminant.X,
-                Ya: this.mediaWhitePoint.Y / this.header.PCSilluminant.Y,
-                Za: this.mediaWhitePoint.Z / this.header.PCSilluminant.Z
-            };
+            // pre-calculate adaptation matrixV4 values.
+            // DeviceLink profiles have no wtpt tag — mediaWhitePoint stays
+            // null and absolute adaptation does not apply (no PCS).
+            if (this.mediaWhitePoint) {
+                this.absoluteAdaptationIn = {
+                    Xa: this.mediaWhitePoint.X / this.header.PCSilluminant.X,
+                    Ya: this.mediaWhitePoint.Y / this.header.PCSilluminant.Y,
+                    Za: this.mediaWhitePoint.Z / this.header.PCSilluminant.Z
+                };
 
-            this.absoluteAdaptationOut = {
-                Xa: this.header.PCSilluminant.X / this.mediaWhitePoint.X,
-                Ya: this.header.PCSilluminant.Y / this.mediaWhitePoint.Y,
-                Za: this.header.PCSilluminant.Z / this.mediaWhitePoint.Z
-            };
+                this.absoluteAdaptationOut = {
+                    Xa: this.header.PCSilluminant.X / this.mediaWhitePoint.X,
+                    Ya: this.header.PCSilluminant.Y / this.mediaWhitePoint.Y,
+                    Za: this.header.PCSilluminant.Z / this.mediaWhitePoint.Z
+                };
+            }
 
             //TODO check for required tags for all profile types...
 
@@ -1111,11 +1122,17 @@ class Profile {
         this.unsupportedTags = this.unsuportedTags;
 
         // copy down important header values
-        this.version = this.header.versionMajor;
+        this.version   = this.header.versionMajor;
+        this.sizeBytes = this.header.profileSize;   // declared profile size in bytes
         this.pcs = this.header.pcs.trim().toUpperCase();
         this.colorSpace = this.header.space.trim().toUpperCase();
 
-        if (!(this.pcs === 'LAB' || this.pcs === 'XYZ')) {
+        // DeviceLink (pClass 'link') has no real PCS — the header PCS field
+        // carries the OUTPUT device colour space (e.g. 'CMYK' for a
+        // CMYK→CMYK link). Skip the PCS gate for links; the output space is
+        // validated below when the output channel count is resolved.
+        var isDeviceLink = this.header.pClass === 'link';
+        if (!isDeviceLink && !(this.pcs === 'LAB' || this.pcs === 'XYZ')) {
             this.lastError = {err: 100, text: 'Unsupported PCS [' + this.pcs + ']'};
             return false;
         }
@@ -1150,9 +1167,42 @@ class Profile {
                 this.type = eProfileType.CMYK; // cmyk
                 break;
 
+            case '5CLR':  this.outputChannels = 5;  this.type = eProfileType.NChannel; break;
+            case '6CLR':  this.outputChannels = 6;  this.type = eProfileType.NChannel; break;
+            case '7CLR':  this.outputChannels = 7;  this.type = eProfileType.NChannel; break;
+            case '8CLR':  this.outputChannels = 8;  this.type = eProfileType.NChannel; break;
+            case '9CLR':  this.outputChannels = 9;  this.type = eProfileType.NChannel; break;
+            case 'ACLR':  this.outputChannels = 10; this.type = eProfileType.NChannel; break;
+            case 'BCLR':  this.outputChannels = 11; this.type = eProfileType.NChannel; break;
+            case 'CCLR':  this.outputChannels = 12; this.type = eProfileType.NChannel; break;
+            case 'DCLR':  this.outputChannels = 13; this.type = eProfileType.NChannel; break;
+            case 'ECLR':  this.outputChannels = 14; this.type = eProfileType.NChannel; break;
+            case 'FCLR':  this.outputChannels = 15; this.type = eProfileType.NChannel; break;
+
             default:
                 this.lastError = {err: 110, text: 'Unsupported Profile Colorspace [' + this.header.space + ']'};
                 return false;
+        }
+
+        if (isDeviceLink) {
+            // The space switch above resolved the INPUT side (a DeviceLink's
+            // space field is its input device space). Record it, then resolve
+            // the OUTPUT side from the PCS field.
+            this.deviceLinkInputChannels = this.outputChannels;
+            var linkOutputChannels = {
+                'GRAY': 1, '2CLR': 2,
+                'RGB': 3, 'CMY': 3, '3CLR': 3,
+                'CMYK': 4, '4CLR': 4,
+                '5CLR': 5, '6CLR': 6, '7CLR': 7, '8CLR': 8, '9CLR': 9,
+                'ACLR': 10, 'BCLR': 11, 'CCLR': 12, 'DCLR': 13, 'ECLR': 14, 'FCLR': 15,
+            }[this.pcs];
+            if (linkOutputChannels === undefined) {
+                this.lastError = {err: 111, text: 'Unsupported DeviceLink output space [' + this.pcs + ']'};
+                return false;
+            }
+            this.outputChannels = linkOutputChannels;
+            // this.type stays as resolved from the input space — Transform
+            // branches on header.pClass === 'link', not on type.
         }
 
         this.tags = this.decodeTags(binary);
@@ -1359,7 +1409,7 @@ class Profile {
         if (!(this.header.pClass === 'prtr' ||
             this.header.pClass === 'mntr' ||
             this.header.pClass === 'scnr' ||
-            //this.header.pClass === 'link' ||// not supported as yet
+            this.header.pClass === 'link' ||
             this.header.pClass === 'spac' ||
             this.header.pClass === 'abst'
         )) {
@@ -1553,6 +1603,32 @@ function base64ToUint8Array(base64) {
     }
 
     return bytes;
+}
+
+// FNV-1a 32-bit hash over a Uint8Array (or any byte-indexable array).
+// Used to fingerprint raw ICC binary for profile equality comparison.
+// Intentionally duplicated from the copy in Transform.js — Profile.js
+// does not import Transform, and the function is too small to extract
+// into a shared module.
+//
+// Only hashes bytes[0 .. declaredSize-1] where declaredSize is the
+// big-endian uint32 in the first 4 bytes of every ICC profile. This
+// makes the hash stable regardless of trailing null padding — a profile
+// embedded in a JPEG APP2 or TIFF tag may be padded to a block boundary
+// by the host application, so naively hashing the whole buffer would
+// produce a different fingerprint for the same logical profile.
+function _profileFnv1a32(bytes, declaredSize) {
+    // ICC headers are at least 128 bytes. If declaredSize is 0, corrupted, or
+    // claims more bytes than we have, fall back to hashing the whole buffer.
+    var hashLength = (declaredSize >= 128 && declaredSize <= bytes.length)
+        ? declaredSize
+        : bytes.length;
+    var hash  = 0x811c9dc5;
+    var prime = 0x01000193;
+    for(var byteIndex = 0; byteIndex < hashLength; byteIndex++){
+        hash = Math.imul(hash ^ bytes[byteIndex], prime);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 module.exports = Profile;

@@ -1218,15 +1218,26 @@ module.exports = {
         // Stride pre-compute for the interpolation hot path.
         // For 3D LUTs `gridPoints[3]` is undefined → g4 is NaN; that's
         // intentional (consumers only read up to g_inputChannels).
-        lut.g1 = lut.gridPoints[0];
-        lut.g2 = lut.g1 * lut.gridPoints[1];
-        lut.g3 = lut.g2 * lut.gridPoints[2];
-        lut.g4 = lut.g3 * lut.gridPoints[3];
+        //
+        // Curves-only mAB/mBA tags (legal per ICC spec — e.g. a
+        // linearization DeviceLink with B-curves and no CLUT) have no
+        // gridPoints at all; leave the strides at 0 — the pipeline builder
+        // checks `lut.CLUT !== false` before adding an interpolation stage.
+        if (lut.gridPoints) {
+            lut.g1 = lut.gridPoints[0];
+            lut.g2 = lut.g1 * lut.gridPoints[1];
+            lut.g3 = lut.g2 * lut.gridPoints[2];
+            lut.g4 = lut.g3 * lut.gridPoints[3];
 
-        lut.go0 = lut.outputChannels;
-        lut.go1 = lut.g1 * lut.outputChannels;
-        lut.go2 = lut.g2 * lut.outputChannels;
-        lut.go3 = lut.g3 * lut.outputChannels;
+            lut.go0 = lut.outputChannels;
+            lut.go1 = lut.g1 * lut.outputChannels;
+            lut.go2 = lut.g2 * lut.outputChannels;
+            lut.go3 = lut.g3 * lut.outputChannels;
+        } else {
+            lut.gridPoints = [];
+            lut.g1 = lut.g2 = lut.g3 = lut.g4 = 0;
+            lut.go0 = lut.go1 = lut.go2 = lut.go3 = 0;
+        }
         return lut;
 
     },
