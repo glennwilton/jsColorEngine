@@ -1,0 +1,19 @@
+# Keep working copies LF everywhere (overrides core.autocrlf=true, which
+# was rewriting files to CRLF whenever git touched them on Windows).
+# Repo blobs were already LF-normalised, so no renormalisation needed.
+* text=auto eol=lf
+
+# Binary assets — never EOL-convert or diff as text
+*.icc binary
+*.icm binary
+*.wasm binary
+*.tif binary
+*.tiff binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.woff binary
+*.woff2 binary
