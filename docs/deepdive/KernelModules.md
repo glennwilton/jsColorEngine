@@ -1,6 +1,6 @@
 # Kernel Modules
 
-> **Status: SHIPPED — v1.7 phases A + B + C (2026-08-15).**
+> **Status: SHIPPED in v1.5.0 — phases A + B + C (2026-08-15).**
 > This is the as-built architecture document. The step-by-step migration
 > guide (`KernelModules_impl.md`) has been retired and its still-relevant
 > content folded in here; the phase history is summarised at the bottom.

@@ -26,14 +26,28 @@ profiles — the actual comparison people reach for when they ask
 
 | # | Workflow | Profiles |
 |---|---|---|
-| 1 | RGB → Lab | sRGB (virtual) → LabD50 (virtual) |
-| 2 | RGB → CMYK | sRGB (virtual) → GRACoL2006_Coated1v2.icc |
-| 3 | CMYK → RGB | GRACoL2006_Coated1v2.icc → sRGB (virtual) |
+| 1 | RGB → RGB   | sRGB (virtual) → AdobeRGB1998.icc (`samples/profiles/`) |
+| 2 | RGB → CMYK  | sRGB (virtual) → GRACoL2006_Coated1v2.icc |
+| 3 | CMYK → RGB  | GRACoL2006_Coated1v2.icc → sRGB (virtual) |
 | 4 | CMYK → CMYK | GRACoL2006_Coated1v2.icc → GRACoL2006_Coated1v2.icc |
 
-Same workflow set as the browser bench and the JS comparison — so
-you can drop jsColorEngine numbers, `lcms-wasm` numbers, and
-native-lcms numbers into a single row-per-workflow table.
+Workflow 1 uses **sRGB → AdobeRGB1998** (not sRGB → Lab, and not sRGB →
+sRGB). lcms2 detects matrix-shaper same-profile transforms as identity
+and short-circuits `cmsDoTransform` to `memcpy`, which would benchmark
+memcpy speed rather than CMS work. AdobeRGB is a different matrix-shaper
+profile — no bypass, real work. This matches `bench/mpx_summary.js`
+exactly.
+
+> **Earlier versions** of this bench tested *RGB → Lab* as workflow 1 —
+> a mismatch with the JS bench. The corrected bench (RGB → RGB) shows
+> lcms2 native at ~160 MPx/s for this direction (matrix-shaper fast
+> path), vs ~50 MPx/s for the original Lab path (LUT-based). Running
+> `make fastfloat` adds a direct comparison; see
+> [fast_float findings](#fast_float-findings) below.
+
+Same workflow set as the browser bench and the JS comparison — so you
+can drop jsColorEngine numbers, `lcms-wasm` numbers, and native-lcms
+numbers into a single row-per-workflow table.
 
 ## One-time setup — fetch lcms2 source
 
@@ -155,7 +169,8 @@ values.
 | Make target | What it does |
 |---|---|
 | `make` (default) | Build `./bench_lcms` with `-O3 -DNDEBUG -march=native` |
-| `make run` | Build + run with default profile path |
+| `make run` | Build + run with default profile paths |
+| `make fastfloat` | Build with fast_float plugin (`-DWITH_FAST_FLOAT`), run — reports vanilla vs fast_float side by side |
 | `make steelman` | Rebuild with **`-ffast-math -funroll-loops -flto`** on top of the release flags (see below) |
 | `make debug` | Rebuild with `-O0 -g` for `gdb` / `valgrind` |
 | `make clean` | Delete binary + all `.o` files |
@@ -208,21 +223,66 @@ the ceiling further.
 # (P-core on Intel 12th-gen+, not strictly required but stabilises
 # the median):
 taskset -c 0 ./bench_lcms
+
+# Environment overrides (added 2026-08 after upstream review — see
+# docs/LcmsComparison.md):
+BENCH_PIXELS=1048576 ./bench_lcms     # pixels per iteration (default 65536)
+BENCH_ITERS=20       ./bench_lcms     # iterations per timed batch (default 100)
+BENCH_WARMUP=50      ./bench_lcms     # warmup iterations (default 300)
+BENCH_INPUT=gradient ./bench_lcms     # photo-like input with flat runs
+BENCH_INPUT=solid    ./bench_lcms     # whole image one colour (cache best case)
+                                      # (default: per-byte random noise)
 ```
+
+**`BENCH_INPUT` matters a lot for lcms**: lcms2 memoizes the
+last-seen input pixel, so pure random noise is its worst case —
+measured 2–3× faster on photo-like gradient content, and up to ~5×
+on solid fills, where every LUT workflow converges to the same
+~160–170 MPx/s cache-hit ceiling (no interpolation at all, just
+compare + copy). jsColorEngine's kernels are content-neutral.
+Report which generator you used with any numbers; real images sit
+between noise and gradient.
+
+## fast_float findings
+
+`make fastfloat` links the `fast_float` plugin from the vendored lcms2
+source tree (`lcms2-2.18/plugins/fast_float/`) and runs vanilla vs
+fast_float side by side in the same binary. WSL2 exposes the host
+CPU's full ISA (SSE2/AVX are available — no SIMD stripping behind
+the hypervisor), so the SSE2 paths inside fast_float execute normally.
+
+**The result splits sharply by profile type:**
+
+| Workflow | lcms2 vanilla | lcms2 + fast_float | Speedup |
+|---|---|---|---|
+| RGB → RGB   (matrix-shaper) | ~160 MPx/s | **~455 MPx/s** | **3.4×** |
+| RGB → CMYK  (LUT-based)     | ~50 MPx/s  | ~48 MPx/s      | ~1.0× |
+| CMYK → RGB  (LUT-based)     | ~34 MPx/s  | ~34 MPx/s      | ~1.0× |
+| CMYK → CMYK (LUT-based)     | ~30 MPx/s  | ~30 MPx/s      | ~1.0× |
+
+The plugin fuses matrix-shaper profiles into a single vectorised 3×3
+multiply — bypassing the stage-walker entirely — which is why it gets
+3.4× on RGB→RGB. For LUT-based CMYK workflows the bottleneck is
+function-pointer dispatch, not arithmetic, so fast_float's SSE2
+kernels have nothing to contribute (0–2% noise).
+
+The plugin's own docs claim "approximately 20% faster for CLUT
+profiles." We measured ~0%. The dispatch-bound analysis in
+[docs/Performance.md §2.1](../../docs/Performance.md) predicted this;
+the measurement confirms it.
+
+**What this means for jsColorEngine:** jsCE WASM SIMD (128–210 MPx/s)
+beats fast_float on all LUT/CMYK workflows by 3–4×. On RGB→RGB
+matrix-shaper, fast_float wins at 455 MPx/s vs jsCE's ~216 MPx/s.
+jsCE routes all transforms through the CLUT pipeline including
+matrix-shaper profiles; a dedicated fused-matrix path is a future
+optimization. Full analysis:
+[docs/Performance.md — Steelmanning the steelman](../../docs/Performance.md#steelmanning-the-steelman--fast-float-measured-directly).
 
 ## What's deliberately **not** configurable (yet)
 
 - **16-bit path.** We pin `TYPE_*_8` on both sides (and in the JS
-  bench) for apples-to-apples with the engine's hot path. A 16-bit
-  variant would be a second build target, useful but out of scope
-  for v1.2 close-out. Add an 8-vs-16 switch when the 16-bit kernels
-  land in jsColorEngine v1.3.
-- **Fast-float plugin.** lcms2's `fast_float` plugin lives in a
-  separate repo (`Little-CMS/Fast-Float-Plugin`) and uses SSE2 +
-  8-bit specialisations internally. If we ever want to claim parity
-  against "the fastest lcms setup", that's the thing to link. For
-  now, plain lcms2 is the honest baseline — it's what ships in the
-  distro packages everyone actually installs.
+  bench) for apples-to-apples with the engine's hot path.
 - **Rendering intents other than relative colorimetric.** Matches
   the rest of the bench suite. Add a CLI flag if anyone needs it.
 
@@ -231,9 +291,9 @@ taskset -c 0 ./bench_lcms
 - [`bench/lcms-comparison/`](../lcms-comparison) — jsColorEngine vs
   `lcms-wasm` head-to-head (Node, JS only, no native C toolchain
   needed).
-- [`bench/lcms_c/`](./) *(this folder)* — native lcms2 baseline.
-  Requires a C compiler; produces the `wasm × ?×` number that
-  Performance.md §4 currently estimates.
+- [`bench/lcms_c/`](./) *(this folder)* — native lcms2 baseline +
+  fast_float comparison. `make` for vanilla, `make fastfloat` for
+  vanilla-vs-fast_float side by side.
 - [`samples/bench/`](../../samples/bench) — every jsColorEngine `lutMode` +
   `lcms-wasm` side-by-side in the browser. Same four workflows.
 - [`bench/mpx_summary.js`](../mpx_summary.js) — jsColorEngine alone,

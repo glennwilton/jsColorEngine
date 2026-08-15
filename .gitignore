@@ -39,3 +39,7 @@ speed_tests/
 # point this whole folder goes away.
 /bench/lcms_exposed/
 .claude/
+
+# Private work-in-progress — not ready for public repo
+/_wip/
+bench/archive/

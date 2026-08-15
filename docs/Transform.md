@@ -30,10 +30,12 @@ colours / pixels as you like.
 * [Quick start — accuracy path](#quick-start--accuracy-path)
 * [Quick start — hot path (image data)](#quick-start--hot-path-image-data)
 * [Multi-stage transforms](#multi-stage-transforms)
+* [DeviceLink and N-channel profiles](#devicelink-and-n-channel-profiles)
 * [Custom pipeline stages](#custom-pipeline-stages)
 * [Constructor options](#constructor-options)
 * [Gamut warning modes](#gamut-warning-modes)
 * [Methods](#methods)
+  * [Pipeline validation — `validatePipeline`](#transformvalidatepipelineformatoverride)
 * [Properties](#properties)
 * [LUT build hooks](#lut-build-hooks)
 * [Portable LUT JSON — `toJSON` / `fromJSON` / signatures](#portable-lut-json--tojson--fromjson--signatures)
@@ -146,6 +148,61 @@ booleans indexed by stage number — useful for the classic
 
 ---
 
+## DeviceLink and N-channel profiles
+
+*(Shipped 2026-08. Full implementation notes:
+[docs/DeviceLink.md](./DeviceLink.md) · [docs/NChannel.md](./NChannel.md).)*
+
+### DeviceLink (`pClass: 'link'`)
+
+A DeviceLink is a complete device→device conversion with no PCS —
+pass it to `create()` **alone**:
+
+```js
+const dl = new Profile();
+await dl.loadPromise('MyDeviceLink.icc');
+
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+t.create(dl);                       // just the link — no second profile
+const out = t.transformArray(cmykPixels, false, false);
+```
+
+- The **rendering intent comes from the profile header** (per spec the
+  single A2B tag serves the declared intent); any intent argument is
+  ignored.
+- Passing additional profiles alongside a DeviceLink **throws** —
+  there is no PCS to link through.
+- Asymmetric links work (CMYK→RGB, RGB→CMYK); input/output channel
+  counts come from the link's header fields. `buildLut: true` bakes
+  the image path as usual, and identity detection never collapses a
+  link.
+- Detect one after loading via `profile.header.pClass === 'link'`.
+
+### N-channel (5CLR–15CLR press profiles)
+
+N-channel profiles load as `eProfileType.NChannel` and work in both
+directions:
+
+- **PCS/RGB → n-ink (output side)** — full support including the
+  baked-LUT image path: a 3D/4D grid with N output channels runs on
+  the existing array kernels at normal image speed.
+- **n-ink → PCS (input side)** — supported on the **per-pixel
+  accuracy pipeline** via a generic N-D simplex interpolator. Device
+  values are accepted as an array/TypedArray of N values in 0..1 or
+  as an object `{c0, c1, …, cN}`. `buildLut: true` is **declined
+  with a console warning** for n-ink input (a `grid^N` bake is
+  impractical — a 17-point 7-channel grid would be ~410 M cells) and
+  the transform falls back to the pipeline; `transform.lut === false`
+  after create tells you this happened.
+
+```js
+const t = new Transform();          // accuracy path
+t.create(sevenClrProfile, '*lab', eIntent.relative);
+const lab = t.transform([0, 0, 0, 1, 0, 0, 0]);   // 7 ink fractions
+```
+
+---
+
 ## Custom pipeline stages
 
 You can inject your own function into the pipeline at a known location
@@ -206,6 +263,7 @@ new Transform(options)
 | `pipelineDebug` | Boolean | `false` | Capture per-stage values into `pipelineHistory` and `debugHistory`. Adds overhead — only enable for diagnostics. Only meaningful on the accuracy path. |
 | `optimise` | Boolean | `true` | Run the pipeline optimiser to remove redundant conversions (e.g. matched encode/decode pairs). |
 | `clipRGBinPipeline` | Boolean | `false` | Clip RGB values to 0..1 inside the pipeline (useful for extreme abstract profiles). |
+| `validateOnCreate` | Boolean | `true` | Run a single-pixel smoke test through the pipeline at the end of `create()`. If the test colour produces `NaN`, `undefined`, or the wrong output type the call throws immediately with a clear message. Adds ~1 µs to `create()` time — negligible. Set `false` to disable (e.g. when loading a pre-validated profile that you already trust). Has no effect when a cached LUT is loaded via `setLut()` / `fromJSON()` — validation is skipped for pre-built LUTs. |
 | `verbose` | Boolean | `false` | Log pipeline construction info to console. |
 | `verboseTiming` | Boolean | `false` | Log build timings to console. |
 | `lutGamutMode` | String | `'none'` | Baked gamut check during LUT build. See [Gamut warning modes](#gamut-warning-modes) below. |
@@ -267,6 +325,56 @@ Build a single-step pipeline.
 
 Build a multi-step pipeline. `profileChain` alternates
 `[profile, intent, profile, intent, …, profile]`.
+
+### `transform.validatePipeline(formatOverride?)`
+
+Run a single-pixel smoke test through the current pipeline. Returns
+`true` if the pipeline looks healthy, `false` if `transform()` threw
+or the output contained `NaN` / `undefined` / wrong colour type.
+
+This is the same check that `validateOnCreate` runs automatically at
+`create()` time. You would call it manually if you disabled
+`validateOnCreate` and want to verify the pipeline later, or if you
+have programmatically modified the pipeline after creation.
+
+**What it catches and what it misses.** The test uses one mid-grey
+input pixel (50 % on every channel). It catches:
+
+- `NaN` in any matrix element that the mid-grey value exercises (the
+  full pipeline runs, so all stages are exercised).
+- Any stage that throws an exception at transform time.
+- A wrong output type (e.g. an RGB object where a CMYK object is
+  expected).
+
+It **does not** catch corruption that only affects extreme values —
+for example, a corrupt entry at the very top of a 1D gamma LUT would
+not be caught because the mid-grey test value never reaches it. A full
+NaN/undefined deep scan of the `Profile` object (planned for v1.8)
+would close that gap.
+
+**Error handling — why you `try/catch` `create()` but not `transform()`.**
+
+With `validateOnCreate: true` (the default), `create()` is the one
+place where a broken profile surfaces as an exception:
+
+```js
+// Recommended pattern — guard at create() time, not at transform() time.
+try {
+    const xf = new Transform();
+    xf.create(inputProfile, outputProfile, eIntent.relative);
+    // If we get here, xf.transform() and xf.transformArray() are safe to
+    // call without a try/catch on every pixel / every array.
+} catch (err) {
+    console.error('Pipeline failed to build:', err.message);
+}
+```
+
+Once `create()` succeeds, `transform()` and `transformArray()` will
+not throw on well-formed input. The only remaining failure mode is
+a caller error (wrong array length, wrong channel count), which the
+existing guards already report with a clear message. Wrapping every
+`transform()` call in a `try/catch` is therefore unnecessary overhead
+and obscures real bugs.
 
 ### `transform.transform(inputColor)`
 
@@ -353,7 +461,7 @@ one-off large image permanently inflates the buffer unless reclaimed.
 | `transform.compactWasmMemory()` | Re-instantiate all WASM states with fresh 1-page (64 KB) memory. ~0.1 ms cost + one LUT re-copy on next call. Transform stays fully functional. |
 | `transform.setWasmShrinkRatio(N)` | Auto-compact after each transform when memory exceeds `N ×` what the just-processed image needed. E.g. `4` = compact when buffer is >4× oversized. Set `0` to disable (default). Also available as constructor option `{ wasmShrinkRatio: 4 }`. |
 | `transform.setWasmMaxMemory(bytes)` | Absolute memory ceiling. Checked immediately after each transform — if WASM memory exceeds this, compacts right away. Default **128 MB**. Set `0` to disable. Also available as constructor option `{ wasmMaxMemory: N }`. |
-| `transform.releaseWasmMemory()` | Drop all WASM states; dispatcher falls back to pure-JS `'int'` kernels. Call `create()` to reload WASM. |
+| `transform.releaseWasmMemory()` | Drop all WASM states; the kernel falls back to pure-JS `'int'` kernels. Call `create()` to reload WASM. |
 | `transform.wasmMemoryBytes()` | Returns total bytes held across all WASM states (diagnostic). |
 | `transform = null` | Let GC collect everything — WASM, LUT, the lot. |
 
@@ -737,7 +845,9 @@ both its rounding error AND its instruction count.
 - The mirror LUT is built in `Transform.buildIntLut(lut)`, called from
   `create()` after the optimiser has finalised the float pipeline.
   Shape gating happens in there — adding a new supported shape means
-  adding the kernel, extending the dispatcher in `transformArrayViaLUT`,
+  adding the kernel loop, adding its row to `src/lutKernelTable.js`
+  (the kernel instance resolves run refs from it at create() time —
+  see [deepdive/KernelModules.md](./deepdive/KernelModules.md)),
   and extending `buildIntLut`'s `supported3D` / `supported4D` test.
 - The `input === 255` boundary patches (one per axis) are **non-optional**.
   Without them, pure-channel inputs land one grid below the top with

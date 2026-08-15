@@ -80,15 +80,21 @@ recipes.
 
 ## Contents
 
-| Page | What it covers |
-|---|---|
-| [Architecture](./Architecture.md) | Pipeline model: how an ICC profile becomes a kernel. Stages, LUT build, kernel dispatch, accuracy vs image paths |
-| [LUT modes](./LutModes.md) | `float` / `int` / `int-wasm-scalar` / `int-wasm-simd` — what each mode is, when it's picked, how it's bit-exact vs the reference |
-| [JIT inspection](./JitInspection.md) | V8 emitted x64 assembly walked line-by-line. Working-set size, instruction mix, move classification, the "named temps" micro-test. Why the scalar JS kernel is as fast as it is |
-| [WASM kernels](./WasmKernels.md) | Hand-written `.wat` for 3D and 4D tetrahedral interp. SIMD channel-parallel layout, rolling-shutter pack, the V8 inliner lesson. Reproduction recipes |
-| [Compiled pipeline (POC)](./CompiledPipeline.md) | `transform.compile()` — turning the runtime stage walker into one straight-line JS function per profile chain. 1.75× on sRGB→CMYK, three measurement methods, and the path to `getSource()` / `toModule()` |
-| [Accuracy](./Accuracy.md) | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
-| [LUTs](./Luts.md) | Custom LUT creation, TIFF-based visual editing, lcms-wasm bridge, portable JSON serialisation format, and the architecture for CMS-agnostic LUT capture and redistribution. Companion how-to: [`samples/lutbuilder.md`](../../samples/lutbuilder.md). |
+| Page                                             | What it covers                                                                                                                                                                                                                                                   |
+|--------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [Architecture](./Architecture.md)                | Pipeline model: how an ICC profile becomes a kernel. Stages, LUT build, kernel dispatch, accuracy vs image paths                                                                                                                                                 |
+| [LUT modes](./LutModes.md)                       | `float` / `int` / `int-wasm-scalar` / `int-wasm-simd` — what each mode is, when it's picked, how it's bit-exact vs the reference                                                                                                                                 |
+| [JIT inspection](./JitInspection.md)             | V8 emitted x64 assembly walked line-by-line. Working-set size, instruction mix, move classification, the "named temps" micro-test. Why the scalar JS kernel is as fast as it is                                                                                  |
+| [WASM kernels](./WasmKernels.md)                 | Hand-written `.wat` for 3D and 4D tetrahedral interp. SIMD channel-parallel layout, rolling-shutter pack, the V8 inliner lesson. Reproduction recipes                                                                                                            |
+| [Compiled pipeline (POC)](./CompiledPipeline.md) | `transform.compile()` — turning the runtime stage walker into one straight-line JS function per profile chain. 1.75× on sRGB→CMYK, three measurement methods, and the path to `getSource()` / `toModule()`                                                       |
+| [Accuracy](./Accuracy.md)                        | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
+| [Custom LUT Builder](./Luts.md)                  | Custom LUT creation, TIFF-based visual editing, lcms-wasm bridge, portable JSON serialisation format, and the architecture for CMS-agnostic LUT capture and redistribution. Companion how-to: [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md).            |
+| [Identity / NOP detection](./Identity.md)        | How same-profile pairs are detected (binary hash, virtual name, matrix comparison), how multi-stage chains are collapsed, the identity pipeline and `kernelCopy` path, and the connection to kernel binding.                                                      |
+| [Kernel modules](./KernelModules.md)             | **Shipped v1.5.0** as-built architecture: dimension-specific kernel instances (`src/kernels/{1d..4d,nd}/`) own the tuned array loops, WASM lifecycle, output allocation, and per-call dispatch (`kernel._runBig`/`_runSmall` resolved at create() time). Registration/override patterns, `provideLut()` contract, plugin coexistence, V8 dispatch analysis, migration history. |
+| [Matrix-shaper WASM kernel](./MatrixShaperKernel.md) | Dynamic WASM emission for RGB matrix-shaper transforms. Five-generation POC: 52 → 257 MPx/s. Final design (v5): bytes-as-indices into f32x4 lanes, pre-loaded matrix constants, 4096-entry output gamma. **250–257 MPx/s in Chrome, 2.3–2.7× faster than the existing CLUT kernel** (advantage grows with image size — gamma tables are 9KB L1-resident; CLUT is 214KB and goes cold on large images). *(POC complete — v1.7 integration planned)* |
+| [Why MPE is not supported](./multiProcessElements.md) | Why `multiProcessElementsType` (`mpet`) / `DToB`/`BToD` tags are not decoded: spec-mandated fallback to `AToB`/`BToA`, near-zero real-world prevalence, and why ICC's own answer to HDR (iccMAX) made MPE a dead end. |
+| [Why named colour profiles are not supported](./namedColorProfiles.md) | Why `ncl2` profiles are outside transform scope: they are pure name→Lab/XYZ lookup tables with no pipeline, and real-world spot colour workflows use RIP-internal databases, PANTONE-licensed app libraries, or CxF/X-4 instead. |
+| LUT Accuracy                                     | Baseline interpolation error for standard LUT grid sizes, measured against the full f64 accuracy pipeline. *(In progress — not yet published.)*                                                                                                                 |
 
 ## Learn more (external)
 
@@ -119,5 +125,5 @@ go deeper on the topics we build on:
 - **WebAssembly SIMD** —
   [WebAssembly SIMD proposal](https://github.com/WebAssembly/simd) ·
   [v128 opcode table](https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md).
-  Relevant if you want to read the `.wat` in `src/wasm/` and understand
+  Relevant if you want to read the `.wat` in `src/kernels/{3d,4d}/` and understand
   the instruction choices in [WASM kernels](./WasmKernels.md).

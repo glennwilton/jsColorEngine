@@ -228,10 +228,17 @@ await jsGRACoL.loadPromise('file:' + GRACOL_PATH);
 if(!jsGRACoL.loaded) throw new Error('js: failed to load GRACoL');
 
 
+// lcms oracle flags. Default is flags=0 — lcms2's modern default
+// optimisation path. Per upstream (Marti Maria, jsColorEngine#6),
+// cmsFLAGS_HIGHRESPRECALC is a legacy lcms 1.x emulation flag and
+// should not be treated as the reference behaviour; pass --highres
+// to reproduce the pre-2026-08 oracle runs that used it.
+const USE_HIGHRES = process.argv.includes('--highres');
+const LCMS_FLAGS  = USE_HIGHRES ? cmsFLAGS_HIGHRESPRECALC : 0;
+
 function runLcms(pIn, fIn, pOut, fOut, input, nPx){
-    // HIGHRESPRECALC: match our "big precomputed LUT" story for fairness
     const xf = lcms.cmsCreateTransform(pIn, fIn, pOut, fOut,
-        INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_HIGHRESPRECALC);
+        INTENT_RELATIVE_COLORIMETRIC, LCMS_FLAGS);
     const out = lcms.cmsDoTransform(xf, input, nPx);
     lcms.cmsDeleteTransform(xf);
     return out;
@@ -287,7 +294,7 @@ console.log('==============================================================');
 console.log(' Accuracy check — jsColorEngine vs lcms-wasm (8-bit I/O)');
 console.log('==============================================================');
 console.log(' intent        : relative colorimetric');
-console.log(' lcms flags    : cmsFLAGS_HIGHRESPRECALC');
+console.log(' lcms flags    : ' + (USE_HIGHRES ? 'cmsFLAGS_HIGHRESPRECALC (legacy emulation — diagnostic only)' : '0 (lcms default optimisation)'));
 console.log(' profile       : GRACoL2006_Coated1v2.icc');
 console.log(' node          : ' + process.version);
 console.log(' lcms-wasm     : 1.0.5 (LCMS 2.16 compiled to wasm32)');

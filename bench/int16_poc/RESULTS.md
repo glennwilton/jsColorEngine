@@ -1,5 +1,14 @@
 # int16 POC — first numbers
 
+> **Historical note (2026-08):** the accuracy comparisons on this page
+> used `cmsFLAGS_HIGHRESPRECALC` as the lcms-wasm oracle. Per upstream
+> ([jsColorEngine#6](https://github.com/glennwilton/jsColorEngine/issues/6))
+> that flag selects a legacy lcms 1.x emulation path, not the reference
+> behaviour — when the 8-bit accuracy harness was re-run against lcms's
+> default optimisation the agreement *improved* (see
+> `bench/lcms-comparison/README.md`), so treat the numbers below as a
+> conservative POC-era floor, not the current oracle methodology.
+
 **Status: POC validated.** New u16 in / u16 out JS hot kernel sits at
 **1.80–1.97× faster than lcms-wasm's u16 path** on the two tested
 workflows, with **100 % of samples within 1 LSB at u8-equivalent

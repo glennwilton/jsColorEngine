@@ -78,7 +78,8 @@ describe('tetrahedralInterp3DArray_3Ch_loop preserveAlpha (multi-pixel)', () => 
     test('sRGB -> sRGB with outputHasAlpha=true (no input alpha) writes 255 per pixel', async () => {
         const t = new Transform({
             builtLut: true,
-            dataFormat: 'int8'
+            dataFormat: 'int8',
+            detectIdentity: false,
         });
         t.create('*sRGB', '*sRGB', eIntent.relative);
 
@@ -101,21 +102,21 @@ describe('tetrahedralInterp3DArray_3Ch_loop preserveAlpha (multi-pixel)', () => 
 describe('Transform constructor buildLut / builtLut option spellings', () => {
 
     test('buildLut: true builds the LUT', () => {
-        const t = new Transform({ buildLut: true, dataFormat: 'int8' });
+        const t = new Transform({ buildLut: true, dataFormat: 'int8', detectIdentity: false });
         t.create('*sRGB', '*sRGB', eIntent.relative);
         expect(t.builtLut).toBe(true);
         expect(t.lut).not.toBe(false);
     });
 
     test('builtLut: true also builds the LUT (legacy spelling)', () => {
-        const t = new Transform({ builtLut: true, dataFormat: 'int8' });
+        const t = new Transform({ builtLut: true, dataFormat: 'int8', detectIdentity: false });
         t.create('*sRGB', '*sRGB', eIntent.relative);
         expect(t.builtLut).toBe(true);
         expect(t.lut).not.toBe(false);
     });
 
     test('neither set: no LUT is built', () => {
-        const t = new Transform({ dataFormat: 'int8' });
+        const t = new Transform({ dataFormat: 'int8', detectIdentity: false });
         t.create('*sRGB', '*sRGB', eIntent.relative);
         expect(t.builtLut).toBe(false);
     });

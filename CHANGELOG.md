@@ -7,6 +7,101 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.5.0] — 2026-08-15
+
+Everything since 1.4.4 in one release: the v1.5 polish arc, the
+kernel-module architecture, and DeviceLink + N-channel support.
+
+### Added — DeviceLink profile support (`pClass: 'link'`)
+
+`t.create(deviceLink)` runs the single `A2B` tag device→device with no
+PCS: full element structure (v2 `inputCurve→CLUT→outputCurve`; v4
+`aCurves→CLUT→mCurves→matrix→bCurves`, including curves-only
+linearization links), asymmetric channel counts (CMYK→RGB, RGB→CMYK),
+header-declared intent, `buildLut: true`. Fixes exposed along the way:
+curves-only `mAB` tags no longer crash the LUT decoder; pure-gamma
+parametric curves (`para` type 0) now evaluate; the mft matrix is
+correctly skipped for non-PCSXYZ input. Docs:
+[docs/DeviceLink.md](./docs/DeviceLink.md) · Tests:
+`__tests__/transform_devicelink.tests.js` (self-validating fixtures —
+gamma-3 link = in³ exact, lcms 150 % ink-limit algorithm reproduced).
+
+### Added — N-channel profiles (5CLR–15CLR, `eProfileType.NChannel`)
+
+Hexachrome / 7-ink / spot press profiles load and transform in both
+directions: n-ink → PCS via a generic N-D simplex interpolator on the
+accuracy pipeline (input accepted as array or `{c0…cN}` object), and
+PCS/RGB → n-ink including the baked-LUT image path. `buildLut` with
+n-ink *input* is declined with a warning (a `grid^N` bake is
+impractical) and falls back to the per-pixel pipeline. A latent
+clamp-before-scale bug in the four `*_NCh` interpolators (unreachable
+before N-channel) was found and fixed. Docs:
+[docs/NChannel.md](./docs/NChannel.md).
+
+### Changed — kernel-module architecture
+
+The per-dimension hot-path kernels moved out of Transform.js into
+`src/kernels/{1d,2d,3d,4d,nd}/` as registered descriptors with
+per-Transform instances; WASM assets moved beside their kernels; the
+tuned loops moved verbatim (bench parity held, ~212 MPx/s Node
+wasm-simd). Dispatch resolves once at `create()` onto the kernel
+instance (`_runBig`/`_runSmall`/`_threshold`) — per call: one
+threshold compare + one indirect call. Transform.js: 15,878 → ~11,000
+lines. As-built doc:
+[docs/deepdive/KernelModules.md](./docs/deepdive/KernelModules.md).
+
+### Added — v1.5 polish arc
+
+- **Identity / NOP detection** (`detectIdentity`, default `true`) —
+  same-profile pairs collapse to a stride copy; multi-stage chains
+  collapse pairwise. **Semantic change:** same-profile transforms are
+  now exact pass-throughs; code relying on round-trip rounding must
+  pass `detectIdentity: false`. See
+  [docs/deepdive/Identity.md](./docs/deepdive/Identity.md).
+- **Pipeline validation** — `validateOnCreate` /
+  `transform.validatePipeline()`.
+- **Fully-bound `transformArrayFn`** dispatch (identity always;
+  LUT-path closures opt-in via `bindTransformArrayFn`).
+- **LUT kernel plugins** — register custom kernels under a custom
+  `lutMode`. See [docs/Plugin.md](./docs/Plugin.md).
+
+### Changed — LittleCMS comparison framing + corrected accuracy oracle
+
+After generous upstream review by Marti Maria
+([#6](https://github.com/glennwilton/jsColorEngine/issues/6)):
+
+- `cmsFLAGS_HIGHRESPRECALC` retired as an oracle/steelman
+  configuration (it's a legacy lcms 1.x emulation flag).
+  `bench/lcms-comparison/accuracy.js` now defaults to lcms's default
+  optimisation (`flags = 0`; `--highres` reproduces the old oracle) —
+  and against the modern path the image-LUT agreement **improved to
+  100 % within 1 LSB on all four workflows** (the old 14-LSB
+  out-of-gamut tail was a legacy-oracle artifact).
+- Native-C throughput claims marked historical pending re-measurement
+  with corrected lcms API calls; comparisons re-scoped as explicitly
+  single-threaded. The detail moved to a dedicated page:
+  [docs/LcmsComparison.md](./docs/LcmsComparison.md).
+
+### Docs
+
+- New: [docs/LcmsComparison.md](./docs/LcmsComparison.md),
+  [docs/DeviceLink.md](./docs/DeviceLink.md),
+  [docs/NChannel.md](./docs/NChannel.md),
+  [docs/Plugin.md](./docs/Plugin.md),
+  [docs/deepdive/Identity.md](./docs/deepdive/Identity.md),
+  [docs/deepdive/KernelModules.md](./docs/deepdive/KernelModules.md)
+  (as-built), plus deep dives on benchmarking methodology
+  ("Schrödinger's Bench"), the matrix-shaper WASM POC, and why
+  MPE / Named Color profiles are out of scope.
+- README repositioned: single-threaded framing throughout — faster
+  than `lcms-wasm` on every workflow; native-C-class performance on
+  one thread; not a scoreboard against LittleCMS.
+- Samples reorganised into per-tool folders
+  (`samples/ICCImage/`, `samples/LutBuilder/`, …); new browser
+  benchmark framework under `samples/benchmark/`.
+
+---
+
 ## [1.4.4] — 2026-05-02
 
 ### Added — TIFF visual editing workflow (`LutBuilder` Stage 3)
@@ -36,7 +131,7 @@ Any ICC-aware image editor (Photoshop, Affinity, GIMP, ColorSync) can now act as
 
 **`LutBuilder.pixelsToTIFF(pixels, w, h, spp, bps, opts)`** — static helper to write raw pixel data as a TIFF (used by `--apply` and delta output)
 
-### Added — CLI tool (`samples/lut-tiff-cli.js`)
+### Added — CLI tool (`samples/LutBuilder/lut-tiff-cli.js`)
 
 A command-line interface for the full TIFF LUT workflow:
 
@@ -151,7 +246,7 @@ externally with crypto + a key.
 
 ### Added — `LutBuilder` (samples)
 
-A small MIT-licensed helper at `samples/LutBuilder.js` for creating,
+A small MIT-licensed helper at `samples/LutBuilder/LutBuilder.js` for creating,
 mutating, and serialising LUTs on top of the engine. Stage 1 ships
 the core API:
 
@@ -184,7 +279,7 @@ the ICC LUT precision ceiling, the 16-bit TIFF workflow, lcms-wasm u16
 output, and the engine's u16 kernel. Conversion to f64 happens at
 `toLut()` time (lossless).
 
-See [`samples/lutbuilder.md`](./samples/lutbuilder.md) for the user
+See [`samples/LutBuilder/lutbuilder.md`](./samples/LutBuilder/lutbuilder.md) for the user
 guide and [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md) for the
 deep dive.
 
@@ -285,7 +380,7 @@ sRGB relative+BPC):
 - New [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md) (renamed
   from `LUTBuilder.md`) — deep-dive: design rationale, format spec,
   lcms architecture, signature design, demo numbers.
-- New [`samples/lutbuilder.md`](./samples/lutbuilder.md) — practical
+- New [`samples/LutBuilder/lutbuilder.md`](./samples/LutBuilder/lutbuilder.md) — practical
   user guide with code examples for every API, common workflows
   (TAC limit, pre-baked library, hybrid lcms fallback, JSON
   portability), and the audit-trail story.
@@ -419,7 +514,7 @@ colorimetric** intent only. Applying the user-selected proof intent
 **double-applies** gamut handling and is not how separation preview
 is meant to behave.
 
-- **`samples/iccimage.js` — `ICCImage.toProof()`** — When `intent` or
+- **`samples/ICCImage/iccimage.js` — `ICCImage.toProof()`** — When `intent` or
   `BPC` is passed as a single value, the second leg now defaults to
   **relative colorimetric** and **no black-point compensation**;
   the first leg still receives the caller’s intent and BPC. Explicit
@@ -507,7 +602,7 @@ to embed in commercial web apps, Electron tools, and SaaS pipelines
 — the main adoption blocker GPL posed. The `samples/` directory
 remains MIT-licensed.
 
-### Added — `ICCImage` helper (`samples/iccimage.js`)
+### Added — `ICCImage` helper (`samples/ICCImage/iccimage.js`)
 
 Small immutable image wrapper that owns the "I have an image, I want
 to display / proof / inspect it" workflow on top of jsColorEngine.
@@ -532,7 +627,7 @@ data.
 Key methods: `ICCImage.fromHTMLImage()`, `toProof()`,
 `toSeparation()`, `renderChannelAs()`, `toCanvas()`, `pixel(x, y)`,
 `toBitDepth()`, `resizeTo()`. Full API reference:
-[`samples/ICCImage.md`](./samples/ICCImage.md).
+[`samples/ICCImage/ICCImage.md`](./samples/ICCImage/ICCImage.md).
 
 ### Added — baked gamut-mapping LUT (`lutGamutMode`)
 
@@ -590,7 +685,7 @@ converter) and `profile-inspector.html` (ICC tag/TRC/gamut viewer).
 
 - **`samples/serve.js`** — zero-dependency static HTTP server for
   local development (`npm run samples:browser` → `:8080`).
-- **`samples/styles.css`** — shared stylesheet across all demos.
+- **`samples/styles/styles.css`** — shared stylesheet across all demos.
 - **`samples/profiles/`** — bundled CMYK ICC profiles for the demos
   (CoatedGRACoL2006, ISOcoated_v2_eci, eciCMYK_v2).
 
@@ -598,7 +693,7 @@ converter) and `profile-inspector.html` (ICC tag/TRC/gamut viewer).
 
 - New **[docs/Samples.md](./docs/Samples.md)** — live demo index,
   setup instructions, helper overview.
-- New **[samples/ICCImage.md](./samples/ICCImage.md)** — full API
+- New **[samples/ICCImage/ICCImage.md](./samples/ICCImage/ICCImage.md)** — full API
   reference for the `ICCImage` helper.
 
 ### Tests

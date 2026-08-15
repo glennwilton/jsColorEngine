@@ -723,11 +723,16 @@ profiles, same input bytes, same methodology as `bench/mpx_summary.js`.
 
 Setup for fairness:
 
-- **`cmsFLAGS_HIGHRESPRECALC`** on the lcms side — forces a large
-  precalc device-link LUT, matching jsColorEngine's "bake a LUT at
-  create time" design. Without this flag lcms2 still auto-precalcs,
-  but may pick a smaller grid for some pipelines; with it explicit,
-  there's no ambiguity.
+- **`cmsFLAGS_HIGHRESPRECALC`** on the lcms side — at the time we
+  believed this forced a larger precalc LUT "for fairness".
+  **Correction (Aug 2026, upstream feedback in
+  [#6](https://github.com/glennwilton/jsColorEngine/issues/6)):** it
+  is a legacy lcms 1.x *emulation* flag and should not be used as
+  the reference configuration. In this speed bench it measured
+  within ±1.5 % of `flags = 0` so the throughput conclusions are
+  unaffected; the `flags = 0` column is the representative lcms
+  number. (The same correction *improved* the accuracy comparison —
+  see `bench/lcms-comparison/README.md`.)
 - **Pinned WASM heap buffers** — `_malloc` input and output buffers
   once outside the loop and call `_cmsDoTransform` directly, so we
   don't time a `malloc`/`memcpy`/`free` on every iteration. This is
@@ -827,6 +832,17 @@ landing into lcms2 `fast-float` territory on a single CPU thread.
 
 ### Measured — vs native LittleCMS (same hardware, same run)
 
+> **Historical — under re-measurement (Aug 2026).** LittleCMS's
+> author reviewed this harness
+> ([#6](https://github.com/glennwilton/jsColorEngine/issues/6)): our
+> lcms API calls weren't optimal, HIGHRESPRECALC is a legacy
+> emulation flag (not a "bigger grid" fairness switch), and the GPL3
+> plugin pack lifts native lcms substantially beyond the stock MIT
+> build measured here. This whole native section is kept as the
+> honest record of what we measured and how; the current status and
+> the re-measurement plan live in
+> [docs/LcmsComparison.md](./LcmsComparison.md).
+
 Native lcms2 measurement, same methodology as the `lcms-wasm`
 comparison above (same profiles, same 65k-pixel seeded PRNG input,
 same warmup + median-of-5-batches timing loop, same
@@ -856,6 +872,16 @@ profile and input generator.
 >
 > To reproduce: `cd bench/lcms_c && make steelman && ./bench_lcms`.
 > Flag details: [`bench/lcms_c/README.md`](../bench/lcms_c/README.md#make-steelman--native-lcms2-ceiling).
+
+> **Bench correction (v1.5+).** The original C bench tested *RGB → Lab*
+> (sRGB → LabD50) as workflow 1 while `bench/mpx_summary.js` tests
+> *RGB → RGB* (sRGB → AdobeRGB1998). These measure different lcms2 code
+> paths — AdobeRGB is a matrix-shaper profile, so sRGB→AdobeRGB uses an
+> optimised matrix-composition path that runs ~3× faster than the
+> LUT-based Lab evaluation. The bench has been corrected. The table
+> below preserves the original RGB→Lab numbers for continuity; see
+> **[Steelmanning the steelman](#steelmanning-the-steelman--fast-float-measured-directly)**
+> for the corrected RGB→RGB comparison with fast_float measurements.
 
 | Workflow | jsCE `float` | **jsCE `int`** | lcms-wasm (best) | lcms2 native release | **lcms2 native steelman** | jsCE `int` / steelman |
 |---|---|---|---|---|---|---|
@@ -928,7 +954,7 @@ estimate:**
 | jsColorEngine `lutMode: 'float'`              | 33.5 – 55.4 MPx/s | Measured — above |
 | **lcms2 vanilla (native C, scalar)**           | **31.2 – 61.9 MPx/s** | Measured — above (steelman build; release within ±2 %) |
 | lcms-wasm (HIGHRESPRECALC + pinned)           | 22.0 – 40.2 MPx/s | Measured — above |
-| lcms2 + `fast-float` plugin (SSE2, **128-bit — same width as ours**) | ≈ 150 – 500 MPx/s | Estimated — vanilla × 3–8 per maintainer (see below) |
+| lcms2 + `fast-float` plugin (SSE2, **128-bit**) | **~455 MPx/s** matrix-shaper / **~30–50 MPx/s** LUT | **Measured** — splits by profile type; see [Steelmanning the steelman](#steelmanning-the-steelman--fast-float-measured-directly) |
 | babl (GIMP, AVX2/AVX-512 256/512-bit)         | ≈ 500 – 1500 MPx/s | "up to 10× lcms2" per GIMP release notes — wider SIMD than JS/WASM can reach today |
 | lcms2 + multithreaded plugin                  | N × single-thread | Just CPU core scaling, orthogonal |
 
@@ -956,20 +982,21 @@ Three things fall out of the measured table above:
    measured native-lcms2 row. On pure WebAssembly, on a single CPU
    thread, with JavaScript as the outer language.
 
-3. **`lutMode: 'int-wasm-simd'` chases the Fast Float + SIMD
-   plugin.** Measured 3.25× over `'int'` on 3D RGB-input workloads,
-   landing at ~210 MPx/s — past the vanilla lcms2 band (both
-   measured and estimated) and into the lcms2 `fast-float` plugin's
-   estimated 150-500 MPx/s range. This was *not* predicted at the
-   time the 1D POC was run (see v1.5 Historical record for the
-   0.89× across-pixel SIMD result that suggested LUT SIMD wouldn't
-   work); it became possible once we inverted the vectorisation
-   axis. Importantly, `fast-float` is **SSE2-only (128-bit)**, the
-   same SIMD width as wasm v128 — so `int-wasm-simd` vs `fast-float`
-   is genuinely apples-to-apples on instruction width. The remaining
-   gap to `fast-float`'s upper band is specialisation depth (number
-   of hand-rolled kernel variants × tightness of the plugin
-   dispatcher) and multi-threading, not SIMD width.
+3. **`lutMode: 'int-wasm-simd'` beats fast_float on LUT workflows;
+   loses on matrix-shaper.** Measured 3.25× over `'int'` on 3D
+   workloads, landing at ~210 MPx/s. For CMYK/LUT workflows,
+   fast_float gives lcms2 nothing (~0–2%), so jsCE WASM SIMD wins by
+   **3–4×** on every CMYK direction — confirmed measured, not
+   estimated. For RGB→RGB (matrix-shaper), fast_float reaches
+   ~455 MPx/s vs jsCE's ~216 MPx/s — native wins by 2.1×. The split
+   is because fast_float fuses both matrix-shaper profiles into a
+   single vectorised 3×3 multiply (bypassing stage-walking entirely),
+   while jsCE currently routes all transforms — including RGB→RGB —
+   through the CLUT pipeline. A dedicated fused-matrix path in jsCE
+   would close this gap; it is a roadmap item, not an architectural
+   constraint. The full story, measured table, and opportunity
+   analysis are in
+   **[Steelmanning the steelman](#steelmanning-the-steelman--fast-float-measured-directly)**.
 
 ### What is `fast-float`?
 
@@ -1039,6 +1066,128 @@ above that (babl, pillow-simd, Intel IPP) is a different library
 with a different purpose, **and is also on our honest-comparison
 table** as something we don't claim to beat without wasm SIMD
 widening first.
+
+---
+
+### Steelmanning the steelman — fast_float measured directly
+
+The comparison table above listed fast_float as *estimated* at
+`≈ 150–500 MPx/s (vanilla × 3–8)`, taken from the maintainer's
+documentation. We built `make fastfloat` in `bench/lcms_c/` to
+replace that estimate with actual measurements — and in doing so,
+found a problem in our own C bench along the way.
+
+**What we got wrong in the original bench.** Workflow 1 in the C bench
+was *RGB → Lab* (sRGB → LabD50). The JS bench (`bench/mpx_summary.js`)
+tests *RGB → RGB* (sRGB → AdobeRGB1998). These hit different code paths
+in lcms2: AdobeRGB is a matrix-shaper profile, so the transform goes
+through a matrix-composition fast path rather than a CLUT evaluation.
+The C bench has been corrected to match; `make fastfloat` (and `make`,
+`make steelman`) now all test the same four workflows as the JS bench.
+Not catching this earlier was an oversight worth naming — if you're
+cross-checking two benches, make sure they measure the same thing.
+
+**fast_float splits sharply by profile type.** To reproduce: `cd bench/lcms_c && make fastfloat`. Results on the same reference hardware (WSL2 Ubuntu, gcc 9.3.0, same seeded input, same warmup-and-median methodology as §4 above):
+
+| Workflow | Profile type | lcms2 vanilla | lcms2 + fast_float | Speedup |
+|---|---|---|---|---|
+| RGB → RGB   (sRGB → AdobeRGB1998)             | Matrix-shaper | ~160 MPx/s | **~455 MPx/s** | **3.4×** |
+| RGB → CMYK  (sRGB → GRACoL)                   | LUT-based     | ~50 MPx/s  | ~48 MPx/s      | ~1.0× |
+| CMYK → RGB  (GRACoL → sRGB)                   | LUT-based     | ~34 MPx/s  | ~34 MPx/s      | ~1.0× |
+| CMYK → CMYK (GRACoL → GRACoL)                 | LUT-based     | ~30 MPx/s  | ~30 MPx/s      | ~1.0× |
+| RGB → RGB   (sRGB→GRACoL→sRGB, soft-proof LUT)| LUT-based     | ~51 MPx/s  | ~51 MPx/s      | ~1.0× |
+
+The maintainer docs say "approximately 20% faster for CLUT profiles
+(8-bit)." We measured 0–2% — within noise. Our dispatch-bound analysis
+(§2.1) predicted this: fast_float's SSE2 arithmetic optimises the
+interpolation weights, but the bottleneck on LUT workflows is
+function-pointer stage dispatch, not the weight arithmetic. The plugin
+can't help what it can't see past the `call *%rax` boundary.
+
+The matrix-shaper case is structurally different. fast_float composes
+both profiles' 3×3 matrices into one at create time, then executes
+every pixel as nine multiplies and six adds — no stage-walking,
+no LUT reads. That is what gets 3.4×.
+
+The soft-proof row confirms this cleanly: force RGB→RGB through a 3D
+LUT (via the CMYK intermediate in `cmsCreateProofingTransform`) and
+fast_float drops straight to 1.0×. Same input type, same output type,
+same pixels — the only difference is whether the transform evaluates
+a matrix or a LUT. fast_float helps exactly one of those two code
+paths.
+
+**Where jsColorEngine fits — the honest picture:**
+
+| Workflow | jsCE `int` (pure JS) | **jsCE WASM SIMD** | lcms2 vanilla | lcms2 + fast_float |
+|---|---|---|---|---|
+| RGB → RGB   (matrix-shaper)      | ~72 MPx/s | ~216 MPx/s         | ~160 MPx/s | **~455 MPx/s** |
+| RGB → CMYK  (LUT)                | **~55 MPx/s** | **~210 MPx/s** | ~50 MPx/s  | ~48 MPx/s |
+| CMYK → RGB  (LUT)                | **~53 MPx/s** | **~128 MPx/s** | ~34 MPx/s  | ~34 MPx/s |
+| CMYK → CMYK (LUT)                | **~44 MPx/s** | **~128 MPx/s** | ~30 MPx/s  | ~30 MPx/s |
+| RGB → RGB   (soft-proof 3D LUT)  | **~55 MPx/s** | **~210 MPx/s** | ~51 MPx/s  | ~51 MPx/s |
+
+_jsCE numbers from Windows/Node 20 (§1 and soft-proof equivalent to other 3D workflows); lcms2 numbers from WSL2 on the same machine — same caveat as the §4 table above._
+
+**On LUT workflows, jsCE already beats native C in pure JavaScript —
+no WASM required.** The `int` mode (hand-unrolled JS integer kernel,
+no WebAssembly) beats vanilla lcms2 on every LUT-based direction:
++10% on RGB→CMYK, +56% on CMYK→RGB, +47% on CMYK→CMYK, +8% on the
+RGB→RGB soft-proof 3D LUT. That gap exists before a single WASM
+instruction runs — it's pure V8 TurboFan vs gcc on specialised
+vs general-purpose kernel design. WASM SIMD then extends that lead
+to 3–4× over C.
+
+> **Soft-proofing is a jsCE win.** A soft-proof in a browser (sRGB
+> display → CMYK press simulation → sRGB display) is a 3D LUT workflow.
+> jsCE `int` runs it at ~55 MPx/s; jsCE WASM SIMD runs it at ~210 MPx/s.
+> Vanilla native lcms2 runs it at ~51 MPx/s; fast_float doesn't help.
+> jsCE wins in pure JavaScript, and widens to 4× with WASM SIMD —
+> while remaining fully portable with no native binaries required.
+
+**On RGB→RGB (matrix-shaper), fast_float wins by 2.1×.** jsCE WASM
+SIMD at ~216 MPx/s loses to fast_float's ~455 MPx/s. The reason:
+jsColorEngine currently routes *all* transforms through the same
+pre-baked CLUT pipeline, including matrix-shaper profiles like
+sRGB↔AdobeRGB. Where fast_float runs nine multiply-adds, jsCE runs
+full tetrahedral LUT interpolation — eight grid-point reads, fractional
+weight calculation, the works. The fact that jsCE's general-purpose LUT
+kernel gets within 2× of a purpose-built matrix-multiply path is
+actually a testament to LUT kernel efficiency — but it doesn't close
+the gap.
+
+**The acknowledged gap and the opportunity.** jsCE does not yet have a
+dedicated fast path for matrix-shaper→matrix-shaper transforms. The
+optimisation is well-defined: detect at create time that both profiles
+are matrix-shaper, compose their 3×3 matrices into one, run a
+vectorised per-pixel multiply. No CLUT needed. This would push RGB→RGB
+throughput past the fast_float band and give jsCE a clean win on every
+workflow class. It's a bounded, accuracy-preserving optimisation on the
+roadmap; it hasn't been the priority because LUT performance is what
+the prepress audience actually measures.
+
+**Portability still matters for RGB→RGB.** fast_float requires native
+compilation and cannot ship in a browser, a Lambda function, or a React
+Native app without a native addon. jsCE WASM SIMD at ~216 MPx/s is the
+fastest portable option for any RGB→RGB transform today — 1.4× over
+vanilla native lcms2, deployable anywhere a JavaScript engine runs.
+
+**The specialisation story — where each engine put its SIMD:**
+
+Both engines applied their SIMD investment to the code path they own.
+The result is that each wins exactly where it specialised:
+
+| Engine | Where SIMD was applied | Wins on |
+|---|---|---|
+| **lcms2 + fast_float** | Matrix-shaper arithmetic (9 mul + 6 add / pixel, fixed pipeline) | Matrix-to-matrix RGB transforms |
+| **jsColorEngine WASM SIMD** | Tetrahedral LUT interpolation (channel-parallel v128 loads) | Every LUT-based workflow — CMYK, device-link, soft-proof |
+
+Neither engine is universally faster. Each is the right tool for its
+workflow class. For the workflows that prepress and colour management
+actually care about — CMYK conversion, device-link, and soft-proofing —
+jsCE wins in pure JavaScript before WASM is even involved. The WASM
+SIMD mode extends that advantage; it doesn't create it.
+
+---
 
 ### Lessons we picked up from reading `lcms2/src/cmsintrp.c`
 
@@ -1407,8 +1556,11 @@ reusable output buffer parameter that eliminates per-call typed-array
 allocation.
 
 **Dispatcher: table-driven vs legacy cascade
-(`bench/dispatcher_compare_bench.js`, Node 20, Win x64, 65 K
-pixels/iter, median of 5 × 100 iters, 500 iter warmup):**
+(`bench/dispatcher_compare_bench.js` — bench since retired; dispatch
+now resolves onto per-Transform kernel instances at create() time,
+see [deepdive/KernelModules.md](./deepdive/KernelModules.md) — Node
+20, Win x64, 65 K pixels/iter, median of 5 × 100 iters, 500 iter
+warmup):**
 
 | Config | Table-driven | Legacy cascade | Ratio |
 |---|---|---|---|

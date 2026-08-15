@@ -38,8 +38,11 @@ production-realistic, apples-to-apples setup):
 3. lcms-wasm `flags = 0`              (default — lcms2's auto-precalc
    heuristic decides grid size)
 4. lcms-wasm `cmsFLAGS_HIGHRESPRECALC` (force a large precalc device-link
-   LUT — matches jsColorEngine's "pre-bake a LUT at create time" design
-   exactly)
+   LUT). **Note (2026-08):** per upstream
+   ([jsColorEngine#6](https://github.com/glennwilton/jsColorEngine/issues/6)),
+   HIGHRESPRECALC is a legacy lcms 1.x *emulation* flag, not a "bigger
+   grid" switch — it is kept here as a diagnostic variant only, and
+   `flags = 0` is the representative lcms number.
 
 65536 pixels per iter, warmup 300 iters, median of 5 batches of 100
 iters (`~25s` total).
@@ -86,12 +89,16 @@ runs the same input pixels through both engines over a systematic
 mid-greys, skin tone, paper white, rich black, 100 % C/M/Y/K, etc.)
 and compares 8-bit output byte-for-byte.
 
+Oracle transforms use lcms **default optimisation** (`flags = 0`) —
+see the note below on the old HIGHRESPRECALC oracle. Results
+(2026-08-15, lcms-wasm / LCMS 2.16, `js[float]` vs oracle):
+
 | Workflow | exact match | within 1 LSB | within 2 LSB | max Δ | mean Δ |
 |---|---|---|---|---|---|
-| RGB → Lab    (sRGB → LabD50)   | 98.79 % | **100.00 %** | 100.00 % | 1 LSB  | 0.004 LSB |
-| RGB → CMYK   (sRGB → GRACoL)   | 93.54 % | **100.00 %** | 100.00 % | 1 LSB  | 0.016 LSB |
-| CMYK → RGB   (GRACoL → sRGB)   | 83.55 % | 98.51 %      | 99.07 %  | 14 LSB\*| 0.073 LSB |
-| CMYK → CMYK  (GRACoL → GRACoL) | 59.50 % | 98.83 %      | 99.86 %  | 4 LSB  | 0.141 LSB |
+| RGB → Lab    (sRGB → LabD50)   | 98.92 % | **100.00 %** | 100.00 % | 1 LSB | 0.004 LSB |
+| RGB → CMYK   (sRGB → GRACoL)   | 97.71 % | **100.00 %** | 100.00 % | 1 LSB | 0.006 LSB |
+| CMYK → RGB   (GRACoL → sRGB)   | 99.48 % | **100.00 %** | 100.00 % | 1 LSB | 0.002 LSB |
+| CMYK → CMYK  (GRACoL → GRACoL) | 96.96 % | **100.00 %** | 100.00 % | 1 LSB | 0.008 LSB |
 
 `lutMode: 'int'` is within 1 LSB of `lutMode: 'float'` on 99 %+ of
 samples (self-check) so using the integer kernel doesn't introduce
@@ -101,9 +108,25 @@ All **named reference colours** match exactly or within 1 LSB on
 every workflow. No disagreement on whites, blacks, primaries, mid-
 greys, skin tones, paper white, rich black, 100 % solids, etc.
 
-### \* The 14-LSB max on CMYK → RGB is out-of-gamut clipping, not a bug
+### The old 14-LSB CMYK → RGB outlier — resolved: legacy-oracle artifact
 
-Every single worst offender looks like this:
+Earlier published runs used `cmsFLAGS_HIGHRESPRECALC` on the oracle
+transform and showed a small out-of-gamut tail: 98.51 % within 1 LSB
+on CMYK → RGB with a 14-LSB max, 98.83 % / 4 LSB on CMYK → CMYK.
+Marti Maria pointed out
+([jsColorEngine#6](https://github.com/glennwilton/jsColorEngine/issues/6))
+that HIGHRESPRECALC is a legacy lcms 1.x *emulation* flag, not the
+reference behaviour. Re-run against lcms's default pipeline
+(`flags = 0`), **the divergences disappear — every workflow is 100 %
+within 1 LSB.** `node accuracy.js --highres` reproduces the legacy
+oracle if you want to see the old tail.
+
+The analysis below is kept as context for the `--highres` mode: it
+correctly identified the disagreements as out-of-gamut clipping
+differences, but the aggressive intermediate clamping it describes
+belongs to the legacy emulation path, not to modern lcms.
+
+Every worst offender under `--highres` looks like this:
 
 ```
 in (192,  0, 64, 32)  js ( 0,163,174)  lcms (14,163,174)   Δmax=14
@@ -140,11 +163,11 @@ opt-in **lcms-compatibility mode** that clamps more aggressively at
 intermediate stages for audit workflows that need bit-exact
 agreement with a reference lcms pipeline.
 
-If you need *bit-for-bit* agreement with LittleCMS for an audit
-workflow today, use `lutMode: 'float'` and expect occasional OOG
-drift as above. If you need *visually indistinguishable* output for
-a practical application, every workflow clears that bar by a wide
-margin.
+Against lcms's default pipeline the practical answer is simpler:
+every workflow agrees within 1 LSB on 100 % of sampled inputs,
+named reference colours included. For audit workflows chasing exact
+byte parity, `lutMode: 'float'` maximises exact-match rates
+(97–99.5 % exact, remainder 1 LSB).
 
 ## How to read these numbers (important caveats)
 
