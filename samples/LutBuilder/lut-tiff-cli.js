@@ -8,9 +8,9 @@
  *  Builds LUT TIFF files using LutBuilder.js.
  *
  *  Usage:
- *    node samples/lut-tiff-cli.js --help
- *    node samples/lut-tiff-cli.js --make-samples
- *    node samples/lut-tiff-cli.js --identity --channels 3 --size 33 \
+ *    node samples/LutBuilder/lut-tiff-cli.js --help
+ *    node samples/LutBuilder/lut-tiff-cli.js --make-samples
+ *    node samples/LutBuilder/lut-tiff-cli.js --identity --channels 3 --size 33 \
  *        --chain-in *AdobeRGB --chain-out *AdobeRGB \
  *        --images face.png,fruit.png,skin.png \
  *        --out out.tiff
@@ -117,20 +117,20 @@ MODES
 
 Examples:
   # Create an AdobeRGB identity LUT with preview images:
-  node samples/lut-tiff-cli.js --create --channels 3 --size 33 --scale 3 \\
+  node samples/LutBuilder/lut-tiff-cli.js --create --channels 3 --size 33 --scale 3 \\
       --chain-in *AdobeRGB --chain-out *AdobeRGB \\
       --images face.png,fruit.png,skin.png \\
       --out adobe_rgb.tiff
 
   # Import a Photoshop-edited TIFF (auto-detects metadata):
-  node samples/lut-tiff-cli.js --import --in edited.tiff --out my_lut.json
+  node samples/LutBuilder/lut-tiff-cli.js --import --in edited.tiff --out my_lut.json
 
   # Import when TIFF has no embedded profile (CMYK always needs one):
-  node samples/lut-tiff-cli.js --import --in edited_cmyk.tiff \\
+  node samples/LutBuilder/lut-tiff-cli.js --import --in edited_cmyk.tiff \\
       --output-profile samples/profiles/CoatedGRACoL2006.icc \\
       --out my_cmyk_lut.json
 
-  node samples/lut-tiff-cli.js --make-samples
+  node samples/LutBuilder/lut-tiff-cli.js --make-samples
 `);
 }
 
@@ -154,7 +154,7 @@ function resolveProfileSpec(spec, fallbackChannels) {
     if (up === 'RGB')                    return virtualRGB('RGB');
     // Try as ICC file path
     if (fs.existsSync(spec)) {
-        const Profile = require('../src/Profile');
+        const Profile = require('../../src/Profile');
         const p = new Profile();
         p.loadBinary(fs.readFileSync(spec));
         if (!p.loaded) throw new Error('Failed to load ICC profile: ' + spec);
@@ -189,7 +189,7 @@ function runCreate() {
 
     if (!out) { console.error('Error: --out <path> is required'); process.exit(1); }
 
-    const { eIntent } = require('../src/main');
+    const { eIntent } = require('../../src/main');
 
     const b = new LutBuilder().createIdentity(inCh, size);
     b.setChain([
@@ -222,7 +222,7 @@ function runImport() {
     if (!inPath) { console.error('Error: --in <path> is required'); process.exit(1); }
     if (!fs.existsSync(inPath)) { console.error('Error: file not found: ' + inPath); process.exit(1); }
 
-    const { eIntent } = require('../src/main');
+    const { eIntent } = require('../../src/main');
 
     // Optional fallback parameters for TIFFs with no metadata
     const fallback = {};
@@ -564,12 +564,12 @@ function printReport(title, aName, bName, lutName, w, h, sppA, bpsA, sppB, bpsB,
 // ─── Built-in samples ────────────────────────────────────────────────────────
 
 function makeSamples() {
-    const { eIntent } = require('../src/main');
-    const Profile = require('../src/Profile');
+    const { eIntent } = require('../../src/main');
+    const Profile = require('../../src/Profile');
 
-    const outDir     = path.join(__dirname, 'tiff_samples');
-    const imgDir     = path.join(__dirname, 'images');
-    const profileDir = path.join(__dirname, 'profiles');
+    const outDir     = path.join(__dirname, '..', 'tiff_samples');
+    const imgDir     = path.join(__dirname, '..', 'images');
+    const profileDir = path.join(__dirname, '..', 'profiles');
     ensureDir(outDir);
 
     const images = ['face.png', 'fruit.png', 'skin.png']
@@ -680,7 +680,7 @@ Next steps:
   3. Save losslessly (TIFF, no JPEG compression)
   4. Reimport with:
 
-       const { LutBuilder } = require('./samples/LutBuilder');
+       const { LutBuilder } = require('./samples/LutBuilder/LutBuilder');
        const lut = LutBuilder.fromTIFF(require('fs').readFileSync('${rgbFile}'));
        const t   = lut.toTransform({ dataFormat: 'int8' });
        // t.transformArray(pixels)  — full WASM-SIMD speed

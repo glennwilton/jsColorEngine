@@ -8,7 +8,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jsColorEngine &middot; Soft Proof Demo</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles/styles.css">
 <style>
     /* ── Floating colour-picker tooltip ─────────────────────────────── */
     #pickerTooltip {
@@ -74,7 +74,7 @@
     }
     .timing-inline.is-busy { color: var(--accent); }
 </style>
-<script src="devtools-warn.js"></script>
+<script src="lib/devtools-warn.js"></script>
 <script src="browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
@@ -118,8 +118,8 @@
         RGB (right) so you can see the gamut compression at a glance.
     </p>
     <p class="muted">
-        Source: <a href="iccimage.js"><code>iccimage.js</code></a>
-        &middot; API reference: <a href="ICCImage.md"><code>ICCImage.md</code></a>
+        Source: <a href="ICCImage/iccimage.js"><code>iccimage.js</code></a>
+        &middot; API reference: <a href="ICCImage/ICCImage.md"><code>ICCImage.md</code></a>
         &middot; License: MIT
         &middot; Lab uses relative colorimetric (D50-adapted)
     </p>
@@ -326,7 +326,7 @@
     //
     // See iccimage.js header and ICCImage.md for the full API.
 
-    import { ICCImage, ChannelSets } from './iccimage.js';
+    import { ICCImage, ChannelSets } from './ICCImage/iccimage.js';
 
     // jsColorEngine core — Profile for loading ICC files, eIntent for
     // rendering intents, convert for deltaE colour-difference formulas.

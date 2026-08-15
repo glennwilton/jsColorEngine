@@ -1,10 +1,10 @@
 # `ICCImage` — colour-managed image wrapper
 
-`samples/iccimage.js` is a small immutable image wrapper around `jsColorEngine`.
+`samples/ICCImage/iccimage.js` is a small immutable image wrapper around `jsColorEngine`.
 It is the helper used by every demo in `samples/*.html` and doubles as living
 documentation of how to drive the engine on real image data.
 
-> **License:** MIT (separate from the engine's MPL-2.0 — see [LICENSE](./LICENSE)).
+> **License:** MIT (separate from the engine's MPL-2.0 — see [LICENSE](../LICENSE)).
 > **Status:** demo-grade. Not a general-purpose image library.
 
 ---

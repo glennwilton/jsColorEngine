@@ -8,7 +8,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jsColorEngine &middot; Samples</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles/styles.css">
 </head>
 <body>
 
@@ -26,6 +26,7 @@
     </div>
     <nav class="nav nav--secondary" aria-label="Sample demos">
         <a href="samples.html" class="is-active">Samples</a>
+        <a href="the-good-the-bad-and-the-ugly.html">Good / Bad / Ugly</a>
         <a href="live-video-softproof.html">Live Video</a>
         <a href="softproof.html">Soft Proof</a>
         <a href="softproof-vs-lcms.html">jsCE vs lcms</a>
@@ -43,7 +44,7 @@
         Runnable demos of the <a href="https://github.com/glennwilton/jsColorEngine">jsColorEngine</a>
         ICC colour management library. Every demo is zero-build vanilla JS
         driven by the small
-        <a href="ICCImage.md"><code>ICCImage</code></a> helper module.
+        <a href="ICCImage/ICCImage.md"><code>ICCImage</code></a> helper module.
     </p>
     <p class="muted">
         Engine: MPL-2.0 &middot; Samples: MIT
@@ -56,6 +57,15 @@
 <section class="card" id="demos">
     <h2>Demos</h2>
     <div class="info-grid" style="margin-top:12px">
+        <a href="the-good-the-bad-and-the-ugly.html" class="info-cell" style="text-decoration:none">
+            <span class="lbl">New — performance shape</span>
+            <span class="val" style="color:var(--accent)">The Good, The Bad and The Ugly</span>
+            <span class="muted" style="margin-top:4px">
+                Three ways to call the same <code>transformArray</code> kernel.
+                Nice wrapper, direct inline, and isolated module — with live
+                MPx/s numbers showing why call shape matters.
+            </span>
+        </a>
         <a href="live-video-softproof.html" class="info-cell" style="text-decoration:none">
             <span class="lbl">Ready</span>
             <span class="val" style="color:var(--accent)">Live Video Soft Proof</span>
@@ -146,13 +156,13 @@ npm run serve     # start dev server on :8080 (samples + bench)</code></pre>
     <h2>ICCImage helper</h2>
     <p class="lead">
         All demos share a small immutable image wrapper:
-        <a href="iccimage.js"><code>iccimage.js</code></a>.
+        <a href="ICCImage/iccimage.js"><code>iccimage.js</code></a>.
         It handles the &ldquo;load image &rarr; transform &rarr; display&rdquo;
         plumbing so each demo stays under ~100 lines.
     </p>
     <p class="lead">
         Full API reference:
-        <a href="ICCImage.md"><code>ICCImage.md</code></a>
+        <a href="ICCImage/ICCImage.md"><code>ICCImage.md</code></a>
     </p>
 </section>
 

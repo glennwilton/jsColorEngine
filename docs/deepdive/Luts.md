@@ -19,13 +19,13 @@
 [Compiled pipeline](./CompiledPipeline.md) ·
 [Accuracy](./Accuracy.md)
 
-**Companion guide:** [`samples/lutbuilder.md`](../../samples/lutbuilder.md) — the practical how-to with code samples, written for developers using the LutBuilder helper. This document is the *deep dive*: design rationale, format spec, the lcms bridge, the TIFF roadmap, and why the architecture looks the way it does.
+**Companion guide:** [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md) — the practical how-to with code samples, written for developers using the LutBuilder helper. This document is the *deep dive*: design rationale, format spec, the lcms bridge, the TIFF roadmap, and why the architecture looks the way it does.
 
 ---
 
 > **Status: shipped — v1.4.4.** All three stages are implemented. This document
 > is the architecture reference and rationale; the practical how-to and CLI guide
-> is in [`samples/lutbuilder.md`](../../samples/lutbuilder.md).
+> is in [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md).
 
 ## Table of contents
 
@@ -2072,7 +2072,7 @@ const report = builder.analyze(sourcePixels, expectedPixels, {
     returnDelta:  true,      // attach delta pixel arrays to the report
     deltaAmplify: 10,        // amplify delta values for visualisation
 });
-// See samples/lutbuilder.md API reference for the full report shape.
+// See samples/LutBuilder/lutbuilder.md API reference for the full report shape.
 ```
 
 > **ΔE metrics — not implemented (deferred, no current need).** The original spec
@@ -2385,7 +2385,7 @@ blockers.
 | 4 | ✅ **4D TIFF layout — resolved.** numSlices = N² (one per combination of two outermost axes), slicesPerRow = ceil(sqrt(N²)) = N (exact), giving a perfect N²×N² square for any N. At N=17: 289×289 = exactly 17⁴ cells. | |
 | 5 | **Should 5+ input channels be supported?** The current design caps at 4. N-channel inputs (5–8ch device profiles) are rare but exist (Hexachrome, RISO MZ770). Grid explosion is the concern: 17⁵ = 1.4M cells, 17⁶ = 24M. | Defer to v2. The callback API supports it; the TIFF workflow doesn't have a natural visual representation beyond 4D. |
 | 6 | **Grid size guidance for creative effects.** A 33-point grid samples colour space at 33 steps per axis. Smooth ICC transforms interpolate well at this resolution (~0.06 ΔE worst case). But steep creative effects (hard thresholds, posterisation, per-hue selective colour with sharp boundaries) will be visibly smoothed by the grid. The grid size modes (§3b) solve the ICC case — `'auto'`/`'high'`/`'low'` inspect profile LUT tables to pick appropriate resolution. But for Tier 2 callbacks with steep gradients, the modes don't help because there's no profile to inspect. The future `'test'` mode (§3b) would address this by empirically measuring interpolation error across grid sizes. | Documentation should recommend 49 or 65-point grids for effects with steep gradients. The `'test'` mode (§3b, future) could auto-discover the optimal size for any callback by building multiple candidate LUTs and measuring interpolation error against a high-resolution reference. |
-| 7 | ✅ **CLI tool — shipped.** `samples/lut-tiff-cli.js` provides `--create`, `--import`, `--validate`, `--compare`, `--apply`, `--make-samples` modes. See `samples/lutbuilder.md` CLI quick reference. | |
+| 7 | ✅ **CLI tool — shipped.** `samples/LutBuilder/lut-tiff-cli.js` provides `--create`, `--import`, `--validate`, `--compare`, `--apply`, `--make-samples` modes. See `samples/LutBuilder/lutbuilder.md` CLI quick reference. | |
 | 8 | **LUT composition.** Should the Builder support chaining two LUTs (A→B, B→C → A→C by re-sampling through both)? This is a natural operation but adds complexity — grid resolution compounds, and the inner LUT needs interpolation during the outer LUT's build pass. | Useful but not v1. The callback API already supports this manually (`builder.create()` where the callback calls `transform.transform()` on a previously built LUT). |
 | 9 | **Identity LUT optimisation.** An identity RGB LUT at 33³ is 35,937 cells of `(r,g,b) = input`. Should the Builder detect identity and skip the grid fill? Or is the explicit grid useful (e.g. for TIFF export where you want to see the identity gradient)? | Always fill the grid. The identity gradient is the TIFF export's whole point — it's the "blank canvas" that the user edits. |
 | 10 | **Versioning the LUT format.** The serialisation format is versioned (`_version: 2`). What's the compatibility contract? Can a v3 engine read a v2 LUT? Must it? | Forward-compatible reads, backward-compatible writes. A v3 engine MUST be able to read v2 LUTs. A v2 LUT written by a v3 engine must be readable by any v2-capable engine (new fields are additive, never removing existing ones). |

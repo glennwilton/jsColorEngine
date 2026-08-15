@@ -17,7 +17,7 @@ const fs   = require('fs');
 const path = require('path');
 const { Transform, eIntent } = require('../src/main');
 const Profile = require('../src/Profile');
-const { LutBuilder, virtualProfile, virtualRGB, virtualCMYK } = require('../samples/LutBuilder');
+const { LutBuilder, virtualProfile, virtualRGB, virtualCMYK } = require('../samples/LutBuilder/LutBuilder');
 
 const TIFF_DIR  = path.join(__dirname, '../samples/tiff_samples/tests');
 const PROF_DIR  = path.join(__dirname, '.');

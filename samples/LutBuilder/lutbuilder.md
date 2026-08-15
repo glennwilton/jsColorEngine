@@ -10,7 +10,7 @@ There are plenty of other uses for LUTs — colour grading, film emulation, phot
 
 ---
 
-`samples/LutBuilder.js` covers four practical use cases:
+`samples/LutBuilder/LutBuilder.js` covers four practical use cases:
 
 1. **Pre-bake a transform** — build once with ICC profiles, ship JSON, run anywhere with no profiles at runtime.
 2. **Capture any CMS** — export an identity TIFF, edit in Photoshop (or any colour-managed editor), reimport. The editor's CMS becomes your LUT.
@@ -19,7 +19,7 @@ There are plenty of other uses for LUTs — colour grading, film emulation, phot
 
 > **Version:** jsColorEngine v1.4.4 — LutBuilder Stage 1–3 complete.
 > **License:** MIT (separate from the engine's MPL-2.0).
-> **Architecture / rationale:** see [`docs/deepdive/Luts.md`](../docs/deepdive/Luts.md). This file is the how-to.
+> **Architecture / rationale:** see [`docs/deepdive/Luts.md`](../../docs/deepdive/Luts.md). This file is the how-to.
 
 ---
 
@@ -571,7 +571,7 @@ fs.writeFileSync('my_lut.tiff', bytes);
 
 ```
 # Via CLI
-node samples/lut-tiff-cli.js --create \
+node samples/LutBuilder/lut-tiff-cli.js --create \
     --channels 3 --size 33 --scale 3 --bps 16 \
     --chain-in *AdobeRGB --chain-out *AdobeRGB \
     --images face.png,fruit.png,skin.png \
@@ -612,7 +612,7 @@ t.transformArray(pixels);   // full WASM-SIMD speed
 
 ```
 # Via CLI (auto-detects all parameters from TIFF metadata)
-node samples/lut-tiff-cli.js --import \
+node samples/LutBuilder/lut-tiff-cli.js --import \
     --in edited.tiff \
     --out my_lut.json
 ```
@@ -623,7 +623,7 @@ node samples/lut-tiff-cli.js --import \
 
 ```
 # TIFF with no embedded ICC:
-node samples/lut-tiff-cli.js --import \
+node samples/LutBuilder/lut-tiff-cli.js --import \
     --in edited_cmyk.tiff \
     --output-profile samples/profiles/CoatedGRACoL2006.icc \
     --out my_cmyk_lut.json
@@ -831,8 +831,8 @@ All methods throw on invalid input — clear messages, no silent failures. Wrap 
 
 ## See also
 
-- [`docs/deepdive/Luts.md`](../docs/deepdive/Luts.md) — the deep dive: design rationale, format spec, lcms architecture, TIFF roadmap, precision proofs.
-- [`samples/lut-tiff-cli.js`](./lut-tiff-cli.js) — CLI for creating, importing, validating, and comparing LUT TIFFs. `--create`, `--import`, `--validate`, `--compare`, `--make-samples`.
-- [`samples/iccimage.js`](./iccimage.js) — image-level wrapper around `Transform` (a sibling sample, MIT-licensed).
+- [`docs/deepdive/Luts.md`](../../docs/deepdive/Luts.md) — the deep dive: design rationale, format spec, lcms architecture, TIFF roadmap, precision proofs.
+- [`samples/LutBuilder/lut-tiff-cli.js`](./lut-tiff-cli.js) — CLI for creating, importing, validating, and comparing LUT TIFFs. `--create`, `--import`, `--validate`, `--compare`, `--make-samples`.
+- [`samples/ICCImage/iccimage.js`](../ICCImage/iccimage.js) — image-level wrapper around `Transform` (a sibling sample, MIT-licensed).
 - [`__tests__/lutbuilder.tests.js`](../__tests__/lutbuilder.tests.js) — 90+ tests covering every API surface and the workflow patterns above.
 - [`__tests__/lutbuilder_tiff.tests.js`](../__tests__/lutbuilder_tiff.tests.js) — TIFF round-trip integration tests (Photoshop saved files, outCh detection, ICC extraction, damaged file rejection).

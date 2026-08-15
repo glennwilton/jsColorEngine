@@ -33,7 +33,7 @@ const {
     virtualCMYK,
     virtualGray,
     virtualLab,
-} = require('../samples/LutBuilder');
+} = require('../samples/LutBuilder/LutBuilder');
 
 const eProfileType = require('../src/main').eProfileType;
 
@@ -786,7 +786,7 @@ describe('W3 — clone-and-diverge produces independent LUT variants', () => {
     let coolTransform;
 
     beforeAll(() => {
-        const lutSource = new Transform({ dataFormat: 'int8', buildLut: true });
+        const lutSource = new Transform({ dataFormat: 'int8', buildLut: true, detectIdentity: false });
         lutSource.create('*srgb', '*srgb', eIntent.perceptual);
 
         const base = LutBuilder.fromTransform(lutSource);

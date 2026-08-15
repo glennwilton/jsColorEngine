@@ -26,7 +26,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jsColorEngine &middot; CMYK → RGB via LUT</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles/styles.css">
 <style>
     .canvas-grid {
         display: grid;
@@ -142,9 +142,9 @@
     .delta-warn   { color: var(--warn, #fc6); }
     .delta-bad    { color: var(--error, #f76); }
 </style>
-<script src="devtools-warn.js"></script>
+<script src="lib/devtools-warn.js"></script>
 <script src="browser/jsColorEngineWeb.js"></script>
-<script src="LutBuilder.js"></script>
+<script src="LutBuilder/LutBuilder.js"></script>
 </head>
 <body>
 
@@ -208,7 +208,7 @@
         Intent: relative colorimetric + BPC (lcms&rsquo;s perceptual disables BPC) &middot;
         Grid: 17<sup>4</sup> (4D) &middot;
         Source: <a href="lut-cmyk-to-rgb.html">view source</a> &middot;
-        API guide: <a href="lutbuilder.md"><code>lutbuilder.md</code></a>
+        API guide: <a href="LutBuilder/lutbuilder.md"><code>lutbuilder.md</code></a>
     </p>
     <div style="margin-top:8px; padding:10px; background:rgba(96,220,160,0.08); border-left:3px solid var(--accent-2,#5d8); border-radius:4px; font-size:13px;">
         <strong>What you should see in practice:</strong> the two LUTs (jsCE-built and lcms-built) agree on raw u16 grid data to <strong>~0.1 ΔP per channel</strong> &mdash; effectively the same colour math. Pixel ΔP between live (no LUT) and the LUT path is &lt;&nbsp;1 on average, with occasional pixels at K-generation transitions or gamut boundaries where 17-pt grid interpolation diverges from the f64 pipeline. <strong>jsCE LUT and lcms LUT are interchangeable as runtime artefacts.</strong>

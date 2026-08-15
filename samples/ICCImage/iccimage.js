@@ -49,7 +49,7 @@
  *    that exposes a global `jsColorEngine`. By default this module
  *    reads `globalThis.jsColorEngine` lazily on first use:
  *
- *        <script src="../browser/jsColorEngineWeb.js"></script>
+ *        <script src="../../browser/jsColorEngineWeb.js"></script>
  *        <script type="module">
  *            import { ICCImage } from './iccimage.js';
  *            // ...just works

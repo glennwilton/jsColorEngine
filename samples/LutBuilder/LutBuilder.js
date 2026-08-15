@@ -16,7 +16,7 @@
  *    of the existing Transform.setLut() contract.
  *
  *    See ./lutbuilder.md for the practical how-to with code samples, and
- *    ../docs/deepdive/Luts.md for the deep-dive design rationale, format
+ *    ../../docs/deepdive/Luts.md for the deep-dive design rationale, format
  *    spec, the lcms bridge, and the TIFF workflow roadmap.
  *
  *  STAGE 1 API
@@ -72,8 +72,8 @@
 // bundler — no separate ESM build needed.
 var engineModule, Profile;
 if (typeof module === 'object' && module.exports && typeof require === 'function') {
-    engineModule = require('../src/main');
-    Profile      = require('../src/Profile');
+    engineModule = require('../../src/main');
+    Profile      = require('../../src/Profile');
 } else if (typeof window !== 'undefined' && window.jsColorEngine) {
     engineModule = window.jsColorEngine;
     Profile      = window.jsColorEngine.Profile;
@@ -1497,7 +1497,7 @@ class LutBuilder {
     //
     // Returns a LutBuilder (synchronous — pure byte parsing, no I/O or async ops).
     // Export (exportTIFF) is async because it drives a Canvas context and loads images.
-    // Requires utif: npm install utif  |  <script src="utif.js"></script>
+    // Requires utif: npm install utif  |  <script src="LutBuilder/utif.js"></script>
 
     static fromTIFF(data, options) {
         options = options || {};
@@ -1661,7 +1661,7 @@ if (typeof module === 'object' && module.exports) {
     // Node CJS — what the Jest tests use.
     module.exports = _exports;
 } else if (typeof window !== 'undefined') {
-    // Browser global — the demo loads via <script src="LutBuilder.js"></script>.
+    // Browser global — the demo loads via <script src="LutBuilder/LutBuilder.js"></script>.
     window.LutBuilder     = LutBuilder;
     window.virtualProfile = virtualProfile;
     window.virtualRGB     = virtualRGB;

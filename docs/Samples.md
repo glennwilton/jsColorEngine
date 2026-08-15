@@ -15,12 +15,12 @@ the small helper module they all share.
 
 | File | Purpose |
 |---|---|
-| [`samples/iccimage.js`](../samples/iccimage.js) | Small immutable image wrapper (`ICCImage`). The thing every demo loads. |
-| [`samples/ICCImage.md`](../samples/ICCImage.md) | Full API reference for the helper. |
+| [`samples/ICCImage/iccimage.js`](../samples/ICCImage/iccimage.js) | Small immutable image wrapper (`ICCImage`). The thing every demo loads. |
+| [`samples/ICCImage/ICCImage.md`](../samples/ICCImage/ICCImage.md) | Full API reference for the helper. |
 
 `ICCImage` exists to make the "I have an image, I want to display / proof /
 inspect it" workflow a one-liner. It is *not* a general-purpose image
-library — see [`ICCImage.md`](../samples/ICCImage.md) for the design tenets
+library — see [`ICCImage.md`](../samples/ICCImage/ICCImage.md) for the design tenets
 and the explicit list of what's deliberately missing.
 
 ## Demos
