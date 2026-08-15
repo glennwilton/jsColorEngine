@@ -50,16 +50,18 @@ future-facing only.
     - [Pipeline validation — `validateOnCreate` option (shipped)](#pipeline-validation--validateoncreate-option-shipped)
     - [Transform identity / NOP detection (shipped)](#transform-identity--nop-detection-shipped)
     - [Fully-bound `transformArrayFn` (dispatch optimisation) — shipped](#fully-bound-transformarrayfn-dispatch-optimisation--shipped)
+    - [Kernel modules by dimension — ✅ shipped](#kernel-modules-by-dimension---shipped-in-v150-2026-08-15)
+    - [DeviceLink profile support — ✅ shipped](#devicelink-profile-support---shipped-in-v150-2026-08-15)
+    - [N-channel LUT support (5CLR–15CLR) — ✅ shipped](#n-channel-lut-support-5clr15clr---shipped-in-v150-2026-08-15)
+- [v1.5.5 — RGB matrix-shaper fast path + one-pixel cache](#v155--rgb-matrix-shaper-fast-path--one-pixel-cache)
     - [RGB matrix-shaper fast path — fused gamma + matrix + curves](#rgb-matrix-shaper-fast-path--fused-gamma--matrix--curves)
+    - [One-pixel memo cache — performance experiment](#one-pixel-memo-cache-for-the-lut-kernels--performance-experiment)
 - [v1.6 — QC infrastructure + automated bench history](#v16--qc-infrastructure--automated-bench-history)
     - [Automated bench recording — `npm run benchRecord`](#automated-bench-recording--npm-run-benchrecord)
     - [Browser bundle archive — `bench/results/bundles/`](#browser-bundle-archive--benchresultsbundles)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
-    - [DeviceLink profile support — ✅ shipped in v1.5.0](#devicelink-profile-support---shipped-in-v150-2026-08-15)
-    - [N-channel LUT support (5CLR–15CLR) — ✅ shipped in v1.5.0](#n-channel-lut-support-5clr15clr---shipped-in-v150-2026-08-15)
     - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
-- [v1.7 — Compiled non-LUT pipeline + `toModule()` + kernel modules](#v17--compiled-non-lut-pipeline--tomodule--kernel-modules)
-    - [Kernel modules by dimension — ✅ shipped in v1.5.0](#kernel-modules-by-dimension---shipped-in-v150-2026-08-15)
+- [v1.7 — Compiled non-LUT pipeline + `toModule()`](#v17--compiled-non-lut-pipeline--tomodule)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [POC `compile()` options](#poc-compile-options)
@@ -1120,10 +1122,11 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 
 ## v1.5 — Polish, validation, and fast paths — shipped in v1.5.0
 
-> All items below shipped in **v1.5.0 (2026-08-15)** except the RGB
-> matrix-shaper fast path, which is deferred to the v1.7 kernel-emit
-> work (the [POC is complete](./deepdive/MatrixShaperKernel.md) at
-> 250–257 MPx/s).
+> Everything below shipped in **v1.5.0 (2026-08-15)** — including the
+> kernel-module architecture, DeviceLink, and N-channel features that
+> were originally filed under v1.6/v1.7, now consolidated here. The
+> RGB matrix-shaper fast path moved to its own
+> [v1.5.5 section](#v155--rgb-matrix-shaper-fast-path--one-pixel-cache).
 
 > **Theme.** Quick wins that improve developer experience, close
 > security alerts, harden the pipeline, and add targeted fast paths
@@ -1150,6 +1153,12 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
   demos ran correctly against the esbuild browser bundle.
 - **No runtime surface changes.** The engine's `src/` tree picks up
   no new direct dependencies.
+- **Re-checked 2026-08-16:** `esbuild` 0.28.0 → 0.28.2; `js-yaml`
+  quadratic-CPU advisories cleared via `npm audit fix`; unused
+  `adm-zip` devDependency removed entirely (no consumer left in the
+  repo — it served the retired webpack-era archive script). Result:
+  **`npm audit` clean, 0 vulnerabilities.** `jest` 29.7 → 30.x is a
+  major bump, deferred until there's a reason to take it.
 
 ### Pipeline validation — `validateOnCreate` option (shipped)
 
@@ -1245,9 +1254,86 @@ silent `TypeError`.
 for the plan to extend `transformArrayFn` to cover all formats and remove
 the full-pipeline-loop fallback entirely.
 
+### Kernel modules by dimension — ✅ SHIPPED in v1.5.0 (2026-08-15)
+
+Per-dimension kernel modules live in `src/kernels/{1d,2d,3d,4d,nd}/`.
+Each dimension registers a **descriptor** via
+`Transform.registerKernel()`; `setKernel()` creates a per-Transform
+instance with `Object.create(descriptor)` (one hidden class per
+dimension — call sites stay bounded-polymorphic, never megamorphic).
+The instance owns the tuned array loops (moved verbatim from
+Transform.js), the WASM lifecycle (`create()` settle + demotion,
+`release()`), output allocation, and per-call dispatch: BIG/SMALL run
+refs are resolved once at create time onto `kernel._runBig` /
+`_runSmall` / `_threshold`, so a `transformArray()` call costs one
+threshold compare + one indirect call. Transform.js shrank from
+15,878 to ~11,000 lines with bench parity held throughout
+(~212 MPx/s Node wasm-simd).
+
+Differences from the original plan: descriptor instances with
+run-slot resolution replaced the "`getKernel() → always-bound
+closure`" shape (binding a full `transformArrayFn` closure measured
+no faster for images and slower for tiny batches, so it's opt-in via
+`bindTransformArrayFn`), and the planned `BIND_MIN_PIXELS` gate was
+dropped for the same reason. Custom kernels plug in via
+`Transform.registerKernel()` / `registerLutKernelPlugin()` rather
+than `setKernelModule()`.
+
+**As-built documentation:**
+[deepdive/KernelModules.md](./deepdive/KernelModules.md) (includes
+remaining future work: `emitKernel()` for the v1.7 `toModule()`
+pipeline, `kernelInfo()` diagnostics, per-dimension WASM loading).
+
+### DeviceLink profile support — ✅ SHIPPED in v1.5.0 (2026-08-15)
+
+DeviceLink (`pClass: 'link'`) profiles load and transform:
+`t.create(deviceLink)` runs the single `A2B` tag device→device with no
+PCS, handling the full element structure (v2 curves→CLUT→curves; v4
+aCurves→CLUT→mCurves→matrix→bCurves, including curves-only linearization
+links), asymmetric channel counts (CMYK→RGB, RGB→CMYK), and
+`buildLut: true`. Validated against lcms-testbed links (gamma-3
+linearization = in³ exactly; 150% ink-limit = lcms's algorithm
+reproduced) and the Serendipity null/simple sample links.
+
+Implementation notes: [`docs/DeviceLink.md`](./DeviceLink.md) ·
+Tests: `__tests__/transform_devicelink.tests.js`. Real-world DeviceLink
+profiles now flow through the bulk ICC oracle (v1.6, below) like every
+other profile type.
+
+### N-channel LUT support (5CLR–15CLR) — ✅ SHIPPED in v1.5.0 (2026-08-15)
+
+Hexachrome / 7-ink / spot-colour profiles (5CLR–FCLR) load and transform
+in both directions: N-channel→PCS via the generic
+`tetrahedralInterpND_NCh` sorted-fraction simplex (accuracy path — no
+hot-path array loop by design; press profiles are a proof/measurement
+use case), and PCS/RGB→N-channel including the fast baked-LUT image path
+(3D grid, N output channels, existing `3D→NCh` array loop).
+`buildLut` with N-channel *input* is declined with a warning (a `grid^N`
+bake is impractical) and falls back to the per-pixel pipeline.
+
+Implementation notes: [`docs/NChannel.md`](./NChannel.md) ·
+Tests: `__tests__/transform_nchannel.tests.js` (7CLR press profile;
+physical-sanity assertions until lcms oracle numbers arrive — hexachrome
+and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
+
+---
+
+## v1.5.5 — RGB matrix-shaper fast path + one-pixel cache
+
+> **Status.** Two performance items, both with groundwork done.
+> **Matrix-shaper fast path**: started — the matrix fuse and
+> `useCurveLut` shipped in v1.5.0, and the WASM SIMD kernel exists as
+> a validated five-generation POC at **250–257 MPx/s in Chrome**
+> (`bench/matrix_shaper_poc/`, design history in
+> [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md));
+> remaining work is packaging the POC as a registered kernel
+> descriptor and wiring matrix-shaper detection into `create()`.
+> **One-pixel cache**: an lcms-style memo cache to bench on real
+> images — experiment below.
+
 ### RGB matrix-shaper fast path — fused gamma + matrix + curves
 
-**Progress so far (v1.5):**
+**Progress so far (shipped in v1.5.0):**
 
 - **Matrix fuse** — already shipped in v1.3 `optimisePipeline()`.  Adjacent
   `stage_matrix_rgb + stage_matrix_rgb` pairs are collapsed into one combined
@@ -1373,10 +1459,11 @@ beats it), the WASM kernel is still worth building; if pure JS
 already wins, WASM is a tighter-loop refinement rather than a
 prerequisite.
 
-**WASM SIMD kernel — v1.7 matrix-shaper kernel module.**
+**WASM SIMD kernel — matrix-shaper kernel module.**
 
-The SIMD matrix-shaper path is the natural first use-case for the v1.7
-kernel module architecture (see [deepdive/KernelModules.md](./deepdive/KernelModules.md)):
+The SIMD matrix-shaper path is the natural first use-case for the
+kernel-module architecture that shipped in v1.5.0 (see
+[deepdive/KernelModules.md](./deepdive/KernelModules.md)):
 
 - A `kernel3D_matrix_shaper` descriptor is registered via `Transform.registerKernel()`
 - Its `buildLut(lutMode)` checks `inputProfile.isRGBMatrix && outputProfile.isRGBMatrix`
@@ -1409,6 +1496,29 @@ to the existing CLUT kernels unchanged via `buildLut()` returning `null`.
   pure JS; WASM variant targets parity with or beyond fast_float
   (~455 MPx/s).
 
+### One-pixel memo cache for the LUT kernels — performance experiment
+
+lcms2 memoizes the last-seen input pixel inside `cmsDoTransform` and
+it's worth 2–3× on photo-like content with flat runs, up to ~5× on
+solid fills where every workflow converges to a ~160–170 MPx/s
+cache-hit ceiling (measured 2026-08 — see
+[LcmsComparison.md § First re-measurement data](./LcmsComparison.md#first-re-measurement-data--input-content-matters-23-aug-2026)).
+jsCE's kernels are content-neutral: every pixel pays full
+interpolation.
+
+**The experiment:** add a one-entry cache to the 4D paths (compare 4
+input bytes vs the previous pixel, copy the previous output on hit)
+and bench it across the three content generators (noise / gradient /
+solid) **plus a real-image corpus** — the open question is how often
+real photographic content produces *byte-identical* adjacent pixels
+(sensor noise and JPEG artifacts break exact equality; flat synthetic
+content — UI, logos, vector fills, page backgrounds — is where runs
+actually live). On pure noise the cost is one compare+branch per
+pixel (lcms pays the same and still posts its noise numbers, so the
+downside is bounded). Ship only if the real-image numbers justify
+it; per-kernel opt-in via the descriptor fits the kernel-module
+architecture.
+
 ---
 
 ## v1.6 — QC infrastructure + automated bench history
@@ -1418,9 +1528,8 @@ to the existing CLUT kernels unchanged via `buildLut()` returning `null`.
 > pass/fail QC across every ICC profile in a corpus.  Add automated
 > bench recording so every version bump captures a Node throughput
 > snapshot — regressions become visible before they reach users.
->
-> *(The DeviceLink and N-channel items below were originally filed
-> here but shipped early, in **v1.5.0**.)*
+> (DeviceLink and N-channel support, originally filed here, shipped
+> early — see [v1.5](#v15--polish-validation-and-fast-paths--shipped-in-v150).)
 
 ### Automated bench recording — `npm run benchRecord`
 
@@ -1536,38 +1645,6 @@ just removes the "you need our vendored lcms tree on disk" step
 for contributors who want to regenerate the oracle from scratch
 against a future lcms release.
 
-### DeviceLink profile support — ✅ SHIPPED in v1.5.0 (2026-08-15)
-
-DeviceLink (`pClass: 'link'`) profiles load and transform:
-`t.create(deviceLink)` runs the single `A2B` tag device→device with no
-PCS, handling the full element structure (v2 curves→CLUT→curves; v4
-aCurves→CLUT→mCurves→matrix→bCurves, including curves-only linearization
-links), asymmetric channel counts (CMYK→RGB, RGB→CMYK), and
-`buildLut: true`. Validated against lcms-testbed links (gamma-3
-linearization = in³ exactly; 150% ink-limit = lcms's algorithm
-reproduced) and the Serendipity null/simple sample links.
-
-Implementation notes: [`docs/DeviceLink.md`](./DeviceLink.md) ·
-Tests: `__tests__/transform_devicelink.tests.js`. Real-world DeviceLink
-profiles now flow through the bulk ICC oracle (below) like every other
-profile type.
-
-### N-channel LUT support (5CLR–15CLR) — ✅ SHIPPED in v1.5.0 (2026-08-15)
-
-Hexachrome / 7-ink / spot-colour profiles (5CLR–FCLR) load and transform
-in both directions: N-channel→PCS via the generic
-`tetrahedralInterpND_NCh` sorted-fraction simplex (accuracy path — no
-hot-path array loop by design; press profiles are a proof/measurement
-use case), and PCS/RGB→N-channel including the fast baked-LUT image path
-(3D grid, N output channels, existing `3D→NCh` array loop).
-`buildLut` with N-channel *input* is declined with a warning (a `grid^N`
-bake is impractical) and falls back to the per-pixel pipeline.
-
-Implementation notes: [`docs/NChannel.md`](./NChannel.md) ·
-Tests: `__tests__/transform_nchannel.tests.js` (7CLR press profile;
-physical-sanity assertions until lcms oracle numbers arrive — hexachrome
-and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
-
 ### Automated profile oracle — bulk ICC compatibility testing
 
 Drop ICC profiles into a folder, run a single command, get a
@@ -1621,7 +1698,7 @@ before we move on to the heavier v1.7 work.
 
 ---
 
-## v1.7 — Compiled non-LUT pipeline + `toModule()` + kernel modules
+## v1.7 — Compiled non-LUT pipeline + `toModule()`
 
 > **Scope.** This is **the largest single piece of post-v1.4 work**.
 > Code-generation for non-LUT transforms, the `getSource()` /
@@ -1652,40 +1729,11 @@ before we move on to the heavier v1.7 work.
 > (2) ship `getSource()` / `toModule()`, (3) document the
 > coverage matrix, (4) stay opt-in (do NOT auto-route in
 > `'auto'` yet — LUT modes remain the default for bulk image
-> work). *(The kernel-modules item below shipped early, in
-> **v1.5.0**.)* See
+> work). *(The kernel-modules groundwork this depends on shipped
+> early, in **v1.5.0** — see
+> [v1.5](#v15--polish-validation-and-fast-paths--shipped-in-v150).)* See
 > [deepdive/CompiledPipeline.md § Should we ship this](./deepdive/CompiledPipeline.md#should-we-ship-this-as-default--honest-assessment)
 > for the full reasoning.
-
-### Kernel modules by dimension — ✅ SHIPPED in v1.5.0 (2026-08-15)
-
-Per-dimension kernel modules live in `src/kernels/{1d,2d,3d,4d,nd}/`.
-Each dimension registers a **descriptor** via
-`Transform.registerKernel()`; `setKernel()` creates a per-Transform
-instance with `Object.create(descriptor)` (one hidden class per
-dimension — call sites stay bounded-polymorphic, never megamorphic).
-The instance owns the tuned array loops (moved verbatim from
-Transform.js), the WASM lifecycle (`create()` settle + demotion,
-`release()`), output allocation, and per-call dispatch: BIG/SMALL run
-refs are resolved once at create time onto `kernel._runBig` /
-`_runSmall` / `_threshold`, so a `transformArray()` call costs one
-threshold compare + one indirect call. Transform.js shrank from
-15,878 to ~11,000 lines with bench parity held throughout
-(~212 MPx/s Node wasm-simd).
-
-Differences from the plan above-the-fold in earlier drafts:
-descriptor instances with run-slot resolution replaced the
-"`getKernel() → always-bound closure`" shape (binding a full
-`transformArrayFn` closure measured no faster for images and slower
-for tiny batches, so it's opt-in via `bindTransformArrayFn`), and the
-planned `BIND_MIN_PIXELS` gate was dropped for the same reason.
-Custom kernels plug in via `Transform.registerKernel()` /
-`registerLutKernelPlugin()` rather than `setKernelModule()`.
-
-**As-built documentation:**
-[deepdive/KernelModules.md](./deepdive/KernelModules.md) (includes
-remaining future work: `emitKernel()` for the `toModule()` pipeline
-below, `kernelInfo()` diagnostics, per-dimension WASM loading).
 
 ### Per-Transform microbench for `'auto'`
 
@@ -2434,22 +2482,6 @@ bound enforced (refuse 65⁴ — 143 MB breaks everything).
 **Expected win:** at 33³ vs 17³ on a GRACoL profile, ΔE₀₀ max
 should drop from ~0.4 to ~0.1 in the saturation corners, for zero
 per-pixel cost — the LUT is built once, evaluated the same way.
-
-### One-pixel memo cache for the 4D kernels (lcms-style)
-
-lcms2 memoizes the last-seen input pixel inside `cmsDoTransform` and
-it's worth 2–3× on photo-like content with flat runs, up to ~5× on
-solid fills where every workflow converges to a ~160–170 MPx/s
-cache-hit ceiling (measured 2026-08 — see
-[LcmsComparison.md § First re-measurement data](./LcmsComparison.md#first-re-measurement-data--input-content-matters-23-aug-2026)).
-jsCE's kernels are content-neutral: every pixel pays full
-interpolation. A one-entry cache on the 4D paths (compare 4 input
-bytes vs previous pixel, copy previous output on hit) is cheap and
-would claw back most of that gap on real images; on pure noise it
-costs one compare+branch per pixel (lcms pays the same and still
-posts its noise numbers, so the downside is bounded). Needs
-benching on both content types before shipping; per-kernel opt-in
-via the descriptor would fit the kernel-module architecture.
 
 ### Non-uniform LUT grid (√ and cubic) for RGB-input workflows
 
