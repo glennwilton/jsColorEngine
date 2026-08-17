@@ -203,6 +203,48 @@ must stay live across the interpolation cascade, where
 which is exactly what the run-scan restructure earlier in this document
 exists to address.
 
+### Which kernels are even candidates
+
+Not all of them, and the rule is sharper than "the heavy ones":
+
+> **A cache is only interesting where the input space is too large to
+> precompute *and* the per-pixel work is high.**
+
+At 8 bits per channel the whole input space is enumerable for small
+dimensions, and a complete table beats any cache:
+
+| input | distinct inputs | verdict |
+|---|---:|---|
+| 1D (Gray) | 256 | **Never cache.** Precompute all 256 outputs — that is just a LUT, and cheaper than one hash. |
+| 2D (Duotone) | 65,536 | **Never cache.** A complete table is 64 K entries; precompute it. |
+| 3D (RGB) | 16.7 M | Marginal. Too big to enumerate (this is the 2²⁴ joke above), but per-pixel work is only moderate — modelled break-even ~41 %. |
+| 4D (CMYK) | 4.3 G | **The target.** Cannot be enumerated, heaviest interpolation, modelled break-even ~25 %. |
+| ND (5–15 ch) | astronomical | Also attractive — `KernelND` runs the per-pixel interpolator with an allocation per pixel, so it is the slowest path in the engine. |
+
+Output channel count pushes the same way: 4 output channels is more
+interpolation per pixel than 3, so CMYK and N-channel *destinations*
+improve the ratio too. A DeviceLink CMYK→CMYK is the ideal case —
+4D in, 4 out, and print workflows are exactly where flat graphic
+content lives.
+
+**RGB matrix-shaper needs no cache, now or later.** That path is headed
+for the fused WASM kernel at 250–257 MPx/s
+([MatrixShaperKernel.md](./MatrixShaperKernel.md)) — about 4 ns per
+pixel. A 4–5 ns check would more than double the cost of the thing it
+was meant to accelerate.
+
+Which is the general warning: **the better a kernel gets, the worse the
+cache looks on it.** The two efforts pull against each other, so the
+cache belongs only on paths that are expensive for irreducible reasons
+— high-dimensional interpolation — not on paths that are merely
+unoptimised yet.
+
+A useful side effect of this scoping: if only the 4D and ND kernels are
+candidates, that is two hand-written variants, and the codegen idea
+from the design notes is no longer needed to manage the matrix. It
+would earn its place only if slot-size or stats variants also had to be
+generated — worth revisiting when there is a POC to test it against.
+
 ### Hit rate vs table size — whole frames
 
 | image | 1 | 16 | 32 | 64 | 128 | 256 | 1024 |
