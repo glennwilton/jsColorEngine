@@ -186,6 +186,14 @@ that briefly reversed the conclusion: the bundled sample images are
 AI-adjusted rather than shot, and capping pixel count crops the top of
 a frame instead of sampling it.
 
+### deepdive/multicore.md
+Brainstorm for a worker-parallel image path (nothing implemented): the
+two models — transfer vs SharedArrayBuffer — and why the transfer one
+comes first, what the kernel split already gives for free (the loops
+are slice-shaped, no mutable scratch), the alignment rules, the
+COOP/COEP deployment blocker, and a first experiment that needs no
+engine changes.
+
 ### deepdive/multiProcessElements.md
 Why `mpet` / `DToB`/`BToD` tags are not decoded: spec-mandated fallback
 to AToB/BToA, near-zero real-world prevalence, iccMAX context.
