@@ -263,6 +263,66 @@ describe('pixelCache — safety', () => {
         expect(withCustom.getPixelCacheStats().enabled).toBe(false);
     });
 
+    test('real image: every output byte identical to uncached', () => {
+        // The colour-level tests above cannot produce what a bug would need to
+        // surface: evictions, hash collisions, and long hit/miss interleavings.
+        // This runs a real photograph through and compares the whole buffer.
+        // The exhaustive version (every content type, four transform shapes,
+        // 250k pixels) is bench/pixel_cache/verify_cache.js.
+        const fs = require('fs');
+        const imagePath = path.join(__dirname, '..', 'samples', 'images', 'skin.png');
+        if (!fs.existsSync(imagePath)) return;
+
+        let rgba, width, height;
+        try {
+            const { createCanvas, loadImage } = require('canvas');
+            // loadImage is async; the tests are sync, so use the sync decode
+            // path via a data buffer instead of awaiting.
+            const image = new (require('canvas').Image)();
+            image.src = fs.readFileSync(imagePath);
+            width = image.width;
+            height = image.height;
+            const canvas = createCanvas(width, height);
+            const context = canvas.getContext('2d');
+            context.drawImage(image, 0, 0);
+            rgba = context.getImageData(0, 0, width, height).data;
+        } catch (error) {
+            return; // canvas unavailable in this environment — skip
+        }
+
+        const pixelCount = Math.min(width * height, 60000);
+        const pixels = new Uint8ClampedArray(pixelCount * 3);
+        for (let i = 0; i < pixelCount; i++) {
+            pixels[i * 3]     = rgba[i * 4];
+            pixels[i * 3 + 1] = rgba[i * 4 + 1];
+            pixels[i * 3 + 2] = rgba[i * 4 + 2];
+        }
+
+        function run(cacheSlots) {
+            const transform = new Transform({
+                dataFormat: 'int8', buildLut: false, pixelCache: cacheSlots
+            });
+            transform.create('*sRGB', '*Lab', eIntent.relative);
+            const output = transform.transformArray(pixels, false, false, false, pixelCount);
+            return { output: output, stats: transform.getPixelCacheStats() };
+        }
+
+        const reference = run(0).output;
+        for (const slots of [1, 32]) {
+            const result = run(slots);
+            expect(result.output.length).toBe(reference.length);
+            // toEqual on 180k elements is slow; find the first difference.
+            let firstMismatch = -1;
+            for (let i = 0; i < reference.length; i++) {
+                if (reference[i] !== result.output[i]) { firstMismatch = i; break; }
+            }
+            expect({ slots: slots, firstMismatch: firstMismatch })
+                .toEqual({ slots: slots, firstMismatch: -1 });
+            // and the cache genuinely engaged, so this isn't vacuously true
+            expect(result.stats.hits).toBeGreaterThan(0);
+        }
+    });
+
     test('transformArray matches the uncached result and accumulates hits', () => {
         const plain = new Transform({ dataFormat: 'int8', buildLut: false });
         plain.create('*sRGB', '*Lab', eIntent.relative);

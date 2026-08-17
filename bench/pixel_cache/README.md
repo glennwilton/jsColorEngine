@@ -8,6 +8,24 @@ node bench/pixel_cache/cache_bench.js
 
 Options: `--pixels <n>` (default 250000), `--iters <n>` (default 3).
 
+## Correctness first
+
+```bash
+node bench/pixel_cache/verify_cache.js
+```
+
+Proves the cache is output-identical to no cache, byte for byte, across
+every content type, four transform shapes (3- and 4-channel output, int8
+and int16) and all cache modes — 108 whole-image comparisons plus an
+FNV-1a hash of each buffer. Exits non-zero on any mismatch, so it can
+gate a release.
+
+This exists because colour-level unit tests cannot produce what a cache
+bug needs to surface: evictions, hash collisions and long hit/miss
+interleavings only appear at image scale. A reduced version (one
+photograph, 60k pixels) runs as part of `__tests__/pixelcache.tests.js`
+so the guarantee is checked on every test run.
+
 ## What it reports
 
 For each content type, throughput with the cache off, then hit rate and

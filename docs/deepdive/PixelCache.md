@@ -58,10 +58,43 @@ in a rolling window, and 8-bit images reuse colours heavily. The three
 sample photographs hit **59–83 %** at 32 slots and are *faster* with
 the cache on, not slower. Adjacency was simply the wrong model.
 
-**Caveat.** Three sample PNGs, probably web-optimised. Camera-raw or
-heavily compressed content may behave differently, and nothing here
-has been checked against a broad corpus. This is enough to redirect
-the work, not enough to publish.
+**Adjacency vs recurrence, separated.** The `slots=1` column *is* the
+pure adjacency measure, and the gap to `slots=32` is everything else:
+
+| image | adjacency (slots=1) | + recurrence (slots=32) |
+|---|---:|---:|
+| face.png | 26.1 % | 58.8 % |
+| fruit.png | 58.3 % | 76.2 % |
+| skin.png | 52.1 % | 83.3 % |
+
+So roughly half the hits on `face.png` come from colours recurring
+elsewhere in the rolling window rather than from neighbouring pixels —
+a noisy flat background cycling through a dozen values is invisible to
+a single entry and free to a small table. The synthetic `near-miss`
+pattern (every pixel differing by 1 LSB, 27 distinct colours) shows the
+same shape: 0 % at one entry, 83 % at 32 slots.
+
+**Caveats — these are not a corpus.**
+
+- Three PNGs, and they are *AI-generated / adjusted* images. Those
+  plausibly carry smoother gradients and fewer distinct colours than
+  camera output, which would inflate every figure above.
+- Each has a substantial flat background (~20 % of frame), so some of
+  the win is background, not subject.
+- Counter-intuitively, JPEG input may score *higher*, not lower:
+  quantisation flattens smooth DCT blocks to identical values. The
+  familiar "JPEG artifacts break byte-equality" intuition applies to
+  high-frequency detail, not flat regions.
+
+Enough to redirect the work. Not enough to publish.
+
+**Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
+cached against uncached output byte for byte — every content type
+above, four transform shapes (3- and 4-channel output, int8 and int16),
+all cache modes: 108 whole-image comparisons, every byte identical,
+FNV-1a hashes matching. A reduced version runs in the test suite. This
+matters because colour-level unit tests cannot generate the evictions,
+collisions and hit/miss interleavings that only appear at image scale.
 
 **Worst case is worse than estimated.** Pure noise costs 0.82x — about
 a 20 % tax, against the 8–12 % predicted from op counts. And note the
