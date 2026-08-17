@@ -328,6 +328,41 @@ silently corrupt every later hit on it. Both halves are now written
 together in the store stage, which costs about 1 point on the pure-miss
 path and is worth it.
 
+### Scope decision (2026-08-19): four loops, nothing else
+
+**Targeted RGB/CMYK caching on the common 8-bit path — not a generic
+cache.** JavaScript performance is won by narrowing, not by generality,
+so the cache goes only where it demonstrably pays and the affected
+surface stays as small as possible:
+
+| in scope | file |
+|---|---|
+| `tetrahedralInterp3DArray_3Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:269` |
+| `tetrahedralInterp3DArray_4Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:665` |
+| `tetrahedralInterp4DArray_3Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:900` |
+| `tetrahedralInterp4DArray_4Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:1149` |
+
+Four loops. Everything else is explicitly **out**: 1D and 2D (their
+input space is enumerable — precompute instead, see below), ND (float,
+proof-oriented, and the key does not pack), all float variants, every
+WASM and SIMD variant (a scalar check serialises what f32x4
+vectorises), and the matrix-shaper path (headed for ~4 ns/pixel, where
+a 4–5 ns check would double the cost).
+
+These four are chosen because they are the **real-world common paths** —
+8-bit RGB and CMYK image conversion — and because 8 bits × 3 or 4
+channels packs into a single int32, which is what makes the check one
+`===` and one `imul`. That property is the whole reason this is cheap;
+it does not survive to u16 or float, and neither should the feature.
+
+**Still to measure: the 3D case.** Only 4D has a POC
+(break-even ~10 %, +47 % to +169 % on real content). 3D was modelled at
+~41 % break-even and never measured, and RGB content hit rates are more
+variable than CMYK — beach photo 3 %, text page 41 % at 32 slots. The
+same POC should be run on `tetrahedralInterp3DArray_4Ch_intLut_loop`
+(RGB → CMYK, a heavily used soft-proof and print-prep path with
+4-channel output) before 3D ships alongside 4D.
+
 ### Which kernels are even candidates
 
 Not all of them, and the rule is sharper than "the heavy ones":
