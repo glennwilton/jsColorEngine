@@ -203,6 +203,54 @@ must stay live across the interpolation cascade, where
 which is exactly what the run-scan restructure earlier in this document
 exists to address.
 
+### POC result — the kernel cache is much better than this path
+
+Built and measured: `bench/pixel_cache_kernel_poc/`, a DeviceLink
+CMYK→CMYK against `tetrahedralInterp4DArray_4Ch_intLut_loop`, with the
+cached variant produced by source-transforming the real kernel so the
+cascade is identical to production.
+
+| content | plain | cached (64 slots) | change | hit rate |
+|---|---:|---:|---:|---:|
+| cmyk noise | 26.9 | 24.6 | −8 % | 0 % |
+| photo → CMYK | 31.8 | 46.6 | +47 % | 57 % |
+| photo → CMYK | 27.8 | 41.5 | +49 % | 53 % |
+| poster → CMYK | 33.0 | 59.6 | +81 % | 73 % |
+| cmyk gradient | 32.7 | 72.2 | +121 % | 75 % |
+| cmyk solid | 32.3 | 151.4 | +368 % | 100 % |
+
+Byte-identical output in every case. **Break-even is ~10 %**, against
+~38–40 % on the accuracy path — so the modelled ~25 % was pessimistic
+and the earlier "the kernel port is questionable" conclusion was wrong.
+
+Why it is so much better:
+
+1. **No stage dispatch** — the largest single component of the
+   accuracy-path tax does not exist in an unrolled loop. Miss tax 8 %.
+2. **The key is one int32.** 4 × u8 packs exactly, so the check is a
+   single `===` and the hash a single `imul`, against three float
+   compares and three chained imuls.
+3. **A hit skips proportionally more** — the tetrahedral cascade is the
+   bulk of the per-pixel cost.
+
+**The most important finding is about the data, not the code.** The same
+photographs that hit 3–41 % as RGB hit **43–70 % once separated to
+CMYK**, because the RGB→CMYK LUT quantises many source colours onto the
+same output. So CMYK wins twice over: heavier per-pixel work *and*
+inherently more repetitive data. That is the strongest argument yet for
+scoping the cache to CMYK/4D.
+
+**Table size matters here, unlike on the accuracy path**, because the
+kernel streams a large CLUT and competes for L1: 16–256 slots all cost
+−7 to −8 %, but 1024 (12 KB) drops to −17 %. Use 64–256. The
+L1-pressure reasoning from the design notes was right for kernels all
+along — it was only wrong when applied to the allocation-heavy accuracy
+path.
+
+Caveats: 8-bit only (the 32-bit key does not generalise to u16 or
+float), no alpha exercised, one kernel on one machine. A POC, not a
+feature.
+
 ### Which kernels are even candidates
 
 Not all of them, and the rule is sharper than "the heavy ones":
