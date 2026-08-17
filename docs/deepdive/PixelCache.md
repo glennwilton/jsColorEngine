@@ -328,6 +328,45 @@ silently corrupt every later hit on it. Both halves are now written
 together in the store stage, which costs about 1 point on the pure-miss
 path and is worth it.
 
+### Profiling mode — measure hit rate without doing the maths
+
+`setPixelCacheProfiling(true)` answers "is this worth enabling for *my*
+content?" without the caller needing to know anything about the
+internals.
+
+The implementation is a single number. A miss normally sets
+`stage.step = 1` and walks on into the maths; in profiling mode it sets
+`endStep - 1`, jumping straight to the STORE stage. No NOP stage, no
+splice, no second pipeline — the pipeline is untouched and the mode is
+a **runtime toggle**.
+
+**Hit accounting stays bit-identical**, and the reason is structural:
+the key depends only on the stages *before* the check, and those still
+run. Only the value-producing stages are skipped. Measured on palette
+content, normal and profiling report the same hits and lookups to the
+integer.
+
+Speed-up is inversely proportional to hit rate, which is the useful way
+round:
+
+| content | hit rate | normal | profiling | speed-up |
+|---|---:|---:|---:|---:|
+| noise | 0 % | 6.2 | 18.8 | **3.0×** |
+| gradient | 75 % | 14.2 | 24.8 | 1.8× |
+| solid | 100 % | 26.9 | 27.5 | 1.0× |
+
+Profiling is fastest exactly when the content is worst for the cache —
+i.e. when the answer is "don't bother" and you want it quickly. When it
+is slow, the normal run was already fast and you have your answer
+anyway.
+
+**The output is meaningless while it is on.** The cached values are
+whatever was in flight, not converted colour, so the cache is flushed on
+every mode change in *both* directions. Without that, profiling and then
+transforming for real would silently return garbage from every hit —
+which is why the toggle owns the flush rather than leaving it to the
+caller.
+
 ### Scope decision (2026-08-19): four loops, nothing else
 
 **Targeted RGB/CMYK caching on the common 8-bit path — not a generic

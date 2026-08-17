@@ -56,9 +56,15 @@
      *      covers object / objectFloat / int8 / int16 / device without any
      *      per-format code. On a hit it sets its own `step` so the walk jumps
      *      straight to the output conversion, skipping the maths and the STORE
-     *      stage. On a miss it sets step = 1 and claims a slot.
+     *      stage. On a miss it sets step = `missStep` and claims a slot.
      *    - STORE captures the finished value. It is only ever reached on a
      *      miss, because a hit jumps over it, so it needs no branch of its own.
+     *
+     *  `missStep` is normally 1 — walk on into the maths. Setting it to
+     *  `endStep - 1` makes a miss jump straight to STORE, skipping the maths
+     *  as well: the keys are still computed and cached exactly as they would
+     *  be, so hit-rate accounting is unchanged, but the output is meaningless.
+     *  That is PROFILING MODE — see setPixelCacheProfiling().
      *
      *  The walk reads `stage.step` instead of incrementing, which is why it
      *  only runs under the dedicated arm in transform() / _walkPipelineCached.
@@ -75,9 +81,14 @@
      *  never referenced. That matters because with dataFormat 'device' the
      *  caller owns the input array and may mutate or reuse it between calls.
      *
-     *  SLOT VALIDITY. On a miss CHECK writes the key but marks the entry
-     *  invalid; STORE marks it valid. If a stage throws mid-pipeline the entry
-     *  stays invalid, so a half-written slot can never produce a hit.
+     *  NO EMPTY STATE. Every entry is seeded at build time with a real
+     *  (key, value) pair — lcms2 does the same, evaluating the all-zero pixel
+     *  at transform creation — so there is no validity flag to load and no
+     *  sentinel to reserve. The consequence is that key and value MUST be
+     *  written together, in STORE: a half-written entry would be
+     *  indistinguishable from a good one, and a stage throwing between the two
+     *  writes would leave a new key beside a stale value, silently corrupting
+     *  every later hit on it.
      *
      *  COUNTERS are always on. They live on stageData (an object already in
      *  the register set) and cost one increment against ~50 cycles of
@@ -132,7 +143,7 @@
                 stageData.pendingUsable = false;
             }
 
-            stage.step = 1;
+            stage.step = stageData.missStep;
             return colour;
         },
 
@@ -185,7 +196,7 @@
             for(c = 0; c < channels; c++){ pending[c] = colour[c]; }
             stageData.pendingSlot = slot;
             stageData.pendingUsable = true;
-            stage.step = 1;
+            stage.step = stageData.missStep;
             return colour;
         },
 
@@ -238,7 +249,7 @@
             for(c = 0; c < channels; c++){ pending[c] = colour[c]; }
             stageData.pendingSlot = slot;
             stageData.pendingUsable = true;
-            stage.step = 1;
+            stage.step = stageData.missStep;
             return colour;
         },
 
@@ -635,6 +646,10 @@
                 slotBits: slotBits,
                 hits: 0,
                 lookups: 0,
+                // 1 = walk on into the maths (normal). endStep - 1 = jump
+                // straight to STORE, skipping the maths — profiling mode.
+                missStep: 1,
+                profiling: false,
                 // handed from the check to the store on a miss, so both halves
                 // of an entry are written together — see stage_pixelCacheStore
                 pendingKey: new Float64Array(channels),
@@ -716,12 +731,54 @@
             }
             return {
                 enabled: true,
+                // true = the maths was skipped, so these counts are valid but
+                // any transform output produced alongside them is not
+                profiling: stageData.profiling,
                 slots: (stageData.slots === 0) ? 1 : stageData.slots,
                 hits: stageData.hits,
                 misses: stageData.lookups - stageData.hits,
                 lookups: stageData.lookups,
                 hitRate: (stageData.lookups === 0) ? 0 : stageData.hits / stageData.lookups
             };
+        },
+
+        /**
+         * Profiling mode — measure hit rate on real content without doing the
+         * colour maths.
+         *
+         * A miss normally walks on into the maths and the STORE stage captures
+         * the finished value. In profiling mode a miss jumps *straight* to
+         * STORE, so the maths never runs. The cache still computes and stores
+         * exactly the same keys in exactly the same order, so **hit-rate
+         * accounting is bit-identical to a real run** — the key depends only on
+         * the stages before the check, and those still execute.
+         *
+         * The point is capacity planning: break-even is around a 40 % hit rate
+         * on this path, so pointing this at your own images answers "is
+         * `pixelCache` worth enabling for my content?" without needing to know
+         * anything about the internals.
+         *
+         * **The output is meaningless while this is on.** The values cached and
+         * returned are whatever happened to be in flight, not converted colour.
+         * The cache is therefore flushed on every mode change, in both
+         * directions — leaving profiled garbage in the table and then
+         * transforming for real would silently return wrong colours.
+         *
+         * @param {boolean} enabled
+         * @returns {boolean} true if the mode was applied (a cache is present)
+         */
+        setPixelCacheProfiling(enabled){
+            var stageData = this._pixelCacheData;
+            if(!stageData){ return false; }
+
+            stageData.profiling = (enabled === true);
+            // endStep lands on the output conversion, one past STORE; one less
+            // than that lands on STORE itself.
+            stageData.missStep = stageData.profiling ? (stageData.endStep - 1) : 1;
+
+            this.clearPixelCache();
+            this.resetPixelCacheStats();
+            return true;
         },
 
         /**

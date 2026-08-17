@@ -206,6 +206,88 @@ describe('pixelCache — hit accounting', () => {
     });
 });
 
+describe('pixelCache — profiling mode', () => {
+
+    // Profiling skips the maths on a miss by jumping straight to the store
+    // stage. The keys still come from the stages BEFORE the check, which all
+    // still run, so hit accounting must be bit-identical to a real run — that
+    // is the entire premise of the feature.
+    function paletteRGB(count) {
+        const palette = [
+            [255, 255, 255], [0, 0, 0], [237, 28, 36], [0, 166, 81],
+            [46, 49, 146], [255, 242, 0], [140, 98, 57], [190, 190, 190],
+        ];
+        const pixels = new Uint8ClampedArray(count * 3);
+        let seed = 0x2468ace0;
+        for (let i = 0; i < count; i++) {
+            seed = (Math.imul(seed, 1103515245) + 12345) | 0;
+            const colour = palette[(seed >>> 16) % palette.length];
+            pixels[i * 3] = colour[0]; pixels[i * 3 + 1] = colour[1]; pixels[i * 3 + 2] = colour[2];
+        }
+        return pixels;
+    }
+
+    function rgbTransform(cacheSlots) {
+        const transform = new Transform({ dataFormat: 'int8', buildLut: false, pixelCache: cacheSlots });
+        transform.create('*sRGB', '*Lab', eIntent.relative);
+        return transform;
+    }
+
+    const COUNT = 5000;
+
+    test('hit accounting is identical to a real run', () => {
+        const pixels = paletteRGB(COUNT);
+
+        const normal = rgbTransform(32);
+        normal.resetPixelCacheStats();
+        normal.transformArray(pixels, false, false, false, COUNT);
+        const normalStats = normal.getPixelCacheStats();
+
+        const profiling = rgbTransform(32);
+        expect(profiling.setPixelCacheProfiling(true)).toBe(true);
+        profiling.transformArray(pixels, false, false, false, COUNT);
+        const profilingStats = profiling.getPixelCacheStats();
+
+        expect(profilingStats.profiling).toBe(true);
+        expect(normalStats.profiling).toBe(false);
+        expect(profilingStats.lookups).toBe(normalStats.lookups);
+        expect(profilingStats.hits).toBe(normalStats.hits);
+        expect(profilingStats.hits).toBeGreaterThan(0);
+    });
+
+    test('turning it off flushes the cache, so later output is never poisoned', () => {
+        // While profiling, the cached "values" are whatever was in flight, not
+        // converted colour. If the mode change did not flush, every subsequent
+        // hit would silently return that garbage.
+        const pixels = paletteRGB(COUNT);
+
+        const plain = new Transform({ dataFormat: 'int8', buildLut: false });
+        plain.create('*sRGB', '*Lab', eIntent.relative);
+        const expected = plain.transformArray(pixels, false, false, false, COUNT);
+
+        const transform = rgbTransform(32);
+        transform.setPixelCacheProfiling(true);
+        transform.transformArray(pixels, false, false, false, COUNT);   // fill with garbage
+        transform.setPixelCacheProfiling(false);
+
+        const actual = transform.transformArray(pixels, false, false, false, COUNT);
+
+        let firstMismatch = -1;
+        for (let i = 0; i < expected.length; i++) {
+            if (expected[i] !== actual[i]) { firstMismatch = i; break; }
+        }
+        expect(firstMismatch).toBe(-1);
+        expect(transform.getPixelCacheStats().hits).toBeGreaterThan(0);
+    });
+
+    test('is a no-op when no cache is configured', () => {
+        const transform = new Transform({ dataFormat: 'int8', buildLut: false });
+        transform.create('*sRGB', '*Lab', eIntent.relative);
+        expect(transform.setPixelCacheProfiling(true)).toBe(false);
+        expect(transform.getPixelCacheStats().enabled).toBe(false);
+    });
+});
+
 describe('pixelCache — safety', () => {
 
     test('device: a caller mutating a result does not poison the cache', () => {
