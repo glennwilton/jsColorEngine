@@ -287,11 +287,12 @@ cache belongs only on paths that are expensive for irreducible reasons
 — high-dimensional interpolation — not on paths that are merely
 unoptimised yet.
 
-A useful side effect of this scoping: if only the 4D and ND kernels are
-candidates, that is two hand-written variants, and the codegen idea
-from the design notes is no longer needed to manage the matrix. It
-would earn its place only if slot-size or stats variants also had to be
-generated — worth revisiting when there is a POC to test it against.
+Scoping to 4D/ND does *not* remove the case for codegen, as first
+thought. Even two dimensions still multiply out across data type (u8 /
+u16 / float), channel count and slot size — and crucially the
+**injection point and key method differ per data type**, which cannot
+be a runtime test without taxing the loop. See
+"Validated by the POC" under Codegen below.
 
 ### Hit rate vs table size — whole frames
 
@@ -874,6 +875,41 @@ variant (cache generated functions by config key so repeated identical
 configs share one object), and **`new Function` is blocked under a
 strict CSP without `unsafe-eval`** — a browser library must fall back
 to the hand-written kernels, so codegen can never be the only path.
+For the cache that fallback is trivially correct: no codegen means no
+cache, which is the default anyway.
+
+### Validated by the POC — and it is the answer to the data-type axis
+
+`bench/pixel_cache_kernel_poc/` builds its cached kernel exactly this
+way (`toString()` → insert → `new Function`) and produces byte-identical
+output, so the mechanism is no longer hypothetical.
+
+More importantly it resolves a problem hand-writing cannot: **both the
+injection point and the key method vary by data type**, and neither can
+be a runtime test without taxing the hot loop.
+
+| input | key | where to inject |
+|---|---|---|
+| u8, 3 ch | `(r<<16)\|(g<<8)\|b` — 24 bits, one int32 | straight after the input reads |
+| u8, 4 ch | `(k<<24)\|(c<<16)\|(m<<8)\|y` — exactly 32 bits, one int32 | straight after the input reads |
+| u16, 3 ch | 48 bits → two int32, `&&`-chained compare | after the input reads |
+| u16, 4 ch | 64 bits → two int32 | after the input reads |
+| float | no packing — compare components, or hash raw bits | *after* normalisation, not before |
+
+Baking that in as literals means the emitted loop carries one key
+expression and one compare with no branching, and the uncached variant
+contains no cache code at all. The earlier note that scoping to 4D/ND
+made codegen unnecessary was too quick: two dimensions × three data
+types × channel counts × slot sizes is exactly the matrix codegen
+exists for.
+
+**Inject into the hand-written kernels; do not generate them from
+scratch.** The kernels are the product of the tuning recorded in
+[JitInspection.md](./JitInspection.md) and the PERFORMANCE LESSONS
+block, and that hand-work is the asset. Transforming their source at
+build time keeps them the single source of truth and guarantees the
+cascade stays identical — which is precisely why the POC's output
+matched byte for byte on the first run.
 
 ## What to measure first
 
