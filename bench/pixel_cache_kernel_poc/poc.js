@@ -52,7 +52,31 @@ const HASH_PRIME = 2654435761;
 // Build the cached kernel by transforming the real one
 // ----------------------------------------------------------------------
 
-function buildCachedLoop(slots) {
+/**
+ * Evaluate one pixel through the UNMODIFIED kernel, so the cache can be seeded
+ * with a real (key, value) pair instead of a sentinel.
+ *
+ * Borrowed from lcms2, which seeds its one-entry cache at transform creation by
+ * evaluating the all-zero pixel. It matters more here than on the accuracy
+ * path: with a packed 4x8-bit CMYK key there is NO impossible int32 to use as
+ * an empty marker — CMYK(255,255,255,255) is exactly -1 — so the first version
+ * had to keep keys in a Float64Array initialised to NaN. Seeding removes the
+ * problem, which lets keys go back to Int32Array: half the memory per slot, and
+ * an integer compare rather than a double one.
+ */
+function seedPair(link) {
+    const transform = new Transform({
+        dataFormat: 'int8', buildLut: true, lutMode: 'int', detectIdentity: false
+    });
+    transform.create(link);
+    const out = transform.transformArray(new Uint8ClampedArray(4), false, false, false, 1);
+    return {
+        key: 0,                                   // (0<<24)|(0<<16)|(0<<8)|0
+        value: out[0] | (out[1] << 8) | (out[2] << 16) | (out[3] << 24)
+    };
+}
+
+function buildCachedLoop(slots, seed) {
     const original = Transform.prototype[LOOP_NAME];
     let source = original.toString();
 
@@ -66,9 +90,9 @@ function buildCachedLoop(slots) {
                 // 4 x u8 -> exactly 32 bits, so key and compare are single
                 // int32 operations and the hash is one imul.
                 _key = (inputK << 24) | (input0 << 16) | (input1 << 8) | input2;
-                _slot = (Math.imul(_key, ${HASH_PRIME}) >>> ${32 - slotBits}) << 1;
+                _slot = Math.imul(_key, ${HASH_PRIME}) >>> ${32 - slotBits};
                 if (_ckeys[_slot] === _key) {
-                    _val = _cvals[_slot >> 1];
+                    _val = _cvals[_slot];
                     output[outputPos++] = _val & 255;
                     output[outputPos++] = (_val >>> 8) & 255;
                     output[outputPos++] = (_val >>> 16) & 255;
@@ -86,7 +110,7 @@ function buildCachedLoop(slots) {
     const store = `
                 // ---- pixel cache store (miss only) -------------------
                 _ckeys[_slot] = _key;
-                _cvals[_slot >> 1] = output[outputPos - 4]
+                _cvals[_slot] = output[outputPos - 4]
                     | (output[outputPos - 3] << 8)
                     | (output[outputPos - 2] << 16)
                     | (output[outputPos - 1] << 24);
@@ -100,13 +124,13 @@ function buildCachedLoop(slots) {
     source = source.replace(declAnchor, declAnchor +
         '\n            var _key = 0|0, _slot = 0|0, _val = 0|0;');
 
-    // Keys live in a Float64Array initialised to NaN. An empty slot must never
-    // false-hit, and with all 32 bits of the key in use there is no impossible
-    // int32 sentinel — CMYK(255,255,255,255) is exactly -1. NaN !== anything,
-    // including itself, so an untouched slot can never match, and it costs one
-    // load and one compare with no extra branch.
-    const keys = new Float64Array(slots * 2).fill(NaN);
-    const vals = new Int32Array(slots);
+    // Int32Array keys, every slot seeded with a real (key, value) pair. No
+    // sentinel and no validity flag, so the hot path is a single integer load
+    // and compare. Filling every slot with the same pair is safe: a key only
+    // ever probes one slot, so the duplicates elsewhere are unreachable by it
+    // and any other key landing there compares unequal and misses.
+    const keys = new Int32Array(slots).fill(seed.key);
+    const vals = new Int32Array(slots).fill(seed.value);
     const state = { hits: 0, lookups: 0 };
 
     const body = source.slice(source.indexOf('{') + 1, source.lastIndexOf('}'));
@@ -119,7 +143,10 @@ function buildCachedLoop(slots) {
         };`);
 
     return { fn: factory(keys, vals, state), state: state,
-        reset: () => { keys.fill(NaN); state.hits = 0; state.lookups = 0; } };
+        reset: () => {
+            keys.fill(seed.key); vals.fill(seed.value);
+            state.hits = 0; state.lookups = 0;
+        } };
 }
 
 // ----------------------------------------------------------------------
@@ -232,11 +259,15 @@ async function main() {
         return { mpx: median(times), out: out };
     }
 
+    const seed = seedPair(link);
+    console.log('\n  seeded with CMYK(0,0,0,0) -> 0x' + (seed.value >>> 0).toString(16).padStart(8, '0') +
+        '  (no sentinel, no validity flag)');
+
     for (const slots of [16, 64, 256]) {
         console.log('\n  slots = ' + slots);
         console.log('    content                    plain    cached    change   hit%   identical');
         for (const [label, pixels, count] of contents) {
-            const cached = buildCachedLoop(slots);
+            const cached = buildCachedLoop(slots, seed);
             const base = run(pixels, count, null);
             const withCache = run(pixels, count, cached);
 

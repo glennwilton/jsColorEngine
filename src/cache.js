@@ -105,7 +105,7 @@
             var c;
             stageData.lookups++;
 
-            if(stageData.hasPrevious && colour.length === channels){
+            if(colour.length === channels){
                 var previousKey = stageData.previousKey;
                 var isSame = true;
                 for(c = 0; c < channels; c++){
@@ -120,14 +120,18 @@
                         ? stageData.previousValue.slice()
                         : stageData.previousValue;
                 }
+
+                // Miss — hand the key to STORE rather than writing it here.
+                // Writing it now would leave a new key beside a stale value if
+                // a later stage throws, and the next lookup would hit that and
+                // return the wrong answer. STORE writes key and value together.
+                var pending = stageData.pendingKey;
+                for(c = 0; c < channels; c++){ pending[c] = colour[c]; }
+                stageData.pendingUsable = true;
+            } else {
+                stageData.pendingUsable = false;
             }
 
-            // Miss — record the key, invalidate the entry until STORE completes.
-            if(colour.length === channels){
-                var keyStore = stageData.previousKey;
-                for(c = 0; c < channels; c++){ keyStore[c] = colour[c]; }
-            }
-            stageData.hasPrevious = false;
             stage.step = 1;
             return colour;
         },
@@ -163,23 +167,24 @@
             var slotBase = slot * channels;
             var keys = stageData.keys;
 
-            if(stageData.slotValid[slot] === 1){
-                var isSame = true;
-                for(c = 0; c < channels; c++){
-                    if(keys[slotBase + c] !== colour[c]){ isSame = false; break; }
-                }
-                if(isSame){
-                    stageData.hits++;
-                    stage.step = stageData.endStep;
-                    var cachedValue = stageData.values[slot];
-                    return stageData.copyOnHit ? cachedValue.slice() : cachedValue;
-                }
+            // No validity check: every slot is seeded at build time with a real
+            // (key, value) pair, so there is no empty state to guard against.
+            var isSame = true;
+            for(c = 0; c < channels; c++){
+                if(keys[slotBase + c] !== colour[c]){ isSame = false; break; }
+            }
+            if(isSame){
+                stageData.hits++;
+                stage.step = stageData.endStep;
+                var cachedValue = stageData.values[slot];
+                return stageData.copyOnHit ? cachedValue.slice() : cachedValue;
             }
 
-            // Miss — claim the slot, invalidate it until STORE completes.
-            for(c = 0; c < channels; c++){ keys[slotBase + c] = colour[c]; }
-            stageData.slotValid[slot] = 0;
+            // Miss — hand key and slot to STORE, which writes both together.
+            var pending = stageData.pendingKey;
+            for(c = 0; c < channels; c++){ pending[c] = colour[c]; }
             stageData.pendingSlot = slot;
+            stageData.pendingUsable = true;
             stage.step = 1;
             return colour;
         },
@@ -218,22 +223,21 @@
             var slotBase = slot * channels;
             var keys = stageData.keys;
 
-            if(stageData.slotValid[slot] === 1){
-                var isSame = true;
-                for(c = 0; c < channels; c++){
-                    if(keys[slotBase + c] !== colour[c]){ isSame = false; break; }
-                }
-                if(isSame){
-                    stageData.hits++;
-                    stage.step = stageData.endStep;
-                    var cachedValue = stageData.values[slot];
-                    return stageData.copyOnHit ? cachedValue.slice() : cachedValue;
-                }
+            var isSame = true;
+            for(c = 0; c < channels; c++){
+                if(keys[slotBase + c] !== colour[c]){ isSame = false; break; }
+            }
+            if(isSame){
+                stageData.hits++;
+                stage.step = stageData.endStep;
+                var cachedValue = stageData.values[slot];
+                return stageData.copyOnHit ? cachedValue.slice() : cachedValue;
             }
 
-            for(c = 0; c < channels; c++){ keys[slotBase + c] = colour[c]; }
-            stageData.slotValid[slot] = 0;
+            var pending = stageData.pendingKey;
+            for(c = 0; c < channels; c++){ pending[c] = colour[c]; }
             stageData.pendingSlot = slot;
+            stageData.pendingUsable = true;
             stage.step = 1;
             return colour;
         },
@@ -247,31 +251,52 @@
         stage_pixelCacheStore(colour, stageData, stage){
             var cacheData = stageData.cacheData;
             var channels = colour.length;
+            var keyChannels = cacheData.channels;
+            var pending = cacheData.pendingKey;
             var target;
             var c;
 
+            // Only reached on a miss — a hit jumps over this stage.
+            //
+            // Key and value are written HERE, together, never split between the
+            // check and the store. With no validity flag (every entry is seeded
+            // with a real pair) a half-written slot would be indistinguishable
+            // from a good one, so a stage throwing between the two writes would
+            // leave a new key beside a stale value and silently corrupt every
+            // later hit on it. Writing both here makes that impossible: the
+            // slot is either wholly old or wholly new.
+            if(!cacheData.pendingUsable){
+                stage.step = 1;
+                return colour;
+            }
+
             if(cacheData.slots === 0){
                 target = cacheData.previousValue;
+                // Reuse the array rather than slice()ing a new one — a miss is
+                // the common case on photographic content, so an allocation
+                // here lands on the hot path. Safe because a hit hands the
+                // array to the output conversion, which reads it and builds its
+                // own result before any later miss can overwrite it.
                 if(target === null || target.length !== channels){
                     target = cacheData.previousValue = new Array(channels);
                 }
                 for(c = 0; c < channels; c++){ target[c] = colour[c]; }
-                cacheData.hasPrevious = true;
+
+                var previousKey = cacheData.previousKey;
+                for(c = 0; c < keyChannels; c++){ previousKey[c] = pending[c]; }
             } else {
                 var slot = cacheData.pendingSlot;
                 target = cacheData.values[slot];
-                // Reuse the slot's array rather than slice()ing a new one.
-                // A miss happens on the majority of pixels for photographic
-                // content, so an allocation here lands on the hot path; the
-                // reuse is safe because a hit returns the array to the output
-                // converter, which reads it immediately and builds its own
-                // result before any later miss can overwrite the slot.
                 if(target === undefined || target.length !== channels){
                     target = cacheData.values[slot] = new Array(channels);
                 }
                 for(c = 0; c < channels; c++){ target[c] = colour[c]; }
-                cacheData.slotValid[slot] = 1;
+
+                var keys = cacheData.keys;
+                var slotBase = slot * keyChannels;
+                for(c = 0; c < keyChannels; c++){ keys[slotBase + c] = pending[c]; }
             }
+
             stage.step = 1;
             return colour;
         },
@@ -531,6 +556,28 @@
                 '  [PixelCache store]|({last}) > ({data})'
             );
 
+            // Seed every entry with a real pair before the stages go in, using
+            // the probe colour already walked to checkAt: continue it through
+            // the maths to storeAt and the two ends are exactly a valid
+            // (key, value). Declines rather than falling back to a sentinel if
+            // any stage throws on the probe.
+            var seedKey = Array.prototype.slice.call(probeColour, 0, channels);
+            var seedValue = probeColour;
+            try {
+                for(i = checkAt; i < storeAt; i++){
+                    seedValue = pipeline[i].funct.call(this, seedValue,
+                        pipeline[i].stageData, pipeline[i]);
+                }
+            } catch(seedError){
+                console.warn('jsColorEngine: pixelCache disabled — probe colour threw while seeding: ' + seedError);
+                return false;
+            }
+            if(!cacheStages.isCacheableColour(seedValue, seedValue && seedValue.length)){
+                console.warn('jsColorEngine: pixelCache disabled — probe produced no usable value to seed with');
+                return false;
+            }
+            cacheStages.seedPixelCache(cacheData, seedKey, seedValue);
+
             // Insert the later position first so the earlier one stays valid.
             pipeline.splice(storeAt, 0, storeStage);
             pipeline.splice(checkAt, 0, checkStage);
@@ -588,24 +635,66 @@
                 slotBits: slotBits,
                 hits: 0,
                 lookups: 0,
+                // handed from the check to the store on a miss, so both halves
+                // of an entry are written together — see stage_pixelCacheStore
+                pendingKey: new Float64Array(channels),
+                pendingSlot: 0,
+                pendingUsable: false,
                 // single-entry state
                 previousKey: new Float64Array(channels),
                 previousValue: null,
-                hasPrevious: false,
                 // keyed-table state
                 keys: null,
                 values: null,
-                slotValid: null,
-                pendingSlot: 0
+                // the seed pair, retained so clearPixelCache() can restore it
+                seedKey: null,
+                seedValue: null
             };
 
             if(stageData.slots > 0){
-                stageData.keys      = new Float64Array(stageData.slots * channels);
-                stageData.values    = new Array(stageData.slots);
-                stageData.slotValid = new Uint8Array(stageData.slots);
+                stageData.keys   = new Float64Array(stageData.slots * channels);
+                stageData.values = new Array(stageData.slots);
             }
 
             return stageData;
+        },
+
+        /**
+         * Fill every entry with a real (key, value) pair, so there is no empty
+         * state to test for on the hot path.
+         *
+         * Borrowed from lcms2, which seeds its single-entry cache at transform
+         * creation by evaluating the all-zero pixel (`cmsxform.c`,
+         * `cmsCreateTransform`). It removes an entire class of problem: with a
+         * sentinel you need either a validity flag (a load per lookup) or an
+         * impossible key — and for a packed 4x8-bit CMYK key there is no
+         * impossible int32, since CMYK(255,255,255,255) is exactly -1.
+         *
+         * Filling *every* slot of a table with the same pair is safe, not just
+         * the one the seed hashes to. A given key only ever probes one slot, so
+         * the duplicate copies in the other slots can never be reached by the
+         * seed key itself; any other key landing there compares unequal and
+         * misses. Correct by construction, and the copies are simply overwritten
+         * as real entries arrive.
+         */
+        seedPixelCache(stageData, key, value){
+            var channels = stageData.channels;
+            var c, s;
+
+            stageData.seedKey = key.slice ? key.slice() : Array.prototype.slice.call(key);
+            stageData.seedValue = value.slice ? value.slice() : Array.prototype.slice.call(value);
+
+            if(stageData.slots === 0){
+                for(c = 0; c < channels; c++){ stageData.previousKey[c] = key[c]; }
+                stageData.previousValue = stageData.seedValue.slice();
+                return;
+            }
+
+            for(s = 0; s < stageData.slots; s++){
+                var base = s * channels;
+                for(c = 0; c < channels; c++){ stageData.keys[base + c] = key[c]; }
+                stageData.values[s] = stageData.seedValue.slice();
+            }
         },
 
         /**
@@ -652,13 +741,10 @@
          */
         clearPixelCache(){
             var stageData = this._pixelCacheData;
-            if(!stageData){ return; }
-            stageData.hasPrevious = false;
-            stageData.previousValue = null;
-            if(stageData.slots > 0){
-                stageData.slotValid = new Uint8Array(stageData.slots);
-                stageData.values = new Array(stageData.slots);
-            }
+            if(!stageData || !stageData.seedKey){ return; }
+            // Restore the seeded state rather than emptying: there is no empty
+            // state to return to, and every entry must stay a valid pair.
+            cacheStages.seedPixelCache(stageData, stageData.seedKey, stageData.seedValue);
         }
     };
 

@@ -251,6 +251,83 @@ Caveats: 8-bit only (the 32-bit key does not generalise to u16 or
 float), no alpha exercised, one kernel on one machine. A POC, not a
 feature.
 
+### How lcms2 does it, and what we took from it
+
+Worth reading the reference implementation once the design was settled,
+to see where two independent attempts agreed. `CachedXFORM` in
+`cmsxform.c`:
+
+```c
+typedef struct {
+    cmsUInt16Number CacheIn [cmsMAXCHANNELS];   // 16 ch x u16 = 32 bytes
+    cmsUInt16Number CacheOut[cmsMAXCHANNELS];   // 32 bytes -> 64 total
+} _cmsCACHE;
+
+accum = p->FromInput(p, wIn, accum, ...);              // unpack to u16
+if (memcmp(wIn, Cache.CacheIn, sizeof(Cache.CacheIn)) == 0)
+     memcpy(wOut, Cache.CacheOut, sizeof(Cache.CacheOut));
+else { p->Lut->Eval16Fn(wIn, wOut, p->Lut->Data);
+       memcpy(Cache.CacheIn,  wIn,  sizeof(Cache.CacheIn));
+       memcpy(Cache.CacheOut, wOut, sizeof(Cache.CacheOut)); }
+output = p->ToOutput(p, wOut, output, ...);            // pack
+```
+
+**Where we agreed, independently:**
+
+- The cache sits between unpack and pack — on the *unpacked* pixel,
+  with format conversion still running every pixel. That is exactly the
+  device-boundary position argued for above.
+- Variants are selected at transform creation, not tested in the loop:
+  lcms swaps between `PrecalculatedXFORM`, `CachedXFORM` and the two
+  gamut-check equivalents via a function pointer.
+- Float transforms get no cache at all (`dwFlags |= cmsFLAGS_NOCACHE`).
+
+**Where we differ:**
+
+- **lcms caches one entry only.** No table, no hash. Our measurements
+  say that is the weak form — single-entry managed 1–31 % on
+  photographs where a keyed table reached 43–70 % in CMYK — so the
+  table is a genuine step past the reference, not a re-implementation
+  of it.
+- **Fixed-size `memcmp` over all 16 channels**, which is why `wIn` is
+  zeroed first: unused channels are zero on both sides, so one
+  constant-size compare (two SIMD ops) serves any channel count with no
+  loop and no branch. We specialise per channel count instead.
+- **The cache is stack-local per call** (`memcpy(&Cache, &p->Cache, …)`,
+  never written back), making it thread-safe by construction. Ours
+  persists on the Transform — better across many small calls,
+  irrelevant for one whole-image call.
+
+**What we took: seeding.** lcms initialises its entry at transform
+creation by evaluating the all-zero pixel, so the cache always holds a
+real `(key, value)` pair and has no empty state at all. Adopted here,
+and it earns more than tidiness:
+
+- The `slotValid` array is gone — one load removed from every lookup.
+- The single-entry `hasPrevious` flag is gone. Measured: `slots=1`
+  improved on every content class (skin.png 1.03× → 1.25×, fruit 1.20×
+  → 1.24×, noise 0.82× → 0.87×).
+- In the **kernel** it removes a real problem. With a packed 4×8-bit
+  CMYK key there is no impossible int32 sentinel — CMYK(255,255,255,255)
+  is exactly `-1` — so the first POC had to keep keys in a
+  `Float64Array` initialised to `NaN`. Seeded, keys go back to
+  `Int32Array`: a quarter of the memory (256 slots: 1 KB vs 4 KB) and
+  an integer compare instead of a double one.
+
+Filling *every* slot of a table with the same seed pair is safe, not
+just the slot it hashes to: a given key only ever probes one slot, so
+duplicates elsewhere are unreachable by the seed key, and any other key
+landing there compares unequal and misses. The copies are simply
+overwritten as real entries arrive.
+
+The cost is one extra key write per miss. With no validity flag a
+half-written entry is indistinguishable from a good one, so the key can
+no longer be written by the check and the value by the store — a stage
+throwing between the two would leave a new key beside a stale value and
+silently corrupt every later hit on it. Both halves are now written
+together in the store stage, which costs about 1 point on the pure-miss
+path and is worth it.
+
 ### Which kernels are even candidates
 
 Not all of them, and the rule is sharper than "the heavy ones":
