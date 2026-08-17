@@ -133,10 +133,40 @@ silently becomes a no-op — and swapping in a fresh shared memory
 instead would leave workers holding the old one, writing into an
 orphaned buffer. Silent divergence, no error raised.
 
-So in threaded mode `compactIfNeeded` must be **disabled**, and
-reclamation moves up a level: tear down the pool, drop the shared
-memory, rebuild. `setWasmShrinkRatio` / `setWasmMaxMemory` /
-`compactWasmMemory` need to no-op or throw rather than appear to work.
+So under Model B `compactIfNeeded` must be **disabled**, and
+reclamation moves up a level. Note this is a Model B problem only —
+under Model A each worker owns a private instance with internal memory
+and compacts exactly as it does today.
+
+**Reclaim should move to pool-drain in both models anyway.** Not because
+Model A breaks, but because per-call compaction is the wrong trigger
+under a pool: you compact, then immediately get handed the next slice
+and re-grow. Across a batch that is pure churn.
+
+Rather than adding a parallel `compactIfNeededMulticore` flag — which
+duplicates a policy that is already fine — keep the existing
+`shrinkRatio` / `maxMemory` policy and move *when it is evaluated*:
+
+| mode | reclaim trigger |
+|---|---|
+| single-threaded | after a call — today's behaviour, opt-in |
+| pooled | when the pool **drains**, i.e. no slices in flight |
+
+The completion barrier the pool needs anyway is exactly that point, so
+no new synchronisation has to be invented. It also happens to be the
+only *safe* point for Model B: rebuilding the shared memory while any
+worker might still touch it is precisely the orphaned-buffer failure
+described above, and "drained" is the guarantee that rules it out.
+
+Keep visible that under Model B this is not compaction at all — a
+shared memory cannot shrink — but **teardown and rebuild**: re-instantiate
+and re-copy the LUT per worker. That has to stay rare. Idle-triggered,
+never per batch.
+
+Under Model B, `setWasmShrinkRatio` / `setWasmMaxMemory` /
+`compactWasmMemory` on an individual Transform also need to no-op or
+throw rather than appear to work, since the memory is no longer the
+Transform's to reclaim.
 
 ### 4. Delete the copy (worth doing regardless)
 
