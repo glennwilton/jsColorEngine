@@ -716,6 +716,19 @@
             // The accuracy trade-off is safe for image work but is opt-in so existing
             // tests and precision-sensitive workflows are unaffected.
             this.useCurveLut = options.useCurveLut === true;
+
+            // pixelCache: memoise the accuracy path at the device boundary.
+            //   0 / false — off (default)
+            //   1         — single entry: catches solid fills and runs
+            //   16, 32 …  — direct-mapped table (rounded to a power of two):
+            //               also catches repeating palettes and dithers
+            // One number rather than an enabled+size pair, which would admit
+            // the meaningless {enabled: true, size: 0}. See
+            // docs/deepdive/PixelCache.md.
+            this.pixelCache = (options.pixelCache === true) ? 1 : (Number(options.pixelCache) || 0);
+            if(this.pixelCache < 0 || isNaN(this.pixelCache)){ this.pixelCache = 0; }
+            this._pixelCacheData = null;
+
             this.verbose = options.verbose === true;
             this.verboseTiming = options.verboseTiming === true;
             this.pipelineDebug = options.pipelineDebug === true;
@@ -2624,6 +2637,19 @@
                     this.pipelineHistory.push(newResult);
                     result = newResult;
                 }
+            } else if(this._pixelCacheData){
+                // Pixel-cache walk. Reads stage.step instead of incrementing
+                // so the cache check can jump the maths on a hit. Kept in its
+                // own arm because `i += stage.step` makes the loop counter
+                // depend on a load, where `i++` is a register increment the
+                // CPU speculates through — the default walk below must not
+                // pay for a feature it isn't using.
+                i = 0;
+                while(i < len){
+                    stage = pipeline[i];
+                    result = stage.funct.call(this, result, stage.stageData, stage);
+                    i += stage.step;
+                }
             } else {
                 for(i = 0; i < len; i++){
                     result = pipeline[i].funct.call(this, result, pipeline[i].stageData, pipeline[i]);
@@ -3216,6 +3242,17 @@
                 preserveAlpha = outputHasAlpha && inputHasAlpha;
             }
 
+            // A pixel cache makes the per-pixel walks below wrong: they
+            // increment blindly, so they would re-run the maths on a value a
+            // cache hit had already resolved. Handled by a separate generic
+            // implementation rather than a branch inside these loops — that
+            // branch measured ~2.5% on the uncached accuracy path, and
+            // cache-off must pay nothing. Keep the loops below byte-identical.
+            if(this._pixelCacheData !== null){
+                return this._transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha,
+                    preserveAlpha, pixelCount, outputFormat);
+            }
+
             var pipeline = this.pipeline;
             var pipeLen = pipeline.length;
             var result;
@@ -3490,6 +3527,10 @@
         createPipeline(profileChain, convertInput , convertOutput, useCahcedLut){
 
             this.pipeline = [];
+            // Drop any cache from a previous create() on this instance — a
+            // stale handle would send transform() down the step-based walk
+            // over stages that never got a `step`.
+            this._pixelCacheData = null;
             var chainEnd = profileChain.length - 1;
 
 
@@ -3524,6 +3565,7 @@
                 // When using dataFormat='device' we do not need to convert from input to device
                 pcsInfo.pcsEncoding = this.getInput2DevicePCSInfo(profileChain[0]);
             }
+
 
             ////////////////////////////////////////////////////////////////////
             //
@@ -3670,6 +3712,8 @@
             //
             // Step 5: Convert from device encoding 0.0-1.0 to output lab/rgb/cmyk/int8 etc
             //
+            var pixelCacheOutputAt = this.pipeline.length;
+
             if(convertOutput && this.dataFormat !== 'device'){
                 // Convert from Output Device to outputFormat i.e cmsRGB / cmsLab
                 this.createPipeline_Device_to_Output(pcsInfo, profileChain[chainEnd]);
@@ -3679,6 +3723,19 @@
                 }
             }
 
+            // Pixel-cache boundary marker: the FIRST stage of the output
+            // conversion, held as a stage REFERENCE because optimisePipeline()
+            // shifts every index. The first output stage is used rather than
+            // the last maths stage because no optimiser pattern matches
+            // stage_device_to_*, so this reference always survives — whereas
+            // the maths boundary is routinely consumed by a fusion (e.g.
+            // LabD50_to_PCSv4 + PCSv4_to_PCSXYZ collapse, and the PCSv4
+            // position between them stops existing).
+            if(this.pixelCache){
+                this._pcOutputFirst = (pixelCacheOutputAt < this.pipeline.length)
+                    ? this.pipeline[pixelCacheOutputAt] : null;
+            }
+
             if(this.pipelineDebug){
                 this.addStage(false, 'END', this.stage_debug, '[PipeLine Output]| {data}', false);
             }
@@ -3686,6 +3743,14 @@
             if(this.optimise){
                 // merge stages that can be merged
                 this.optimisePipeline();
+            }
+
+            // After the optimiser (so the cache stages cannot be folded into a
+            // neighbour, and so the positions it finds are final) and before
+            // verifyPipeline (so the injected device->device encodings are
+            // still checked rather than silently trusted).
+            if(this.pixelCache){
+                this.injectPixelCacheStages();
             }
 
             // Ensure pipeline is valid by checking that the output of one stage matches the input of the next
@@ -7623,55 +7688,6 @@
     }
 
 
-    function data2String(color, format, precision){
-        if(typeof precision === 'undefined'){
-            precision = 6;
-        }
-
-        if(color === null){
-            return '<NULL>';
-        }
-
-        if(color.type){
-            return convert.cmsColor2String(color);
-        }
-
-        if(color.hasOwnProperty('L')){ // labD50 object {L:0, a:0, b:0}
-            return 'LabD50: ' + n2str(color.L) + ', ' + n2str(color.a) + ', ' + n2str(color.b);
-        }
-
-        var str ='';
-        for(var i=0;i < color.length; i++){
-            switch(format){
-                case 'r':
-                case 'round':
-                    str += Math.round(color[i]);
-                    break;
-                case 'f>16':
-                case 'float>16':
-                    str += Math.round(color[i]*65535);
-                    break;
-                case 'float':
-                case 'f':
-                default:
-                    // raw
-                    str += n2str(color[i], precision);
-            }
-            if(i<color.length - 1){
-                str += ', ';
-            }
-        }
-        return str;
-
-        function n2str(n){
-            return isNaN(n) ? n : n.toFixed(precision);
-        }
-
-
-
-
-
-    }
 
     // ---------------------------------------------------------------------------
     // Class statics — dispatch thresholds, magic numbers, etc.
@@ -7979,6 +7995,7 @@ function _attachPrototypeLoops(loops){
         });
     });
 }
+
 _attachPrototypeLoops(require('./kernels/1d/kernel1D_loops.js'));
 _attachPrototypeLoops(require('./kernels/2d/kernel2D_loops.js'));
 _attachPrototypeLoops(require('./kernels/3d/kernel3D_loops.js'));
@@ -7992,6 +8009,12 @@ _attachPrototypeLoops(require('./kernels/4d/kernel4D_loops.js'));
 // `this` semantics, call sites and performance are unchanged.
 _attachPrototypeLoops(require('./stages.js'));
 _attachPrototypeLoops(require('./interp.js'));
+
+// ─── Pixel cache ────────────────────────────────────────────────────────────
+// Accuracy-path memoisation stages + their injection/stats helpers. Attached
+// the same way; inert unless the `pixelCache` option is set. See
+// docs/deepdive/PixelCache.md.
+_attachPrototypeLoops(require('./cache.js'));
 
 // ─── Built-in kernel modules ────────────────────────────────────────────────
 // Registered here (not main.js) so Transforms created via a direct

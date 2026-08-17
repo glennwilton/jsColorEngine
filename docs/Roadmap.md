@@ -1530,6 +1530,30 @@ downside is bounded). Ship only if the real-image numbers justify
 it; per-kernel opt-in via the descriptor fits the kernel-module
 architecture.
 
+✅ **Accuracy-path implementation landed (2026-08-17)** — `src/cache.js`,
+opt-in via `pixelCache: 0|1|16|32`, `getPixelCacheStats()` for hit
+counting, tests in `__tests__/pixelcache.tests.js`, bench in
+`bench/pixel_cache/`. First measurements **overturned the assumption
+this experiment was built on**: real photographs hit 59–83 % on a
+32-slot table (1.2–1.9× on the accuracy path), because a keyed table
+catches colour *recurrence*, not adjacency. Pure noise is the worst
+case at 0.82×. Still outstanding: a proper corpus (three sample PNGs
+is not one), and the kernel port — where the cost side is completely
+different and none of these timings transfer.
+
+**Design space captured in
+[deepdive/PixelCache.md](./deepdive/PixelCache.md)** (2026-08-16,
+predating the measurements above): three shapes — single-value memo, two-entry rotating memo
+for dither, and a 32/64-slot direct-mapped table — with the JS
+mechanics (u32 key packing fused into existing loads, interleaved
+`Int32Array`, golden-ratio hashing), the honest cost table, and the
+working hypothesis that **the accuracy path is a better target than
+the tuned kernels** (payoff scales with the work a hit skips). Also
+raises `new Function()` codegen for the cache-config matrix, so
+variants bake their config as literals instead of being all-or-none.
+First step is a hit-rate counter over a real corpus — no kernel work
+required.
+
 ---
 
 ## v1.6 — QC infrastructure + automated bench history

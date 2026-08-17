@@ -1611,6 +1611,59 @@
         };
     }
 
+    // Moved here with addDebugHistory (its only caller) — it was left behind
+    // in Transform.js by the v1.5.5 stages split, which silently broke
+    // pipelineDebug: no test covered the debug path.
+    function data2String(color, format, precision){
+        if(typeof precision === 'undefined'){
+            precision = 6;
+        }
+
+        if(color === null){
+            return '<NULL>';
+        }
+
+        if(color.type){
+            return convert.cmsColor2String(color);
+        }
+
+        if(color.hasOwnProperty('L')){ // labD50 object {L:0, a:0, b:0}
+            return 'LabD50: ' + n2str(color.L) + ', ' + n2str(color.a) + ', ' + n2str(color.b);
+        }
+
+        var str ='';
+        for(var i=0;i < color.length; i++){
+            switch(format){
+                case 'r':
+                case 'round':
+                    str += Math.round(color[i]);
+                    break;
+                case 'f>16':
+                case 'float>16':
+                    str += Math.round(color[i]*65535);
+                    break;
+                case 'float':
+                case 'f':
+                default:
+                    // raw
+                    str += n2str(color[i], precision);
+            }
+            if(i<color.length - 1){
+                str += ', ';
+            }
+        }
+        return str;
+
+        function n2str(n){
+            return isNaN(n) ? n : n.toFixed(precision);
+        }
+
+
+
+
+
+    }
+
 var _exports = {};
 Object.getOwnPropertyNames(_TransformStages.prototype).forEach(function(name){
     if (name !== 'constructor') _exports[name] = _TransformStages.prototype[name];

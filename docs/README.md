@@ -175,6 +175,15 @@ The matrix-shaper WASM kernel POC: five design generations from 52 to
 257 MPx/s, the final bytes-as-indices f32x4 design, and why it beats
 the CLUT kernel on RGB→RGB. Integration pending (v1.5.5).
 
+### deepdive/PixelCache.md
+The pixel cache: design space, as-built notes for the accuracy-path
+implementation (`src/cache.js`, opt-in via `pixelCache`), and the
+measured hit-rate/throughput table that overturned the design's central
+assumption — real photographs hit 59–83 % on a keyed table, because it
+catches colour *recurrence* rather than adjacency. Also records the
+three things building it proved wrong (boundary detection, hash
+scaling, transformArray) and why the kernel port is still design-only.
+
 ### deepdive/multiProcessElements.md
 Why `mpet` / `DToB`/`BToD` tags are not decoded: spec-mandated fallback
 to AToB/BToA, near-zero real-world prevalence, iccMAX context.
