@@ -246,12 +246,31 @@
          */
         stage_pixelCacheStore(colour, stageData, stage){
             var cacheData = stageData.cacheData;
+            var channels = colour.length;
+            var target;
+            var c;
+
             if(cacheData.slots === 0){
-                cacheData.previousValue = colour.slice();
+                target = cacheData.previousValue;
+                if(target === null || target.length !== channels){
+                    target = cacheData.previousValue = new Array(channels);
+                }
+                for(c = 0; c < channels; c++){ target[c] = colour[c]; }
                 cacheData.hasPrevious = true;
             } else {
-                cacheData.values[cacheData.pendingSlot] = colour.slice();
-                cacheData.slotValid[cacheData.pendingSlot] = 1;
+                var slot = cacheData.pendingSlot;
+                target = cacheData.values[slot];
+                // Reuse the slot's array rather than slice()ing a new one.
+                // A miss happens on the majority of pixels for photographic
+                // content, so an allocation here lands on the hot path; the
+                // reuse is safe because a hit returns the array to the output
+                // converter, which reads it immediately and builds its own
+                // result before any later miss can overwrite the slot.
+                if(target === undefined || target.length !== channels){
+                    target = cacheData.values[slot] = new Array(channels);
+                }
+                for(c = 0; c < channels; c++){ target[c] = colour[c]; }
+                cacheData.slotValid[slot] = 1;
             }
             stage.step = 1;
             return colour;

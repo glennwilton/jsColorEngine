@@ -117,10 +117,51 @@ a 96× larger working set — changes nothing measurable; the numbers past
 the extra stage call, the hash, and the compare. Single-entry is
 cheaper (−18 %) only because it skips the hash and indexing.
 
-The L1-pressure worry in the design notes above was therefore wrong for
-this path. It was reasoned from the image kernels, which stream a large
-CLUT and genuinely are cache-bound; the accuracy path allocates per
-pixel and is nowhere near that regime.
+The L1-pressure worry in the design notes above does not apply here,
+and the reason is structural rather than a matter of degree: this is a
+full JS pipeline that allocates several arrays per pixel and dispatches
+every stage through `.call()`. Memory traffic and allocation already
+dominate, so a few KB of table is invisible. A hot kernel is the
+opposite regime — tight integer loops streaming a large CLUT with
+nothing to hide behind — and there the same table genuinely would
+compete. The argument was imported from the wrong path, not merely
+overstated.
+
+### Where the tax actually goes (and it is not the hash)
+
+~18 % looks steep for "a hash and a lookup", so it was decomposed by
+adding plain pass-through stages to the same pipeline:
+
+| | MPx/s | vs baseline |
+|---|---:|---:|
+| baseline, 7 stages | 7.80 | — |
+| + 1 no-op stage | 7.56 | −3.1 % |
+| + 2 no-op stages | 7.29 | −6.5 % |
+| cache slots=1 (no hash at all) | 6.44 | −17.4 % |
+| cache slots=32 (hashed) | 6.29 | −19.4 % |
+
+Roughly: **6.5 points is bare stage dispatch**, ~8 points is
+bookkeeping (counters, key writes, `stage.step` writes, copying the
+value), and **the hash is about 3 points** — the gap between slots=1,
+which does no hashing whatsoever, and slots=32.
+
+So the hash is the cheapest part, and the dominant cost is structural:
+in this architecture every stage is a dynamic `.call()` passing arrays
+around, so *adding two stages costs 6.5 % before they do anything*.
+That is the price of the plugin shape — the cache can be declined,
+switched off at zero cost, and deleted without trace, precisely because
+it is ordinary stages rather than something welded into the walk.
+
+One fix came out of this: the store stage originally did
+`colour.slice()`, allocating on every miss — the common case for
+photographic content. Reusing the slot's array took slots=1 from
+−17.4 % to −14.8 % and slots=32 from −19.4 % to −17.5 %. Worth having,
+but it confirms there is no single large win hiding here; the cost is
+spread thin.
+
+Further reduction would mean a build-time variant with the counters
+compiled out, or folding the check into the walk instead of using
+stages — trading the properties above for a couple of points.
 
 ### Hit rate vs table size — whole frames
 
@@ -136,6 +177,67 @@ pixel and is nowhere near that regime.
 image — these are 8–19 MP frames, so even 1024 entries is a tiny window
 over the colours present. Since the cost is flat, **a bigger table is
 strictly better**, bounded only by memory you care about.
+
+### The headroom nobody is using
+
+Counting distinct colours per image explains why the numbers above are
+so modest — and it is not because photographs lack repetition:
+
+| image | pixels | unique colours | perfect-cache ceiling | actual @32 | @1024 |
+|---|---:|---:|---:|---:|---:|
+| text page | 18.7 M | 0.02 M | 99.9 % | 41.5 % | 79.6 % |
+| poster | 19.4 M | 0.18 M | 99.1 % | 67.4 % | 83.6 % |
+| strawberries | 10.8 M | 0.47 M | 95.6 % | 36.9 % | 48.7 % |
+| sunflower | 7.6 M | 0.31 M | 96.0 % | 19.4 % | 33.8 % |
+| beach | 11.9 M | 0.88 M | 92.6 % | 3.2 % | 13.0 % |
+
+**Every image could hit 92–99.9 %.** Even the beach photo repeats
+itself constantly — 11.9 M pixels drawn from 0.88 M colours. What the
+cache actually delivers is 3–67 %, so the losses are almost entirely
+*conflict misses* in a small direct-mapped table, not a shortage of
+repetition in the data. Associativity or a much larger table would
+recover far more than tuning anything else here.
+
+Verified independently: a standalone direct-mapped simulation, sharing
+no code with the engine, reproduces the engine's hit rate to the digit
+on every image at both 32 and 1024 slots.
+
+**Which makes the limit case obvious.** Hit rate never plateauing does
+suggest an easy fix: just use 16,777,216 slots and cover every possible
+8-bit RGB colour. 100 % hits after first touch, problem solved. 🎉
+
+That is, of course, a lazily-populated 256³ CLUT — which is
+`buildLut: true`, built eagerly, packed as u16, and with a decade of
+kernel work behind it. Congratulations, you have reinvented the LUT,
+slower and one pixel at a time.
+
+Which is the real framing for this whole feature: **the pixel cache is
+a partial, lazy LUT for the path where a full one is not wanted.** Grow
+it far enough and it becomes the thing the engine already does better.
+That also bounds how much effort it deserves — anyone needing high hit
+rates on bulk data should be using `buildLut`, not a bigger cache.
+
+### Pipeline weight changes the answer
+
+All the figures above use `sRGB → AdobeRGB`, which at 7 stages (two
+gammas and a matrix) is the *cheapest* pipeline in the engine — so the
+fixed cost of a cache check is at its most visible. Heavier pipelines
+dilute the tax and amplify the win:
+
+| pipeline | noise (pure tax) | poster @32 | poster @1024 |
+|---|---:|---:|---:|
+| sRGB → AdobeRGB (7 stages) | −19 % | +112 % (85 %) | +191 % (99 %) |
+| sRGB → GRACoL (10 stages, 3D CLUT) | −15 % | +156 % (85 %) | +269 % (99 %) |
+
+So on a CMYK destination with graphic content the cache is worth
+**3.7×**, against 2.9× for the same content on the cheap RGB pipeline.
+Break-even moves down accordingly. Anyone measuring this on their own
+content should measure it on *their* pipeline — an RGB→RGB result is
+the pessimistic end of the range.
+
+(A 4-channel *input* also makes the check itself dearer — four values
+to hash and compare instead of three — which is why `GRACoL → sRGB`
+shows −19 % rather than following the dilution trend.)
 
 ### Break-even
 
