@@ -1546,11 +1546,25 @@ capping the pixel count crops the top of the frame instead of sampling
 it. Both are written up in
 [deepdive/PixelCache.md](./deepdive/PixelCache.md).)
 
-**So the kernel port is now questionable**, not merely unproven: the
-kernels are far more sensitive to miss-path cost than the accuracy
-path, and photographs do not supply the hit rate to pay for it. Next
-step is a corpus of the classes that might justify it — screenshots,
-halftones, print-origin scans — not more photographs.
+**Where the cost goes.** Decomposing the ~18 % miss tax: ~6.5 points is
+bare pipeline-stage dispatch, ~8 points bookkeeping, and only ~3 points
+the hash. Table size is free — 4096 slots costs no more than 32 — so
+the tuning question is on/off and content, not size. Break-even is
+~38–40 % hit rate.
+
+**The kernel port stays open, and 4D/CMYK is the best target.** An
+unrolled kernel has no stage dispatch, so the dominant cost here
+disappears; modelling puts kernel break-even in much the same range,
+with the 4D kernel most attractive because heavier per-pixel work
+dilutes the check. That is a model, not a measurement — a POC on one
+kernel would settle it. Unmodelled risk: register pressure across the
+interpolation cascade, where JitInspection already found pressure
+binding.
+
+**Recommendation for users today:** enable on CMYK destinations with
+graphic or flat content, leave off for RGB→RGB photographic work, and
+check `getPixelCacheStats()` on your own data rather than trusting
+ours.
 
 **Design space captured in
 [deepdive/PixelCache.md](./deepdive/PixelCache.md)** (2026-08-16,

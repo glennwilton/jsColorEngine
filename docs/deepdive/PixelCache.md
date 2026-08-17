@@ -163,6 +163,46 @@ Further reduction would mean a build-time variant with the counters
 compiled out, or folding the check into the walk instead of using
 stages — trading the properties above for a couple of points.
 
+The hash itself was timed in isolation at **1.35 ns/pixel** for three
+channels. Restructuring it as three independent multiplies combined at
+the end — on the theory that the chained form is latency-bound — came
+out *slower* (1.50 ns). It is not a dependent-chain problem, and there
+is nothing to win there. Recorded so nobody tries it twice.
+
+### What this implies for a kernel port
+
+This changes the earlier conclusion, which was too pessimistic. An
+unrolled kernel loop has no stage dispatch at all, so the 6.5 points
+that dominate here simply do not exist, and most of the bookkeeping
+(the `stage.step` writes, the separate store stage, the counters) goes
+with it. The check reduces to: build the key from bytes already loaded
+for interpolation, hash, compare, branch — roughly 4–5 ns.
+
+Against that, the per-pixel budget shrinks: the int 3D kernel runs at
+~73 MPx/s (13.7 ns/pixel) and the 4D at ~48 MPx/s (20.8 ns), versus
+~125 ns here. A rough model — *estimates from decomposition, not
+measurements*:
+
+| | miss cost | hit cost | break-even | ceiling |
+|---|---:|---:|---:|---:|
+| accuracy path (measured) | 1.21× | 0.31× | ~38 % | 3.2× |
+| 3D int kernel (modelled) | ~1.33× | ~0.52× | ~41 % | ~1.9× |
+| 4D int kernel (modelled) | ~1.22× | ~0.34× | ~25 % | ~2.9× |
+
+So the kernel port is *not* obviously a loser: break-even lands in
+much the same place, and the **4D/CMYK kernel is the most attractive
+target of all** — the heavier the per-pixel work, the better the cache
+looks, exactly as the pipeline-weight measurements show on the
+accuracy path.
+
+Two caveats before anyone builds it. These are models, not
+measurements — the honest next step is a POC on one kernel rather than
+more arithmetic. And register pressure is unmodelled: the cache state
+must stay live across the interpolation cascade, where
+[JitInspection.md](./JitInspection.md) already found pressure binding,
+which is exactly what the run-scan restructure earlier in this document
+exists to address.
+
 ### Hit rate vs table size — whole frames
 
 | image | 1 | 16 | 32 | 64 | 128 | 256 | 1024 |
@@ -264,15 +304,20 @@ a 20 % tax, against the 8–12 % predicted from op counts. And note the
 uncached column is itself content-sensitive (7.75 on noise vs 10.73 on
 `fruit.png`), so the pipeline was never truly content-neutral either.
 
-**What it means for the next step.** If the kernel port happens at all,
-the keyed table is the design to carry — single-entry loses on most
-content and wins big only on solid fills. But the case for porting is
-now weaker than when this experiment was proposed: the kernels are far
-more sensitive to the miss-path cost than this path is, and real
-photographs do not supply the hit rate to pay for it. The honest next
-step is a corpus that includes screenshots, halftones and print-origin
-scans — the classes that might justify it — rather than more
-photographs.
+**What it means for the next step.** The keyed table is the design to
+carry — single-entry loses on most content and wins big only on
+near-solid fills. Content selection matters more than any tuning:
+photographs do not clear break-even, graphic and flat content clears it
+comfortably. And the heavier the pipeline, the better the cache looks,
+which makes **CMYK destinations the recommendation and RGB→RGB the
+worst case**.
+
+For the kernel port, see "What this implies for a kernel port" above —
+the dispatch cost that dominates here vanishes in an unrolled loop, so
+the port is more attractive than this document first concluded,
+especially for the 4D/CMYK kernel. A POC on one kernel would settle it;
+a corpus of screenshots, halftones and print-origin scans would settle
+whether real workloads clear break-even.
 
 ## Decisions taken (2026-08-16)
 
