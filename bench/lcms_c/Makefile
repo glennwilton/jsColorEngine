@@ -32,7 +32,14 @@ CC         ?= gcc
 CSTD       := -std=c99
 
 # Release defaults — match lcms2's own autotools CFLAGS closely.
-CFLAGS     ?= -O3 -DNDEBUG -march=native -fno-strict-aliasing
+# MEASURED 2026-08-18 (Ryzen 7700X, gcc, flag_sweep.sh): -march=native is
+# at or near the BOTTOM on every workflow here — the old default below cost
+# lcms 15-23%% on the RGB paths versus plain -O2/-O3, which handicapped every
+# comparison made with it. No single set wins everything: -O2 takes the RGB
+# workflows, -O3 the CMYK ones. Run flag_sweep.sh on YOUR machine before
+# publishing anything, and give lcms its best build.
+#   old default: -O3 -DNDEBUG -march=native -fno-strict-aliasing
+CFLAGS     ?= -O3 -DNDEBUG -fno-strict-aliasing
 CFLAGS     += $(CSTD) -Wall -Wextra -Wno-unused-parameter \
               -Wno-sign-compare -Wno-unused-but-set-variable \
               -I$(LCMS_INC)

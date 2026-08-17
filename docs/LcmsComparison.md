@@ -119,6 +119,44 @@ measured:
 | CMYK → CMYK  (GRACoL → GRACoL)             | 44 MPx/s  | 29 MPx/s  | 1.52× |
 | RGB → RGB    (sRGB→GRACoL→sRGB, soft-proof) | ~72 MPx/s | 51 MPx/s | 1.41× |
 
+> ### ⚠ Second reason the table above is wrong — and this one is our fault
+>
+> **The build flags handicapped lcms.** Every native figure here was
+> produced with `-march=native`. Sweeping compiler flags on a Ryzen
+> 7700X (`bench/lcms_c/flag_sweep.sh`, noise content, cache off, 1 M px,
+> median of 5) shows `-march=native` at or near the **bottom** on every
+> workflow:
+>
+> | CFLAGS | RGB→Lab | RGB→CMYK | CMYK→RGB | CMYK→CMYK |
+> |---|---:|---:|---:|---:|
+> | `-O2` | **83.6** | **71.5** | 36.3 | 29.9 |
+> | `-O3` | 72.5 | 66.2 | **39.5** | 33.6 |
+> | `-O3 -DNDEBUG -fno-strict-aliasing` | 73.0 | 65.1 | 37.9 | **34.7** |
+> | `-O3 -march=native` | 69.9 | 61.1 | 35.6 | 32.8 |
+> | `-O3 -DNDEBUG -march=native -fno-strict-aliasing` *(old default)* | 67.9 | 62.6 | 37.0 | 30.2 |
+> | `-O3 -DNDEBUG -march=native -ffast-math -funroll-loops -flto` *(the "steelman" above)* | 71.1 | 65.4 | 37.2 | 33.3 |
+>
+> The build we called a *steelman* was one of the slower ones. Plausible
+> on Zen 4 — AVX-512 downclocking, or gcc choosing worse vectorisation
+> for lcms's interpolation loops — but the cause matters less than the
+> effect.
+>
+> **What this does to the claims above.** lcms's best measured build
+> reaches ~71.5 MPx/s on RGB → CMYK, against the 49 quoted. That row
+> does not merely narrow, it **reverses**: jsCE's 54 becomes ~0.76× of
+> native, not 1.10×. The two CMYK rows survive but shrink materially
+> (~1.34× and ~1.27×).
+>
+> No single flag set wins everything — `-O2` takes the RGB workflows,
+> `-O3` variants the CMYK ones — so the replacement table should quote
+> **lcms's best build per workflow** and say so. A comparison that gives
+> the other engine anything less is not worth publishing.
+>
+> The Makefile default has been changed to drop `-march=native`, and
+> `flag_sweep.sh` should be run on the measuring machine before any
+> figure is published. Superseded numbers stay here rather than being
+> deleted, so the correction is on the record.
+
 On that harness, pure JS matched or beat the stock build on 4 of 5
 workflows, and jsCE WASM SIMD led all five. We also measured lcms2's
 `fast-float` SIMD plugin directly (`make fastfloat` in

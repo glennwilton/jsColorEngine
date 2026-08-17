@@ -206,12 +206,27 @@ int main(int argc, char **argv) {
     size_t sizes[MAX_SIZES] = { 16384, 65536, 1048576, 10485760 };
     int n_sizes = 4;
 
+    /* content filter — bit per content_t, all on by default. Lets a compiler
+     * flag sweep run only `noise` (the purest measure of transform throughput,
+     * with no cache hits to confound it) instead of the whole matrix. */
+    int content_mask = (1 << C_COUNT) - 1;
+
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--profile") && i + 1 < argc) profile_path = argv[++i];
         else if (!strcmp(argv[i], "--sizes") && i + 1 < argc) {
             n_sizes = 0;
             char *tok = strtok(argv[++i], ",");
             while (tok && n_sizes < MAX_SIZES) { sizes[n_sizes++] = (size_t)strtoull(tok, NULL, 10); tok = strtok(NULL, ","); }
+        }
+        else if (!strcmp(argv[i], "--content") && i + 1 < argc) {
+            content_mask = 0;
+            char *tok = strtok(argv[++i], ",");
+            while (tok) {
+                for (int k = 0; k < C_COUNT; k++)
+                    if (!strcmp(tok, CONTENT_NAME[k])) content_mask |= (1 << k);
+                tok = strtok(NULL, ",");
+            }
+            if (!content_mask) content_mask = (1 << C_COUNT) - 1;
         }
     }
 
@@ -239,6 +254,7 @@ int main(int argc, char **argv) {
         printf("\n");
 
         for (int k = 0; k < C_COUNT; k++) {
+            if (!(content_mask & (1 << k))) continue;
             double adj = -1.0;
             double on[MAX_SIZES], off[MAX_SIZES];
 

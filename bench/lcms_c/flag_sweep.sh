@@ -1,30 +1,56 @@
 #!/bin/bash
-# Does -march=native help or hurt lcms2 here?
+# Find the best CFLAGS for lcms2 ON THIS MACHINE, before any comparison.
 #
-# Our published native-lcms figures were produced with the Makefile's
-# CFLAGS (-O3 -DNDEBUG -march=native -fno-strict-aliasing). A plain -O3
-# build measured noticeably faster on RGB->CMYK, which would mean the
-# comparison has been handicapping lcms rather than steelmanning it.
-# This isolates each flag.
+# A speed comparison is only worth publishing if the other engine got its best
+# build. Our Makefile has always used -march=native, but a first pass suggested
+# that is actually SLOWER here than plain -O3 on the RGB workflows — which
+# would mean we have been handicapping lcms rather than steelmanning it.
+#
+# Measures `noise` content with the memo cache OFF: no cache hits to confound
+# it, so the figure is the transform's real throughput and nothing else.
+# Iteration counts inside the harness auto-scale to ~400 ms per batch and
+# report a median of 5, so the numbers are stable enough to choose on.
 #
 # Run from bench/lcms_c/ inside WSL:  bash flag_sweep.sh
+# Takes a few minutes. Put the winner in the Makefile and record it in the
+# conditions block of docs/LcmsComparison.md.
 set -e
 cd "$(dirname "$0")"
-cp ../../__tests__/GRACoL2006_Coated1v2.icc /tmp/ 2>/dev/null || true
 
-run() {
-    echo "### CFLAGS: $1"
-    gcc $1 -std=c99 -DIMAGE_WIDTH=256 -DIMAGE_HEIGHT=256 \
-        -I lcms2-2.18/include -o /tmp/bm_sweep \
-        bench_content_matrix.c lcms2-2.18/src/*.c -lm 2>/dev/null
-    ( cd /tmp && ./bm_sweep | sed -n '8,12p' )
+SIZE=${SIZE:-1048576}
+BIN=/tmp/bm_flagsweep
+
+FLAGSETS=(
+    "-O2"
+    "-O3"
+    "-O3 -DNDEBUG -fno-strict-aliasing"
+    "-O3 -march=native"
+    "-O3 -DNDEBUG -march=native -fno-strict-aliasing"
+    "-O3 -DNDEBUG -march=native -fno-strict-aliasing -funroll-loops"
+    "-O3 -DNDEBUG -march=native -ffast-math -funroll-loops -flto"
+)
+
+echo "======================================================================"
+echo " lcms2 CFLAGS sweep — noise content, cache OFF (pure transform speed)"
+echo " $SIZE px/iter, median of 5, higher is better"
+echo "======================================================================"
+lscpu 2>/dev/null | grep -E "^Model name" | sed 's/  */ /g' || true
+gcc --version | head -1
+echo ""
+
+for F in "${FLAGSETS[@]}"; do
+    printf '%-58s' "$F"
+    if ! gcc $F -std=c99 -I lcms2-2.18/include -o "$BIN" \
+            bench_content_matrix.c lcms2-2.18/src/*.c -lm 2>/dev/null; then
+        echo "  BUILD FAILED"
+        continue
+    fi
     echo ""
-}
+    "$BIN" --sizes "$SIZE" --content noise 2>/dev/null \
+        | awk '/^ (RGB|CMYK)/     { wf=$0 }
+               /^ +off +[0-9]/    { printf "    %-16s %8.1f MPx/s\n", wf, $NF }'
+    echo ""
+done
 
-run "-O3"
-run "-O2"
-run "-O3 -march=native"
-run "-O3 -DNDEBUG -march=native -fno-strict-aliasing"
-
-echo "### CPU"
-lscpu | grep -E "Model name|Flags" | cut -c1-160
+echo "Pick the fastest set, update the Makefile CFLAGS, and record it in the"
+echo "conditions block of docs/LcmsComparison.md. Give lcms its best build."
