@@ -200,10 +200,128 @@ It also bounds the remaining gap to Marti's reported figures
 multi-threading plugin) and any further calling-convention gains —
 still to be measured when his corrected harness is back online.
 
-*(Engineering note-to-self: a one-pixel memo cache is cheap to add to
-jsCE's 4D kernels — compare 4 input bytes against the previous pixel,
-copy the previous output on hit — and would claw back most of the
-photo-content gap. Filed as a roadmap idea, not shipped.)*
+*(Engineering note: that memo cache now exists as an opt-in
+`pixelCache` on the accuracy path, plus a 4D-kernel POC — see
+[deepdive/PixelCache.md](./deepdive/PixelCache.md). Measured on the
+kernel it costs ~8 % on noise and pays 1.5–3.6× on repetitive content,
+which is the same trade lcms makes.)*
+
+---
+
+## Release comparison — TEMPLATE, NOT YET MEASURED
+
+> **Do not quote anything below until it is filled in.** Empty cells
+> mean unmeasured, never zero. This structure exists so the numbers can
+> be produced in one controlled session rather than assembled from runs
+> made months apart on different machines — which is how the historical
+> section above ended up needing corrections.
+
+### Conditions (fill in first — the numbers are meaningless without these)
+
+| | |
+|---|---|
+| Date | |
+| CPU / RAM | |
+| OS / kernel | |
+| Compiler + **exact CFLAGS** | |
+| lcms2 version (native) | |
+| lcms-wasm version | |
+| Node version / V8 | |
+| Browser + version (if browser figures included) | |
+| jsColorEngine version | |
+| Profiles used | |
+
+**Settle the compile flags before running.** `-march=native` measured
+*slower* than plain `-O3` on a Ryzen 7700X (~20–30 % on the RGB
+workflows). Sweep with `bench/lcms_c/flag_sweep.sh` and give lcms its
+**best** build — a comparison that handicaps the other engine is worth
+nothing. State the winning flags in the table above.
+
+### Table 1 — Single-threaded, like-for-like (the only comparable claim)
+
+One block per workflow. `adj%` is the share of pixels byte-identical to
+the previous one — what a one-pixel cache can hit — and belongs in the
+table because it explains every difference between the content rows.
+
+Repeat this block for: RGB→Lab, RGB→CMYK, CMYK→RGB, CMYK→CMYK,
+soft-proof (sRGB→GRACoL→sRGB), RGB→RGB matrix-shaper.
+
+**Workflow: _______**
+
+| content | adj % | jsCE `int` | jsCE WASM SIMD | jsCE + pixelCache | lcms-wasm | lcms-wasm NOCACHE | lcms native | lcms native NOCACHE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| noise | 0.0 | | | | | | | |
+| gradient | 75.0 | | | | | | | |
+| blocks16 | 93.8 | | | | | | | |
+| solid | 100.0 | | | | | | | |
+| photo corpus (mean) | | | | | | | | |
+
+Notes for whoever fills this in:
+
+- **`blocks16` is Marti Maria's generator** (16×16 flat colour blocks).
+  Include it: his revised harness uses it, so it is the row that makes
+  his figures reproducible rather than contradictory.
+- **The NOCACHE columns are not padding.** Where cache and NOCACHE
+  agree, the number is the transform's real throughput; where they
+  diverge, the gap is the memo cache. Without them a content change
+  looks like a library difference.
+- The photo-corpus row needs a stated corpus. `samples/images/` is
+  **not** suitable — those are AI-adjusted and read far more repetitive
+  than camera output (see PixelCache.md).
+
+### Table 2 — Buffer-size sensitivity
+
+Small, and expected to be undramatic — early runs showed 64K and 1024K
+within noise of each other. Worth publishing precisely because it
+forecloses "you measured on a buffer that fits in cache".
+
+| engine | 16K px | 64K px | 1M px | 10M px |
+|---|---:|---:|---:|---:|
+| jsCE `int` | | | | |
+| jsCE WASM SIMD | | | | |
+| lcms-wasm | | | | |
+| lcms native | | | | |
+
+### Table 3 — The full picture (NOT comparable — shown for honesty)
+
+These are the configurations jsColorEngine has no equivalent of. They
+exist so a reader sees the whole landscape and understands exactly
+which claim is being made, instead of discovering the gap elsewhere and
+assuming it was hidden.
+
+| configuration | throughput | jsColorEngine equivalent |
+|---|---:|---|
+| lcms native + `fast_float` plugin (GPL3) | | *none — no SIMD-specialised float path* |
+| lcms native + multi-threading plugin (GPL3) | | *none — see note on Web Workers* |
+| lcms native, N threads (manual split) | | *not implemented* |
+| GPU / other acceleration | | *none* |
+
+**On multi-core.** The single-threaded framing throughout this document
+is about making a like-for-like comparison, not a claim that
+single-core is the right way to ship. The JavaScript equivalent is Web
+Workers over image strips; it works, and it is not currently measured
+here. Single-thread throughput matters because it sets the floor for
+what each worker achieves. Marti Maria's reported 1,200–1,600 MPx/s
+belongs in this table, not against Table 1.
+
+### How to produce it
+
+```bash
+# native lcms — content x cache x size, all in one run
+cd bench/lcms_c && bash flag_sweep.sh          # pick CFLAGS first
+./bench_content_matrix --sizes 16384,65536,1048576,10485760
+
+# lcms-wasm + jsCE, same content axes
+cd bench/lcms-comparison && npm install && node bench.js
+
+# jsCE pixel cache, per content class
+node bench/pixel_cache/cache_bench.js --images <real corpus>
+```
+
+The C harness prints `adj%` per content row, so Table 1's second column
+comes straight from it and does not need to be derived by hand.
+
+---
 
 ## The specialisation story
 
