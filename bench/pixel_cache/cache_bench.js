@@ -50,7 +50,11 @@ function argString(name, fallback) {
 const MAX_PIXELS  = argValue('pixels', 250000);
 const TIMED_ITERS = argValue('iters', 3);
 const WARMUP      = 1;
-const CACHE_MODES = [0, 1, 16, 32];
+// --slots 0,1,16,32,64 to sweep table sizes. 0 is the uncached baseline and
+// should always be first. Noise is the useful row for reading the miss-path
+// cost of each size, because it never hits.
+const CACHE_MODES = argString('slots', '0,1,16,32')
+    .split(',').map(s => Number(s.trim()));
 const SKIP_SYNTHETIC = process.argv.indexOf('--images-only') !== -1;
 
 // --images <dir> to point at a different corpus. The bundled

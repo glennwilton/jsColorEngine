@@ -98,6 +98,57 @@ material — the classes most likely to *favour* the cache. And note the
 uncached column is itself content-sensitive (4.46–8.74 MPx/s), so the
 pipeline was never truly content-neutral either.
 
+### Miss-path cost, and why table size is free
+
+Noise never hits, so its throughput is the tax on its own:
+
+| | MPx/s | vs off | key memory |
+|---|---:|---:|---:|
+| cache off | 7.91 | — | — |
+| slots=1 | 6.46 | −18.4 % | — |
+| slots=32 | 6.17 | −21.9 % | 1 KB |
+| slots=256 | 5.93 | −25.1 % | 6 KB |
+| slots=1024 | 5.98 | −24.3 % | 24 KB |
+| slots=4096 | 6.05 | −23.4 % | 96 KB |
+
+**The cost is the check, not the table.** Going from 32 to 4096 slots —
+a 96× larger working set — changes nothing measurable; the numbers past
+256 sit inside run-to-run noise. What costs is doing a lookup at all:
+the extra stage call, the hash, and the compare. Single-entry is
+cheaper (−18 %) only because it skips the hash and indexing.
+
+The L1-pressure worry in the design notes above was therefore wrong for
+this path. It was reasoned from the image kernels, which stream a large
+CLUT and genuinely are cache-bound; the accuracy path allocates per
+pixel and is nowhere near that regime.
+
+### Hit rate vs table size — whole frames
+
+| image | 1 | 16 | 32 | 64 | 128 | 256 | 1024 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| text page | 13.0 % | 35.2 % | 41.5 % | 47.7 % | 56.0 % | 63.7 % | 79.6 % |
+| strawberries | 25.4 % | 35.3 % | 36.9 % | 38.7 % | 40.4 % | 41.8 % | 48.7 % |
+| poster | 31.3 % | 62.3 % | 67.4 % | 70.5 % | 73.5 % | 76.9 % | 83.6 % |
+| sunflower | 10.8 % | 17.5 % | 19.4 % | 21.3 % | 22.9 % | 24.6 % | 33.8 % |
+| beach | 1.0 % | 2.4 % | 3.2 % | 4.4 % | 6.0 % | 8.0 % | 13.0 % |
+
+**Hit rate never plateaus.** It is still climbing at 1024 slots on every
+image — these are 8–19 MP frames, so even 1024 entries is a tiny window
+over the colours present. Since the cost is flat, **a bigger table is
+strictly better**, bounded only by memory you care about.
+
+### Break-even
+
+A hit runs at roughly 0.3× the cost of an uncached pixel and a miss at
+roughly 1.25×, which puts break-even near **38–40 % hit rate**. The
+measurements land exactly there: strawberries at 36.9 % gives 0.99×,
+text page at 41.5 % gives 1.05×.
+
+So the decision is **on or off, not what size**: pick the largest table
+you are willing to pay memory for, then ask whether the content clears
+~40 %. Single-entry has a lower break-even (~24 %) but a ceiling so low
+that it only wins on near-solid content.
+
 **Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
 cached against uncached output byte for byte — every content type
 above, four transform shapes (3- and 4-channel output, int8 and int16),
