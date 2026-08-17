@@ -28,8 +28,46 @@ author has been generous with corrections
 comparisons exist to answer one question honestly: *how fast can
 colour management go in JavaScript?*
 
+## TL;DR
+
+*Last reviewed 2026-08-18. Read the caveat column — it is the point.*
+
+| question | answer | confidence |
+|---|---|---|
+| Fastest colour transforms **in JavaScript**? | Yes — consistently ahead of `lcms-wasm` on every workflow | **Solid.** Same runtime, same input, same session |
+| Faster than **native C**? | **No, and we no longer claim it.** Some LUT workflows are competitive; RGB→RGB is not close | **Being re-measured** — our old figures used a build flag that handicapped lcms, see below |
+| Why do published lcms figures vary so much? | Content. lcms memoises the previous pixel, so repetitive images run 2–5× faster than noise **in the same build** | **Solid.** Measured both ways with `cmsFLAGS_NOCACHE` |
+| Multi-core / GPU? | Out of scope here. lcms's plugin pack and thread plugin are far faster; we have no equivalent | **Solid** — stated, not measured |
+
+**The one claim to take away:** for a JavaScript project, jsColorEngine
+is the fastest option available, and it gets within reach of native C
+on LUT-heavy work. It is not a general "faster than C" claim, and any
+comparison that omits input content, compiler flags and thread count is
+not telling you much — including our own earlier ones.
+
+**Two corrections we made to our own numbers**, both recorded in full
+below rather than quietly edited:
+
+1. `cmsFLAGS_HIGHRESPRECALC` was the wrong oracle for accuracy. Fixing
+   it made our accuracy comparison *better* — 100 % within 1 LSB.
+2. `-march=native` made lcms **slower** on the test machine. Every
+   native figure we published was produced with it, which handicapped
+   lcms; at least one workflow reverses once lcms gets its best build.
+
+### The gaps, and what closes each
+
+Useful because each measured gap has a named remedy rather than being a
+verdict:
+
+| gap | why | what closes it |
+|---|---|---|
+| RGB→RGB ~0.46× of native | native uses a fused matrix-shaper path; we walk a general pipeline | **Matrix-shaper kernel** — POC at 250–257 MPx/s, v1.5.5 |
+| Repetitive content 2–5× behind | lcms memoises the previous pixel; our kernels are content-neutral | **Pixel cache** — shipped opt-in on the accuracy path, 4D-kernel POC measured at 1.5–3.6× |
+| 8× behind on plugin-enabled figures | `fast_float` SIMD + multi-threading plugin | **Web Workers** for the thread axis; SIMD tier already exists |
+
 ## Contents
 
+- [TL;DR](#tldr)
 - [Scope: single-threaded, engine vs engine](#scope-single-threaded-engine-vs-engine)
 - [vs lcms-wasm — the comparison that matters for JS](#vs-lcms-wasm--the-comparison-that-matters-for-js)
 - [vs native single-threaded C — historical, under re-measurement](#vs-native-single-threaded-c--historical-under-re-measurement)
