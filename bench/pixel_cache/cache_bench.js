@@ -42,12 +42,21 @@ function argValue(name, fallback) {
     return (i !== -1 && process.argv[i + 1]) ? Number(process.argv[i + 1]) : fallback;
 }
 
+function argString(name, fallback) {
+    const i = process.argv.indexOf('--' + name);
+    return (i !== -1 && process.argv[i + 1]) ? process.argv[i + 1] : fallback;
+}
+
 const MAX_PIXELS  = argValue('pixels', 250000);
 const TIMED_ITERS = argValue('iters', 3);
 const WARMUP      = 1;
 const CACHE_MODES = [0, 1, 16, 32];
+const SKIP_SYNTHETIC = process.argv.indexOf('--images-only') !== -1;
 
-const IMAGE_DIR = path.join(__dirname, '..', '..', 'samples', 'images');
+// --images <dir> to point at a different corpus. The bundled
+// samples/images/ set is small and was authored/adjusted rather than shot,
+// so it is a starting point, not a corpus.
+const IMAGE_DIR = argString('images', path.join(__dirname, '..', '..', 'samples', 'images'));
 
 // ----------------------------------------------------------------------
 // Content generators — all return Uint8ClampedArray of RGB triplets
@@ -120,6 +129,11 @@ async function loadImageRGB(file, maxPixels) {
     context.drawImage(image, 0, 0);
     const rgba = context.getImageData(0, 0, image.width, image.height).data;
 
+    // NOTE: this takes the first n pixels, i.e. a top strip. That is fine for
+    // a whole image and misleading for a crop — see the warning at the call
+    // site. Striding would sample the frame evenly but destroy adjacency,
+    // which is exactly what the slots=1 column measures, so cropping is the
+    // lesser evil; the answer is to raise --pixels, not to stride.
     const pixelCount = Math.min(image.width * image.height, maxPixels);
     const out = new Uint8ClampedArray(pixelCount * 3);
     for (let i = 0; i < pixelCount; i++) {
@@ -194,17 +208,19 @@ async function main() {
     console.log(' image kernels; see docs/deepdive/PixelCache.md.');
     header();
 
-    const synthetic = [
-        ['noise',        makeNoise(MAX_PIXELS)],
-        ['gradient',     makeGradient(MAX_PIXELS)],
-        ['checkerboard', makeCheckerboard(MAX_PIXELS)],
-        ['palette8',     makePalette8(MAX_PIXELS)],
-        ['solid',        makeSolid(MAX_PIXELS)],
-    ];
+    if (!SKIP_SYNTHETIC) {
+        const synthetic = [
+            ['noise',        makeNoise(MAX_PIXELS)],
+            ['gradient',     makeGradient(MAX_PIXELS)],
+            ['checkerboard', makeCheckerboard(MAX_PIXELS)],
+            ['palette8',     makePalette8(MAX_PIXELS)],
+            ['solid',        makeSolid(MAX_PIXELS)],
+        ];
 
-    for (const [label, pixels] of synthetic) {
-        const results = CACHE_MODES.map(m => measure(pixels, MAX_PIXELS, m));
-        reportRow(label, MAX_PIXELS, results);
+        for (const [label, pixels] of synthetic) {
+            const results = CACHE_MODES.map(m => measure(pixels, MAX_PIXELS, m));
+            reportRow(label, MAX_PIXELS, results);
+        }
     }
 
     // Real photographs
@@ -225,8 +241,18 @@ async function main() {
                 console.log('  ' + file.padEnd(16) + '  skipped: ' + error.message);
                 continue;
             }
+            const fullPixels = image.width * image.height;
+            if (image.pixelCount < fullPixels) {
+                // --pixels takes the FIRST n pixels, which is a top strip, not
+                // a sample. On a large frame that is usually sky or background
+                // and reads nothing like the whole image: one test photo
+                // measured 3.2% over the full frame and 7.5% over the top 250k.
+                const pct = ((image.pixelCount / fullPixels) * 100).toFixed(1);
+                console.log(`  ! ${file.slice(0, 24)} cropped to top ${pct}% ` +
+                    `(${image.pixelCount} of ${fullPixels}) — raise --pixels for a real figure`);
+            }
             const results = CACHE_MODES.map(m => measure(image.pixels, image.pixelCount, m));
-            reportRow(file, image.pixelCount, results);
+            reportRow(file.slice(0, 24), image.pixelCount, results);
         }
     }
 

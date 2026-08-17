@@ -1532,14 +1532,25 @@ architecture.
 
 ✅ **Accuracy-path implementation landed (2026-08-17)** — `src/cache.js`,
 opt-in via `pixelCache: 0|1|16|32`, `getPixelCacheStats()` for hit
-counting, tests in `__tests__/pixelcache.tests.js`, bench in
-`bench/pixel_cache/`. First measurements **overturned the assumption
-this experiment was built on**: real photographs hit 59–83 % on a
-32-slot table (1.2–1.9× on the accuracy path), because a keyed table
-catches colour *recurrence*, not adjacency. Pure noise is the worst
-case at 0.82×. Still outstanding: a proper corpus (three sample PNGs
-is not one), and the kernel port — where the cost side is completely
-different and none of these timings transfer.
+counting, tests in `__tests__/pixelcache.tests.js`, bench and
+output-verification in `bench/pixel_cache/`.
+
+**Measured, and the original hypothesis held.** On whole
+full-resolution photographs the cache hits 3–41 % and runs between
+0.84× and 1.05× — break-even at best. The clear win is graphic
+content: a flat-colour poster hit 67 % at 1.22×, and synthetic solid
+/ checkerboard content reaches 3.2×. Pure noise is the floor at 0.82×.
+(An earlier reading of 59–83 % on photographs was wrong twice over —
+the bundled sample images are AI-adjusted rather than shot, and
+capping the pixel count crops the top of the frame instead of sampling
+it. Both are written up in
+[deepdive/PixelCache.md](./deepdive/PixelCache.md).)
+
+**So the kernel port is now questionable**, not merely unproven: the
+kernels are far more sensitive to miss-path cost than the accuracy
+path, and photographs do not supply the hit rate to pay for it. Next
+step is a corpus of the classes that might justify it — screenshots,
+halftones, print-origin scans — not more photographs.
 
 **Design space captured in
 [deepdive/PixelCache.md](./deepdive/PixelCache.md)** (2026-08-16,

@@ -34,9 +34,11 @@ Which content classes win was, until measured, assumed — wrongly. See
 
 ## Measured — accuracy path, 2026-08-17
 
-`node bench/pixel_cache/cache_bench.js` — sRGB → AdobeRGB, 250k pixels,
-`buildLut: false`, median of 3. Hit rate is the transferable figure;
-the MPx/s columns describe this path only.
+`node bench/pixel_cache/cache_bench.js` — sRGB → AdobeRGB,
+`buildLut: false`. Hit rate is the transferable figure; the MPx/s
+columns describe this path only.
+
+### Synthetic content, 250k pixels
 
 | content | cache off | slots=1 | slots=32 |
 |---|---:|---:|---:|
@@ -45,48 +47,56 @@ the MPx/s columns describe this path only.
 | checkerboard | 9.06 | 0.1 % · 0.76x | 100 % · 3.25x |
 | palette8 | 9.10 | 12.5 % · 0.86x | 87.5 % · 1.94x |
 | solid | 8.83 | 100 % · 3.39x | 100 % · 3.25x |
-| face.png | 9.56 | 26.1 % · 0.83x | 58.8 % · 1.22x |
-| fruit.png | 10.73 | 58.3 % · 1.20x | 76.2 % · 1.39x |
-| skin.png | 8.98 | 52.1 % · 1.03x | 83.3 % · 1.91x |
+| near-miss (1 LSB apart) | — | 0 % | 83 % |
 
-**The assumption this overturns.** Every design note above argued that
-real photographs would almost never hit, because sensor noise and JPEG
-artifacts break byte-identical *adjacent* pixels. Adjacency is indeed
-weak — single-entry manages only 26 % on `face.png`. But a keyed table
-does not care about adjacency: it catches a colour recurring anywhere
-in a rolling window, and 8-bit images reuse colours heavily. The three
-sample photographs hit **59–83 %** at 32 slots and are *faster* with
-the cache on, not slower. Adjacency was simply the wrong model.
+### Real images — whole frame, full resolution
 
-**Adjacency vs recurrence, separated.** The `slots=1` column *is* the
-pure adjacency measure, and the gap to `slots=32` is everything else:
+Unsplash photographs and one Library of Congress poster, 7.6–19.4 MP,
+every pixel converted:
 
-| image | adjacency (slots=1) | + recurrence (slots=32) |
-|---|---:|---:|
-| face.png | 26.1 % | 58.8 % |
-| fruit.png | 58.3 % | 76.2 % |
-| skin.png | 52.1 % | 83.3 % |
+| image | pixels | cache off | slots=1 | slots=32 |
+|---|---:|---:|---:|---:|
+| beach | 11.9 M | 4.92 | 1.0 % · 0.82x | 3.2 % · 0.84x |
+| sunflower | 7.6 M | 8.38 | 10.8 % · 0.85x | 19.4 % · 0.87x |
+| strawberries | 10.8 M | 8.74 | 25.4 % · 0.93x | 36.9 % · 0.99x |
+| photo of text page | 18.7 M | 4.46 | 13.0 % · 0.94x | 41.5 % · 1.05x |
+| poster illustration | 19.4 M | 4.60 | 31.3 % · 1.01x | 67.4 % · 1.22x |
 
-So roughly half the hits on `face.png` come from colours recurring
-elsewhere in the rolling window rather than from neighbouring pixels —
-a noisy flat background cycling through a dozen values is invisible to
-a single entry and free to a small table. The synthetic `near-miss`
-pattern (every pixel differing by 1 LSB, 27 distinct colours) shows the
-same shape: 0 % at one entry, 83 % at 32 slots.
+**Conclusion: the original hypothesis was right.** Photographs run
+3–41 % and land between break-even and a 16 % loss. The one clear win
+is the flat-colour illustration at 67 % and 1.22x. The cache is a
+content-class feature that pays on graphic and synthetic content and
+costs on photographic content, exactly as the design notes argued.
 
-**Caveats — these are not a corpus.**
+### Two measurement errors that briefly said otherwise
 
-- Three PNGs, and they are *AI-generated / adjusted* images. Those
-  plausibly carry smoother gradients and fewer distinct colours than
-  camera output, which would inflate every figure above.
-- Each has a substantial flat background (~20 % of frame), so some of
-  the win is background, not subject.
-- Counter-intuitively, JPEG input may score *higher*, not lower:
-  quantisation flattens smooth DCT blocks to identical values. The
-  familiar "JPEG artifacts break byte-equality" intuition applies to
-  high-frequency detail, not flat regions.
+Recorded because both were convincing while they lasted.
 
-Enough to redirect the work. Not enough to publish.
+**1. The bundled sample images are not photographs.** A first pass over
+`samples/images/` (`face`, `fruit`, `skin`) showed 59–83 % hit rates
+and 1.2–1.9x, and this document briefly claimed the photograph
+assumption had been "overturned" — that a keyed table catches
+*recurrence* rather than adjacency and therefore wins on photos too.
+Those three are AI-generated/adjusted images with large flat
+backgrounds and unnaturally smooth gradients. On real camera output the
+effect largely disappears. The recurrence-vs-adjacency mechanism is
+real (the `near-miss` row above shows 0 % → 83 %); what was wrong was
+the claim that natural photographs supply enough of it.
+
+**2. Capping pixels crops rather than samples.** `--pixels` takes the
+first *n* pixels, which on a 19 MP frame is the top 1–3 % — usually
+sky or background, and nothing like the whole image. The beach photo
+reads **27.8 %** resized-to-small, **7.5 %** as a 250k top crop, and
+**3.2 %** over the full frame. Striding would sample evenly but destroy
+adjacency, which is precisely what the `slots=1` column measures, so
+the bench now warns when it crops and the answer is to raise
+`--pixels`, not to stride.
+
+**Still not a corpus.** Five images. Missing: screenshots and UI
+captures, halftone/dithered content, and scanned or print-origin
+material — the classes most likely to *favour* the cache. And note the
+uncached column is itself content-sensitive (4.46–8.74 MPx/s), so the
+pipeline was never truly content-neutral either.
 
 **Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
 cached against uncached output byte for byte — every content type
@@ -101,9 +111,15 @@ a 20 % tax, against the 8–12 % predicted from op counts. And note the
 uncached column is itself content-sensitive (7.75 on noise vs 10.73 on
 `fruit.png`), so the pipeline was never truly content-neutral either.
 
-**What it means for the next step.** The keyed table, not the single
-entry, is the design worth carrying to the kernels: single-entry loses
-on four of the eight content types and wins big only on solid fills.
+**What it means for the next step.** If the kernel port happens at all,
+the keyed table is the design to carry — single-entry loses on most
+content and wins big only on solid fills. But the case for porting is
+now weaker than when this experiment was proposed: the kernels are far
+more sensitive to the miss-path cost than this path is, and real
+photographs do not supply the hit rate to pay for it. The honest next
+step is a corpus that includes screenshots, halftones and print-origin
+scans — the classes that might justify it — rather than more
+photographs.
 
 ## Decisions taken (2026-08-16)
 

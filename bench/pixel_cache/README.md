@@ -52,13 +52,33 @@ The synthetic generators deliberately match the native lcms harness so
 results line up with the LittleCMS content-sensitivity measurements in
 [docs/LcmsComparison.md](../../docs/LcmsComparison.md).
 
+## Two ways to get a wrong answer
+
+Both of these produced convincing but false results before being caught,
+so the harness now guards against them:
+
+**Do not trust `samples/images/`.** Those three PNGs are AI-generated
+and adjusted, with unnaturally smooth gradients and large flat
+backgrounds. They read 59–83 % hit rate; real camera output over the
+same transform reads 3–41 %. Point `--images <dir>` at genuine
+photographs.
+
+**Do not cap the pixel count on large images.** `--pixels` takes the
+first *n* pixels, which on a 19 MP frame is the top 1–3 % — normally
+sky or background. One test photo measured 27.8 % resized, 7.5 % as a
+250k top crop, and 3.2 % over the full frame. The bench now prints a
+warning when it crops. Striding would sample evenly but destroy
+adjacency, which is exactly what the `slots=1` column measures, so the
+fix is to raise `--pixels`, not to stride.
+
 ## Results
 
-Recorded, with the assumption they overturned, in
-[docs/deepdive/PixelCache.md](../../docs/deepdive/PixelCache.md) —
-short version: the photographs hit far more often than the design notes
-predicted, because a keyed table catches recurrence rather than
-adjacency.
+Recorded in
+[docs/deepdive/PixelCache.md](../../docs/deepdive/PixelCache.md).
+Short version: photographs 3–41 % (0.84–1.05×), flat graphic content
+67 % (1.22×), synthetic solid/checkerboard up to 3.2×, pure noise the
+floor at 0.82×.
 
-Three sample PNGs are not a corpus. Treat the photographic numbers as a
-direction to investigate, not a published figure.
+Five images is still not a corpus — screenshots, halftones and
+print-origin scans are the classes most likely to favour the cache and
+none are represented.

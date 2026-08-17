@@ -177,12 +177,14 @@ the CLUT kernel on RGB→RGB. Integration pending (v1.5.5).
 
 ### deepdive/PixelCache.md
 The pixel cache: design space, as-built notes for the accuracy-path
-implementation (`src/cache.js`, opt-in via `pixelCache`), and the
-measured hit-rate/throughput table that overturned the design's central
-assumption — real photographs hit 59–83 % on a keyed table, because it
-catches colour *recurrence* rather than adjacency. Also records the
-three things building it proved wrong (boundary detection, hash
-scaling, transformArray) and why the kernel port is still design-only.
+implementation (`src/cache.js`, opt-in via `pixelCache`), and measured
+hit rates by content class — photographs 3–41 % (break-even at best),
+flat graphic content 67 %+ (1.2–3.2×). Also records the three things
+building it proved wrong (boundary detection, hash scaling,
+transformArray) and, as a methodology warning, two measurement errors
+that briefly reversed the conclusion: the bundled sample images are
+AI-adjusted rather than shot, and capping pixel count crops the top of
+a frame instead of sampling it.
 
 ### deepdive/multiProcessElements.md
 Why `mpet` / `DToB`/`BToD` tags are not decoded: spec-mandated fallback
