@@ -1,12 +1,17 @@
 # Multicore — design notes
 
-> **Status: brainstorm. Nothing implemented, nothing measured.** This
-> captures the shape of a worker-parallel image path while the kernel
-> architecture is fresh, so the design isn't re-derived later. Every
-> number here is an estimate or an order-of-magnitude sanity check, not
-> a measurement. Multicore is currently an empty cell in the
-> [LcmsComparison](../LcmsComparison.md) "not comparable" table — the
-> honest position, and this is what would change it.
+> **Status: measured, not implemented.** The design below was written
+> first as a brainstorm; the experiment has since been run
+> (`bench/multicore_poc/`, public API only, no engine changes) and the
+> results are in "MEASURED" near the end. Read that first — it rules out
+> the more invasive half of this document. Nothing has been built into
+> the engine. Multicore is still an empty cell in the
+> [LcmsComparison](../LcmsComparison.md) "not comparable" table; the
+> numbers here are from a proof of concept, not a shipped feature.
+>
+> Headline: **5.46x peak**, byte-identical, and the copies that Model B
+> exists to eliminate cost only **4-7%** — so Model B is probably never
+> worth building.
 
 ## Why this is worth writing down now
 

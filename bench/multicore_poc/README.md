@@ -92,7 +92,7 @@ The memory objection to batching is smaller than it looks: you need
 `workers + 1` images resident, not the whole batch. Load lazily as workers
 free up.
 
-### 3. Hyperthreads are worth ~25 %, not 100 %
+### 4. Hyperthreads are worth ~25 %, not 100 %
 
 Scaling is near-linear to 4, good to 8 (the physical core count), then
 flattens: 12 and 16 workers land within noise of each other. `auto` at 75 %
