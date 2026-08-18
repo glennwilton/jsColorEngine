@@ -685,6 +685,64 @@ single small conversion is far more than doing it single-threaded. The
 spin up a pool for one small image" — the pool wants to be created once
 and reused, which is what `transformImages()` taking 1..n images is for.
 
+## Public options
+
+Every default below is the measured one, with the finding that set it.
+The intent is that **passing nothing is the right answer for almost
+everyone** — these exist for the cases where the caller knows something
+the library cannot, such as "leave two cores for the UI" or "this is a
+384-core render node".
+
+```js
+const t = new Transform({
+    dataFormat: 'int8',
+    buildLut: true,
+    multicore: true,              // false (default) | true | { …options }
+});
+```
+
+`multicore: true` takes every default. The long form:
+
+| option | default | what it does | measured basis |
+|---|---|---|---|
+| `cores` | `'auto'` | `1` disables; a number pins it; `'auto'` uses ~50 % of logical cores; `'max'` uses all | efficiency falls from 95 % at 1 worker to 34 % at 16 — past ~8 you buy little and cost the rest of the machine |
+| `minThreads` | `2` | never spin up a pool smaller than this; below it, run single-threaded | one worker is *slower* than no pool (0.95×) once copies are counted |
+| `maxThreads` | `16` | hard ceiling regardless of `cores` | measured scaling flattens: 5.38× at 12 workers, 5.46× at 16 |
+| `autoTune` | `'lazy'` | `false` uses defaults; `true` calibrates before first use; `'lazy'` calibrates off the critical path after the first batch; or pass a **stored tuning object** | calibration costs ~300 ms and repays only after ~369 × 8 MP images, so it must never block first use and must be cached |
+| `tuning` | `null` | a previously persisted `autoTune()` result, keyed by `(cores, lutMode)` | the result is a property of the machine, not the image — it should survive a reload |
+| `tasksPerWorker` | `10` | over-decomposition target | one task per worker is the worst measured split, 30–48 % off; 8–12 absorbs jitter, and content variance needs only 2–4 |
+| `bufferPx` | `262144` | fixed per-worker slot capacity, allocated once | 128–256 K px sits in the flat region; 16 workers at ~28 MB rather than ~190 MB at 5 MB slots |
+| `minSlicePx` | `16384` | never cut smaller than this | keeps per-task overhead (~7 µs) under ~1 % of a task |
+| `parallelFloorPx` | `65536` | total pixels below which the work runs on the calling thread | measured floor where splitting stops paying at all |
+| `allocation` | `'fixed'` | `'fixed'` \| `'dynamic'` \| `'grow'` | fixed slots remove `Memory.grow()` and the reclaim path from the hot loop; the other two remain for the jitter comparison that is still unmeasured |
+
+Notes that matter more than the table:
+
+- **`cores: 'auto'` deliberately does not take the whole machine.**
+  Efficiency is already down to 54 % at 8 workers and 34 % at 16, so the
+  last cores buy little throughput while making the host unresponsive.
+  A batch server should say `'max'`; a UI application should not.
+- **`autoTune: 'lazy'` is the default, not `true`.** Blocking first use
+  for ~300 ms to win 3 % is the wrong trade, and on the JS kernel there
+  is nothing to win at all. Lazy calibration applies from the second
+  batch onward and costs the caller nothing visible.
+- **`tuning` is how calibration actually pays.** Run `autoTune()` once,
+  persist the JSON, hand it back on subsequent runs. Without persistence
+  the feature is close to pointless — see the payback table above.
+- **`bufferPx` is a ceiling, not a quantum.** Slices are sized from the
+  image and the pool and then clamped to it; a worker's buffer is
+  frequently not full, and that is correct.
+- **`allocation` should not need changing.** It exists because the
+  claim that fixed slots reduce jitter is still unmeasured; when that
+  comparison is done, the loser should be deleted rather than left as a
+  option nobody understands.
+
+`pool.transformImages([...])` takes 1..n images and always works, with
+or without workers — where none are available it falls back to
+sequential `transformArray()` and reports the worker count it actually
+used, so a caller measuring throughput is never told a single-threaded
+run was parallel.
+
 ## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task
