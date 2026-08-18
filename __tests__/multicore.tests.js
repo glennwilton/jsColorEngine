@@ -296,3 +296,36 @@ describe('multicore — pool lifecycle', () => {
         expect(res.workersUsed).toBe(0);
     });
 });
+
+describe('getOptions', () => {
+
+    test('returns RESOLVED options, not what was passed in', () => {
+        const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'auto'});
+        t.create('*sRGB', gracol(), eIntent.relative);
+
+        const o = t.getOptions();
+        expect(o.lutModeRequested).toBe('auto');
+        expect(o.lutMode).not.toBe('auto');          // resolved to a real kernel
+        expect(o.dataFormat).toBe('int8');
+        expect(o.buildLut).toBe(true);
+    });
+
+    test('flags function-valued options, which are what cannot cross a worker boundary', () => {
+        const plain = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
+        plain.create('*sRGB', gracol(), eIntent.relative);
+        expect(plain.getOptions().functions).toEqual([]);
+
+        const hooked = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int',
+            lutInputHook: (c) => c});
+        hooked.create('*sRGB', gracol(), eIntent.relative);
+        expect(hooked.getOptions().functions).toContain('lutInputHook');
+    });
+
+    test('the returned options are structured-cloneable when nothing is a function', () => {
+        // This is the property the multicore path depends on: options with no
+        // functions can be handed to a worker, options with them cannot.
+        const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
+        t.create('*sRGB', gracol(), eIntent.relative);
+        expect(() => structuredClone(t.getOptions())).not.toThrow();
+    });
+});

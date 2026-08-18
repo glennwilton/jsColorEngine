@@ -1769,6 +1769,75 @@
          * absolute certainty that WASM memory is freed.
          */
         /**
+         * The options this Transform is actually running with.
+         *
+         * Not the object you passed in — the *resolved* values, so
+         * `lutMode: 'auto'` comes back as whatever it resolved to
+         * (`'int-wasm-simd'`, say), and anything you omitted comes back as the
+         * default that was applied. That makes it useful for three things:
+         * reporting what really happened, reconstructing an equivalent
+         * Transform, and deciding whether a Transform can cross a worker
+         * boundary.
+         *
+         * `functions` lists any option holding a function —
+         * `gamutDeFn`, `lutInputHook`, `lutOutputHook`. Those cannot be
+         * structured-cloned (`postMessage` throws `DataCloneError`), so they
+         * are the reason a Transform may not be rebuildable in a worker from
+         * options alone. Custom stages are baked into the LUT at build time,
+         * so they do not appear here and do not travel either.
+         *
+         *     const o = t.getOptions();
+         *     o.lutMode          // 'int-wasm-simd', not 'auto'
+         *     o.functions        // ['lutInputHook'] — cannot be cloned
+         *
+         * @returns {Object} resolved options, plus `functions: string[]`
+         */
+        getOptions(){
+            var out = {
+                dataFormat:                 this.dataFormat,
+                buildLut:                   this.builtLut === true,
+                lutMode:                    this.lutMode,
+                lutModeRequested:           this.lutModeRequested,
+                lutGridPoints:              this.lutGridPoints,
+                BPC:                        this.BPC,
+                interpolation:              this.interpolation,
+                interpolationFast:          this.interpolationFast,
+                labAdaptation:              this.labAdaptation,
+                labInputAdaptation:         this.labInputAdaptation,
+                displayChromaticAdaptation: this.displayChromaticAdaptation,
+                lutGamutMode:               this.lutGamutMode,
+                lutGamutLimit:              this.lutGamutLimit,
+                lutGamutMapScale:           this.lutGamutMapScale,
+                lutGamutColor:              this.lutGamutColor,
+                pixelCache:                 this.pixelCacheSlots !== undefined
+                                                ? this.pixelCacheSlots : 0,
+                roundOutput:                this.roundOutput,
+                precision:                  this.precision,
+                optimise:                   this.optimise,
+                detectIdentity:             this.detectIdentity,
+                clipRGBinPipeline:          this.clipRGBinPipeline,
+                useCurveLut:                this.useCurveLut,
+                pipelineDebug:              this.pipelineDebug,
+                validateOnCreate:           this.validateOnCreate,
+                bindTransformArrayFn:       this.bindTransformArrayFn,
+                wasmShrinkRatio:            this._wasmShrinkRatio,
+                wasmMaxMemory:              this._wasmMaxMemory
+            };
+
+            // Anything a structured clone would reject, named rather than
+            // silently dropped.
+            var fns = [];
+            if(typeof this.gamutDeFn === 'function' && this.gamutDeFn !== convert.deltaE1976){
+                fns.push('gamutDeFn');
+            }
+            if(this._lutInputHooks  && this._lutInputHooks.length)  fns.push('lutInputHook');
+            if(this._lutOutputHooks && this._lutOutputHooks.length) fns.push('lutOutputHook');
+            out.functions = fns;
+
+            return out;
+        }
+
+        /**
          * Convert 1..n images, using a worker pool when it is worth it.
          *
          * ALWAYS CALLABLE. Where workers are unavailable — no `worker_threads`,

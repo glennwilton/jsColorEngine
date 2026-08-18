@@ -1198,19 +1198,69 @@ extra cost:
 **The chain alone is not enough.** `lut.chain` is a *descriptor* —
 header, name, whitePoint, description — and serialises to about **2.0 KB
 against a 2,684 KB profile**. It records which profiles were used, not
-what they contain. So Mode 2 ships profile bytes *plus* the chain, the
-chain saying how to wire them:
+what they contain.
+
+**And there are no raw bytes to send.** `Profile` decodes the ICC file
+and discards the source — after `loadFile()` there is not a single
+binary property left on it. So "ship the profile bytes" is not available
+without making the caller retain them.
+
+The decoded `Profile` object itself is the answer, and it is better than
+bytes: **42 plain properties, no functions, structured-cloneable as-is.**
+Cloning drops the prototype, so the worker must restore it — after which
+it behaves as a Profile and builds an identical Transform:
 
 ```js
-{ profiles: { '<hash>': ArrayBuffer, … },      // real ICC bytes, once per worker
-  chain:    ['*sRGB', intent, '<hash>', intent, '*sRGB'] }
+// worker side
+Object.setPrototypeOf(clonedProfile, Profile.prototype);
+```
+
+Measured: a Transform built from a cloned Profile is **byte-identical**
+to one built from the original. That removes the 12.3 ms parse from the
+per-worker cost entirely — the worker receives an already-decoded
+profile. It costs more on the wire (~3.90 MB decoded against 2.62 MB of
+ICC) but the wire is a same-process structured clone, not a network.
+
+So the Mode 2 payload is:
+
+```js
+{ profiles: { '<hash>': <cloned Profile>, … },   // once per worker
+  chain:    ['*sRGB', intent, '<hash>', intent, '*sRGB'],
+  options:  { …non-function options… } }
 ```
 
 Virtual profiles cost nothing — `'*sRGB'` is synthesised from its name —
-so a soft-proof chain of `sRGB → GRACoL → sRGB` ships exactly one
-profile's bytes, not three. The same content-hash trick already used for
-LUTs applies: send each distinct profile once per worker, reference it
-by hash thereafter.
+so a soft-proof chain of `sRGB → GRACoL → sRGB` ships one profile, not
+three, and the content-hash trick already used for LUTs applies:
+send each distinct profile once per worker, reference it by hash after.
+
+**The options must travel too, and four of them cannot.** `create()`
+depends on 37 constructor options, and the Transform already keeps
+`_originalOptions` for forwarding. But `gamutDeFn`, `lutInputHook`,
+`lutOutputHook` — and any **custom stages** passed to `create()` /
+`createMultiStage()` — are *functions*, and `structuredClone` throws
+outright on those (`DataCloneError`).
+
+**This is what stops Mode 2 replacing Mode 1**, and it is the reverse of
+what the cost measurements suggested:
+
+| | Mode 1 (LUT) | Mode 2 (profiles) |
+|---|---|---|
+| custom stages, hooks, custom ΔE | ✅ **already baked into the LUT** | ❌ cannot cross the wire |
+| N-channel / pipeline-driven paths | ❌ diverges, caught by the probe | ✅ exact by construction |
+| LUT-free accuracy path | ❌ nothing to ship | ✅ the main prize |
+| a Transform restored from a portable LUT | ✅ | ❌ no profiles exist |
+
+They are **complementary, not ranked.** A custom stage is baked into the
+LUT at build time, so Mode 1 carries it for free and Mode 2 would
+silently drop it — which is the worst possible failure, since the output
+would look plausible. The selection rule follows:
+
+1. LUT present **and** the probe passes → **Mode 1** (cheapest, and the
+   only mode that carries baked functions).
+2. Otherwise, profiles available **and** no function-valued options →
+   **Mode 2**.
+3. Otherwise → **sequential**, which is always correct.
 
 **Multi-step needs no special handling in Mode 1**, which is worth
 stating because it looks like it should. A five-slot soft-proof chain
@@ -1219,13 +1269,11 @@ byte-identical on 8 workers, and now asserted in the tests. Mode 2 is
 the only mode that has to care about chains, because it rebuilds rather
 than inherits.
 
-On the evidence, **Mode 2 should probably become the primary hand-off
-and Mode 1 the optimisation**, rather than the other way round — Mode 1
-is worth keeping where the LUT is materially smaller than the profiles
-(2 MB of LUT versus 2.7 MB of ICC is close, so this is per-case), or
-where the profiles are no longer available: a Transform restored from a
-portable LUT has none to send. The probe then stops being a correctness
-guard and becomes a routing hint.
+Earlier in this document I concluded from the cost measurements that
+Mode 2 should become the primary hand-off. The function-valued options
+above correct that: neither mode dominates, and the selection rule is
+the conclusion instead. The probe stays a correctness guard for Mode 1
+rather than becoming a routing hint.
 
 ### A pool serving several transforms at once (future)
 
@@ -1758,15 +1806,14 @@ sits once worker spin-up is counted.
    server, a phone — to check that the *rule* transfers even though the
    *numbers* do not. If the derived `tasksPerWorker` lands outside 4–16
    anywhere, the model is missing a term.
-9. **Should Mode 2 replace Mode 1 as the default hand-off?** Measured,
-   `create()` without a LUT costs 0.08 ms and the whole per-worker cost
-   is the profile parse (~12.4 ms, in parallel, against a 66.5 ms
-   spin-up already being paid). That would remove the equivalence probe
-   entirely and unlock the accuracy path, which is where parallelism is
-   worth most. The open part is what to do when the profiles are gone —
-   a Transform restored from a portable LUT has none to send — so the
-   answer is probably "Mode 2 when profiles are available, Mode 1 when
-   only a LUT is", with the probe demoted from guard to routing hint.
+9. ~~Should Mode 2 replace Mode 1?~~ **ANSWERED: no, they are
+   complementary.** create() without a LUT costs 0.08 ms and a cloned
+   Profile needs no re-parse, so Mode 2 is cheap -- but four options are
+   FUNCTIONS (gamutDeFn, lutInputHook, lutOutputHook, custom stages) and
+   structuredClone throws on them. Mode 1 carries those for free because
+   they are baked into the LUT; Mode 2 would silently drop them. Mode 1
+   also serves a Transform restored from a portable LUT, which has no
+   profiles at all. Selection rule is in AS BUILT above.
 10. **How much do heterogeneous cores widen the variance, and does SIMD
    suffer more?** Every measurement here is from a homogeneous Zen 4
    part. On an Intel P/E or Apple Silicon machine the prediction is that
