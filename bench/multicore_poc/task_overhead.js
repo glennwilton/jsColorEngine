@@ -55,6 +55,7 @@ const TOTAL_PX  = Number(arg('pixels', 8388608));      // 8 MP
 const REPEATS   = Number(arg('repeats', 5));
 const LUT_MODE  = arg('lutMode', 'int');
 const RAGGED    = has('ragged');
+const CONTENT   = arg('content', 'uniform');   // uniform | mixed
 const TASK_COUNTS = arg('tasks', '1,4,16,64,256,1024')
     .split(',').map(s => parseInt(s.trim(), 10));
 
@@ -165,12 +166,32 @@ async function main() {
     build.create('*sRGB', gracol, eIntent.relative);
     const lutJson = build.toJSON();
 
-    // one deterministic source image, reused for every row
+    // One deterministic source image, reused for every row.
+    //
+    // CONTENT MATTERS TO SCHEDULING, not just to throughput. The content work
+    // (deepdive/benchmark.md §§20-21) showed the same kernel runs anywhere
+    // from ~100 to ~270 MPx/s depending on how much of the CLUT the pixels
+    // touch. A real image is not uniform: flat sky converts fast, dense
+    // foliage converts slowly. So two slices of identical PIXEL COUNT can take
+    // very different times, and a scheduler that assumes equal cost per equal
+    // size is wrong about real images.
+    //
+    //   uniform  every slice statistically identical - the easy case
+    //   mixed    first half solid, second half noise - equal pixels,
+    //            very unequal cost, which is what a real frame looks like
+    //            in caricature
     const source = new Uint8ClampedArray(TOTAL_PX * IN_CH);
     let s = 0x13579bdf;
-    for (let i = 0; i < source.length; i++) {
+    const noiseByte = () => {
         s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff;
-        source[i] = (s >>> 23) & 0xff;
+        return (s >>> 23) & 0xff;
+    };
+    if (CONTENT === 'mixed') {
+        const half = (TOTAL_PX >> 1) * IN_CH;
+        for (let i = 0; i < half; i++) source[i] = 200;           // flat: tiny CLUT working set
+        for (let i = half; i < source.length; i++) source[i] = noiseByte();
+    } else {
+        for (let i = 0; i < source.length; i++) source[i] = noiseByte();
     }
     const output = new Uint8ClampedArray(TOTAL_PX * OUT_CH);
 
@@ -180,6 +201,7 @@ async function main() {
     console.log(' workers      : ' + WORKERS + ' of ' + os.availableParallelism() + ' logical');
     console.log(' total pixels : ' + TOTAL_PX.toLocaleString() + '  (sRGB -> GRACoL, lutMode ' + LUT_MODE + ')');
     console.log(' split        : ' + (RAGGED ? 'RAGGED — uneven lengths, one 3-px task per row' : 'uniform'));
+ console.log(' content      : ' + (CONTENT === 'mixed' ? 'MIXED — half flat, half noise (equal pixels, unequal cost)' : 'uniform noise'));
     console.log(' repeats      : ' + REPEATS + ', best taken\n');
     console.log('  tasks   px/task (median)      best ms      MPx/s    vs 1 task');
     console.log('  ------  ------------------  ---------  ---------  ----------');

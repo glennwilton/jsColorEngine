@@ -1608,6 +1608,21 @@ worth stating plainly for whoever designs the next harness:
    cache-hierarchy measurement; the knee position is a property of this
    Ryzen's L1/L2, not of colour management.
 
+### The consequence beyond benchmarking
+
+This is not only a measurement concern. **A LUT transform is not
+fixed-cost per pixel** — content moves throughput by up to 2.7× — and
+any design that assumes otherwise inherits the error. The clearest case
+is parallelism: splitting an image evenly across N threads assumes equal
+pixels take equal time, which is false, and it measured **30–48 % off**
+the best split. See
+[multicore.md — pixels are not fixed-cost](./multicore.md#the-assumption-to-discard-first-pixels-are-not-fixed-cost).
+
+Anything that budgets, schedules or predicts by pixel count is making
+the same assumption: progress bars, frame-time budgets, tile schedulers,
+"this will take N seconds" estimates. They will all be wrong in the same
+direction on detailed images.
+
 All three generators (`sweep`, `noisy:<base>:<n>`, and the corrected
 `noise`) are kept in the harness, and both charts regenerate from run
 output via `plot_noise_curve.cjs` and `plot_noise_bases.cjs`.

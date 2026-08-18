@@ -12,6 +12,47 @@
 > Headline: **5.46x peak**, byte-identical, and the copies that Model B
 > exists to eliminate cost only **4-7%** — so Model B is probably never
 > worth building.
+>
+> **The one thing to take away if you read nothing else:** a LUT
+> transform is *not* fixed-cost per pixel — content changes throughput by
+> up to 2.7x — so splitting an image evenly across N threads is the wrong
+> fit and measured 30-48% off. Over-decompose instead.
+
+## The assumption to discard first: pixels are not fixed-cost
+
+Almost every naive parallel-image design starts from *split the image by
+the number of threads*. That is correct only if a pixel costs a constant
+amount to convert. **In a LUT-based colour transform it does not**, and
+everything else in this document follows from that.
+
+The content work measured the same kernel running anywhere from **~100
+to ~270 MPx/s on identical pixel counts** — a 2.7× spread — decided
+purely by how much of the interpolation table the pixels touch
+([benchmark.md §§20–21](./benchmark.md#21-noise-is-the-great-equaliser)).
+A flat region converts fast because the CLUT working set stays in cache;
+a detailed, colourful region converts slowly because it does not. Real
+frames contain both, usually in large contiguous areas — sky at the top,
+foliage at the bottom.
+
+So for a colour transform:
+
+| assumption | true? |
+|---|---|
+| every pixel costs the same | **no** — up to 2.7× depending on content |
+| equal-sized slices take equal time | **no** — follows from the above |
+| therefore: one slice per thread balances the load | **no** — measured 30–48 % off |
+
+**`image.length / threadCount` is the wrong split**, and not by a little.
+It is the worst configuration measured, because the batch finishes when
+the slowest slice finishes and a slice that happens to land on detailed
+content has nothing left to overlap it. The fix is not a smarter
+estimate of where the expensive regions are — it is to cut the work into
+many more pieces than there are workers and let a pull-queue absorb the
+difference. Roughly ten tasks per worker, measured below.
+
+This also means a scheduler cannot use slice *size* as a proxy for slice
+*cost*, which is what an LPT sort implicitly assumes. Details in
+"Equal pixels are not equal work" below.
 
 ## Why this is worth writing down now
 
@@ -644,6 +685,60 @@ The only structure with reuse is the CLUT, and it is the same ~280 KB
 however the image is cut. This is the same lesson as the content work —
 CLUT residency is what matters, and the image is just a stream passing
 through.
+
+### Equal pixels are not equal work — and LPT cannot see it
+
+There is a second reason to over-decompose, and it comes straight out of
+the content work in [benchmark.md §§20–21](./benchmark.md#21-noise-is-the-great-equaliser):
+**the same kernel runs anywhere from ~100 to ~270 MPx/s depending on how
+much of the CLUT the pixels touch.** A real frame is not uniform. Flat
+sky converts fast, dense foliage converts slowly. So two slices of
+*identical pixel count* can take substantially different times, and a
+scheduler that treats size as a proxy for cost is wrong about every real
+image.
+
+Measured with content deliberately split down the middle — first half
+flat colour, second half noise, equal pixels, very unequal cost. 2 MP,
+8 workers:
+
+| tasks | per worker | uniform noise | mixed content |
+|---:|---:|---:|---:|
+| 8 | 1 | 10.8 ms | 9.5 ms |
+| **16** | **2** | 9.7 ms | **7.2 ms** |
+| 24 | 3 | 8.4 ms | 7.3 ms |
+| 96 | 12 | 7.6 ms | 7.4 ms |
+| 192 | 24 | 8.3 ms | 7.5 ms |
+
+**One task per worker is the worst case for both, and for different
+reasons.** With uniform content the only imbalance is random jitter, so
+it takes deep over-decomposition — around twelve tasks per worker — for
+the queue to average it out. With mixed content the imbalance is
+*systematic*: half the tasks are simply slower. Two tasks per worker is
+enough to fix that, because each worker ends up with roughly one of
+each.
+
+Which yields a useful split:
+
+- **Systematic cost variance (content)** — cured by modest
+  over-decomposition, 2–4 tasks per worker.
+- **Random jitter (OS scheduling, SMT, the main thread copying)** —
+  needs 8–12 tasks per worker to average out.
+
+Both point the same way, so the ~10-per-worker target covers both, but
+the deeper figure is driven by jitter rather than content.
+
+**The sharper consequence is for the LPT sort.** Longest-processing-time
+scheduling orders tasks by *length*, which is only a proxy for cost —
+and content is exactly what breaks the proxy. In the mixed run every
+task is the same length, so the sort has nothing to work with and
+contributes nothing; all the balancing comes from having enough tasks
+in the queue. Fixing that properly would mean *estimating* cost per
+slice, which means inspecting content before scheduling. Not worth it:
+over-decomposition solves the same problem for free, and a cost model
+that has to sample pixels to predict CLUT locality would be both
+expensive and easy to get wrong. **Keep the LPT sort — it helps when
+lengths genuinely differ, as in a mixed batch of image sizes — but do
+not rely on it to balance a single image.**
 
 **Per-task overhead is partly hidden by parallelism.** The same sweep
 measures ~33 µs per task at 1 worker and ~7–8 µs at 4. Nothing about the
