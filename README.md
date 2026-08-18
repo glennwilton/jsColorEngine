@@ -127,11 +127,13 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
 > ### ⚠ These figures are being re-measured (Aug 2026)
 >
 > The v1.5 release comparison found that the synthetic "random noise"
-> input used by every bench in this repo was **degenerate**: taking the
-> low 8 bits of an LCG gives a buffer containing only **256 distinct
-> colours**, which fits a CLUT working set entirely in L1 while still
-> reporting 0.0 % adjacency. The row we treated as the hardest case was
-> the easiest one.
+> input used by every bench built on the seeded PRNG — including the
+> browser bench that produced the figures below — was **degenerate**.
+> Measured, not inferred: that generator emits **105 distinct colours**
+> at 21.6 % adjacency, against a 33³ CLUT of 35,937 cells. It fits
+> entirely in L1, so the row we treated as the hardest case was the
+> easiest one. (The `bench/compile_poc/` benches used `Math.random` and
+> were never affected.)
 >
 > Corrected, throughput on a properly-distributed input is roughly
 > **half** the numbers quoted below, and on real photographs it lands

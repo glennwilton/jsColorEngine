@@ -3,11 +3,13 @@
 > ### ⚠ Benchmarks are being redone (Aug 2026)
 >
 > The v1.5 release comparison found that the synthetic "random noise"
-> input used by every bench in this repo was degenerate — taking the low
-> 8 bits of an LCG yields only **256 distinct colours**, which keeps a
-> CLUT working set in L1 while still reporting 0.0 % adjacency. It also
-> found that measuring several workloads in one process moved an
-> identical measurement by 27 %.
+> input used by every bench built on the seeded PRNG — including the
+> browser bench behind most figures here — was degenerate. Executed and
+> counted rather than inferred: it emits **105 distinct colours** at
+> 21.6 % adjacency, against a 33³ CLUT of 35,937 cells, so the
+> interpolation table never leaves L1. It also found that measuring
+> several workloads in one process moved an identical measurement by
+> 27 %. (`bench/compile_poc/` used `Math.random` and was unaffected.)
 >
 > **Treat the absolute MPx/s figures on this page as provisional.**
 > Corrected, throughput on a properly-distributed input is roughly half

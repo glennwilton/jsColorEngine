@@ -1386,6 +1386,36 @@ Any harness touching a CLUT should report **coverage** — distinct input
 colours ÷ grid cells — next to it. Below 1× the measurement describes a
 working set no real image produces.
 
+#### Audited by execution, not by reading
+
+The defect was first spotted by reading code, which is exactly how it
+got introduced, so every generator in the repo was then **run** and its
+output counted. 65,536 px, RGB, against a 33³ = 35,937-cell CLUT:
+
+| generator shape | distinct colours | coverage | adjacency | used by |
+|---|---:|---:|---:|---|
+| f64 multiply + low bits | **105** | 0.003× | 21.6 % | `samples/bench/main.js` (the browser bench behind the published figures), `mpx_summary`, `lcms-comparison`, `wasm_poc`, `int16_poc`, `samples/benchmark` |
+| `Math.imul` + low bits | **256** | 0.007× | 0.0 % | `pixel_cache`, `multicore_poc`, `int_vs_float`, `pixel_cache_kernel_poc` |
+| `Math.random` | 65,407 | 1.82× | 0.0 % | `compile_poc` — **unaffected** |
+| `Math.imul` + high bits *(the fix)* | 65,394 | 1.82× | 0.0 % | `release_matrix` |
+
+Three things this audit established that reading had not:
+
+- **The browser bench was the worst case, not an average one.** It
+  carried *both* defects at once — f64 overflow *and* low-bit
+  extraction — giving 105 colours at 21.6 % adjacency. So the headline
+  210/270 MPx/s figures were measured on the least demanding input in
+  the repository.
+- **"Every bench" was an overstatement.** `bench/compile_poc/` used
+  `Math.random` throughout and was always fine. The correct scope is
+  "every bench built on the seeded PRNG", which is most but not all of
+  them. Recorded because the original claim went into a commit message
+  and two documents before it was checked.
+- **`Math.imul` alone was not enough.** Four benches had already been
+  fixed for the f64 overflow and still produced 256 colours, because the
+  low-bit extraction was the larger of the two defects and had never
+  been questioned.
+
 ### "Buffer size doesn't matter" was an artifact of the same bug
 
 The old conclusion was that throughput was flat from 16 K to 10 M px.
