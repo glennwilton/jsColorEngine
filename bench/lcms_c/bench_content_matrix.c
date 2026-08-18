@@ -53,6 +53,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <dirent.h>
 #include "lcms2.h"
 
 #define TIMED_BATCHES     5
@@ -60,6 +61,8 @@
 #define MIN_ITERS         3
 #define MAX_ITERS         2000
 #define DEFAULT_PROFILE   "../../__tests__/GRACoL2006_Coated1v2.icc"
+#define DEFAULT_ADOBERGB  "../../samples/profiles/AdobeRGB1998.icc"
+#define DEFAULT_PHOTO_DIR "../release_matrix/corpus"
 #define MAX_SIZES         8
 
 static uint64_t now_ns(void) {
@@ -70,15 +73,23 @@ static uint64_t now_ns(void) {
 
 /* ---------------- content generators ---------------------------------- */
 
-typedef enum { C_NOISE = 0, C_GRADIENT, C_BLOCKS16, C_SOLID, C_COUNT } content_t;
-static const char *CONTENT_NAME[C_COUNT] = { "noise", "gradient", "blocks16", "solid" };
+typedef enum { C_NOISE = 0, C_GRADIENT, C_BLOCKS16, C_SOLID, C_PHOTO, C_COUNT } content_t;
+static const char *CONTENT_NAME[C_COUNT] = { "noise", "gradient", "blocks16", "solid", "photo" };
 
-/* Every pixel unique: the memo cache never hits. */
+/* Every pixel unique: the memo cache never hits.
+ *
+ * TAKE THE HIGH BITS. An LCG's low bits have a very short period — `seed & 0xff`
+ * cycles with period 256, so the buffer contains only 256 DISTINCT COLOURS while
+ * still reporting 0.0% adjacency. Adjacency is the metric this harness prints,
+ * so the defect is invisible in it, and the row advertised as "no cache hits,
+ * hardest case" was instead the easiest case for interpolation: a 256-colour
+ * working set fits entirely in L1. Bits 23-30 give ~1M distinct colours per
+ * megapixel at the same 0.0% adjacency. */
 static void gen_noise(uint8_t *buf, size_t len) {
     uint32_t seed = 0x13579bdfU;
     for (size_t i = 0; i < len; i++) {
         seed = (seed * 1103515245U + 12345U) & 0x7fffffffU;
-        buf[i] = (uint8_t)(seed & 0xFFU);
+        buf[i] = (uint8_t)((seed >> 23) & 0xFFU);
     }
 }
 
@@ -102,7 +113,7 @@ static void gen_blocks16(uint8_t *buf, size_t npx, int channels) {
             uint8_t color[4];
             for (int c = 0; c < channels; c++) {
                 seed = (seed * 1103515245U + 12345U) & 0x7fffffffU;
-                color[c] = (uint8_t)(seed & 0xFFU);
+                color[c] = (uint8_t)((seed >> 23) & 0xFFU);
             }
             for (int dy = 0; dy < bh && y + dy < height; dy++)
                 for (int dx = 0; dx < bw && x + dx < width; dx++) {
@@ -120,11 +131,80 @@ static void gen_solid(uint8_t *buf, size_t npx, int channels) {
     uint8_t px[4]; uint32_t seed = 0x13579bdfU;
     for (int c = 0; c < channels; c++) {
         seed = (seed * 1103515245U + 12345U) & 0x7fffffffU;
-        px[c] = (uint8_t)(seed & 0xFFU);
+        px[c] = (uint8_t)((seed >> 23) & 0xFFU);
     }
     for (size_t p = 0; p < npx; p++)
         for (int c = 0; c < channels; c++)
             buf[p * (size_t)channels + (size_t)c] = px[c];
+}
+
+/* ---------------- real photographs ------------------------------------
+ *
+ * Synthetic content brackets the cache — 0% adjacency at one end, 100% at the
+ * other — but no real image sits at either. The photo rows are decoded once by
+ * bench/release_matrix/make_corpus.js and dumped as raw interleaved planes so
+ * that the Node harness and this one measure the identical bytes; a comparison
+ * where each side generates its own "photo-like" content is not a comparison.
+ *
+ * The 4-channel plane is the same frame separated to GRACoL, not random CMYK:
+ * separation changes adjacency (the black channel flattens shadow detail), and
+ * that difference is part of what the content axis is measuring.
+ */
+static uint8_t *g_photo[5];        /* indexed by channel count */
+static size_t   g_photo_px[5];
+
+/* Concatenate every <name>.rgb.bin (channels==3) or <name>.cmyk.bin
+ * (channels==4) in `dir`, in readdir order. The harness needs one long stream
+ * of real pixels, not per-image attribution, so no manifest parsing. */
+static int load_photo_plane(const char *dir, int channels) {
+    const char *suffix = (channels == 3) ? ".rgb.bin" : ".cmyk.bin";
+    size_t suffix_len  = strlen(suffix);
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        size_t name_len = strlen(entry->d_name);
+        if (name_len <= suffix_len) continue;
+        if (strcmp(entry->d_name + name_len - suffix_len, suffix) != 0) continue;
+
+        char full[2048];
+        snprintf(full, sizeof(full), "%s/%s", dir, entry->d_name);
+        FILE *f = fopen(full, "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (size > 0) {
+            uint8_t *grown = realloc(buf, len + (size_t)size);
+            if (grown) {
+                buf = grown;
+                if (fread(buf + len, 1, (size_t)size, f) == (size_t)size) len += (size_t)size;
+            }
+        }
+        fclose(f);
+    }
+    closedir(d);
+
+    if (!buf || len < (size_t)channels) { free(buf); return 0; }
+    g_photo[channels]    = buf;
+    g_photo_px[channels] = len / (size_t)channels;
+    return 1;
+}
+
+/* Tile the corpus to fill the requested buffer. Repetition adds one seam per
+ * wrap, which is negligible against millions of pixels, and keeps the size
+ * axis meaningful for a corpus smaller than the largest buffer. */
+static void gen_photo(uint8_t *buf, size_t npx, int channels) {
+    const uint8_t *src = g_photo[channels];
+    size_t have = g_photo_px[channels];
+    if (!src || !have) { gen_noise(buf, npx * (size_t)channels); return; }
+    for (size_t p = 0; p < npx; p++) {
+        const uint8_t *s = src + (p % have) * (size_t)channels;
+        for (int c = 0; c < channels; c++) buf[p * (size_t)channels + (size_t)c] = s[c];
+    }
 }
 
 static void build_content(content_t k, uint8_t *buf, size_t npx, int channels) {
@@ -132,6 +212,7 @@ static void build_content(content_t k, uint8_t *buf, size_t npx, int channels) {
         case C_NOISE:    gen_noise(buf, npx * (size_t)channels); break;
         case C_GRADIENT: gen_gradient(buf, npx, channels);       break;
         case C_BLOCKS16: gen_blocks16(buf, npx, channels);       break;
+        case C_PHOTO:    gen_photo(buf, npx, channels);          break;
         default:         gen_solid(buf, npx, channels);          break;
     }
 }
@@ -190,19 +271,28 @@ static double time_transform(cmsHTRANSFORM xf, const void *in, void *out,
 typedef struct {
     const char *name; int in_ch, out_ch;
     cmsUInt32Number in_type, out_type;
-    int src_gracol, dst_gracol, dst_lab;
+    int src_gracol, dst_gracol, dst_lab, dst_adobergb, is_softproof;
 } workflow_t;
 
+/* RGB->RGB is sRGB->AdobeRGB1998, never sRGB->sRGB: lcms2 detects the identity
+ * and collapses it, which measures nothing. Soft-proof (sRGB->GRACoL->sRGB via
+ * cmsCreateProofingTransform) is the RGB-in/RGB-out workflow that DOES go
+ * through a 3D LUT, so the pair separates "matrix-shaper fast path" from
+ * "interpolation" on identical pixel formats. */
 static const workflow_t WORKFLOWS[] = {
-    { "RGB  -> Lab ", 3, 3, TYPE_RGB_8,  TYPE_Lab_8,  0, 0, 1 },
-    { "RGB  -> CMYK", 3, 4, TYPE_RGB_8,  TYPE_CMYK_8, 0, 1, 0 },
-    { "CMYK -> RGB ", 4, 3, TYPE_CMYK_8, TYPE_RGB_8,  1, 0, 0 },
-    { "CMYK -> CMYK", 4, 4, TYPE_CMYK_8, TYPE_CMYK_8, 1, 1, 0 },
+    { "RGB  -> RGB  (matrix)   ", 3, 3, TYPE_RGB_8,  TYPE_RGB_8,  0, 0, 0, 1, 0 },
+    { "RGB  -> Lab             ", 3, 3, TYPE_RGB_8,  TYPE_Lab_8,  0, 0, 1, 0, 0 },
+    { "RGB  -> CMYK            ", 3, 4, TYPE_RGB_8,  TYPE_CMYK_8, 0, 1, 0, 0, 0 },
+    { "CMYK -> RGB             ", 4, 3, TYPE_CMYK_8, TYPE_RGB_8,  1, 0, 0, 0, 0 },
+    { "CMYK -> CMYK            ", 4, 4, TYPE_CMYK_8, TYPE_CMYK_8, 1, 1, 0, 0, 0 },
+    { "RGB  -> RGB  (softproof)", 3, 3, TYPE_RGB_8,  TYPE_RGB_8,  0, 0, 0, 0, 1 },
 };
 #define N_WORKFLOWS (sizeof(WORKFLOWS) / sizeof(WORKFLOWS[0]))
 
 int main(int argc, char **argv) {
-    const char *profile_path = DEFAULT_PROFILE;
+    const char *profile_path  = DEFAULT_PROFILE;
+    const char *adobe_path    = DEFAULT_ADOBERGB;
+    const char *photo_dir     = DEFAULT_PHOTO_DIR;
     size_t sizes[MAX_SIZES] = { 16384, 65536, 1048576, 10485760 };
     int n_sizes = 4;
 
@@ -213,6 +303,8 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--profile") && i + 1 < argc) profile_path = argv[++i];
+        else if (!strcmp(argv[i], "--adobergb") && i + 1 < argc) adobe_path = argv[++i];
+        else if (!strcmp(argv[i], "--photo-dir") && i + 1 < argc) photo_dir = argv[++i];
         else if (!strcmp(argv[i], "--sizes") && i + 1 < argc) {
             n_sizes = 0;
             char *tok = strtok(argv[++i], ",");
@@ -232,8 +324,19 @@ int main(int argc, char **argv) {
 
     cmsHPROFILE hGRACoL = cmsOpenProfileFromFile(profile_path, "r");
     if (!hGRACoL) { fprintf(stderr, "ERROR: cannot open %s\n", profile_path); return 2; }
+    cmsHPROFILE hAdobe = cmsOpenProfileFromFile(adobe_path, "r");
+    if (!hAdobe) { fprintf(stderr, "ERROR: cannot open %s\n", adobe_path); return 2; }
     cmsHPROFILE hSRGB = cmsCreate_sRGBProfile();
     cmsHPROFILE hLab  = cmsCreateLab4Profile(NULL);
+
+    /* Photo planes are optional: without them the photo rows are skipped
+     * rather than silently replaced by something that is not a photograph. */
+    int have_photo = load_photo_plane(photo_dir, 3) & load_photo_plane(photo_dir, 4);
+    if (!have_photo) {
+        content_mask &= ~(1 << C_PHOTO);
+        fprintf(stderr, "NOTE: no photo corpus in %s — photo rows skipped.\n"
+                        "      Generate with: node bench/release_matrix/make_corpus.js\n\n", photo_dir);
+    }
 
     printf("==========================================================================\n");
     printf(" lcms2 %d — content x cache x size sweep (MPx/s, median of %d)\n", LCMS_VERSION, TIMED_BATCHES);
@@ -244,7 +347,10 @@ int main(int argc, char **argv) {
     for (size_t w = 0; w < N_WORKFLOWS; w++) {
         const workflow_t *wf = &WORKFLOWS[w];
         cmsHPROFILE hIn  = wf->src_gracol ? hGRACoL : hSRGB;
-        cmsHPROFILE hOut = wf->dst_gracol ? hGRACoL : (wf->dst_lab ? hLab : hSRGB);
+        cmsHPROFILE hOut = wf->dst_gracol   ? hGRACoL
+                         : wf->dst_lab      ? hLab
+                         : wf->dst_adobergb ? hAdobe
+                         : hSRGB;
 
         printf("\n %s\n", wf->name);
         printf("   content   adj%%        ");
@@ -274,8 +380,12 @@ int main(int argc, char **argv) {
                 cmsUInt32Number flagset[2] = { 0, cmsFLAGS_NOCACHE };
                 double r[2];
                 for (int f = 0; f < 2; f++) {
-                    cmsHTRANSFORM xf = cmsCreateTransform(hIn, wf->in_type, hOut, wf->out_type,
-                                                          INTENT_RELATIVE_COLORIMETRIC, flagset[f]);
+                    cmsHTRANSFORM xf = wf->is_softproof
+                        ? cmsCreateProofingTransform(hSRGB, wf->in_type, hSRGB, wf->out_type, hGRACoL,
+                                                     INTENT_RELATIVE_COLORIMETRIC, INTENT_RELATIVE_COLORIMETRIC,
+                                                     flagset[f] | cmsFLAGS_SOFTPROOFING)
+                        : cmsCreateTransform(hIn, wf->in_type, hOut, wf->out_type,
+                                             INTENT_RELATIVE_COLORIMETRIC, flagset[f]);
                     if (!xf) { fprintf(stderr, "cmsCreateTransform failed\n"); return 2; }
                     double ms = time_transform(xf, in, out, (cmsUInt32Number)width, (cmsUInt32Number)height,
                                                (cmsUInt32Number)(width * wf->in_ch),
@@ -300,6 +410,8 @@ int main(int argc, char **argv) {
     printf(" figure is the transform's real throughput. Where they diverge, the gap\n");
     printf(" is the memo cache reacting to repetition in the input.\n\n");
 
-    cmsCloseProfile(hGRACoL); cmsCloseProfile(hSRGB); cmsCloseProfile(hLab);
+    cmsCloseProfile(hGRACoL); cmsCloseProfile(hAdobe);
+    cmsCloseProfile(hSRGB);   cmsCloseProfile(hLab);
+    free(g_photo[3]); free(g_photo[4]);
     return 0;
 }

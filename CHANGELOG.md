@@ -137,6 +137,97 @@ After generous upstream review by Marti Maria
   single-threaded. The detail moved to a dedicated page:
   [docs/LcmsComparison.md](./docs/LcmsComparison.md).
 
+### Fixed — benchmark methodology (two defects that inflated our own numbers)
+
+Found while producing the v1.5 release comparison. Both affected
+**benchmarks only** — no engine code, no output, no accuracy — but both
+had been quietly deciding published figures.
+
+- **The "random noise" generator was not random.** Taking the low 8 bits
+  of a linear congruential generator yields a buffer of only **256
+  distinct colours** (those bits have period 256), while still reporting
+  0.0 % adjacency — so the defect was invisible in the metric the
+  harnesses printed. Against a 33³ CLUT (35,937 cells) that leaves the
+  interpolation table L1-resident: the row advertised as the hardest
+  case was the easiest. Separately, transcribing the C generator's
+  `seed * 1103515245` into JavaScript overflowed f64 and collapsed the
+  sequence to **21.6 % adjacency**, handing lcms's memo cache a fifth of
+  the pixels in the row meant to give it none. Fixed with `Math.imul`
+  and bits 23–30 (~1,016,892 distinct colours/Mpx at 0.0 % adjacency)
+  across `bench/mpx_summary.js`, `bench/lcms-comparison/bench.js`,
+  `bench/lcms_c/bench_content_matrix.c` and the new release harness.
+  **Corrected throughput is roughly half the previously published
+  figures for both engines**; README and Performance.md numbers are
+  flagged provisional pending a browser-bench rebuild.
+- **A shared benchmark process measured the wrong thing.** Running
+  several content rows through one long-lived Node process gave 59.5
+  MPx/s where an isolated run of the identical workflow, content and
+  buffer size gave 75.4 — a 27 % swing from call-site specialisation
+  alone. Every cell is now measured in its own process (`--isolate`).
+
+### Added — `bench/release_matrix/` release comparison harness
+
+Drives both halves of [docs/LcmsComparison.md](./docs/LcmsComparison.md)
+from one photo corpus so jsCE, `lcms-wasm` and native lcms are measured
+on identical bytes. Six workflows × five content classes × cache on/off
+× buffer size, one process per cell, with **CLUT coverage** (distinct
+input colours ÷ grid cells) reported next to adjacency on every row —
+the metric that would have caught the generator defect above. Documents
+the six methodology rules it enforces, including giving lcms its best
+compiler flags per workflow.
+
+### Fixed — npm tarball was shipping 37 MB of benchmark data
+
+`.npmignore` takes precedence over `.gitignore` when it exists, so
+directories excluded only from git were still being published. The
+tarball carried `_wip/` (13 MB of full-size benchmark photographs) and
+`testbed/` (188 files of ICC profiles and IT8 reference data): **37.1 MB
+packed / 80.8 MB unpacked / 252 files**, for a library whose runtime is
+~40 source files. Both are now listed explicitly, along with `scripts/`
+and editor directories.
+
+**Now 2.3 MB packed and unpacked, 48 files** — `src/`, `build/`,
+`browser/`, README, LICENSE, CHANGELOG. Verified by extracting the
+tarball and running a transform from it. No consumer-visible change
+beyond a dramatically smaller install.
+
+### Added — committed photo corpus for the release comparison
+
+The five photographs behind the LcmsComparison figures now live in
+`bench/release_matrix/images/` (~1.1 MB, Unsplash licence, attributed in
+`images/CREDITS.md`) instead of a gitignored scratch directory. A
+benchmark whose input cannot be obtained is not reproducible, and
+`bench/` is excluded from the npm tarball, so this costs consumers
+nothing. The decoded `corpus/` planes stay gitignored as derived data.
+
+### Added — `bench/reproduce.js` — one command for the whole comparison
+
+Runs all seven phases behind
+[docs/LcmsComparison.md](./docs/LcmsComparison.md) — corpus, accuracy,
+native lcms at both builds, JS content matrix, size sweep, per-image
+rows, pixel cache, control bench — and writes each phase's raw output to
+`bench/results/<timestamp>/` next to a `conditions.md` that captures CPU,
+compiler, versions and corpus automatically. Detects WSL on Windows,
+`--skip-native` where no Linux toolchain exists, `--only <phases>` for
+subsets, `--quick` for a reduced pass. The page asks that the comparison
+be produced in one controlled session rather than assembled from runs
+made months apart; this is what makes that repeatable instead of
+aspirational.
+
+### Added — `bench/solo_photo/` control bench
+
+A deliberately minimal cross-check for the above: one photograph, one
+engine, one process, no `lcms-wasm` loaded, five independent processes
+per engine with a 3 s warmup each. It exists because correcting the
+input generator roughly halved published throughput, and a harness that
+measures 120 cells could plausibly have caused that itself. It agrees
+with the release matrix to within a few per cent on the same image and
+workflow, with **0.4–2.0 % spread** across processes — two harnesses
+sharing no measurement code, so the halving was the input rather than
+the harness. It also fills in the WASM **scalar** tier (76.6 / 66.5
+MPx/s), which sits between plain JS and SIMD about where four-lane
+vectorisation predicts.
+
 ### Docs
 
 - New: [docs/LcmsComparison.md](./docs/LcmsComparison.md),

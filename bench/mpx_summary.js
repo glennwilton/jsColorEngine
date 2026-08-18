@@ -58,7 +58,7 @@ function buildInput(channels, pixelCount){
     var arr = new Uint8ClampedArray(pixelCount * channels);
     var seed = 0x13579bdf;
     for(var i = 0; i < arr.length; i++){
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         arr[i] = seed & 0xff;
     }
     return arr;

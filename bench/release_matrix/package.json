@@ -1,0 +1,14 @@
+{
+  "name": "release-matrix",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "jsColorEngine release comparison matrix: jsCE vs lcms-wasm across content, engine and size axes",
+  "scripts": {
+    "corpus": "node make_corpus.cjs",
+    "bench": "node run.js"
+  },
+  "dependencies": {
+    "lcms-wasm": "^1.0.5"
+  }
+}

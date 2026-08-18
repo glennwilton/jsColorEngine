@@ -14,11 +14,12 @@ JavaScript with optional inline WASM SIMD for the image hot path.
 ones); `Transform` builds a stage pipeline between profiles, optionally
 bakes it into a LUT, and dispatches per-dimension tuned kernels
 (`src/kernels/{1d,2d,3d,4d,nd}/`) — `transform()` for single colours at
-full f64 accuracy, `transformArray()` for images at 45–270 MPx/s on one
-thread. Positioning: the fastest single-threaded colour transforms in
-JavaScript — faster than `lcms-wasm` on every workflow, native-C-class
-on one thread — accuracy-validated against LittleCMS oracles (100 %
-within 1 LSB on the image path). The repo is deliberately
+full f64 accuracy, `transformArray()` for images at ~80–120 MPx/s on
+photographic content, one thread. Positioning: the fastest ICC colour
+engine in JavaScript — 3.2–3.6× `lcms-wasm` on every LUT workflow, with
+pure JS landing within 0.78–1.08× of single-threaded native C —
+accuracy-validated against LittleCMS oracles (100 % within 1 LSB on the
+image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
@@ -58,11 +59,13 @@ read-modify-write, custom pipeline stages at PCS, multi-stage chains,
 and other integration patterns.
 
 ### LcmsComparison.md
-The full LittleCMS comparison and its history: single-threaded scope,
-lcms-wasm results (the headline claim), the native-C harness marked
-historical after upstream review, measured input-content sensitivity
-(lcms's one-pixel cache: 2–5×), and the specialisation story. Read this
-before touching any performance claim.
+Accuracy and speed against LittleCMS as the goalpost, across three
+engines: jsColorEngine, `lcms-wasm`, and native C. Carries the v1.5
+position (100 % within 1 LSB; ~2× native C on LUT workflows, 0.72× on
+matrix-shaper), the content/coverage analysis that shows throughput
+tracks CLUT locality rather than adjacency, and four documented
+corrections to our own measurements. Read this before touching any
+performance claim.
 
 ### Loader.md
 API for the optional batch profile loader — loading several profiles

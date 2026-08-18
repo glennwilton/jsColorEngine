@@ -94,7 +94,7 @@ function buildRgbInput(pixelCount){
     var arr = new Uint8ClampedArray(pixelCount * 3);
     var seed = 0x13579bdf;
     for(var i = 0; i < arr.length; i++){
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         arr[i] = seed & 0xff;
     }
     return arr;
@@ -104,7 +104,7 @@ function buildCmykInput(pixelCount){
     var arr = new Uint8ClampedArray(pixelCount * 4);
     var seed = 0x2468ace0;
     for(var i = 0; i < arr.length; i++){
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         arr[i] = seed & 0xff;
     }
     return arr;

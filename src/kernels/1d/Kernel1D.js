@@ -11,6 +11,8 @@ var wasmLifecycle = require('../wasmLifecycle.js');
 module.exports = {
     dimensions: 1,
 
+    _variant: null,
+
     supports: {
         float: true,
         int8_js: true,

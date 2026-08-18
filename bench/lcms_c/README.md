@@ -1,7 +1,34 @@
 # `bench/lcms_c/` — native lcms2 benchmark
 
+> **Two binaries live here.** `bench_lcms` is the original
+> four-workflow harness described below. **`bench_content_matrix` is
+> the one the release comparison uses** — it adds the axes that turned
+> out to move the numbers most: content type, cache on/off, and buffer
+> size, across six workflows. If you are reproducing
+> [`docs/LcmsComparison.md`](../../docs/LcmsComparison.md), start at
+> [`bench/release_matrix/README.md`](../release_matrix/README.md), which
+> drives both halves.
+>
+> ```bash
+> bash flag_sweep.sh                    # give lcms its best build first
+> gcc -O2 -std=c99 -I lcms2-2.18/include -o /tmp/bm \
+>     bench_content_matrix.c lcms2-2.18/src/*.c -lm
+> taskset -c 0 /tmp/bm --sizes 1048576
+> taskset -c 0 /tmp/bm --sizes 16384,65536,1048576,10485760 --content noise
+> ```
+>
+> `--content noise,gradient,blocks16,solid,photo` selects content;
+> `--photo-dir` points at the decoded corpus from
+> `bench/release_matrix/make_corpus.cjs` (photo rows are skipped, not
+> faked, when it is absent).
+>
+> **`-march=native` is not the right default.** It measured at or near
+> the *bottom* on every workflow on a Ryzen 7700X. Run `flag_sweep.sh`
+> on your own machine and quote lcms's best build — the Makefile default
+> no longer uses it.
+
 Companion to [`bench/lcms-comparison/`](../lcms-comparison) that
-measures **native** lcms2 (C, `-O3 -march=native`) on the exact
+measures **native** lcms2 (C) on the exact
 same 4 workflows, exact same pixel count, exact same seeded PRNG
 input, and exact same timing loop (warmup + median-of-5 batches of
 100 iters). The MPx/s numbers drop straight into the comparison

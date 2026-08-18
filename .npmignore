@@ -9,11 +9,25 @@ speed_tests/
 /browser-dev/
 
 # Not needed by library consumers — keep them in git but out of the tarball.
+#
+# NOTE: npm uses THIS file instead of .gitignore when it exists, so anything
+# only listed in .gitignore still ships. That is how `_wip/` (13 MB of
+# full-size benchmark photographs) and `testbed/` (188 files of ICC profiles
+# and IT8 reference data) ended up in the published tarball — 37 MB packed,
+# 80 MB unpacked, for a library whose runtime is ~40 source files. Both are
+# listed explicitly below. Verify with `npm pack --dry-run` after touching
+# this file; the tarball should be a couple of hundred KB.
 __tests__/
 bench/
 docs/
 samples/
 http/
+testbed/
+_wip/
+scripts/
 .gitignore
+.gitattributes
 .github/
 .claude/
+.cursor/
+CLAUDE.md

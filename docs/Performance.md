@@ -1,4 +1,27 @@
-# Performance — where we are, what we learned, where we're going
+# Performance
+
+> ### ⚠ Benchmarks are being redone (Aug 2026)
+>
+> The v1.5 release comparison found that the synthetic "random noise"
+> input used by every bench in this repo was degenerate — taking the low
+> 8 bits of an LCG yields only **256 distinct colours**, which keeps a
+> CLUT working set in L1 while still reporting 0.0 % adjacency. It also
+> found that measuring several workloads in one process moved an
+> identical measurement by 27 %.
+>
+> **Treat the absolute MPx/s figures on this page as provisional.**
+> Corrected, throughput on a properly-distributed input is roughly half
+> what is quoted here for *both* engines, so most ratios survive — but
+> the numbers do not. Paths with no CLUT (matrix-shaper) are unaffected
+> and remain valid.
+>
+> The Node-side comparison has already been redone on corrected inputs
+> with one process per measurement and CLUT coverage reported next to
+> every row: **[LcmsComparison.md](./LcmsComparison.md)**. Trust that
+> page over this one where they disagree. This page will be updated with
+> the full re-measurement — including the browser and Apple Silicon
+> figures — in the next release. Methodology detail:
+> [deepdive/benchmark.md § 20](./deepdive/benchmark.md#20-two-more-ways-the-input-lied-2026-08-19). — where we are, what we learned, where we're going
 
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
@@ -837,8 +860,11 @@ landing into lcms2 `fast-float` territory on a single CPU thread.
 > ([#6](https://github.com/glennwilton/jsColorEngine/issues/6)): our
 > lcms API calls weren't optimal, HIGHRESPRECALC is a legacy
 > emulation flag (not a "bigger grid" fairness switch), and the GPL3
-> plugin pack lifts native lcms substantially beyond the stock MIT
-> build measured here. This whole native section is kept as the
+> plugins lift native lcms substantially beyond the stock MIT build
+> measured here. (Two separate plugins, since later corrected in
+> LcmsComparison.md: `fast_float` — fused format paths plus SSE2 for
+> 8-bit matrix-shaper only, entirely single-threaded — and `threaded`,
+> which slices across worker threads and contains no SIMD.) This whole native section is kept as the
 > honest record of what we measured and how; the current status and
 > the re-measurement plan live in
 > [docs/LcmsComparison.md](./LcmsComparison.md).

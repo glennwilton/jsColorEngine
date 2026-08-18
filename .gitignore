@@ -8,6 +8,9 @@ speed_tests/
 *.tgz
 /browser-dev/
 
+CLAUDE.md
+
+
 # Large ephemeral outputs from bench/jit_inspection.js
 /bench/jit_asm_dump.txt
 /bench/jit_asm_core_dump.txt
@@ -25,6 +28,8 @@ speed_tests/
 /bench/lcms_c/*.o
 /bench/lcms_c/bench_lcms
 /bench/lcms_c/bench_lcms.exe
+/bench/lcms_c/bench_content_matrix
+/bench/lcms_c/bench_content_matrix.exe
 
 # lcms_compat/ harness — profiles are licensed artefacts (Adobe,
 # IDEAlliance, ECI, RISO, etc.) so user-supplied copies stay local;
@@ -43,3 +48,15 @@ speed_tests/
 # Private work-in-progress — not ready for public repo
 /_wip/
 bench/archive/
+
+# Decoded photo corpus — ~27 MB of derived .rgb.bin/.cmyk.bin planes.
+# The SOURCE images in bench/release_matrix/images/ ARE committed (Unsplash
+# licence, see their CREDITS.md) so the published comparison is reproducible;
+# only the generated planes are ignored. Rebuild them with:
+#   node bench/release_matrix/make_corpus.cjs
+bench/release_matrix/corpus/
+bench/release_matrix/node_modules/
+
+# Reproduction runs from bench/reproduce.js — raw timing output, machine-specific.
+# Curated result summaries (e.g. bench/results/v1.5.0-dev.md) stay tracked.
+bench/results/[0-9]*/

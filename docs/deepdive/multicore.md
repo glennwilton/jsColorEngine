@@ -475,6 +475,43 @@ Public shape, then, is one call that covers both cases:
 await pool.transformImages([img1, img2, ...]);   // 1..n, planner decides
 ```
 
+### The zero-worker fallback is the same call
+
+Workers are not always available: `worker_threads` may be absent or
+blocked, a browser may refuse to construct one under a restrictive CSP,
+`cores: 1` may be set deliberately, or the planner may decide the job is
+too small to be worth splitting. In every one of those cases the answer
+is the same — **run the images sequentially through `transformArray()`
+and return the identical result.**
+
+```js
+if (!pool.workerCount) {
+    for (const image of images) {
+        transform.transformArray(image.data, false, false, false, image.pixelCount);
+    }
+    return images;
+}
+```
+
+This is what keeps multicore an *optimisation* rather than a
+capability. Three consequences worth stating, because they are the
+reason to design it in from the start rather than bolt it on:
+
+- **`transformImages()` is always callable.** No feature detection at
+  the call site, no second code path in the host application, no
+  "multicore build" of the library. Availability is the pool's problem.
+- **The fallback is the correctness oracle.** Sequential
+  `transformArray()` is already the tested path, so
+  "parallel output must equal sequential output byte-for-byte" is a test
+  that writes itself — which is exactly how the POC was verified.
+- **The planner already produces it.** A plan of one task per image with
+  `start = 0` *is* the sequential run. The fallback is not a separate
+  implementation; it is the same queue drained on the calling thread.
+
+The one thing the fallback must not do is pretend: `transformImages()`
+should report the worker count it actually used, so a caller measuring
+throughput is never silently told a single-threaded run was parallel.
+
 ### What this leaves open
 
 Model B, the imported-memory change and the reclaim rework are all

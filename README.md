@@ -1,28 +1,62 @@
 # jsColorEngine
 
-**A fast, accurate ICC colour-management engine for JavaScript — 100 %
-native JS, zero dependencies, optional WASM for the hot path.**
+**The fastest ICC colour engine in JavaScript — and accurate to within
+1 LSB of LittleCMS.** 100 % native JS, zero dependencies, optional WASM
+for the hot path.
+
+<sub>*Fastest*: measured single-threaded against
+[`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm) — the only
+comparable full ICC implementation available to JavaScript — where it
+runs 3.2–3.6× faster on every LUT workflow. *Accurate*: 100 % of samples
+within 1 LSB of the LittleCMS oracle on all four tested workflows, the
+large majority bit-identical. Both claims, with conditions and the
+harness that produced them:
+[docs/LcmsComparison.md](./docs/LcmsComparison.md).</sub>
 
 Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/>**
 
-- **Fast — single-threaded.** Over **210 MPx/s on x86_64** and up to
-  **270 MPx/s on Apple Silicon (M4)** — roughly **25–32 4K images per
-  second** on a single CPU thread with WASM SIMD enabled. Hot-path
-  kernels hand-tuned for V8 / SpiderMonkey / JSC; optional WebAssembly
-  (scalar + SIMD) kernels for the image path. The wider ARM register
-  file lifts the **4D CMYK paths by ~65 %** over x86_64 — see
-  [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
-  In like-for-like single-threaded comparisons it is consistently
-  faster than the `lcms-wasm` port — the engine a JS project would
-  otherwise install (see [Speed](#speed)). The point isn't a
-  scoreboard against LittleCMS; it's that heavy, real-world colour
-  workloads are completely feasible in JavaScript on a single
-  thread.<br><br>
+- **Fast.** Against [LittleCMS](https://littlecms.com/), the 25-year
+  reference implementation — single-threaded, one core against one core,
+  on real photographic content:
+  - **3.2–3.6× faster than `lcms-wasm`** — the engine a JS project
+    would otherwise install.
+  - **Pure JavaScript lands within 0.78–1.08× of optimised native C**,
+    and is *ahead* on both 4D CMYK workflows. No WASM involved.
+  - **~2× native C with the WASM SIMD tier** on LUT-based workflows.
+
+  "Native C" here means stock open-source lcms2, built by gcc at its
+  best flags — not the fastest colour transform that can be written in
+  C. Closed-source commercial CMMs are faster and can use AVX-512 and
+  GPUs, which WebAssembly cannot reach; the
+  [comparison page](./docs/LcmsComparison.md) says so explicitly rather
+  than leaving it implied.
+
+  In absolute terms that is **~80–120 MPx/s on photographs**
+  (Ryzen 7700X, one thread, WASM SIMD) — roughly **10–15 4K images per
+  second**. Throughput depends heavily on content, so the ratios above
+  are the more portable number; the
+  [full comparison](./docs/LcmsComparison.md) gives every workflow with
+  its conditions.
+
+  🚧 **Multicore is in progress for the next release** — a
+  worker-parallel image path, already measured at **5.46× on 16 threads**
+  in a proof of concept, byte-identical to the single-threaded result.
+  One call takes 1..n images and the planner decides whether to split
+  each one or run it whole; where workers are unavailable it falls back
+  to the ordinary sequential path, so it stays an optimisation rather
+  than a capability. Design and measurements:
+  [deepdive/multicore.md](./docs/deepdive/multicore.md).
+
+  The point isn't a scoreboard against LittleCMS — it's
+  that heavy, real-world colour workloads are completely feasible in
+  JavaScript on a single thread.
+
 - **Accurate.** **LUT-free mode** (`buildLut: false`) — every pixel
   walks the full f64 pipeline, no LUT quantisation, no rounding
   short-cuts. For colour-critical / prepress / proof / measurement
   work where ΔE matters more than MPx/s. Available on both APIs.
-  See [Accuracy](#accuracy).<br><br>
+  See [Accuracy](#accuracy).
+
 - **Fully-featured CMS.** Everything you'd expect from a mature
   colour-management library: RGB, CMYK, Lab, XYZ, 3CLR/4CLR **and
   N-channel (5CLR–15CLR)** device spaces; **DeviceLink profiles**;
@@ -32,7 +66,8 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   tetrahedral interpolation; multi-step transforms; custom pipeline
   stages spliced in at PCS; ΔE76 / ΔE2000 helpers; and spectral /
   illuminant maths for measurement workflows. See
-  [Features at a glance](#features-at-a-glance).<br><br>
+  [Features at a glance](#features-at-a-glance).
+
 - **Portable — runs everywhere JavaScript does, no GPU required.**
   Node.js (rack servers, headless RIPs, CI workers, AWS Lambda),
   browsers, Electron, web workers, React Native (with a Buffer
@@ -45,21 +80,24 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   same speed ceiling, anywhere the V8 / SpiderMonkey / JSC
   WebAssembly engine runs (which is everywhere, including headless
   containers with no display hardware). No native bindings, no
-  compile step, no platform-specific binaries.<br><br>
+  compile step, no platform-specific binaries.
+
 - **Portable LUTs — build once, ship anywhere.** Bake a transform
-  to JSON at deploy time; `Transform.fromJSON(json)` reconstructs 
-  it at runtime with no profiles, no lcms, no pipeline build cost. 
-  Supports LittleCMS emulation mode — sample lcms colour math into 
-  the grid once, then drop lcms entirely; jsCE kernels take it from 
-  there at full WASM-SIMD speed. LUTs carry a chain and a content 
-  fingerprint so you always know what profile, intent, and version 
+  to JSON at deploy time; `Transform.fromJSON(json)` reconstructs
+  it at runtime with no profiles, no lcms, no pipeline build cost.
+  Supports LittleCMS emulation mode — sample lcms colour math into
+  the grid once, then drop lcms entirely; jsCE kernels take it from
+  there at full WASM-SIMD speed. LUTs carry a chain and a content
+  fingerprint so you always know what profile, intent, and version
   produced the file. See [Portable LUTs](#portable-luts--lutbuilder) ·
   [`LutBuilder`](./samples/LutBuilder/lutbuilder.md) ·
-  [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).<br><br>
+  [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).
+
 - **Two APIs, one `Transform`.** `transform(colorObj)` for single
   colours (µs/call, always LUT-free). `transformArray(typedArray)`
-  for bulk — pre-baked LUT at **45–270 MPx/s** (x86_64 → Apple
-  Silicon), or LUT-free f64 when you need accuracy over throughput.
+  for bulk — pre-baked LUT at **~80–120 MPx/s on photographic content**
+  (x86_64, one thread, WASM SIMD), or LUT-free f64 when you need
+  accuracy over throughput.
   See [Two paths, one Transform](#two-paths-one-transform).
 
 ---
@@ -85,6 +123,29 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
 ---
 
 ### Benchmark it yourself
+
+> ### ⚠ These figures are being re-measured (Aug 2026)
+>
+> The v1.5 release comparison found that the synthetic "random noise"
+> input used by every bench in this repo was **degenerate**: taking the
+> low 8 bits of an LCG gives a buffer containing only **256 distinct
+> colours**, which fits a CLUT working set entirely in L1 while still
+> reporting 0.0 % adjacency. The row we treated as the hardest case was
+> the easiest one.
+>
+> Corrected, throughput on a properly-distributed input is roughly
+> **half** the numbers quoted below, and on real photographs it lands
+> around 110–130 MPx/s rather than 210. The *ratios* against
+> `lcms-wasm` largely survive — both engines were flattered — but the
+> absolute MPx/s figures in this README and in
+> [docs/Performance.md](./docs/Performance.md) should be treated as
+> **provisional until the browser bench is rebuilt on a real-image
+> corpus** ([Roadmap](./docs/Roadmap.md#browser-sample-bench--retune-on-real-image-content)).
+>
+> The Node-side comparison **has** been redone on corrected inputs, with
+> one process per measurement and CLUT coverage reported alongside every
+> row: **[docs/LcmsComparison.md](./docs/LcmsComparison.md)**. Trust that
+> page over this section where they disagree.
 
 Every MPx/s number in this README and in
 [docs/Performance.md](./docs/Performance.md) was measured with
@@ -137,13 +198,15 @@ axes. Everything is measured **single-threaded, one core vs one core**,
 same hardware, same profiles, same input bytes:
 
 - **Faster than `lcms-wasm`** — the engine a JS project would
-  otherwise install. Don't assume "WASM = faster": jsCE pure JS is
-  **~1.5–2.1× faster on every workflow**, and **~3.2–6.4× with WASM
-  SIMD** (x86_64 → Apple Silicon M4).
-- **Native-C-class speed on a single thread** — pure JS matched or
-  beat aggressively compiled stock lcms2 on 4 of 5 LUT workflows in
-  our harness (being re-measured with corrected lcms calls after
-  upstream feedback).
+  otherwise install. Don't assume "WASM = faster": jsCE's pure-JS
+  kernels beat it on every LUT workflow before any WASM is involved,
+  and the SIMD tier runs **3.2–3.6×** it on photographic content.
+- **Native-C-class speed on a single thread** — and this one is
+  literal rather than aspirational: on photographs, **pure JavaScript
+  lands within 0.78–1.08× of lcms compiled by gcc at its best flags**,
+  ahead on both 4D CMYK workflows. With WASM SIMD it is roughly 2×
+  native on LUT work. Native C keeps matrix-shaper RGB→RGB, where it
+  is ~1.4× ahead.
 - **Accurate against the same reference** — matches lcms's f64
   pipeline to ≤ 0.06 ΔE76 across 130 reference files, and the
   image-path LUT agrees **within 1 LSB on 100 % of samples** vs
@@ -152,9 +215,16 @@ same hardware, same profiles, same input bytes:
   WASM inlined (no fetch, sync init), vs lcms-wasm's ~129 KB across
   two fetches.
 
+Where LittleCMS wins, the page says so: its one-pixel memo cache makes
+it substantially faster on flat graphic content, and its fused
+matrix-shaper path beats ours on RGB→RGB. Four corrections to our own
+published numbers are recorded there too — three of which had been
+flattering us.
+
 The full comparison — methodology, tables, caveats, and the upstream
 discussion with LittleCMS's author — lives on the
 **[LittleCMS comparison page](./docs/LcmsComparison.md)**.
+Reproduce all of it with `node bench/reproduce.js`.
 
 ---
 
@@ -166,7 +236,7 @@ right one matters more than any other choice you'll make.
 | Use case | API | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calculations, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` | 45–210 MPx/s on x86_64, up to 270 MPx/s on Apple Silicon | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Image / array processing** | `transform.transformArray(typedArray, ...)` | ~80–120 MPx/s on photographs (x86_64, one thread, WASM SIMD) | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
 
 Both live on the same `Transform` object — you pick which by calling
 `transform()` or `transformArray()`, and by passing `{buildLut: true}`
@@ -705,7 +775,39 @@ prepress calcs, anything converting tens to hundreds of colours at a
 time.
 
 For image work: build a LUT (`new Transform({buildLut: true})`) and
-use `transformArray()`. Headline throughput, GRACoL2006 + AdobeRGB1998,
+use `transformArray()`.
+
+### Current figures — real photographs, corrected inputs
+
+Ryzen 7700X, one thread, Node 24, 1 M px, GRACoL2006 + AdobeRGB1998,
+each measurement in its own process. Full conditions and every content
+class: **[docs/LcmsComparison.md](./docs/LcmsComparison.md)**.
+
+| Workflow | `'int'` (pure JS) | `'int-wasm-simd'` | vs `lcms-wasm` | vs native C |
+|---|---:|---:|---:|---:|
+| RGB → Lab | 53.7 | **119.6** | 3.3× | 1.8× |
+| RGB → CMYK | 48.2 | **121.5** | 3.5× | 2.0× |
+| CMYK → RGB | 43.1 | **82.0** | 3.2× | 2.1× |
+| CMYK → CMYK | 36.8 | **81.3** | 3.6× | 2.3× |
+| RGB → RGB (soft-proof) | 53.8 | **118.9** | 3.5× | 2.1× |
+| RGB → RGB (matrix) | 53.5 | 118.8 | 1.8× | 0.72× |
+
+Matrix-shaper RGB→RGB is the one workflow where native C leads — it
+uses a fused matrix path where jsCE interpolates a baked CLUT. A
+dedicated kernel for it is measured and queued
+([Roadmap](./docs/Roadmap.md)).
+
+### Historical table (superseded — see the warning above)
+
+> These figures used 65 K pixels of the degenerate noise generator
+> described earlier: only 256 distinct colours, which leaves the CLUT
+> L1-resident, and 65 K px additionally under-samples a 4D CMYK CLUT
+> (83,521 cells) at ~0.8× coverage. Both effects inflate the result.
+> Kept on the record rather than deleted, because the correction is part
+> of the story — but **quote the table above, not this one.** The
+> Apple Silicon column has not yet been re-measured at all.
+
+Headline throughput, GRACoL2006 + AdobeRGB1998,
 65 K pixels per iter, hot-median across 5 batches — **measured on two
 reference machines** (Node 20 / V8 / x86_64 *and* Apple M4 Mac mini /
 Chrome 147):

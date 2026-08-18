@@ -1345,6 +1345,23 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 > **Scope note (2026-08-19).** Two of the three things once queued here
 > shipped in **v1.5.0** instead: the `Transform.js` split, and the pixel
 > cache on the accuracy path (as a **beta** option — see the CHANGELOG).
+>
+> **The v1.5 release comparison set the order for what remains.** It
+> found exactly two gaps against LittleCMS, and items 1 and 2 below are
+> their remedies — so those are the next two pieces of work, in that
+> order:
+>
+> 1. **Fused matrix-shaper WASM kernel** — closes the only workflow
+>    where native C leads (RGB→RGB at 0.72×). It is also the one path
+>    where lcms has SIMD (`fast_float`'s SSE2, 8-bit matrix-shaper only)
+>    and we do not.
+> 2. **Multicore** — closes the only axis where lcms has an option
+>    (`threaded` plugin) and we have none.
+>
+> Both are prototyped and measured; both land in the next, more detailed
+> comparison. Full detail:
+> [LcmsComparison § In progress](./LcmsComparison.md#in-progress).
+>
 > What remains in v1.5.5 is the work that is genuinely not done:
 >
 > 1. **Matrix-shaper kernel** — the POC runs at 250–257 MPx/s but is not
@@ -1357,6 +1374,50 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 >    (`bench/multicore_poc/`), design in
 >    [deepdive/multicore.md](./deepdive/multicore.md). Nothing in the
 >    engine yet.
+> 4. **Rebuild the browser sample bench on real-image content** — see
+>    below.
+
+### Browser sample bench — retune on real-image content
+
+**Why.** The v1.5 release measurement campaign found that synthetic
+content had been quietly deciding our numbers, and the browser bench
+(`samples/bench/`, `samples/benchmark/`) still runs the old synthetic
+generators. Three findings force a rethink of what it feeds the kernels:
+
+- **Random noise is the worst case, not the representative one.** It
+  covers the whole CLUT with no locality at all, which no photograph
+  does. Marti Maria's point that our noise input was unrepresentative
+  was correct — but his `blocks16` generator is the opposite extreme,
+  and neither bracket is a real image.
+- **Throughput tracks CLUT locality, not adjacency.** A frame moves
+  through colour space in regions — sky, then grass — so the working set
+  is small *and sliding*. Reordering the identical 41,077-colour pixel
+  multiset moved jsCE SIMD between 96 and 176 MPx/s with nothing else
+  changed. A colourful frame should therefore cost more than a
+  harmonious landscape, and the bench should be able to show that.
+- **Buffer size only matters until the input covers the CLUT.** With a
+  properly-distributed input, native lcms RGB→Lab runs 72.6 MPx/s at
+  16 K px and 55.9 at 64 K+ — the small buffer simply cannot fill a
+  35,937-cell table. Under the old degenerate generator this looked flat.
+
+**Plan.** Feed the browser bench a real corpus rather than generators:
+
+1. A **tall composite test image** — several photographs stacked into one
+   file — so the bench loads one asset and gets a mixture of content
+   (flat sky, dense foliage, skin, text) at typical image strides.
+2. Convert that once to **CMYK** and keep it, so the CMYK→RGB and
+   CMYK→CMYK workflows measure real separated data instead of random
+   ink values. Separation changes adjacency and colour distribution, so
+   synthesised CMYK is not a stand-in.
+3. Report **adjacency and CLUT coverage** next to every result, the same
+   way [`bench/release_matrix/`](../bench/release_matrix/README.md) now
+   does, so a reader can tell whether the interpolation table was
+   exercised at all.
+4. Keep noise and `blocks16` as explicitly-labelled *bounds* rather than
+   headline rows.
+
+The Node-side harness and its six rules are already built and can be
+ported rather than reinvented.
 
 ### RGB matrix-shaper fast path — fused gamma + matrix + curves
 

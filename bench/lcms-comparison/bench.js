@@ -70,7 +70,7 @@ function buildInput(channels){
     const arr = new Uint8ClampedArray(PIXEL_COUNT * channels);
     let seed = 0x13579bdf;
     for(let i = 0; i < arr.length; i++){
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         arr[i] = seed & 0xff;
     }
     return arr;

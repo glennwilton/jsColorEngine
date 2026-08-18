@@ -30,7 +30,7 @@ function buildInput(pixelCount, channels) {
     const buffer = new Uint8ClampedArray(pixelCount * channels);
     let seed = 0xDEADBEEF;
     for (let index = 0; index < buffer.length; index++) {
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         buffer[index] = seed & 0xff;
     }
     return buffer;
