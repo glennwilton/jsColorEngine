@@ -575,9 +575,48 @@ average of observed throughput and re-calibrate only if it drifts by
 more than ~2× from the stored value, which catches a laptop dropping to
 battery or a container being throttled.
 
-**Not yet built.** The numbers to seed it with are in the tables above,
-and `task_overhead.js` already reports both quantities — it is most of a
-calibration harness with a different front end.
+**Every derived value is bounded, and then raced against the default.**
+Clamps alone are not enough — they stop a calibration being absurd, not
+being wrong. So after deriving, run the derived plan against the shipped
+default on the same content and **keep whichever is actually faster**,
+with ties going to the default. That makes calibration incapable of
+making things worse, which matters far more than making them slightly
+better: a bad calibration on a throttled or contended machine would
+otherwise silently degrade every subsequent run.
+
+| bound | range | why |
+|---|---|---|
+| `kernelMPxPerSec` | 20–2000 | a throttled machine must not produce a 1-pixel slice |
+| `perTaskOverheadUs` | 1–500 | a contended one must not produce a whole-image slice |
+| `tasksPerWorker` | 4–16 | measured envelope across both kernels |
+| adopt threshold | > 3 % | below this it is noise, so keep the known-good default |
+
+### MEASURED — `autotune.js` on this machine
+
+Ryzen 7700X, 8 workers, 2 MP calibration image (photo blended 5 % toward
+noise), **262–355 ms per run** — inside the one-second budget:
+
+| kernel | aggregate | per worker | overhead | derived | bake-off | adopted |
+|---|---:|---:|---:|---:|---:|---|
+| `int` | 305.4 MPx/s | 38.2 | 6.8 µs | 11.4 /wk | −1.5 % | **default (10)** |
+| `int-wasm-simd` | 608.5 MPx/s | 76.1 | 7.8 µs | 5.0 /wk | +3.1 % | **calibrated (5)** |
+
+Three things worth noting:
+
+- **The overhead figure cross-validates.** 6.8 and 7.8 µs, derived from
+  two timed passes, independently reproduce the 7–8 µs found by the
+  separate task-count sweep. Different method, same answer.
+- **It rediscovered the kernel difference unprompted.** Nobody told it
+  SIMD wants fewer, larger tasks; it derived 5 /wk for SIMD and 11.4 for
+  JS from throughput alone, against measured optima of 6 and 12.
+- **The bake-off did its job on the first run.** For the JS kernel the
+  derived value was *worse* than the default and was correctly
+  discarded. A calibration that only ever adopted its own answer would
+  have shipped a 1.5 % regression on that path.
+
+`autotune.js` is a working proof of the mechanism, not the shipped API —
+`pool.autoTune()` still needs the pool. The numbers above are what it
+should seed, and the JSON it prints is the shape to persist.
 
 ## The unified dispatcher — one queue, one task shape
 
