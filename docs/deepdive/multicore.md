@@ -486,6 +486,13 @@ finish. Keep the LPT sort for batches of differently-sized images; do
 not rely on it inside a single image, where every slice is the same
 length and it can see nothing.
 
+**Startup**: spin the pool up eagerly (~85 ms, repaid inside the first
+image), use the default constants immediately, and calibrate lazily off
+the critical path if no cached tuning exists — calibration costs ~300 ms
+and is repaid only after ~369 eight-megapixel images, so it must be
+cached across sessions rather than recomputed. Detail in
+[where calibration goes in the lifecycle](#where-calibration-goes-in-the-lifecycle--and-what-it-costs).
+
 **Why this is the balanced answer**, in one line each:
 
 - **Over-decompose, never one-slice-per-thread.** The tidy split is the
@@ -617,6 +624,66 @@ Three things worth noting:
 `autotune.js` is a working proof of the mechanism, not the shipped API —
 `pool.autoTune()` still needs the pool. The numbers above are what it
 should seed, and the JSON it prints is the shape to persist.
+
+### Where calibration goes in the lifecycle — and what it costs
+
+`create()` already has a slow phase, so the obvious idea is to fold
+calibration into it: the LUT is built, buffer sizes are about to be
+chosen, workers have to be spun up anyway. Measured, that turns out to
+be the wrong place, and the numbers say so clearly:
+
+| step | `int` | SIMD | already paid? |
+|---|---:|---:|---|
+| profile load | 8.9 ms | 8.9 ms | yes |
+| LUT build | 15.1 ms | 9.6 ms | yes |
+| `toJSON` for workers (376 KB) | 16.5 ms | 9.0 ms | new |
+| pool spin-up ×8, incl. LUT hand-off + warmup | 66.5 ms | 66.5 ms | new |
+| **calibration** | **355 ms** | **262 ms** | new |
+
+**Calibration is 3–4× the entire pool setup and ~20× the LUT build.** It
+cannot hide inside `create()`.
+
+Payback settles it. At 45 MPx/s single-threaded against 305 aggregate on
+eight workers, parallelism saves ~18.9 ms per megapixel:
+
+| cost | pays back after | in 8 MP images |
+|---|---:|---:|
+| pool spin-up, 66.5 ms | 3.5 MP | **~0.4** |
+| calibration, ~300 ms | **2,952 MP** | **~369** |
+
+The asymmetry is the point. Pool spin-up is repaid before the first
+image finishes, so starting workers eagerly is fine. Calibration is
+repaid only out of the *margin over the default* — 3.1 % on SIMD, and
+nothing at all on the JS kernel — so it needs roughly **369 eight-megapixel
+images** to break even within a session. It will essentially never pay
+for itself if recomputed per run.
+
+So the lifecycle is:
+
+1. **`create()` with multicore: spin up the pool, ship the LUT, use the
+   default constants.** Costs ~85 ms on top of an existing ~25 ms, and
+   is repaid inside the first image.
+2. **Look for a cached calibration** keyed by `(cpuCount, workers,
+   lutMode, engineVersion)`. If present, use it — the measurement is a
+   property of the machine and survives restarts.
+3. **If absent, calibrate lazily** — off the critical path, after the
+   first batch or on idle — and apply it to *subsequent* work. Never
+   block the first conversion on it.
+4. **Re-calibrate only on drift**, when observed throughput moves more
+   than ~2× from the stored value (battery, thermal throttling, a
+   container being squeezed).
+
+Which also vindicates keeping a good default: 10 tasks per worker wins
+outright on the JS kernel and loses only 3 % on SIMD, so **the
+uncalibrated path is nearly optimal** and calibration is a refinement
+rather than a prerequisite. That is the right risk profile for something
+shipping to unknown hardware.
+
+One further consequence for small work: pool spin-up (66.5 ms) plus a
+single small conversion is far more than doing it single-threaded. The
+"don't parallelise below ~64 K px" floor should be joined by "and don't
+spin up a pool for one small image" — the pool wants to be created once
+and reused, which is what `transformImages()` taking 1..n images is for.
 
 ## The unified dispatcher — one queue, one task shape
 
