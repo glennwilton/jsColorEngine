@@ -475,6 +475,95 @@ Public shape, then, is one call that covers both cases:
 await pool.transformImages([img1, img2, ...]);   // 1..n, planner decides
 ```
 
+### Allocation: dynamic slices vs fixed slots — measure both
+
+The planner above sizes each slice from the image: *slice size varies,
+slice count is capped at the worker count*. There is an alternative that
+inverts it — **fix the slice size, let the count vary** — and it is
+probably the better engineering choice even if it is not the faster one.
+
+**The problem with dynamic slices is the buffer sizing, not the maths.**
+A worker's WASM memory is laid out `[LUT][input][output]`. If slice size
+depends on the image, the worker cannot know how much memory it needs
+until work arrives, so it either allocates for the worst case, or grows
+and shrinks per task. Growing is a `Memory.grow()` plus re-instantiation;
+shrinking is impossible (there is no `Memory.shrink()`), which is why
+`compactIfNeeded` exists at all. Across a batch of mixed image sizes
+that is continuous churn, and churn is exactly what makes a UI feel
+choppy even when average throughput looks fine.
+
+**Fixed slots remove the question.** Pick a chunk size once at pool
+startup. Every worker allocates `[LUT][chunk_in][chunk_out]` exactly
+once and never resizes. Work is cut into chunk-sized pieces: a 20 MP
+image becomes many tasks, a 300 KB thumbnail becomes one, and a batch of
+four small images is four tasks that happen to fit in one chunk each.
+Nothing about the worker changes between tasks except `start` and
+`length`.
+
+What that buys, concretely:
+
+- **No `Memory.grow()`, no re-instantiation, no `compactIfNeeded` in the
+  hot path.** The reclaim problem that Model B could not solve simply
+  does not arise, because nothing ever needs reclaiming.
+- **Zero per-task allocation.** With transfer, the worker receives a
+  fresh `ArrayBuffer` per task and drops it after — that is the garbage.
+  Copying into a stable buffer instead trades one memcpy for no
+  allocation at all. Given the copies were measured at **4–7 % of a
+  pass**, that is a cheap trade for smoothness.
+- **Better load balance, not worse.** Uniform task size means the
+  makespan tail is bounded by one chunk. Variable slices can leave one
+  worker holding a task several times longer than everything else, which
+  is the case LPT sorting exists to mitigate.
+- **Reassembly is unchanged.** Each task already carries `imageIndex`
+  and `start`, so finished chunks copy into the destination in whatever
+  order they complete. Fixed slots do not make this harder; if anything
+  the destination arithmetic becomes trivial.
+
+**The cost is resident memory, and it is the thing to size carefully.**
+Per worker it is roughly `chunk_in + chunk_out`, times the worker count:
+
+| chunk | pixels (RGB8) | ≈ per worker (RGB→CMYK) | × 16 workers |
+|---|---:|---:|---:|
+| 256 KB | 87 K px | ~0.6 MB | ~10 MB |
+| 1 MB | 350 K px | ~2.3 MB | ~37 MB |
+| 5 MB | 1.7 M px | ~12 MB | ~190 MB |
+
+**5 MB is likely larger than it needs to be.** The measured floor for
+splitting to pay at all is ~64 K px per worker — about 192 KB of RGB —
+so a 512 KB–1 MB chunk already clears it by 5–10× while keeping a
+16-worker pool under 40 MB. 190 MB resident in a browser tab is a real
+cost to accept without evidence. Screen-resolution sizing (1920×1080 ≈
+2.07 MP ≈ 6.2 MB) lands in the same expensive bracket.
+
+The open question is per-task overhead: smaller chunks mean more
+messages, and the 4–7 % figure we have is *per pass*, not per task. That
+is the number that decides the chunk size, and it has not been measured.
+
+**The grow-only variant** is worth including as a third arm: start each
+worker small, let its buffer grow to the high-water mark, never shrink,
+and expose a manual `pool.reset()` for a caller who knows the batch is
+finished. That keeps allocation bounded and amortised without fixing a
+size up front — slightly more complex than fixed slots, considerably
+simpler than grow-and-shrink.
+
+**What the experiment should measure.** Peak MPx/s is the least
+interesting output here, and may well be identical across all three
+arms. The motivation is smoothness, so the comparison must report
+**distribution, not mean**: per-task latency p50/p95/p99, worst-case
+frame time, GC pause count and total pause time, and peak RSS. A design
+that is 3 % slower on average and has no 40 ms stalls is the better one
+for anything driving a canvas.
+
+| arm | slice size | worker buffer | expected trade |
+|---|---|---|---|
+| A — dynamic slices *(currently specified)* | `px / slices` | grows and shrinks | best average, worst jitter |
+| B — fixed slots | constant | allocated once | small constant copy, no churn |
+| C — grow-only + manual reset | constant | grows to high-water | between A and B |
+
+All three share the same task shape `{imageIndex, start, length}` and the
+same planner interface, so this is a swap inside `plan()` plus the
+worker's allocation policy — not three implementations.
+
 ### The zero-worker fallback is the same call
 
 Workers are not always available: `worker_threads` may be absent or
@@ -534,6 +623,16 @@ sits once worker spin-up is counted.
 5. Do the JS int kernels scale as well as the WASM ones? 4 × 73 MPx/s
    would put pure JS level with single-threaded WASM SIMD, which would
    be a genuinely interesting result on its own.
+6. **What is the per-task overhead?** We have the per-*pass* copy cost
+   (4–7 %) but not the per-task cost, and that single number decides the
+   fixed-slot chunk size: too small and messaging dominates, too large
+   and both memory and the makespan tail grow. Measure by running the
+   same total pixels as 1, 4, 16, 64 and 256 tasks on a fixed worker
+   count.
+7. **Does fixed-slot allocation actually reduce jitter?** The whole
+   argument for it is smoothness rather than throughput, so it has to be
+   judged on p95/p99 task latency, GC pause count and peak RSS — not on
+   mean MPx/s, which may show no difference at all.
 6. Browser vs Node: how much worse is the browser path in practice,
    given slower worker spin-up (and COOP/COEP if Model B).
 7. Does the imported-memory change cost anything single-threaded?
