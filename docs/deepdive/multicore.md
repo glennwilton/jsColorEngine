@@ -714,6 +714,7 @@ const t = new Transform({
 | `bufferPx` | `262144` | fixed per-worker slot capacity, allocated once | 128–256 K px sits in the flat region; 16 workers at ~28 MB rather than ~190 MB at 5 MB slots |
 | `minSlicePx` | `16384` | never cut smaller than this | keeps per-task overhead (~7 µs) under ~1 % of a task |
 | `parallelFloorPx` | `65536` | total pixels below which the work runs on the calling thread | measured floor where splitting stops paying at all |
+| `keepAlive` | `true` | reuse the pool between batches; `false` tears it down after each | per-batch spin-up costs 66.5 ms every time — ten batches would burn 665 ms re-creating pools that repay in 3.5 MP each |
 | `idleTimeoutMs` | `30000` | tear the pool down after this long idle, rebuild on demand | spin-up is 66.5 ms and repays in 3.5 MP, so rebuilding is nearly free and bounds the damage from a caller who never releases |
 | `allocation` | `'fixed'` | `'fixed'` \| `'dynamic'` \| `'grow'` | fixed slots remove `Memory.grow()` and the reclaim path from the hot loop; the other two remain for the jitter comparison that is still unmeasured |
 
@@ -796,6 +797,60 @@ log a warning when a `Transform` with a live pool is collected, which
 turns a silent leak into a diagnosable one. It must not be the primary
 mechanism: callbacks are not guaranteed to run at all, and never at a
 predictable time.
+
+### Per-batch or keep-alive? Keep-alive, with an idle timer
+
+Both should be available, but the default decides almost every real
+outcome, and the arithmetic is one-sided:
+
+| policy | first batch | ten batches | idle cost |
+|---|---:|---:|---|
+| per-batch spin-up/teardown | 66.5 ms | **665 ms** | none |
+| keep-alive + 30 s idle timer | 66.5 ms | **66.5 ms** | ~15–20 MB, 8 parked threads |
+
+Spin-up repays in 3.5 MP, so paying it once is trivial and paying it ten
+times is not. **Default to keep-alive with an idle timer**, which gets
+both cases right without the caller deciding anything: repeated work
+reuses a warm pool, and a one-shot conversion releases ~30 s later on
+its own.
+
+Note the idle cost is small but not zero — eight parked threads and the
+slot buffers — which is exactly what the timer is protecting against.
+
+**Arm the timer on drain, not on a poll.** A `setInterval` waking every
+few seconds to ask "are we idle yet" is wasted work on a laptop and
+wakes the CPU out of low-power states. The queue already knows when it
+empties; arm a single timer there and cancel it when work arrives.
+
+**And unref the timer, or you have simply moved the leak.** A pending
+`setTimeout` is an event-loop handle in its own right:
+
+```
+armed a 30s idle timer, main work done
+  -> still alive at 1215 ms, held open by the TIMER
+```
+
+With `timer.unref()` the same program exits at 0 ms. So both the workers
+*and* the idle-shutdown timer must be unref'd; getting one right and not
+the other still hangs the process, and the timer is the easier one to
+forget because it looks like bookkeeping rather than a resource.
+
+So the shipped policy is three independent layers, none of which relies
+on the caller:
+
+1. **`unref()` on workers and timer** — forgetting everything else can
+   no longer hang a process.
+2. **Idle timer, armed on drain** — reclaims memory and threads from
+   callers who never release.
+3. **`releaseWorkers()`** — for callers who want determinism now.
+
+with `keepAlive: false` available for the memory-constrained case that
+genuinely wants teardown after every batch.
+
+**A "release when the Transform closes" watcher cannot be layer 1**, for
+the reason measured above: there is no reliable close event in
+JavaScript. `FinalizationRegistry` can *log* that it happened, which is
+worth having as a diagnostic, but the timer is what actually reclaims.
 
 ### Pool ownership is the bigger question
 
