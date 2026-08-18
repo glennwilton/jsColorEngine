@@ -1056,11 +1056,38 @@ that is ~18 K px, and we arrived at 16 K by a different route.
 (`threaded_scheduler.c` — `_cmsThrJoinWorker` in a loop). There is no
 persistent pool, and **every image ends with a barrier.**
 
-Both choices are reasonable for what lcms is: a library whose API is
-"convert this buffer", called once per image, in C where spawning a
-thread costs tens of microseconds rather than the ~8 ms a JS worker
-costs. Neither is a mistake in context. But both are avoidable when the
-API accepts a *batch*.
+**And the even split is correct for lcms, not a missed optimisation.**
+It is tempting to read "one slice per thread" as dated — the plugin
+counts cores with `GetSystemInfo` / `sysconf(_SC_NPROCESSORS_ONLN)`,
+raw logical CPUs with no notion of E-cores or SMT siblings, which is
+what everyone did before hybrid parts, and there is still no portable C
+way to tell them apart. But the real reason is structural.
+
+lcms creates **one thread per slice, per call** (`_cmsThrCreateWorker`
+in a loop over `nSlices`, then joins). There is no persistent pool. That
+inverts the economics of over-decomposition entirely:
+
+| | jsCE (persistent pool) | lcms (thread per slice) |
+|---|---|---|
+| cost of one more task | a queue pull, ~7 µs | a **thread creation**, tens of µs |
+| 80 tasks on 8 workers | 8 threads, 80 pulls | **80 threads** |
+
+Over-decomposition is only cheap if there is a pool to pull from. For
+lcms, cutting into ten times the cores would mean ten times the thread
+spawns *per image* — several milliseconds of pure overhead. Given
+thread-per-slice, an even split capped at core count is the right
+answer.
+
+Which makes our advantage partly accidental: **JS workers are so
+expensive to spawn (~8 ms, measured) that a persistent pool was never
+optional** — and the pool is precisely what makes over-decomposition
+free. The constraint forced the better architecture. Worth remembering
+before treating the difference as a like-for-like design win.
+
+The remaining choices are reasonable for what lcms is: a library whose
+API is "convert this buffer", called once per image, in C. Neither is a
+mistake in context. But both are avoidable when the API accepts a
+*batch*.
 
 ### MEASURED — what the per-image barrier costs
 
