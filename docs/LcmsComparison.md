@@ -269,6 +269,36 @@ very different photographs, against 96–190 across the synthetic set.
 **Real images cluster; generators do not** — which is the argument for
 quoting a corpus rather than a generator.
 
+### The content axis mostly disappears under 5 % noise
+
+The strongest result to come out of this measurement work, and the one
+that reframes every table above. Blending each content class toward the
+same noise buffer — 0 % is the untouched content, 100 % is pure noise:
+
+![Three starting contents blended toward the same noise, all converging](./deepdive/images/noise-locality-bases.svg)
+
+| base, RGB → Lab, jsCE SIMD | 0 % noise | 2 % | 100 % |
+|---|---:|---:|---:|
+| from `solid` | 181.8 | 98.9 | 97.6 |
+| from `gradient` | 183.2 | 98.8 | 98.6 |
+| from `photo` | 119.1 | 96.0 | 97.7 |
+
+**Three starting points spanning 182 / 183 / 119 MPx/s agree to within a
+few per cent once 2 % noise is added.** Two per cent jitter is visually
+negligible but takes `solid` from 1 distinct colour to ~216 and
+`gradient` from 256 to ~23,000 — and once the working set stops fitting
+in cache, it no longer matters how much worse it gets.
+
+That inverts the obvious reading of the content tables: **the clean
+synthetic rows are the outliers, not the photo row.** `solid` at 182 is
+not measuring the transform, it is measuring how well one colour fits in
+L1. It also explains lcms's memo cache as a cliff rather than a curve —
+from `solid`, `lcms-wasm` drops 92.0 → 33.7 at *one* per cent noise, as
+adjacency collapses from 100 % to 4.2 %.
+
+Full analysis, and the benchmark-design rules that follow from it:
+[deepdive/benchmark.md § 21 — Noise is the great equaliser](./deepdive/benchmark.md#21-noise-is-the-great-equaliser).
+
 **Native C shows the same effect**, which is what makes it a property of
 CLUT interpolation rather than a jsCE quirk. In lcms's `NOCACHE` column,
 where no memo is involved at all, RGB→Lab runs 63.3 MPx/s on noise

@@ -1677,3 +1677,81 @@ machine noise and later traced to an 800 ms warmup being too short. With
 a 3 s warmup the same measurement is stable to ~1 %. **Warmup length is
 a measurement parameter, not a formality** — and an under-warmed run
 looks exactly like a noisy one.
+
+## 21. Noise is the great equaliser
+
+The single most useful thing to come out of the v1.5 measurement work,
+and the one to carry into every future harness.
+
+**Adding 2–5 % noise to any test image collapses every content type onto
+the same number.** Solid colour, a smooth gradient and a photograph
+start at 182, 183 and 119 MPx/s and all land at ~98. Whatever the
+starting content, the plateau is the same, and the plateau is the
+transform.
+
+The reason it happens so fast is that noise is small in the dimension
+you look at and enormous in the dimension that costs. Two per cent
+jitter is visually negligible, but it takes `solid` from 1 distinct
+colour to ~216 and `gradient` from 256 to ~23,000 — the CLUT working set
+scales roughly with the cube of per-channel spread, so a tiny
+perturbation explodes the number of cells touched. And underneath there
+is a floor: once the working set no longer fits in cache and no longer
+prefetches, it stops mattering how much worse it gets, because you are
+paying a miss per lookup either way. Everything slides to the floor and
+stays there.
+
+Which inverts the obvious reading of the content tables:
+
+> **The clean synthetic rows were the outliers, not the photo row.**
+> `solid` at 182 and `gradient` at 183 are not measuring the transform;
+> they are measuring how well a degenerate input fits in L1. The photo
+> at 119 was already most of the way to the truth, and the honest
+> figure for all of them is ~98.
+
+### Where the old 210 MPx/s came from
+
+It was never fake — it was real, and narrow. Sorted by distinct colour
+count (RGB → Lab, jsCE WASM SIMD, 1 M px):
+
+| content | distinct colours | MPx/s |
+|---|---:|---:|
+| solid | 1 | 181.8 |
+| smooth gradient | 256 | 183.2 |
+| the old defective generator | 105 | 183.7 |
+| scanned illustration | 71,661 | 132.0 |
+| photo of a printed page | 6,429 | 120.9 |
+| beach landscape | 229,716 | 109.1 |
+| **any of the above, +5 % noise** | — | **~98** |
+
+So ~180–210 MPx/s is a genuine figure **for flat graphic content with a
+small palette** — UI, vector art, logos, charts. It is not a figure for
+photographs, and it is not even a figure for a *scanned* illustration,
+which measured 132. The old headline was true of a real workload; it was
+simply not true of the workload most people assume when they read
+"MPx/s".
+
+Note also that the printed-page photo (6,429 colours, 120.9) is slower
+than the gradient (256 colours, 183.2) by more than colour count alone
+explains — spatial ordering is the other half, as §20 showed.
+
+### The content taxonomy for the next harness
+
+Three tiers, each answering a different question. Pick deliberately:
+
+| content | what it is good for | what it cannot tell you |
+|---|---|---|
+| **solid / minimal palette**, cache off | Testing the *algorithm*. Cache pressure is eliminated, so a real code improvement shows up cleanly instead of being buried in memory stalls. | Anything about real-world throughput. |
+| **gradients / sweeps** | Largely redundant — they duplicate what solid already shows. Useful for exercising a pixel cache, but an **illustration with a known distinct-colour count** is a better controlled test of the same thing. | Anything about memory pressure; they prefetch perfectly. |
+| **anything + 5 % noise** | Real-world throughput, and the only figure that is comparable across machines and harnesses, because the variable that made results incomparable has been deliberately destroyed. | The *range* real content spans — for that you still need a corpus. |
+
+**If you want one number, add 5 % noise and take the plateau.** It is
+more representative than any clean synthetic and more reproducible than
+any particular photograph. Keep the corpus for showing the range; use
+the noisy figure for the headline.
+
+One caveat worth carrying: the *practice* generalises across processors,
+but the exact knee position does not — this is a cache-hierarchy
+measurement, so the knee is a property of the machine. Worth re-checking
+on the 4D CMYK path too, where the CLUT is 17⁴ = 83,521 cells against
+33³ = 35,937: if the knee moves, that confirms the mechanism is CLUT
+size rather than anything about images.

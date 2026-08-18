@@ -28,7 +28,22 @@
 > page over this one where they disagree. This page will be updated with
 > the full re-measurement — including the browser and Apple Silicon
 > figures — in the next release. Methodology detail:
-> [deepdive/benchmark.md § 20](./deepdive/benchmark.md#20-two-more-ways-the-input-lied-2026-08-19). — where we are, what we learned, where we're going
+> [deepdive/benchmark.md § 20](./deepdive/benchmark.md#20-two-more-ways-the-input-lied-2026-08-19).
+>
+> ### The figures here are real, but narrow
+>
+> Read **[benchmark.md § 21 — Noise is the great equaliser](./deepdive/benchmark.md#21-noise-is-the-great-equaliser)**
+> before quoting anything on this page. The short version: **adding 2–5 %
+> noise to any test image collapses every content type onto the same
+> number.** Solid colour, a gradient and a photograph start at 182, 183
+> and 119 MPx/s and all land at ~98.
+>
+> So the ~210 MPx/s class of figure below was never fake — it is a
+> genuine number **for flat graphic content with a small palette**: UI,
+> vector art, logos, charts. It is not a figure for photographs (109–121),
+> nor even for a *scanned* illustration (132). The clean synthetic rows
+> were the outliers, not the photo row, and the honest single figure is
+> the noisy plateau. — where we are, what we learned, where we're going
 
 **jsColorEngine docs:**
 [← Project README](../README.md) ·

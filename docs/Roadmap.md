@@ -1400,6 +1400,16 @@ generators. Three findings force a rethink of what it feeds the kernels:
   16 K px and 55.9 at 64 K+ — the small buffer simply cannot fill a
   35,937-cell table. Under the old degenerate generator this looked flat.
 
+**Pick content by the question being asked.** The measurement work
+settled a taxonomy — three tiers, each answering something different,
+and choosing by accident is how the old figures went wrong:
+
+| content | good for | cannot tell you |
+|---|---|---|
+| **solid / minimal palette**, cache off | testing the *algorithm* — cache pressure eliminated, so a real code improvement shows cleanly rather than buried in memory stalls | anything about real-world throughput |
+| **gradients / sweeps** | largely redundant with solid; useful for exercising a pixel cache, though an illustration with a known distinct-colour count is a better controlled test | anything about memory pressure — they prefetch perfectly |
+| **anything + 5 % noise** | real-world throughput, and the only figure comparable across machines, because the variable that made results incomparable is deliberately destroyed | the *range* real content spans — that still needs a corpus |
+
 **Plan.** Feed the browser bench a real corpus rather than generators:
 
 1. A **tall composite test image** — several photographs stacked into one
