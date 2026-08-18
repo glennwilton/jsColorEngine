@@ -132,6 +132,25 @@ function genNoise(buf) {
     }
 }
 
+// A predictable walk through the colour cube: same ~1M distinct colours as
+// `noise` and the same 0.0% adjacency, but visited in ORDER rather than at
+// random. This is the control that shows why `cover` alone is not enough — a
+// rainbow sweep or a smooth gradient can touch every cell of the CLUT and
+// still never stress memory, because the access pattern is sequential, the
+// hardware prefetcher predicts it, and the hot window at any instant is tiny.
+// Coverage counts how many cells are touched; it says nothing about the order
+// they are touched in, and the order is what costs.
+function genSweep(buf, npx, channels) {
+    for (let p = 0; p < npx; p++) {
+        const v = (p * 16) & 0xffffff;         // steps through the 24-bit cube
+        const o = p * channels;
+        buf[o]     = (v >>> 16) & 0xff;
+        buf[o + 1] = (v >>> 8) & 0xff;
+        buf[o + 2] = v & 0xff;
+        if (channels === 4) buf[o + 3] = (v >>> 4) & 0xff;
+    }
+}
+
 function genGradient(buf, npx, channels) {
     const width = 1024;
     for (let p = 0; p < npx; p++) {
@@ -208,7 +227,41 @@ function loadSingleImage(stem, channels) {
     return fs.readFileSync(path.join(CORPUS_DIR, file));
 }
 
+// `noisy:<0-100>` blends a real photograph toward pure random by the given
+// percentage: 0 is the untouched frame, 100 is indistinguishable from `noise`.
+//
+// This is the continuous version of the sweep-vs-noise control. A photograph
+// and a random buffer sit at opposite ends of CLUT locality, and everything
+// between them is reachable by dialling one number — so the cost of losing
+// locality can be plotted as a curve rather than inferred from two points.
+// It is also a realistic axis: film grain, dithering, sensor noise and heavy
+// JPEG artefacts all push a real image along it.
+// Blends the photo plane against the SAME noise buffer the `noise` row uses,
+// so the endpoints are exact: noisy:0 is byte-identical to `photo`, noisy:100
+// is byte-identical to `noise`. Fully deterministic, no per-call PRNG state,
+// and every intermediate point is a straight lerp between two known rows.
+function genNoisy(buf, npx, channels, percent) {
+    const src = photoPlane[channels];
+    const have = (src.length / channels) | 0;
+    const t = Math.max(0, Math.min(100, percent)) / 100;
+
+    const noise = new Uint8ClampedArray(npx * channels);
+    genNoise(noise);
+
+    for (let p = 0; p < npx; p++) {
+        const s = (p % have) * channels, o = p * channels;
+        for (let c = 0; c < channels; c++) {
+            buf[o + c] = Math.round(src[s + c] * (1 - t) + noise[o + c] * t);
+        }
+    }
+}
+
 function buildContent(kind, npx, channels) {
+    if (kind.startsWith('noisy:')) {
+        const buf = new Uint8ClampedArray(npx * channels);
+        genNoisy(buf, npx, channels, Number(kind.slice(6)));
+        return buf;
+    }
     if (kind.startsWith('image:')) {
         const src = loadSingleImage(kind.slice(6), channels);
         const have = (src.length / channels) | 0;
@@ -222,6 +275,7 @@ function buildContent(kind, npx, channels) {
     const buf = new Uint8ClampedArray(npx * channels);
     switch (kind) {
         case 'noise':    genNoise(buf); break;
+        case 'sweep':    genSweep(buf, npx, channels); break;
         case 'gradient': genGradient(buf, npx, channels); break;
         case 'blocks16': genBlocks16(buf, npx, channels); break;
         case 'photo':    genPhoto(buf, npx, channels); break;

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="470" viewBox="0 0 860 470" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<rect width="860" height="470" fill="#ffffff" rx="6"/>
+<text x="62" y="26" font-size="15" font-weight="600" fill="#111827">Throughput as a photograph is blended toward random noise</text>
+<text x="62" y="44" font-size="11.5" fill="#6b7280">RGB -&gt; Lab · 33x33x33 = 35,937 cells · 1 M px · one process per measurement · 0 % = untouched frame, 100 % = pure noise</text>
+<line x1="62" y1="412.0" x2="682" y2="412.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="416.0" font-size="11" fill="#6b7280" text-anchor="end">0</text>
+<line x1="62" y1="352.3" x2="682" y2="352.3" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="356.3" font-size="11" fill="#6b7280" text-anchor="end">20</text>
+<line x1="62" y1="292.7" x2="682" y2="292.7" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="296.7" font-size="11" fill="#6b7280" text-anchor="end">40</text>
+<line x1="62" y1="233.0" x2="682" y2="233.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="237.0" font-size="11" fill="#6b7280" text-anchor="end">60</text>
+<line x1="62" y1="173.3" x2="682" y2="173.3" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="177.3" font-size="11" fill="#6b7280" text-anchor="end">80</text>
+<line x1="62" y1="113.7" x2="682" y2="113.7" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="117.7" font-size="11" fill="#6b7280" text-anchor="end">100</text>
+<line x1="62" y1="54.0" x2="682" y2="54.0" stroke="#e5e7eb" stroke-width="1"/>
+<text x="53" y="58.0" font-size="11" fill="#6b7280" text-anchor="end">120</text>
+<text x="16" y="233" font-size="11.5" fill="#374151" text-anchor="middle" transform="rotate(-90 16 233)">MPx/s</text>
+<line x1="62.0" y1="412" x2="62.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="62.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">0</text>
+<line x1="124.0" y1="412" x2="124.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="124.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">10</text>
+<line x1="186.0" y1="412" x2="186.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="186.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">20</text>
+<line x1="248.0" y1="412" x2="248.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="248.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">30</text>
+<line x1="310.0" y1="412" x2="310.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="310.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">40</text>
+<line x1="372.0" y1="412" x2="372.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="372.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">50</text>
+<line x1="434.0" y1="412" x2="434.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="434.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">60</text>
+<line x1="496.0" y1="412" x2="496.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="496.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">70</text>
+<line x1="558.0" y1="412" x2="558.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="558.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">80</text>
+<line x1="620.0" y1="412" x2="620.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="620.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">90</text>
+<line x1="682.0" y1="412" x2="682.0" y2="417" stroke="#9ca3af" stroke-width="1"/>
+<text x="682.0" y="431" font-size="11" fill="#6b7280" text-anchor="middle">100</text>
+<text x="372" y="458" font-size="11.5" fill="#374151" text-anchor="middle">noise blended into the photograph (%)</text>
+<line x1="62" y1="412" x2="682" y2="412" stroke="#9ca3af" stroke-width="1.2"/>
+<line x1="80.6" y1="54" x2="80.6" y2="412" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="86.6" y="68" font-size="10.5" fill="#6b7280">knee ≈ 3 % noise</text>
+<text x="86.6" y="82" font-size="10.5" fill="#9ca3af">120,788 colours · cover 3.4×</text>
+<path d="M62.0 56.7 L68.2 107.1 L74.4 125.6 L80.6 138.7 L93.0 131.6 L124.0 138.4 L186.0 128.0 L248.0 125.6 L372.0 117.8 L496.0 120.8 L682.0 120.5" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="62.0" cy="56.7" r="2.8" fill="#2563eb"/>
+<circle cx="68.2" cy="107.1" r="2.8" fill="#2563eb"/>
+<circle cx="74.4" cy="125.6" r="2.8" fill="#2563eb"/>
+<circle cx="80.6" cy="138.7" r="2.8" fill="#2563eb"/>
+<circle cx="93.0" cy="131.6" r="2.8" fill="#2563eb"/>
+<circle cx="124.0" cy="138.4" r="2.8" fill="#2563eb"/>
+<circle cx="186.0" cy="128.0" r="2.8" fill="#2563eb"/>
+<circle cx="248.0" cy="125.6" r="2.8" fill="#2563eb"/>
+<circle cx="372.0" cy="117.8" r="2.8" fill="#2563eb"/>
+<circle cx="496.0" cy="120.8" r="2.8" fill="#2563eb"/>
+<circle cx="682.0" cy="120.5" r="2.8" fill="#2563eb"/>
+<path d="M62.0 252.7 L68.2 270.0 L74.4 277.2 L80.6 267.0 L93.0 270.3 L124.0 272.4 L186.0 272.1 L248.0 274.2 L372.0 265.8 L496.0 266.1 L682.0 268.5" fill="none" stroke="#0891b2" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="62.0" cy="252.7" r="2.8" fill="#0891b2"/>
+<circle cx="68.2" cy="270.0" r="2.8" fill="#0891b2"/>
+<circle cx="74.4" cy="277.2" r="2.8" fill="#0891b2"/>
+<circle cx="80.6" cy="267.0" r="2.8" fill="#0891b2"/>
+<circle cx="93.0" cy="270.3" r="2.8" fill="#0891b2"/>
+<circle cx="124.0" cy="272.4" r="2.8" fill="#0891b2"/>
+<circle cx="186.0" cy="272.1" r="2.8" fill="#0891b2"/>
+<circle cx="248.0" cy="274.2" r="2.8" fill="#0891b2"/>
+<circle cx="372.0" cy="265.8" r="2.8" fill="#0891b2"/>
+<circle cx="496.0" cy="266.1" r="2.8" fill="#0891b2"/>
+<circle cx="682.0" cy="268.5" r="2.8" fill="#0891b2"/>
+<path d="M62.0 288.2 L68.2 301.6 L74.4 304.9 L80.6 304.0 L93.0 301.9 L124.0 302.2 L186.0 299.5 L248.0 301.3 L372.0 302.2 L496.0 299.5 L682.0 298.9" fill="none" stroke="#b45309" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="62.0" cy="288.2" r="2.8" fill="#b45309"/>
+<circle cx="68.2" cy="301.6" r="2.8" fill="#b45309"/>
+<circle cx="74.4" cy="304.9" r="2.8" fill="#b45309"/>
+<circle cx="80.6" cy="304.0" r="2.8" fill="#b45309"/>
+<circle cx="93.0" cy="301.9" r="2.8" fill="#b45309"/>
+<circle cx="124.0" cy="302.2" r="2.8" fill="#b45309"/>
+<circle cx="186.0" cy="299.5" r="2.8" fill="#b45309"/>
+<circle cx="248.0" cy="301.3" r="2.8" fill="#b45309"/>
+<circle cx="372.0" cy="302.2" r="2.8" fill="#b45309"/>
+<circle cx="496.0" cy="299.5" r="2.8" fill="#b45309"/>
+<circle cx="682.0" cy="298.9" r="2.8" fill="#b45309"/>
+<path d="M62.0 305.8 L68.2 313.8 L74.4 314.7 L80.6 322.2 L93.0 323.4 L124.0 319.8 L186.0 318.6 L248.0 318.0 L372.0 321.3 L496.0 318.9 L682.0 318.9" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="62.0" cy="305.8" r="2.8" fill="#dc2626"/>
+<circle cx="68.2" cy="313.8" r="2.8" fill="#dc2626"/>
+<circle cx="74.4" cy="314.7" r="2.8" fill="#dc2626"/>
+<circle cx="80.6" cy="322.2" r="2.8" fill="#dc2626"/>
+<circle cx="93.0" cy="323.4" r="2.8" fill="#dc2626"/>
+<circle cx="124.0" cy="319.8" r="2.8" fill="#dc2626"/>
+<circle cx="186.0" cy="318.6" r="2.8" fill="#dc2626"/>
+<circle cx="248.0" cy="318.0" r="2.8" fill="#dc2626"/>
+<circle cx="372.0" cy="321.3" r="2.8" fill="#dc2626"/>
+<circle cx="496.0" cy="318.9" r="2.8" fill="#dc2626"/>
+<circle cx="682.0" cy="318.9" r="2.8" fill="#dc2626"/>
+<line x1="698" y1="60" x2="722" y2="60" stroke="#2563eb" stroke-width="2.4"/>
+<text x="728" y="64" font-size="11" fill="#111827">jsCE WASM SIMD</text>
+<text x="728" y="78" font-size="10.5" fill="#6b7280">119.1 → 97.7  (-18%)</text>
+<line x1="698" y1="100" x2="722" y2="100" stroke="#0891b2" stroke-width="2.4"/>
+<text x="728" y="104" font-size="11" fill="#111827">jsCE int (pure JS)</text>
+<text x="728" y="118" font-size="10.5" fill="#6b7280">53.4 → 48.1  (-10%)</text>
+<line x1="698" y1="140" x2="722" y2="140" stroke="#b45309" stroke-width="2.4"/>
+<text x="728" y="144" font-size="11" fill="#111827">lcms-wasm NOCACHE</text>
+<text x="728" y="158" font-size="10.5" fill="#6b7280">41.5 → 37.9  (-9%)</text>
+<line x1="698" y1="180" x2="722" y2="180" stroke="#dc2626" stroke-width="2.4"/>
+<text x="728" y="184" font-size="11" fill="#111827">lcms-wasm</text>
+<text x="728" y="198" font-size="10.5" fill="#6b7280">35.6 → 31.2  (-12%)</text>
+</svg>

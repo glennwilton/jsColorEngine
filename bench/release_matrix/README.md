@@ -119,6 +119,16 @@ Those are the common shapes for RGB and CMYK profiles, not an artifact
 of GRACoL. Note that **64 K px under-samples a 4D CLUT** (~0.8×), which
 is why 1 M px is the size the published content table uses.
 
+**But coverage alone is not enough — ordering costs more.** `cover`
+counts which cells are touched, not the order. A rainbow sweep or smooth
+ramp walks the cube predictably, so the prefetcher keeps up and the hot
+window stays tiny however many cells it eventually visits. The `sweep`
+generator demonstrates it: same ~1 M distinct colours and same 0.0 %
+adjacency as `noise`, **2.1× faster** (190.3 vs 89.0 MPx/s, RGB→Lab).
+`sweep` is even faster than the old degenerate 105-colour generator — so
+a rainbow ramp is a *weaker* test than the bug we removed, while looking
+more rigorous. Never make a smooth synthetic ramp the headline row.
+
 **6. One process per cell.** Running several rows in one process gave
 59.5 MPx/s where an isolated run of the identical workflow, content and
 size gave **75.4** — a 27 % swing caused only by which rows had already
@@ -137,6 +147,8 @@ it is the only mode whose rows can be compared.
 | `blocks16` | Marti Maria's generator: 16×16 flat colour blocks | 93.8 % |
 | `solid` | one colour everywhere — the cache ceiling | 100 % |
 | `photo` | the decoded corpus, tiled | ~17 % (corpus mean) |
+| `sweep` | ordered walk of the colour cube — same coverage as `noise`, opposite locality | 0.0 % |
+| `noisy:N` | photo blended N % toward `noise`; 0 = photo, 100 = noise, deterministic | varies |
 
 The synthetic four bracket the cache — nothing at one end, everything at
 the other — but no real image sits at either. That is what the photo row

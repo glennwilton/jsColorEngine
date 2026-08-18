@@ -1468,6 +1468,84 @@ Two practical consequences:
   way.** If a harness change moves the matrix row, it is not a
   content-locality effect and something else is going on.
 
+### Coverage is necessary but not sufficient — ordering costs more
+
+The `cover` metric added above counts how many CLUT cells an input
+touches. It says nothing about **the order they are touched in**, and
+that turns out to matter more.
+
+A rainbow sweep or a smooth ramp walks the colour cube predictably. Over
+a whole frame it may touch every cell — perfect coverage — yet never
+stress memory, because the accesses are sequential, the hardware
+prefetcher predicts them, and the hot window at any instant is tiny. The
+`sweep` generator makes this measurable: it produces the **same ~1 M
+distinct colours and the same 0.0 % adjacency as `noise`**, differing
+only in ordering.
+
+RGB → Lab, 1 M px, jsCE WASM SIMD:
+
+| content | distinct | cover | adjacency | MPx/s |
+|---|---:|---:|---:|---:|
+| `sweep` — ordered walk | 1,048,576 | 29.2× | 0.0 % | **190.3** |
+| `photo` — real frame | 41,077 | 1.1× | 13.2 % | 119.6 |
+| `noise` — random | 1,016,892 | 28.3× | 0.0 % | **89.0** |
+
+**Identical coverage, identical adjacency, 2.1× apart.** Every metric the
+harness reports says these two inputs are equivalent; the hardware
+disagrees. Worse, `sweep` (190.3) is *faster* than even the degenerate
+105-colour generator (183.7) — so a rainbow sweep is a weaker test than
+the bug we just spent a day removing, while looking far more rigorous:
+full gamut, full coverage, zero repetition.
+
+The same applies to `gradient`, and it is why smooth synthetic ramps
+should never be the headline row.
+
+### The knee is much earlier than intuition suggests
+
+If ordering is what costs, how much disorder does it take? The `noisy:N`
+generator blends a photograph toward the noise buffer — `noisy:0` is
+byte-identical to `photo`, `noisy:100` to `noise` — so locality can be
+swept continuously with everything else held constant.
+
+![Throughput as a photograph is blended toward noise](./images/noise-locality-rgb-lab.svg)
+
+The expected shape was a flat region at low noise (still cache-friendly),
+a knee, then a memory-bound plateau. **Two of those three appear. The
+flat region does not:**
+
+| noise | distinct | cover | jsCE SIMD |
+|---:|---:|---:|---:|
+| 0 % | 41,077 | 1.1× | 119.1 |
+| **1 %** | 84,979 | 2.4× | **102.2  (−14 %)** |
+| 2 % | 101,213 | 2.8× | 96.0 |
+| 3 % | 120,788 | 3.4× | 91.6 |
+| 10 % | 296,566 | 8.3× | 91.7 |
+| 50 % | 933,722 | 26.0× | 98.6 |
+| 100 % | 1,016,892 | 28.3× | 97.7 |
+
+**One per cent of noise costs 14 %**, and by 3 % the entire transition is
+over — after which a further 97 % of noise changes nothing. The
+photograph's advantage is not a gentle gradient that degrades with image
+quality; it is a narrow, fragile state that light grain, dithering or
+heavy JPEG artefacts destroy outright.
+
+Two practical consequences:
+
+- **A "clean" test image is not representative of a noisy one**, but a
+  noisy one is representative of almost everything noisier. The
+  plateau is wide and flat, so the interesting measurement region is
+  0–5 % noise, not 0–100 %.
+- **The engines are not equally exposed.** Across the same sweep
+  `lcms-wasm` moves only −12 % where jsCE SIMD moves −18 %, consistent
+  with everything else here: our SIMD kernel is the most memory-bound of
+  the three, so it has the most to gain from locality and the most to
+  lose without it.
+
+Both generators (`sweep`, `noisy:N`) are kept in the harness. The chart
+regenerates with `plot_noise_curve.cjs`; the shape is expected to be
+processor-dependent, since it is ultimately a cache-hierarchy
+measurement.
+
 ### The defect was shared, but it was not neutral
 
 The obvious defence of a bad input is that every engine got the same
