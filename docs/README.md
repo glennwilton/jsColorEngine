@@ -22,15 +22,20 @@ within 1 LSB on the image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-08-16):** v1.5.0 committed but not yet released
-(kernel modules, DeviceLink, N-channel, v1.5 polish arc; 488 tests,
-audit clean). Native-lcms throughput tables are historical pending a
-re-run with upstream-corrected calls (issue #6, Marti Maria). v1.5.5
-groundwork landed: Transform.js split — `stage_*` functions now in
-`src/stages.js`, single-colour interpolators in `src/interp.js`, both
-still `Transform.prototype` methods (verbatim move, parity-benched).
-In flight: v1.5.5 (matrix-shaper kernel, one-pixel-cache experiment)
-and the browser benchmark framework rewrite (uncommitted).
+**Current state (2026-08-19):** v1.5.0 committed but not yet released —
+kernel modules, DeviceLink, N-channel, the `Transform.js` split into
+`stages.js` + `interp.js`, and an opt-in **beta** pixel cache
+(`pixelCache`, accuracy path only). 518 tests, audit clean.
+
+Native-lcms throughput tables are being re-measured: upstream review
+(issue #6, Marti Maria) corrected the accuracy oracle, and our own flag
+sweep found `-march=native` was *handicapping* lcms, which reverses one
+published row. `docs/LcmsComparison.md` carries an empty release-comparison
+template waiting on that run.
+
+Measured but not shipped: the pixel cache in the image kernels
+(4D POC, break-even ~10 %) and multicore (POC at 5.46×, design in
+`deepdive/multicore.md`). Both are v1.5.5.
 
 ## Documentation index — `docs/`
 

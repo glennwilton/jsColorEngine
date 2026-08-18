@@ -1318,7 +1318,7 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 
 ---
 
-## v1.5.5 — RGB matrix-shaper fast path + one-pixel cache
+## v1.5.5 — matrix-shaper kernel + pixel cache in the image kernels
 
 > **Status.** Two performance items, both with groundwork done.
 > **Matrix-shaper fast path**: started — the matrix fuse and
@@ -1331,7 +1331,7 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 > **One-pixel cache**: an lcms-style memo cache to bench on real
 > images — experiment below.
 >
-> ✅ **Groundwork shipped (2026-08-16): Transform.js file split.** The
+> ✅ **SHIPPED IN v1.5.0: Transform.js file split.** The
 > ~100 `stage_*` functions (+ their compile emitters and colour/matrix
 > helpers) moved verbatim to `src/stages.js`, and the single-colour
 > ACCURACY PATH interpolators to `src/interp.js` — both re-attached to
@@ -1341,6 +1341,22 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 > and is now the pipeline builder + public API, which is the shape the
 > matrix-shaper kernel work (below) and the future v1.7 `stage2code`
 > emitter module plug into.
+
+> **Scope note (2026-08-19).** Two of the three things once queued here
+> shipped in **v1.5.0** instead: the `Transform.js` split, and the pixel
+> cache on the accuracy path (as a **beta** option — see the CHANGELOG).
+> What remains in v1.5.5 is the work that is genuinely not done:
+>
+> 1. **Matrix-shaper kernel** — the POC runs at 250–257 MPx/s but is not
+>    packaged as a kernel descriptor or wired into `create()`.
+> 2. **Pixel cache in the image kernels** — scoped to four int-LUT loops
+>    (3D/4D × 3ch/4ch), 8-bit only, scalar only, never SIMD. The 4D POC
+>    measured break-even ~10 % and up to +169 % on real content; the 3D
+>    case has been modelled but never measured.
+> 3. **Multicore** — measured at 5.46× in a POC
+>    (`bench/multicore_poc/`), design in
+>    [deepdive/multicore.md](./deepdive/multicore.md). Nothing in the
+>    engine yet.
 
 ### RGB matrix-shaper fast path — fused gamma + matrix + curves
 
@@ -1530,7 +1546,7 @@ downside is bounded). Ship only if the real-image numbers justify
 it; per-kernel opt-in via the descriptor fits the kernel-module
 architecture.
 
-✅ **Accuracy-path implementation landed (2026-08-17)** — `src/cache.js`,
+✅ **SHIPPED IN v1.5.0 (beta), not v1.5.5** — `src/cache.js`,
 opt-in via `pixelCache: 0|1|16|32`, `getPixelCacheStats()` for hit
 counting, tests in `__tests__/pixelcache.tests.js`, bench and
 output-verification in `bench/pixel_cache/`.

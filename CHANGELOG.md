@@ -7,10 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [1.5.0] — 2026-08-15
+## [1.5.0] — 2026-08-19
 
 Everything since 1.4.4 in one release: the v1.5 polish arc, the
-kernel-module architecture, and DeviceLink + N-channel support.
+kernel-module architecture, DeviceLink + N-channel support, the
+`Transform.js` source split, and an opt-in pixel cache (beta).
 
 ### Added — DeviceLink profile support (`pClass: 'link'`)
 
@@ -37,6 +38,60 @@ impractical) and falls back to the per-pixel pipeline. A latent
 clamp-before-scale bug in the four `*_NCh` interpolators (unreachable
 before N-channel) was found and fixed. Docs:
 [docs/NChannel.md](./docs/NChannel.md).
+
+### Added — pixel cache (`pixelCache`) — **BETA**
+
+Opt-in memoisation of the accuracy path: `pixelCache: 0 | 1 | 16 | 32 | …`
+(off by default; `1` is a single entry, anything else a direct-mapped
+table rounded down to a power of two). `getPixelCacheStats()` reports
+`{hits, misses, lookups, hitRate}`, and `setPixelCacheProfiling(true)`
+measures hit rate on real content without doing the colour maths, so you
+can decide whether it pays for *your* images before enabling it.
+
+**Whether it pays depends entirely on content**, which is why it is off
+by default: break-even is around a 40 % hit rate on this path. Flat and
+graphic content clears that comfortably; photographs generally do not.
+Pipeline weight matters too — the same content gives +269 % on
+sRGB→GRACoL against +191 % on RGB→RGB, so CMYK destinations are the
+better case. Measured numbers, method and the assumptions they overturned
+are in [deepdive/PixelCache.md](./docs/deepdive/PixelCache.md);
+`bench/pixel_cache/` reproduces them.
+
+Marked **beta**: the accuracy-path implementation is complete, verified
+byte-identical to uncached output over whole images
+(`bench/pixel_cache/verify_cache.js`, 108 full-image comparisons) and
+covered by tests. What is *not* done is the port into the image kernels —
+a POC on the 4D CMYK kernel measured break-even at ~10 % and up to +169 %
+on real content, but it is not wired to the dispatcher and not shipped.
+The option name and semantics may change as that work lands.
+
+Declines rather than misbehaves when it cannot guarantee correctness:
+`pipelineDebug` on, or custom stages present. No effect on the LUT image
+path.
+
+### Changed — `Transform.js` split into `stages.js` + `interp.js`
+
+`Transform.js` was 12,690 lines; it is now ~8,000 and is the pipeline
+builder plus the public API. Moved verbatim, no behaviour change:
+
+- `src/stages.js` — the ~100 `stage_*` pipeline functions, their
+  `compile()` emitters, and the colour/matrix helpers they call.
+- `src/interp.js` — the single-colour ACCURACY PATH interpolators
+  (trilinear/tetrahedral 1D–ND).
+
+Both are re-attached as non-enumerable `Transform.prototype` methods by
+the same mechanism as the kernel loops, so `this`, every call site, and
+function-identity checks are unchanged. Verified with the full suite plus
+`bench/mpx_summary.js` throughput parity and LUT bake timings.
+
+### Fixed — `pipelineDebug` (regression, same release)
+
+`pipelineDebug: true` threw `ReferenceError: data2String is not defined`.
+The stages split moved `addDebugHistory` into `stages.js` while the
+module-scope `data2String` helper it calls stayed behind in
+`Transform.js`. Every one of the 488 tests still passed, because none of
+them switched debug on. Helper moved; `__tests__/pipeline_debug.tests.js`
+now covers that path so it cannot go unnoticed again.
 
 ### Changed — kernel-module architecture
 
