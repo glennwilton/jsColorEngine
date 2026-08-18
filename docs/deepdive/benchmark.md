@@ -1468,19 +1468,65 @@ Two practical consequences:
   way.** If a harness change moves the matrix row, it is not a
   content-locality effect and something else is going on.
 
-### Open question — how much of the drop was which?
+### The defect was shared, but it was not neutral
 
-The corrected figures fold together *two* changes made at the same time:
-the generator fix and a move to one-process-per-measurement. A minimal
-control bench (`bench/solo_photo/` — one image, one engine, one process,
-no `lcms-wasm` loaded) agrees with the full matrix to within a few per
-cent and shows 0.4–2.0 % spread across independent processes, which says
-the harness is not the culprit and the input was. That is good evidence
-but not a decomposition: nobody has yet run the *old* generator through
-the *new* isolated harness to attribute the change precisely. Worth
-doing when this document is next revised, because the answer determines
-how much of the historical record needs re-stating rather than merely
-flagging.
+The obvious defence of a bad input is that every engine got the same
+bytes, so the comparison stayed fair. That is half true and worth
+measuring rather than assuming, which `--legacy-noise` exists for: it
+reinstates the old generator verbatim so the two can be A/B'd through
+the *same* isolated harness, changing nothing but the content.
+
+1 M px, noise, one process per cell — how much each engine lost when the
+input stopped being degenerate:
+
+| workflow | jsCE `int` | jsCE SIMD | lcms-wasm | SIMD ÷ lcms-wasm |
+|---|---:|---:|---:|---|
+| RGB→RGB matrix | −16 % | **−54 %** | −3 % | 2.90× → 1.38× (−52 %) |
+| RGB→Lab | −14 % | **−47 %** | −26 % | 4.38× → 3.13× (−29 %) |
+| RGB→CMYK | −15 % | **−48 %** | −24 % | 4.71× → 3.24× (−31 %) |
+| CMYK→RGB | −33 % | **−43 %** | −20 % | 4.52× → 3.19× (−29 %) |
+| CMYK→CMYK | −28 % | **−44 %** | −20 % | 5.13× → 3.57× (−30 %) |
+| soft-proof | −16 % | **−39 %** | −19 % | 3.99× → 3.03× (−24 %) |
+
+**The defect flattered jsColorEngine about twice as much as it flattered
+lcms**, so the ratios were overstated by 24–52 % — not merely the
+absolute figures. Anyone who assumed "shared input, therefore fair
+comparison" would have concluded the opposite.
+
+The mechanism is the one the coverage analysis predicts. A 105-colour
+input keeps the CLUT in L1; jsCE's SIMD kernel gathers four lanes from
+that table and is the most memory-bound of the three engines, so it
+gains the most when the table is tiny. `lcms-wasm`'s scalar path is
+comparatively more compute-bound and gains less. The matrix row is the
+clinching case: lcms touches no CLUT there and loses **3 %** (noise),
+while jsCE bakes the transform into one and loses **54 %** — the widest
+divergence in the table, on the workflow where the two architectures
+differ most.
+
+**The general lesson:** a shared defect is not automatically a neutral
+one. It is neutral only if every engine depends on the affected
+resource equally, and engines that differ in architecture — which is
+the entire point of comparing them — do not.
+
+### Resolved — how much of the drop was which
+
+The corrected figures folded together *two* changes made at the same
+time: the generator fix and a move to one-process-per-measurement. This
+was an open question until `--legacy-noise` made the A/B possible; the
+table above **is** the decomposition, because both of its columns run
+through the same isolated harness and differ only in content.
+
+The answer: **the generator accounts for essentially all of it.** With
+process isolation held constant, switching the generator alone moves
+jsCE SIMD by 39–54 % and `lcms-wasm` by 3–26 % — the whole of the
+observed drop. The 27 % call-site effect documented in §19 is real, but
+it was a *separate* defect affecting whether rows could be compared to
+each other, not the level they sat at. Two independent bugs, found
+together, fixed together, and easy to conflate for exactly that reason.
+
+The consequence for the historical record is that it needs **restating,
+not merely flagging** — the old ratios were wrong, not just the old
+MPx/s.
 
 A related loose end: an earlier ~10 % run-to-run swing was attributed to
 machine noise and later traced to an 800 ms warmup being too short. With

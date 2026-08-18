@@ -83,6 +83,7 @@ const PIXEL_CACHE  = process.argv.indexOf('--pixelcache') !== -1;
 // is slower to run and it is the only version whose rows can be compared.
 const CELL         = argString('cell', null);
 const ISOLATE      = process.argv.indexOf('--isolate') !== -1;
+const LEGACY_NOISE = process.argv.indexOf('--legacy-noise') !== -1;
 const TIMED_BATCHES = 5;
 const TARGET_BATCH_MS = 400;
 const WARMUP_MS       = 800;   // TurboFan tier-up; longer than the C harness needs
@@ -110,8 +111,21 @@ const WARMUP_MS       = 800;   // TurboFan tier-up; longer than the C harness ne
 // `seed >>> 23` takes bits 23-30 and yields ~1,016,892 distinct colours per
 // megapixel at the same 0.0% adjacency. Any generator added here must be
 // checked for BOTH properties — adjacency alone does not detect this.
+// --legacy-noise reinstates the OLD, defective generator verbatim. It exists so
+// the historical figures can be reproduced and, more usefully, so the question
+// "did the defect flatter one engine more than another?" can be answered by
+// measurement rather than assumed. The defect was shared — every engine got the
+// identical bytes — but shared does not mean neutral: an engine that leans
+// harder on CLUT memory traffic gains more when the table fits in L1.
 function genNoise(buf) {
     let seed = 0x13579bdf;
+    if (LEGACY_NOISE) {
+        for (let i = 0; i < buf.length; i++) {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;   // f64 overflow, intentional
+            buf[i] = seed & 0xff;                              // low bits, intentional
+        }
+        return;
+    }
     for (let i = 0; i < buf.length; i++) {
         seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
         buf[i] = (seed >>> 23) & 0xff;
@@ -419,7 +433,10 @@ function runIsolated() {
                 let adj = 0, distinct = 0;
                 for (const engine of ['int', 'simd', 'lcms', 'lcmsnc']) {
                     const out = execFileSync(process.execPath,
-                        [self, '--cell', `${w}|${kind}|${engine}|${npx}`], { encoding: 'utf8' });
+                        // flags that change the CONTENT must be forwarded, or the
+                        // children silently measure something else than asked for
+                        [self, '--cell', `${w}|${kind}|${engine}|${npx}`,
+                         ...(LEGACY_NOISE ? ['--legacy-noise'] : [])], { encoding: 'utf8' });
                     const [value, cellAdj, cellDistinct] = out.trim().split(/\s+/).map(Number);
                     values[engine] = value;
                     adj = cellAdj; distinct = cellDistinct;

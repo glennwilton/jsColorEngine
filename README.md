@@ -137,12 +137,17 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
 >
 > Corrected, throughput on a properly-distributed input is roughly
 > **half** the numbers quoted below, and on real photographs it lands
-> around 110–130 MPx/s rather than 210. The *ratios* against
-> `lcms-wasm` largely survive — both engines were flattered — but the
-> absolute MPx/s figures in this README and in
-> [docs/Performance.md](./docs/Performance.md) should be treated as
-> **provisional until the browser bench is rebuilt on a real-image
-> corpus** ([Roadmap](./docs/Roadmap.md#browser-sample-bench--retune-on-real-image-content)).
+> around 110–130 MPx/s rather than 210. **The ratios moved too, against
+> us.** Every engine received identical bytes, but not equally: an A/B
+> through the same harness shows jsCE's SIMD tier losing 39–54 % on a
+> correct input where `lcms-wasm` lost only 3–26 %, because the tiny
+> CLUT stayed in L1 and our SIMD kernel is the most memory-bound of the
+> three. Published ratios were overstated by **24–52 %**. So the
+> figures in this README and in
+> [docs/Performance.md](./docs/Performance.md) — absolute *and*
+> relative — should be treated as **provisional until the browser bench
+> is rebuilt on a real-image corpus**
+> ([Roadmap](./docs/Roadmap.md#browser-sample-bench--retune-on-real-image-content)).
 >
 > The Node-side comparison **has** been redone on corrected inputs, with
 > one process per measurement and CLUT coverage reported alongside every

@@ -185,3 +185,24 @@ few per cent of the native/JS gap could be the environment rather than
 the engines. It is stated rather than corrected for — the alternative is
 a native Windows lcms build, which introduces a different compiler
 instead of removing a variable.
+
+## Reproducing the old, defective numbers
+
+`--legacy-noise` reinstates the pre-2026-08 generator verbatim — f64
+overflow and low-bit extraction — so historical figures can be
+regenerated, and so "did the defect favour one engine?" can be answered
+by measurement instead of assumption:
+
+```bash
+node run.js --isolate --sizes 1048576 --content noise --legacy-noise
+```
+
+Run against the normal output it forms a clean A/B: same harness, same
+isolation, only the content differs. The answer it gave is that the
+defect was **shared but not neutral** — jsCE's SIMD tier lost 39–54 % on
+a correct input where `lcms-wasm` lost 3–26 %, so the old *ratios* were
+overstated by 24–52 %, not just the MPx/s. Detail:
+[deepdive/benchmark.md § 20](../../docs/deepdive/benchmark.md#the-defect-was-shared-but-it-was-not-neutral).
+
+Keep the flag. The next time a harness change moves the numbers, this is
+how you find out whether it moved them evenly.

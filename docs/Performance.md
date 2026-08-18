@@ -11,11 +11,16 @@
 > several workloads in one process moved an identical measurement by
 > 27 %. (`bench/compile_poc/` used `Math.random` and was unaffected.)
 >
-> **Treat the absolute MPx/s figures on this page as provisional.**
-> Corrected, throughput on a properly-distributed input is roughly half
-> what is quoted here for *both* engines, so most ratios survive — but
-> the numbers do not. Paths with no CLUT (matrix-shaper) are unaffected
-> and remain valid.
+> **Treat both the absolute figures AND the ratios on this page as
+> provisional.** The defect hit every engine — identical bytes went to
+> all of them — but it did not hit them equally, and an A/B through the
+> same isolated harness shows why: jsCE's SIMD tier lost **39–54 %** on
+> a correct input, `lcms-wasm` only **3–26 %**. The tiny CLUT stayed in
+> L1, and jsCE's SIMD kernel is the most memory-bound of the three, so
+> **the defect flattered us about twice as much as it flattered lcms**.
+> Published ratios were therefore overstated by **24–52 %**, not just
+> the MPx/s. Paths with no CLUT (matrix-shaper) are unaffected and
+> remain valid.
 >
 > The Node-side comparison has already been redone on corrected inputs
 > with one process per measurement and CLUT coverage reported next to
