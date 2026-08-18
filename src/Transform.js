@@ -20,6 +20,7 @@
     var defs = require('./def');
     var wasmLifecycle = require('./kernels/wasmLifecycle');
     var lutKernelTable = require('./lutKernelTable');
+    var _pool = require('./pool.js');
 
     var eIntent = defs.eIntent;
     var eProfileType = defs.eProfileType;
@@ -1767,6 +1768,139 @@
          * Use when a Transform is being shelved or when you need
          * absolute certainty that WASM memory is freed.
          */
+        /**
+         * Convert 1..n images, using a worker pool when it is worth it.
+         *
+         * ALWAYS CALLABLE. Where workers are unavailable — no `worker_threads`,
+         * a restrictive CSP, `cores: 1`, or simply too little work to be worth
+         * splitting — this runs the images sequentially through
+         * `transformArray()` and returns the identical result. Multicore is an
+         * optimisation, never a capability, so a caller never needs to feature
+         * detect. The reported `workersUsed` is what was actually used, so a
+         * caller measuring throughput is never told a single-threaded run was
+         * parallel.
+         *
+         * The sequential path is also the correctness oracle: parallel output
+         * must equal sequential output byte-for-byte, which is what the tests
+         * assert.
+         *
+         *     const res = await t.transformImages([{data: rgba, pixelCount: n}]);
+         *     res.images[0]      // converted output
+         *     res.workersUsed    // 0 when it ran on the calling thread
+         *
+         * Design, and why the splitting looks the way it does:
+         * docs/deepdive/multicore.md
+         *
+         * @param {Array}  images  [{data, pixelCount}, …]
+         * @param {Object} [opts]  {inputHasAlpha, outputHasAlpha, preserveAlpha,
+         *                          multicore: false|true|{…pool options}}
+         * @returns {Promise<{images: Array, workersUsed: number, tasks: number}>}
+         */
+        transformImages(images, opts){
+            var self = this;
+            opts = opts || {};
+
+            if(!this.pipelineCreated) throw 'No Pipeline';
+            if(!Array.isArray(images) || !images.length){
+                return Promise.resolve({images: [], workersUsed: 0, tasks: 0});
+            }
+
+            var flags = {
+                inputHasAlpha:  opts.inputHasAlpha  || false,
+                outputHasAlpha: opts.outputHasAlpha || false,
+                preserveAlpha:  opts.preserveAlpha  || false
+            };
+
+            var runSequential = function(){
+                var out = images.map(function(img){
+                    return self.transformArray(img.data, flags.inputHasAlpha,
+                        flags.outputHasAlpha, flags.preserveAlpha, img.pixelCount);
+                });
+                return Promise.resolve({images: out, workersUsed: 0, tasks: images.length});
+            };
+
+            var multicore = opts.multicore !== undefined ? opts.multicore : this.multicore;
+            if(!multicore) return runSequential();
+
+            // The LUT is what a worker needs — no profiles, no ICC parsing.
+            // Without one there is nothing to ship, so stay on this thread.
+            var signature = this.signLut();
+            if(!signature || !this.lut) return runSequential();
+
+            // A worker rebuilds from the LUT alone, which is only valid if a
+            // LUT-rebuilt Transform reproduces this one exactly. That is NOT
+            // universally true: an N-channel output (measured on a 7-channel
+            // profile) walks the pipeline and a LUT-only rebuild diverges
+            // wildly — 27,204 wrong bytes in 35,000, max delta 254.
+            //
+            // Rather than maintain a list of which cases are safe, prove it
+            // once per Transform on a small probe and fall back if it fails.
+            // Costs a few hundred pixels; the alternative is silently wrong
+            // colour, which is the one outcome worth any amount of caution.
+            if(this._multicoreSafe === undefined){
+                this._multicoreSafe = _probeLutEquivalence(this, flags);
+            }
+            if(!this._multicoreSafe) return runSequential();
+
+            var poolOptions = (multicore === true) ? {} : multicore;
+            var pool;
+            try {
+                pool = _pool.acquire(this.lutMode || 'int', poolOptions);
+            } catch(e){ pool = null; }
+            if(!pool) return runSequential();
+
+            var totalPx = images.reduce(function(a, img){ return a + img.pixelCount; }, 0);
+            if(totalPx < pool.opts.parallelFloorPx){
+                // Below the measured floor, splitting costs more than it saves.
+                _pool.release(pool);
+                return runSequential();
+            }
+
+            var meta = images.map(function(img){
+                return {
+                    data: img.data,
+                    pixelCount: img.pixelCount,
+                    inChannels:  self.inputChannels  + (flags.inputHasAlpha  ? 1 : 0),
+                    outChannels: self.outputChannels + (flags.outputHasAlpha ? 1 : 0)
+                };
+            });
+
+            // The LUT object itself, not toJSON() -- the portable format quantises
+            // and would cost 1 LSB on some pixels. Structured clone keeps the
+            // typed arrays exact, so parallel output is byte-identical.
+            var lutObject = this.lut;
+
+            return pool.start().then(function(){
+                var tasks = _pool.planBatch(meta, pool.all.length, pool.opts);
+                var outputs = meta.map(function(m){
+                    return new Uint8ClampedArray(m.pixelCount * m.outChannels);
+                });
+                return pool.run(tasks, meta, outputs, signature, lutObject, flags)
+                    .then(function(res){
+                        _pool.release(pool);
+                        return {images: outputs, workersUsed: res.workersUsed, tasks: tasks.length};
+                    });
+            }).catch(function(){
+                // Anything at all goes wrong with the pool — no worker_threads,
+                // a spawn failure, a worker crash — and we still owe the caller
+                // correct pixels.
+                _pool.release(pool);
+                return runSequential();
+            });
+        }
+
+        /**
+         * Drop this Transform's lease on the worker pool.
+         *
+         * Workers are NOT collected when a Transform is dropped — JavaScript
+         * has no destructors, and a live Worker owns an OS thread. They are
+         * unref'd so a forgotten pool cannot hang the process, and an idle
+         * timer reclaims them, but this is how a caller releases deterministically.
+         */
+        releaseWorkers() {
+            _pool.destroyAll();
+        }
+
         releaseWasmMemory() {
             wasmLifecycle.releaseWasmStates(this);
             this._resolveLutKernels();
@@ -7681,6 +7815,64 @@
         combined.set(prefixBytes, 0);
         combined.set(clutBytes, prefixBytes.length);
         return combined;
+    }
+
+    /**
+     * Can this Transform be reproduced from its LUT alone?
+     *
+     * The multicore path ships the LUT to workers and rebuilds there, so it is
+     * only correct where a LUT-rebuilt Transform is byte-identical to this one.
+     * That holds for the ordinary 1D-4D LUT paths and does NOT hold for
+     * N-channel output, which walks the pipeline — a LUT-only rebuild there
+     * produced 27,204 wrong bytes in 35,000 (max delta 254).
+     *
+     * Proving it on a probe beats enumerating the safe cases: it stays correct
+     * when new paths are added, and it fails closed.
+     */
+    function _probeLutEquivalence(transform, flags){
+        try {
+            var inCh = transform.inputChannels + (flags.inputHasAlpha ? 1 : 0);
+            if(!inCh || inCh < 1) return false;
+
+            var px = 256;
+            var probe = new Uint8ClampedArray(px * inCh);
+            var seed = 0x13579bdf;
+            for(var i = 0; i < probe.length; i++){
+                seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+                probe[i] = (seed >>> 23) & 0xff;      // spread, not the low-bit trap
+            }
+
+            var here = transform.transformArray(probe, flags.inputHasAlpha,
+                flags.outputHasAlpha, flags.preserveAlpha, px);
+
+            // setLut() MUTATES the LUT it is given — it decodes the CLUT and
+            // normalises the chain in place — so handing it this Transform's
+            // own LUT corrupts the Transform being probed, and every later
+            // conversion with it. Clone first. (The worker path is unaffected:
+            // postMessage structured-clones on the way out.)
+            var copy = (typeof structuredClone === 'function')
+                ? structuredClone(transform.lut)
+                : null;
+            if(!copy) return false;                      // no safe way to probe
+
+            var rebuilt = new Transform({
+                dataFormat: 'int8',
+                lutMode: transform.lutMode,
+                buildLut: true
+            });
+            rebuilt.setLut(copy);
+            var there = rebuilt.transformArray(probe, flags.inputHasAlpha,
+                flags.outputHasAlpha, flags.preserveAlpha, px);
+
+            if(!here || !there || here.length !== there.length) return false;
+            for(var j = 0; j < here.length; j++){
+                if(here[j] !== there[j]) return false;   // exact, not "close"
+            }
+            return true;
+
+        } catch(e){
+            return false;                                // fail closed
+        }
     }
 
     function _computeSignature(lut){

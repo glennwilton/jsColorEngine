@@ -1128,6 +1128,84 @@ The honest limit: on a batch of uniformly large images the advantage is
 on its own. The 37 % case is a batch of thumbnails, which is also a very
 common workload — contact sheets, web pipelines, catalogue processing.
 
+## AS BUILT (v1.5.5) — what a worker can and cannot rebuild
+
+A worker needs its own `Transform`. How it gets one decides which
+workloads can be parallelised at all, and there are two possible
+hand-offs.
+
+### Mode 1 — ship the LUT (implemented)
+
+`postMessage` the LUT object, `setLut()` it in the worker. Cheap, one
+transfer per (worker, LUT) pair keyed by FNV signature, and no profiles
+or ICC parsing in the worker.
+
+**But not every Transform can be rebuilt from its LUT alone.** N-channel
+output walks the pipeline rather than a LUT kernel, and a LUT-only
+rebuild diverges badly — measured on a 7-channel profile: **27,204 wrong
+bytes in 35,000, max delta 254.** Not rounding; different colour.
+
+Rather than maintain a list of which shapes are safe — which rots the
+moment a new path is added — the engine **proves it on a 256-pixel probe
+the first time a Transform is used with `multicore`**, comparing the
+rebuild byte-for-byte against the original. Equal, and the pool is used;
+unequal or throwing, and it silently runs sequentially. Fails closed,
+and costs a few hundred pixels once per Transform.
+
+Two things that probe taught, both now guarded:
+
+- **`setLut()` mutates the LUT it is given** — it decodes the CLUT in
+  place. Handing it the live LUT corrupted the Transform being probed
+  and every later conversion with it. The probe clones first
+  (`structuredClone`); the worker path was never affected, since
+  `postMessage` clones on the way out.
+- **JSON is the wrong wire format here.** `toJSON()`/`fromJSON()` is the
+  *portable* format and quantises: sequential-vs-sequential through it
+  differs on 123 of 200,000 bytes by 1 LSB. Sending the LUT object
+  itself keeps the typed arrays exact, which is what makes
+  byte-identity achievable rather than merely "close".
+
+### Mode 2 — ship the profiles (not built)
+
+Send the ICC bytes and the chain, and let each worker run `create()`.
+Costs a profile parse plus a pipeline build — and, in LUT mode, a full
+LUT bake — per worker, so roughly 25 ms each, paid once per pool.
+
+Worth building, because it reaches what Mode 1 cannot:
+
+- **The LUT-free accuracy path** (`buildLut: false`) runs at ~5–9
+  MPx/s. A 20 MP image is ~3 seconds single-threaded, so this is where
+  8× is worth the most — and there is no LUT to ship, so Mode 1 cannot
+  serve it at all.
+- **N-channel and anything else pipeline-driven**, without needing the
+  probe to bless it.
+- **No equivalence question.** The worker reproduces `create()` exactly,
+  so there is nothing to prove.
+
+### Mode 3 — clone the pipeline (rejected)
+
+The apparently-direct option: serialise the built pipeline and send it,
+skipping both the LUT and the profiles. It does not work, and it is
+worth saying why before someone tries it.
+
+- **Stages are functions.** `structuredClone` and `postMessage` throw on
+  functions outright, so the pipeline cannot cross a thread boundary as
+  it stands.
+- **`stageData` holds references into decoded profile internals** —
+  matrices, curves, CLUTs, tag data. To serialise it you would end up
+  shipping the profile contents anyway, just in a bespoke,
+  version-fragile form instead of the ICC bytes you already have.
+- **You would be re-implementing `create()` on the far side**, without
+  its validation, and it would need maintaining in lockstep with every
+  new stage type added.
+
+Mode 2 gets the same result by sending the bytes we already hold and
+calling the function that already exists. Cloning a pipeline is more
+work, more fragile, and correct only until the next stage type lands.
+
+The probe stays useful either way: it is what decides which mode a given
+Transform qualifies for.
+
 ## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task

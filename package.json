@@ -8,7 +8,8 @@
     "child_process": false,
     "fs": false,
     "path": false,
-    "util": false
+    "util": false,
+    "worker_threads": false
   },
   "keywords": [
     "icc profile",
