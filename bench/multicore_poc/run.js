@@ -87,11 +87,23 @@ const AUTO_FRACTION = Number(argValue('autoFraction', 0.75));
  */
 const MIN_SLICE_PIXELS = Number(argValue('minSlice', 65536));
 
+// Fallback when the runtime reports nothing. Browsers can return undefined on
+// older engines; 4 is the conventional guess.
+const REPORTED = AVAILABLE || 4;
+
+// Floor for 'auto'. NOT a claim about real cores — a hedge against runtimes
+// that under-report. Safari and privacy-hardened browsers clamp
+// navigator.hardwareConcurrency, so trusting a reported "2" on a 10-core Mac
+// would idle most of the machine. Mild oversubscription costs far less than
+// that, and the slice rule below caps it on small images anyway.
+const AUTO_MIN_WORKERS = Number(argValue('autoMin', 4));
+
 function resolveWorkerCount(spec, pixelCount) {
-    if (spec === 'max') return AVAILABLE;
+    if (spec === 'max') return REPORTED;
     if (spec === 'auto') {
-        var autoMax = Math.max(1, Math.floor(AVAILABLE * AUTO_FRACTION));
+        var autoMax = Math.max(AUTO_MIN_WORKERS, Math.floor(REPORTED * AUTO_FRACTION));
         if (pixelCount === undefined) return autoMax;
+        // Slice floor still wins: no point spawning 4 for a thumbnail.
         var bySlice = Math.floor(pixelCount / MIN_SLICE_PIXELS);
         return Math.max(1, Math.min(bySlice, autoMax));
     }
@@ -185,6 +197,51 @@ function runParallel(pool, pixels, pixelCount, inCh, outCh) {
                 const s = slices[msg.index];
                 output.set(new Uint8ClampedArray(msg.buffer), s.start * outCh);
                 if (--pending === 0) resolve(output);
+                else dispatch(worker);
+            });
+            worker.on('error', reject);
+            dispatch(worker);
+        });
+    });
+}
+
+/**
+ * BATCH mode — task-parallel instead of data-parallel.
+ *
+ * Each worker takes a WHOLE image and, on finishing, pulls the next one off
+ * the queue. Work-stealing, so uneven image sizes balance themselves.
+ *
+ * The reason this matters: it has no slice floor. Data-parallel splitting
+ * loses below ~64 K pixels per slice, so small images cannot be accelerated
+ * that way at all — but one whole small image per worker is fine, because the
+ * unit of work is never subdivided. The two modes cover complementary regions,
+ * and a real scheduler would just put both kinds of item on one queue.
+ *
+ * Cost: `depth` images resident at once. That is worker-count, NOT batch size
+ * — load lazily as workers free up and the memory objection mostly evaporates.
+ */
+function runBatch(pool, images, inCh, outCh) {
+    const results = new Array(images.length);
+    return new Promise((resolve, reject) => {
+        let pending = images.length;
+        let next = 0;
+
+        const dispatch = (worker) => {
+            if (next >= images.length) return;
+            const index = next++;
+            const image = images[index];
+            const buffer = image.pixels.buffer.slice(0);
+            worker.postMessage(
+                { type: 'slice', index: index, buffer: buffer, pixelCount: image.pixelCount },
+                [buffer]
+            );
+        };
+
+        pool.forEach((worker) => {
+            worker.on('message', (msg) => {
+                if (msg.type !== 'done') return;
+                results[msg.index] = new Uint8ClampedArray(msg.buffer);
+                if (--pending === 0) resolve(results);
                 else dispatch(worker);
             });
             worker.on('error', reject);
@@ -308,6 +365,66 @@ async function main() {
             + ((speedup / count * 100).toFixed(0) + '%').padStart(13)
             + (copyMs.toFixed(1) + ' ms').padStart(16)
             + ('  ' + (identical ? 'yes' : '*** NO ***')).padStart(12));
+
+        pool.forEach(w => w.postMessage({ type: 'exit' }));
+        await Promise.all(pool.map(w => new Promise(res => w.once('exit', res))));
+    }
+
+    // ---- BATCH mode: many small images, one per worker ----------------
+    // The case data-parallel splitting cannot serve. Uses the same sizes that
+    // lost above, to show the two modes are complementary rather than rivals.
+    const BATCH_SIZES = [16384, 65536, 262144];
+    console.log('');
+    console.log('  BATCH mode — whole images, work-stealing (no slice floor)');
+    console.log('  img pixels   count   1 thread   pooled    speedup   identical');
+    console.log('  ----------   -----   --------   -------   -------   ---------');
+
+    for (const size of BATCH_SIZES) {
+        const count = Math.max(8, Math.ceil(2000000 / size));
+        const images = [];
+        for (let i = 0; i < count; i++) {
+            images.push({ pixels: makeNoise(size, inCh), pixelCount: size });
+        }
+
+        // serial reference
+        for (let w = 0; w < 2; w++) images.forEach(im => transform.transformArray(im.pixels, false, false, false, im.pixelCount));
+        const serialTimes = [];
+        let serialOut = null;
+        for (let r = 0; r < 3; r++) {
+            const t0 = process.hrtime.bigint();
+            const outs = images.map(im => transform.transformArray(im.pixels, false, false, false, im.pixelCount));
+            serialTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
+            if (serialOut === null) serialOut = outs.map(o => Uint8ClampedArray.from(o));
+        }
+        const serialMs = median(serialTimes);
+
+        const poolSize = resolveWorkerCount('auto', size * count);
+        const pool = await spawnPool(poolSize, lutJson, inCh);
+        await runBatch(pool, images, inCh, outCh);
+        const parTimes = [];
+        let parOut = null;
+        for (let r = 0; r < 3; r++) {
+            const t0 = process.hrtime.bigint();
+            const outs = await runBatch(pool, images, inCh, outCh);
+            parTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
+            if (parOut === null) parOut = outs;
+        }
+        const parMs = median(parTimes);
+
+        let identical = true;
+        outer: for (let i = 0; i < serialOut.length; i++) {
+            for (let j = 0; j < serialOut[i].length; j++) {
+                if (serialOut[i][j] !== parOut[i][j]) { identical = false; break outer; }
+            }
+        }
+
+        const totalPx = size * count;
+        console.log('  ' + String(size).padStart(10) + String(count).padStart(8)
+            + (totalPx / (serialMs * 1000)).toFixed(1).padStart(11)
+            + (totalPx / (parMs * 1000)).toFixed(1).padStart(10)
+            + ((serialMs / parMs).toFixed(2) + 'x').padStart(10)
+            + ('  ' + (identical ? 'yes' : '*** NO ***')).padStart(12)
+            + '   (' + poolSize + ' workers)');
 
         pool.forEach(w => w.postMessage({ type: 'exit' }));
         await Promise.all(pool.map(w => new Promise(res => w.once('exit', res))));

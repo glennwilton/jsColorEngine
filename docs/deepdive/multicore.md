@@ -381,6 +381,26 @@ exactly 1. That made the first run report a correctness failure on every
 row including single-worker — the comparison was wrong, not the workers.
 A real implementation should ship the exact CLUT rather than JSON.
 
+**Batch mode covers what splitting cannot.** Task-parallel — each
+worker takes a whole image and pulls the next when it finishes:
+
+| image size | split, 8 workers | batch, whole-image |
+|---:|---:|---:|
+| 16 K | 0.83x | **3.26x** |
+| 64 K | 0.87x | **4.39x** |
+| 256 K | 1.21x | 2.53x |
+
+The sizes that lose under splitting win under batching, because the unit
+of work is never subdivided and so there is no slice floor. The two
+modes are complementary, and the right implementation is one work queue
+carrying both kinds of item: slices of a large image, or whole small
+ones. A `transformArraysParallel(images)` is the natural public shape
+for the second.
+
+The memory objection is smaller than it appears — `workers + 1` images
+need to be resident, not the whole batch, so lazy loading as workers
+free up keeps the peak bounded.
+
 ### What this leaves open
 
 Model B, the imported-memory change and the reclaim rework are all

@@ -66,6 +66,32 @@ workers = clamp(floor(pixels / 65536), 1, autoMax)
 
 which reproduces the measured optimum at every size tried.
 
+### 3. Batch mode rescues everything splitting cannot
+
+Task-parallel instead of data-parallel: each worker takes a WHOLE image and
+pulls the next one off the queue when it finishes. Work-stealing, so uneven
+sizes balance themselves.
+
+| image size | split, 8 workers | batch, whole-image |
+|---:|---:|---:|
+| 16 K | 0.83x | **3.26x** |
+| 64 K | 0.87x | **4.39x** |
+| 256 K | 1.21x | 2.53x |
+
+The sizes that *lose* under splitting *win* under batching, because there is
+no slice floor — the unit of work is never subdivided. (The 256 K row is
+item-limited, not mode-limited: 8 images across 12 workers leaves 4 idle.)
+
+So the two modes are complementary rather than rivals, and a real scheduler
+should put both kinds of item on one queue:
+
+- one large image  -> slice it (5.46x peak)
+- many small images -> one each (3-4x on sizes that cannot be sliced at all)
+
+The memory objection to batching is smaller than it looks: you need
+`workers + 1` images resident, not the whole batch. Load lazily as workers
+free up.
+
 ### 3. Hyperthreads are worth ~25 %, not 100 %
 
 Scaling is near-linear to 4, good to 8 (the physical core count), then
