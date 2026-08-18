@@ -714,6 +714,7 @@ const t = new Transform({
 | `bufferPx` | `262144` | fixed per-worker slot capacity, allocated once | 128–256 K px sits in the flat region; 16 workers at ~28 MB rather than ~190 MB at 5 MB slots |
 | `minSlicePx` | `16384` | never cut smaller than this | keeps per-task overhead (~7 µs) under ~1 % of a task |
 | `parallelFloorPx` | `65536` | total pixels below which the work runs on the calling thread | measured floor where splitting stops paying at all |
+| `idleTimeoutMs` | `30000` | tear the pool down after this long idle, rebuild on demand | spin-up is 66.5 ms and repays in 3.5 MP, so rebuilding is nearly free and bounds the damage from a caller who never releases |
 | `allocation` | `'fixed'` | `'fixed'` \| `'dynamic'` \| `'grow'` | fixed slots remove `Memory.grow()` and the reclaim path from the hot loop; the other two remain for the jitter comparison that is still unmeasured |
 
 Notes that matter more than the table:
@@ -742,6 +743,81 @@ or without workers — where none are available it falls back to
 sequential `transformArray()` and reports the worker count it actually
 used, so a caller measuring throughput is never told a single-threaded
 run was parallel.
+
+## Teardown — workers do not clean themselves up
+
+**No. Dropping a `Transform` does not close its workers**, and this is
+the sharpest footgun in the whole design. JavaScript has no destructors,
+and a `Worker` is not ordinary garbage: it owns an OS thread and, in
+Node, a handle on the event loop.
+
+Measured, not assumed — create a worker, drop the last reference, run
+GC:
+
+```
+still alive 1516 ms after dropping the reference — process has NOT exited
+```
+
+The process had to be killed. In a CLI or a build step that is a hang on
+exit with no error message, which is about the worst failure mode
+available. Browsers are no kinder: a `Worker` persists until
+`terminate()`, and an unreachable one is *permitted* to be collected but
+not required to be.
+
+### Four mechanisms, in order of reliability
+
+**1. Explicit release, following the existing precedent.** The engine
+already has `releaseWasmMemory()` for exactly this shape of problem, so
+workers should match it rather than inventing a new idiom:
+
+```js
+transform.releaseWorkers();     // terminate pool, free slot buffers
+```
+
+**2. `unref()` while idle — the safety net that actually works.** An
+unref'd worker does not hold the event loop open, so a forgotten pool
+degrades from "process hangs forever" to "workers die at exit":
+
+```
+main work done at 1 ms; exiting cleanly despite a live worker
+```
+
+Ref while tasks are in flight, unref when the queue drains. This is
+cheap, has no downside, and turns the worst failure into a non-event.
+**It should be the default behaviour, not an option.**
+
+**3. Idle timeout.** Tear the pool down after N seconds idle and rebuild
+on demand. Spin-up is 66.5 ms and repays in 3.5 MP, so rebuilding is
+close to free — this costs almost nothing and bounds the damage from a
+caller who never releases. Default somewhere around 30 s.
+
+**4. `FinalizationRegistry` as a backstop, never as the plan.** It can
+log a warning when a `Transform` with a live pool is collected, which
+turns a silent leak into a diagnosable one. It must not be the primary
+mechanism: callbacks are not guaranteed to run at all, and never at a
+predictable time.
+
+### Pool ownership is the bigger question
+
+Per-`Transform` pools are the obvious design and the wrong one: ten
+Transforms would mean eighty workers, each with its own WASM instance
+and slot buffers — hundreds of megabytes and heavy oversubscription for
+what is still one CPU.
+
+The pool should therefore be **shared and reference-counted**, keyed by
+`(cores, lutMode)`, with each `Transform` holding a lease rather than a
+pool. Released on the last lease, or on idle timeout.
+
+That raises one real problem: a worker holds a `Transform` rebuilt from
+*one* LUT, so a shared pool has to serve several. The existing portable
+LUT infrastructure answers it neatly — **LUTs already carry an FNV-1a
+content signature**. Ship a LUT to a worker once, keyed by signature;
+thereafter tasks reference it by signature alone. A worker keeps a small
+LRU of decoded LUTs (376 KB each), and the hand-off cost is paid once
+per (worker, LUT) pair rather than per task.
+
+Which makes the signature work do a job it was not designed for, and is
+a reason to prefer it over an ad-hoc pool-per-Transform shortcut.
 
 ## The unified dispatcher — one queue, one task shape
 
