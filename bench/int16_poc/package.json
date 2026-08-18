@@ -14,5 +14,8 @@
   },
   "dependencies": {
     "lcms-wasm": "^1.0.5"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9"
   }
 }
