@@ -431,9 +431,11 @@ function plan(images, workers, minSlice = 65536) {
     const tasks = [];
     for (let i = 0; i < images.length; i++) {
         const px = images[i].pixelCount;
-        // measured rule: never make a slice smaller than minSlice, and
-        // never use more slices than there are workers
-        const slices = Math.max(1, Math.min(Math.floor(px / minSlice), workers));
+        // MEASURED CORRECTION: capping at the worker count is the WORST
+        // configuration -- one task per worker leaves a slow task with
+        // nothing to overlap, costing 30-48%. Over-decompose instead and
+        // let the queue balance it. See MEASURED, per-task overhead.
+        const slices = Math.min(Math.max(1, Math.floor(px / minSlice)), workers * 6);
         const per = Math.ceil(px / slices / 64) * 64;          // 64-px aligned
         for (let start = 0; start < px; start += per) {
             tasks.push({ imageIndex: i, start, length: Math.min(per, px - start) });
@@ -535,9 +537,74 @@ so a 512 KB–1 MB chunk already clears it by 5–10× while keeping a
 cost to accept without evidence. Screen-resolution sizing (1920×1080 ≈
 2.07 MP ≈ 6.2 MB) lands in the same expensive bracket.
 
-The open question is per-task overhead: smaller chunks mean more
-messages, and the 4–7 % figure we have is *per pass*, not per task. That
-is the number that decides the chunk size, and it has not been measured.
+### MEASURED — per-task overhead, and the planner is wrong
+
+`bench/multicore_poc/task_overhead.js`. 8 MP through 4 workers,
+sRGB→GRACoL, `lutMode:'int'`, best of 7. Total pixels and worker count
+held constant; only the number of tasks the work is cut into varies, so
+any rise is per-task cost and nothing else.
+
+| tasks | px/task | uniform | ragged (incl. a 3-px task) |
+|---:|---:|---:|---:|
+| 4 | 2 M | 72.3 ms | 97.8 ms |
+| 8 | 1 M | 52.1 ms | 62.4 ms |
+| **16** | **524 K** | **50.6 ms** | **51.8 ms** |
+| 64 | 131 K | 53.7 ms | 51.3 ms |
+| 256 | 32 K | 52.5 ms | 51.6 ms |
+| 1024 | 8 K | 58.5 ms | 55.7 ms |
+| 2048 | 4 K | 67.2 ms | 66.5 ms |
+
+**Per-task overhead is ~7–8 µs.** From the plateau to 2048 tasks costs
+15–17 ms across ~2030 extra tasks, both splits agreeing. So a task
+should carry at least ~50 K px to keep overhead under ~1 %, and the flat
+region runs from roughly **32 K to 524 K px per task**.
+
+Three results, in increasing order of how much they change the design:
+
+**1. The 3-pixel task is a non-issue.** At ~7 µs it is 0.013 % of a
+52 ms pass. Ragged splits — deliberately uneven, always including a
+3-pixel remainder — are *within noise of uniform ones* from 16 tasks
+upward. A "run slices under N pixels on the main thread" rule would be
+buying nothing measurable, and would add a branch, a threshold to tune
+and a second code path to the exact place that must stay simple. It was
+right to call it premature; the measurement agrees.
+
+**2. Raggedness only hurts when there are too few tasks.** At 4 and 8
+tasks ragged costs 35 % and 20 % over uniform, because one long task
+lands at the end with nothing to overlap it. By 16 tasks the LPT sort
+absorbs the unevenness completely. Uniformity is not what matters —
+*having enough tasks to schedule* is.
+
+**3. The current planner produces the worst configuration measured.**
+It caps slices at the worker count:
+
+```js
+const slices = Math.max(1, Math.min(Math.floor(px / minSlice), workers));
+```
+
+One task per worker is exactly the 4-task row: **72.3 ms uniform, 97.8 ms
+ragged, against ~51 ms at 16 tasks.** That is a 30–48 % penalty for the
+tidiest-looking split, because a single slow task has nothing left to
+overlap with. **Over-decompose instead** — aim for several times the
+worker count and let the queue balance it:
+
+```js
+// target ~4-8 tasks per worker, each at least minSlice
+const target = Math.max(1, Math.floor(px / minSlice));
+const slices = Math.min(target, workers * 6);
+```
+
+This is also the strongest argument *for* fixed slots, and it arrives
+from a direction nobody was looking: fixed chunks over-decompose
+naturally. A 20 MP image at 256 K px/chunk is 80 tasks whatever the
+worker count, which lands in the flat region by construction, with no
+planner heuristic to get wrong.
+
+**So the chunk size should be ~128–256 K px, not 5 MB.** That is
+384–768 KB of RGB, comfortably inside the flat region, and it puts a
+16-worker pool at **~28 MB resident** rather than ~190 MB. The earlier
+5 MB estimate was ~10× too large, and the cost of getting it wrong is
+paid in memory rather than speed — which is the easier mistake to miss.
 
 **The grow-only variant** is worth including as a third arm: start each
 worker small, let its buffer grow to the high-water mark, never shrink,
@@ -623,12 +690,12 @@ sits once worker spin-up is counted.
 5. Do the JS int kernels scale as well as the WASM ones? 4 × 73 MPx/s
    would put pure JS level with single-threaded WASM SIMD, which would
    be a genuinely interesting result on its own.
-6. **What is the per-task overhead?** We have the per-*pass* copy cost
-   (4–7 %) but not the per-task cost, and that single number decides the
-   fixed-slot chunk size: too small and messaging dominates, too large
-   and both memory and the makespan tail grow. Measure by running the
-   same total pixels as 1, 4, 16, 64 and 256 tasks on a fixed worker
-   count.
+6. ~~What is the per-task overhead?~~ **ANSWERED: ~7–8 µs**
+   (`task_overhead.js`). The flat region is 32 K–524 K px per task, so
+   the fixed-slot chunk wants to be ~128–256 K px — about 10× smaller
+   than the 5 MB first proposed. It also showed the current planner's
+   one-slice-per-worker cap is the worst measured configuration, 30–48 %
+   off the plateau. See MEASURED above.
 7. **Does fixed-slot allocation actually reduce jitter?** The whole
    argument for it is smoothness rather than throughput, so it has to be
    judged on p95/p99 task latency, GC pause count and peak RSS — not on
