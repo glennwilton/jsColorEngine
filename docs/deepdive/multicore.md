@@ -451,6 +451,63 @@ The memory objection is smaller than it appears — `workers + 1` images
 need to be resident, not the whole batch, so lazy loading as workers
 free up keeps the peak bounded.
 
+## CONCLUSION — the allocation rule
+
+Everything measured above collapses to one rule and four constants.
+
+```js
+// Per-worker buffers are allocated ONCE at pool start, at `capacity`.
+// A worker's buffer is a maximum, never a unit of work.
+function sliceLength(px, workers, kernelMPxPerSec, capacity = 262144) {
+    const floor  = Math.round(kernelMPxPerSec * 80);   // 80 µs of work, in px
+    const wanted = Math.ceil(px / (workers * 10));     // ~10 tasks per worker
+    return Math.min(capacity, Math.max(floor, wanted));
+}
+```
+
+| constant | value | why |
+|---|---|---|
+| tasks per worker | ~10 | jitter needs 8–12 to average out; content variance needs only 2–4, so jitter sets it |
+| task floor | 80 µs of work | ~10× the ~7–8 µs effective per-task overhead. **In time, not pixels** — 40 K px for SIMD, 22 K for JS |
+| buffer capacity | 128–256 K px | flat region; keeps 16 workers at ~28 MB rather than ~190 MB |
+| don't parallelise below | ~64 K px total | measured floor where splitting stops paying at all |
+
+**Which term binds, by image size** (8 workers, SIMD):
+
+| image | binds | slice | tasks | per worker |
+|---|---|---:|---:|---:|
+| 20 MP | capacity | 256 K | 78 | 9.8 |
+| 2 MP | floor | 40 K | 52 | 6.5 |
+| 500 K px | floor | 40 K | 13 | 1.6 |
+| < 64 K px | — | — | 1 | run on the calling thread |
+
+**Dispatch**: one flat queue, workers pull the next task when they
+finish. Keep the LPT sort for batches of differently-sized images; do
+not rely on it inside a single image, where every slice is the same
+length and it can see nothing.
+
+**Why this is the balanced answer**, in one line each:
+
+- **Over-decompose, never one-slice-per-thread.** The tidy split is the
+  worst measured, by 30–48 %, because a LUT transform is not fixed-cost
+  per pixel and the slowest slice sets the makespan.
+- **Fixed buffers, variable slices.** Allocate once, never grow, never
+  reclaim — the churn that makes a UI stutter disappears — while the
+  slice still adapts to image and pool size.
+- **Floor in time, not pixels.** The only constant that survives a
+  change of kernel, and it already differs 2× between the two we ship.
+- **Don't model cost.** A content-aware estimator would be expensive,
+  fragile, and is unnecessary — queue depth solves the same problem for
+  free.
+- **Remainders don't matter.** A 3-pixel task costs ~7 µs, 0.013 % of a
+  pass. No threshold, no special case, no second code path.
+
+**Still unmeasured**, and the reason this is a rule rather than a
+result: whether fixed slots actually deliver the smoothness that
+motivates them. That needs the pool built and judged on p95/p99 task
+latency, GC pause count and peak RSS — not mean throughput, which may
+show no difference at all.
+
 ## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task
@@ -747,6 +804,39 @@ while another computes, so most of the cost overlaps with compute.
 Quoting a single overhead figure is therefore wrong — it is ~33 µs
 serialised and ~7–8 µs effective once the pool is deep enough to hide
 it, and only the second number should inform the chunk size.
+
+### The floor is a time, not a pixel count
+
+Every figure above came from the JS `int` kernel. The WASM SIMD kernel
+is roughly twice as fast per pixel, so the same ~7–8 µs of per-task
+overhead buys proportionally less work — and the optimum moves. Same
+2 MP, same 8 workers:
+
+| tasks | per worker | px/task | jsCE `int` | WASM SIMD |
+|---:|---:|---:|---:|---:|
+| 8 | 1 | 262 K | 10.8 ms | 4.5 ms |
+| **48** | **6** | **44 K** | 8.5 ms | **4.1 ms** |
+| **96** | **12** | **22 K** | **7.6 ms** | 5.4 ms |
+| 384 | 48 | 5.5 K | — | 6.3 ms |
+
+**A fixed pixel floor would be wrong for one of them.** SIMD wants ~6
+tasks per worker at ~44 K px; the JS kernel wants ~12 at ~22 K. Push
+SIMD to 12 per worker and it *loses* 30 %.
+
+The two agree once the floor is expressed as **time rather than
+pixels**: a task should run for roughly **10× its own overhead**, i.e.
+~80 µs of compute. Converting through the kernel's known throughput
+reproduces both optima:
+
+| kernel | throughput | 80 µs of work | measured optimum |
+|---|---:|---:|---:|
+| WASM SIMD | ~500 MPx/s | 40 K px | 44 K px |
+| jsCE `int` | ~270 MPx/s | 22 K px | 22 K px |
+
+That is the general form, and it self-adjusts to any future kernel
+without a new constant to tune. It also explains why over-decomposition
+pays far less for SIMD (9 % vs 30 %): the whole pass is only ~4 ms, so
+there is less absolute jitter to hide and overhead bites sooner.
 
 ### The buffer is a ceiling, not a quantum
 
