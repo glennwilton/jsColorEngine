@@ -607,6 +607,52 @@ planner heuristic to get wrong.
 5 MB estimate was ~10× too large, and the cost of getting it wrong is
 paid in memory rather than speed — which is the easier mistake to miss.
 
+### Why more tasks helps — it is scheduling, not caching
+
+"Smaller pieces run faster" is counter-intuitive enough to deserve a
+control, and the obvious explanation is wrong. The tempting story is
+memory: many small slices ought to be kinder to cache than a few large
+ones. Two candidate mechanisms, and they make different predictions:
+
+- **load balancing** — more tasks means the queue can even out jitter,
+  which requires *more than one worker* to matter at all;
+- **per-task working set** — a 22 K px task is ~65 KB in + 87 KB out +
+  280 KB CLUT and fits L2, where a 262 K px task is ~2 MB and spills.
+  This would show up with **one** worker just as clearly.
+
+So run it with one worker, where there is nothing to balance. 2 MP:
+
+| tasks | px/task | best ms | vs 1 task |
+|---:|---:|---:|---:|
+| 1 | 2 M | 46.4 | — |
+| 8 | 262 K | 48.0 | +3.4 % |
+| 32 | 66 K | 46.2 | −0.5 % |
+| 96 | 22 K | 49.5 | +6.7 % |
+| 192 | 11 K | 54.1 | +16.6 % |
+
+**Flat to slightly worse — never better.** The working-set explanation is
+dead. All of the 30 % gain at 8 workers is scheduling: with one task per
+worker the batch ends when the *slowest* worker ends, and any jitter —
+OS scheduling, SMT contention, the main thread busy copying — leaves
+every other worker idle. At ten tasks per worker the fast ones pull more
+and the tail shrinks to at most one task.
+
+**Why slice size cannot help cache here:** the kernel is a pure
+streaming workload. Every pixel is read once, written once, never
+revisited, so the image never benefits from residency at any slice size.
+The only structure with reuse is the CLUT, and it is the same ~280 KB
+however the image is cut. This is the same lesson as the content work —
+CLUT residency is what matters, and the image is just a stream passing
+through.
+
+**Per-task overhead is partly hidden by parallelism.** The same sweep
+measures ~33 µs per task at 1 worker and ~7–8 µs at 4. Nothing about the
+messages changed; with several workers the main thread copies for one
+while another computes, so most of the cost overlaps with compute.
+Quoting a single overhead figure is therefore wrong — it is ~33 µs
+serialised and ~7–8 µs effective once the pool is deep enough to hide
+it, and only the second number should inform the chunk size.
+
 ### The buffer is a ceiling, not a quantum
 
 Fixed chunks over-decompose large images automatically, which is their
@@ -743,12 +789,13 @@ sits once worker spin-up is counted.
 5. Do the JS int kernels scale as well as the WASM ones? 4 × 73 MPx/s
    would put pure JS level with single-threaded WASM SIMD, which would
    be a genuinely interesting result on its own.
-6. ~~What is the per-task overhead?~~ **ANSWERED: ~7–8 µs**
-   (`task_overhead.js`). The flat region is 32 K–524 K px per task, so
-   the fixed-slot chunk wants to be ~128–256 K px — about 10× smaller
-   than the 5 MB first proposed. It also showed the current planner's
-   one-slice-per-worker cap is the worst measured configuration, 30–48 %
-   off the plateau. See MEASURED above.
+6. ~~What is the per-task overhead?~~ **ANSWERED: ~33 µs serialised,
+   ~7–8 µs once overlapped** (`task_overhead.js`) — the second figure is
+   the one that matters, and the gap is parallelism hiding the cost. It
+   also showed the current planner's one-slice-per-worker cap is the
+   worst measured configuration, 30–48 % off, and that the win from
+   over-decomposition is **scheduling, not caching**: with a single
+   worker, smaller tasks are never faster. See MEASURED above.
 7. **Does fixed-slot allocation actually reduce jitter?** The whole
    argument for it is smoothness rather than throughput, so it has to be
    judged on p95/p99 task latency, GC pause count and peak RSS — not on
