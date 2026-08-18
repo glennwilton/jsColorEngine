@@ -328,6 +328,68 @@ defers having to invent one.
 **Out:** the accuracy path, float, and ND. And the pixel cache stays
 off the SIMD kernels even when they are running in workers.
 
+## MEASURED (2026-08-19) — the experiment has been run
+
+`bench/multicore_poc/` — Model A, public API only, no engine changes.
+Ryzen 7700X (8C/16T), Node 24, sRGB→GRACoL, `lutMode: 'int'`, 8 MP,
+output byte-identical to single-threaded in every row.
+
+| workers | MPx/s | speedup | efficiency | copy overhead |
+|---:|---:|---:|---:|---:|
+| 1 | 41.8 | 0.95× | 95 % | 6.9 ms |
+| 2 | 76.3 | 1.73× | 86 % | 7.1 ms |
+| 4 | 130.5 | 2.96× | 74 % | 11.8 ms |
+| 8 | 189.6 | 4.30× | 54 % | 7.3 ms |
+| 12 | 237.3 | 5.38× | 45 % | 12.9 ms |
+| 16 | 240.8 | 5.46× | 34 % | 8.4 ms |
+
+**Model B is probably not worth building.** The copies cost **4–7 %** of
+a pass (7–13 ms against 181 ms). That is the whole prize
+`SharedArrayBuffer` would win, in exchange for cross-origin isolation,
+imported WASM memory and the reclaim rework. The measurement that was
+meant to choose between the models chose the cheap one.
+
+**The crossover is slice size, not image size.** At a fixed 262,144 px:
+
+| workers | slice | speedup |
+|---:|---:|---:|
+| 1 | 262 K | 0.93× |
+| 2 | 131 K | 1.61× |
+| **4** | **65 K** | **2.56×** |
+| 8 | 32 K | 1.22× |
+
+Same image, twice the workers, half the speed. **~64 K pixels per slice**
+is the floor. So `auto` should derive the count from slice size rather
+than gate on image size:
+
+```js
+workers = clamp(floor(pixels / 65536), 1, autoMax)
+```
+
+That reproduces the measured optimum everywhere tried — 1 worker at 16 K
+and 64 K (where 8 lost), 4 at 262 K, the cap above ~1 MP.
+
+**Hyperthreads are worth ~25 %.** Near-linear to 4, good to 8 (the
+physical count), then flat — 12 and 16 land within noise. `auto` at 75 %
+of `availableParallelism` gives 12 here, near the peak, and leaves the
+machine usable.
+
+**Trap:** the portable-LUT JSON round-trip is lossy by up to 1 LSB
+(`toJSON` quantises to u16, `setLut` re-derives), so a round-tripped
+transform differs from a freshly-built one on ~0.07 % of bytes by
+exactly 1. That made the first run report a correctness failure on every
+row including single-worker — the comparison was wrong, not the workers.
+A real implementation should ship the exact CLUT rather than JSON.
+
+### What this leaves open
+
+Model B, the imported-memory change and the reclaim rework are all
+**deferred indefinitely** unless the 4–7 % copy cost turns out to matter
+for some workload. The remaining questions are: browser behaviour
+(slower spin-up, no COOP/COEP needed for Model A), whether the WASM SIMD
+kernels scale the same way, and where the one-shot (unpooled) threshold
+sits once worker spin-up is counted.
+
 ## Open questions — measure before building
 
 1. **How much does Model A's copying actually cost?** The estimate is
