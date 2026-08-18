@@ -1195,12 +1195,61 @@ extra cost:
   `create()` on the same bytes and gets the same Transform by
   construction. Nothing to prove, nothing to fail closed on.
 
+**The chain alone is not enough.** `lut.chain` is a *descriptor* —
+header, name, whitePoint, description — and serialises to about **2.0 KB
+against a 2,684 KB profile**. It records which profiles were used, not
+what they contain. So Mode 2 ships profile bytes *plus* the chain, the
+chain saying how to wire them:
+
+```js
+{ profiles: { '<hash>': ArrayBuffer, … },      // real ICC bytes, once per worker
+  chain:    ['*sRGB', intent, '<hash>', intent, '*sRGB'] }
+```
+
+Virtual profiles cost nothing — `'*sRGB'` is synthesised from its name —
+so a soft-proof chain of `sRGB → GRACoL → sRGB` ships exactly one
+profile's bytes, not three. The same content-hash trick already used for
+LUTs applies: send each distinct profile once per worker, reference it
+by hash thereafter.
+
+**Multi-step needs no special handling in Mode 1**, which is worth
+stating because it looks like it should. A five-slot soft-proof chain
+bakes to a 3→3 LUT, so a worker never sees the chain at all — measured
+byte-identical on 8 workers, and now asserted in the tests. Mode 2 is
+the only mode that has to care about chains, because it rebuilds rather
+than inherits.
+
 On the evidence, **Mode 2 should probably become the primary hand-off
 and Mode 1 the optimisation**, rather than the other way round — Mode 1
-is worth keeping only where the LUT is materially smaller than the
-profiles, or where the profiles are no longer available (a Transform
-restored from a portable LUT has no profiles to send). The probe then
-stops being a correctness guard and becomes a routing hint.
+is worth keeping where the LUT is materially smaller than the profiles
+(2 MB of LUT versus 2.7 MB of ICC is close, so this is per-case), or
+where the profiles are no longer available: a Transform restored from a
+portable LUT has none to send. The probe then stops being a correctness
+guard and becomes a routing hint.
+
+### A pool serving several transforms at once (future)
+
+Once workers hold a registry keyed by signature — which Mode 1 already
+does — nothing requires every task in flight to use the *same*
+transform. A pool of 8 could run RGB→CMYK on some workers and CMYK→RGB
+on others, which is the natural shape for a pipeline stage converting in
+both directions, or a server handling mixed requests.
+
+What that needs beyond today's code:
+
+- **A per-transform concurrency cap**, so one large job cannot starve
+  the others — "at most N workers on any one transform" rather than
+  first-come-first-served on a single queue.
+- **Fair queueing across transforms**, since the current queue is one
+  flat LPT-sorted list and would drain the largest job first regardless
+  of who is waiting.
+- **Registry pressure**: each worker would hold several LUTs
+  concurrently rather than sequentially, so the LRU bound (currently 8)
+  becomes load-bearing rather than a safety net.
+
+None of it is hard, and none of it is justified until someone has the
+workload. Recorded so the registry-by-signature design is understood as
+*enabling* it rather than accidental.
 
 ### Mode 3 — clone the pipeline (rejected)
 

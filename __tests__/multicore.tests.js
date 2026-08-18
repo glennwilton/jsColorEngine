@@ -194,6 +194,21 @@ describe('multicore — parallel output is byte-identical to sequential', () => 
         await assertIdentical(t, [makeImage(100003, 3, 0x7777)]);
     });
 
+    test('multi-step chain: RGB -> CMYK -> RGB soft proof', async () => {
+        // Three profiles, a five-slot chain, and the CMYK intermediate exists
+        // only inside the LUT. A worker never sees the chain at all — the bake
+        // has already collapsed it to a 3->3 table — so multi-step needs no
+        // special handling in Mode 1. Asserted because it is the case most
+        // likely to be assumed broken.
+        const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
+        t.createMultiStage(['*sRGB', eIntent.relative, gracol(), eIntent.relative, '*sRGB']);
+
+        const res = await assertIdentical(t, [makeImage(300000, 3, 0xC0FFEE)]);
+        expect(res.workersUsed).toBeGreaterThan(0);
+        expect(t.inputChannels).toBe(3);
+        expect(t.outputChannels).toBe(3);
+    });
+
     test('WASM SIMD kernel matches its own sequential output', async () => {
         const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
         t.create('*sRGB', gracol(), eIntent.relative);
