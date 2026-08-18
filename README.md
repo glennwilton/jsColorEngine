@@ -31,7 +31,8 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   [comparison page](./docs/LcmsComparison.md) says so explicitly rather
   than leaving it implied.
 
-  In absolute terms that is **~80–120 MPx/s on photographs**
+  In absolute terms that is **~80–120 MPx/s on photographs**, and ~180 on
+  flat digital artwork with a small palette
   (Ryzen 7700X, one thread, WASM SIMD) — roughly **10–15 4K images per
   second**. Throughput depends heavily on content, so the ratios above
   are the more portable number; the
@@ -95,9 +96,12 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
 
 - **Two APIs, one `Transform`.** `transform(colorObj)` for single
   colours (µs/call, always LUT-free). `transformArray(typedArray)`
-  for bulk — pre-baked LUT at **~80–120 MPx/s on photographic content**
-  (x86_64, one thread, WASM SIMD), or LUT-free f64 when you need
-  accuracy over throughput.
+  for bulk — pre-baked LUT at **~80–120 MPx/s on photographs, rising to
+  ~180 MPx/s on flat digital artwork** with a small palette (x86_64, one
+  thread, WASM SIMD), or LUT-free f64 when you need accuracy over
+  throughput. Content matters more than most benchmarks admit: a limited
+  palette keeps the colour lookup table in cache, a photograph does not
+  — [why, measured](./docs/deepdive/benchmark.md#21-noise-is-the-great-equaliser).
   See [Two paths, one Transform](#two-paths-one-transform).
 
 ---
@@ -243,7 +247,7 @@ right one matters more than any other choice you'll make.
 | Use case | API | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calculations, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` | ~80–120 MPx/s on photographs (x86_64, one thread, WASM SIMD) | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Image / array processing** | `transform.transformArray(typedArray, ...)` | ~80–120 MPx/s on photographs, ~180 on flat artwork (x86_64, one thread, WASM SIMD) | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
 
 Both live on the same `Transform` object — you pick which by calling
 `transform()` or `transformArray()`, and by passing `{buildLut: true}`

@@ -4,7 +4,7 @@
 > in this repo cold: what the project is, and a per-document summary of
 > where every piece of context and reasoning lives. Regenerate per
 > [`summary-generator.md`](./summary-generator.md).
-> Last regenerated: **2026-08-16** (v1.5.0, unreleased).
+> Last regenerated: **2026-08-19** (v1.5.0).
 
 ## Project Overview
 
@@ -15,7 +15,7 @@ ones); `Transform` builds a stage pipeline between profiles, optionally
 bakes it into a LUT, and dispatches per-dimension tuned kernels
 (`src/kernels/{1d,2d,3d,4d,nd}/`) — `transform()` for single colours at
 full f64 accuracy, `transformArray()` for images at ~80–120 MPx/s on
-photographic content, one thread. Positioning: the fastest ICC colour
+photographs and ~180 on flat artwork, one thread. Positioning: the fastest ICC colour
 engine in JavaScript — 3.2–3.6× `lcms-wasm` on every LUT workflow, with
 pure JS landing within 0.78–1.08× of single-threaded native C —
 accuracy-validated against LittleCMS oracles (100 % within 1 LSB on the
@@ -23,19 +23,28 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-08-19):** v1.5.0 committed but not yet released —
-kernel modules, DeviceLink, N-channel, the `Transform.js` split into
-`stages.js` + `interp.js`, and an opt-in **beta** pixel cache
-(`pixelCache`, accuracy path only). 518 tests, audit clean.
+**Current state (2026-08-19):** v1.5.0 — kernel modules, DeviceLink,
+N-channel, the `Transform.js` split into `stages.js` + `interp.js`, and
+an opt-in **beta** pixel cache (`pixelCache`, accuracy path only). 518
+tests, audit clean.
 
-Native-lcms throughput tables are being re-measured: upstream review
-(issue #6, Marti Maria) corrected the accuracy oracle, and our own flag
-sweep found `-march=native` was *handicapping* lcms, which reverses one
-published row. `docs/LcmsComparison.md` carries an empty release-comparison
-template waiting on that run.
+The LittleCMS comparison has been **fully re-measured** and is complete
+in `docs/LcmsComparison.md`: corrected inputs, one process per
+measurement, lcms given its best compiler flags per workflow, and CLUT
+coverage reported beside adjacency on every row. Reproduce the whole
+thing with `node bench/reproduce.js`. Four corrections to our own
+earlier figures are on the record there — three of which had been
+flattering us.
 
-Measured but not shipped: the pixel cache in the image kernels
-(4D POC, break-even ~10 %) and multicore (POC at 5.46×, design in
+The measurement work also produced findings that change how the engine
+should be *measured* rather than anything about the engine itself —
+coverage vs access ordering, and noise as the great equaliser. Those are
+`deepdive/benchmark.md` §§20–21, and they are the brief for the browser
+bench rebuild.
+
+Measured but not shipped, in priority order: the **fused matrix-shaper
+WASM kernel** (POC 250–257 MPx/s — closes the one workflow where native
+C leads) and **multicore** (POC 5.46×, design in
 `deepdive/multicore.md`). Both are v1.5.5.
 
 ## Documentation index — `docs/`
@@ -135,10 +144,14 @@ and a LUT becomes a kernel; the accuracy-path vs image-path split and
 the anti-patterns that mix them.
 
 ### deepdive/benchmark.md
-The "1.7× mystery" investigation: why the same kernel measured 100 vs
-200 MPx/s — V8 call-site polymorphism, inlining, and the named
-principle **Schrödinger's Bench** (a shared benchmark harness changes
-what it measures). Patterns/anti-patterns for app developers.
+How to measure a colour engine without fooling yourself — the longest
+running thread in the repo. The "1.7× mystery" and **Schrödinger's
+Bench** (a shared harness changes what it measures); then §20, the two
+ways a degenerate input lied (256 distinct colours at 0 % adjacency) and
+why CLUT coverage must be reported beside it; then §21, **noise as the
+great equaliser** — 2–5 % noise collapses every content class onto the
+same figure, which is where the old 210 MPx/s claim came from and why it
+was real but narrow. Read before designing any new bench.
 
 ### deepdive/benchmark_todo.md
 Live worklist for the new browser benchmark framework

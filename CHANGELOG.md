@@ -200,6 +200,40 @@ benchmark whose input cannot be obtained is not reproducible, and
 `bench/` is excluded from the npm tarball, so this costs consumers
 nothing. The decoded `corpus/` planes stay gitignored as derived data.
 
+### Docs — what the measurement work established (no code change)
+
+Chasing the generator defect turned into a study of what a colour
+benchmark is actually measuring. None of it changed the engine; all of
+it changes how the engine should be measured, so it is recorded in
+[deepdive/benchmark.md](./docs/deepdive/benchmark.md) §§20–21 as the
+brief for the browser-bench rebuild.
+
+- **CLUT coverage is necessary but not sufficient — ordering costs
+  more.** The `sweep` generator produces the same ~1 M distinct colours
+  and the same 0.0 % adjacency as `noise`, and runs **2.1× faster**
+  (190.3 vs 89.0 MPx/s) purely because the accesses are predictable.
+  A rainbow ramp is a weaker test than the bug that was just removed,
+  while looking more rigorous.
+- **Noise is the great equaliser.** Blending any content 2–5 % toward
+  noise collapses every content class onto the same figure: solid,
+  gradient and photo start at 182 / 183 / 119 MPx/s and all land at
+  ~98. The clean synthetic rows were the outliers, not the photo row.
+- **Where the old 210 MPx/s came from.** It was never fake — it is a
+  real figure for flat graphic content with a small palette (UI, vector
+  art, logos), not for photographs (109–121) and not even for a scanned
+  illustration (132).
+- **lcms's memo cache is a cliff, not a curve.** From solid colour,
+  1 % noise takes adjacency from 100 % to 4.2 % and `lcms-wasm` from
+  92.0 to 33.7 MPx/s. The `NOCACHE` column shows no cliff, confirming
+  the attribution.
+- **A shared defect is not a neutral one.** The bad input reached every
+  engine equally but did not affect them equally — jsCE's SIMD tier
+  lost 39–54 % on a corrected input where `lcms-wasm` lost 3–26 %, so
+  the old *ratios* were overstated by 24–52 %, not just the MPx/s.
+
+Two charts are committed as SVG and regenerate from harness output via
+`plot_noise_curve.cjs` / `plot_noise_bases.cjs`.
+
 ### Added — `bench/reproduce.js` — one command for the whole comparison
 
 Runs all seven phases behind
