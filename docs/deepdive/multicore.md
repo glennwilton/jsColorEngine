@@ -277,24 +277,28 @@ vector on a hit). Elegant, but it still adds a branch to the hot path
 of the fastest kernel we have, to serve content that the scalar path
 already handles. Not doing it.
 
-## API sketches (undecided)
+## API shape
+
+Settled by the dispatcher section below: one call takes 1..n images and
+the planner decides per image whether to slice it or run it whole.
 
 ```js
-// A — option on the existing call, degrades silently
-transform.transformArray(pixels, ..., { workers: 4 });
-
-// B — explicit pool, lifecycle visible, reusable across images
-const pool = await jsColorEngine.createPool({ workers: 4 });
-await pool.transformArray(transform, pixels, ...);
+const pool = await jsColorEngine.createPool({ workers: 'auto' });
+await pool.transformImages(transform, [img1, img2, ...]);
 pool.release();
-
-// C — auto
-workers: 'auto'   // navigator.hardwareConcurrency / os.cpus().length, capped
 ```
 
-B is the honest one: worker pools have a lifecycle and pretending
-otherwise leaks. A is what people will want. Possibly A delegating to a
-lazily-created default pool, with B available when control matters.
+An explicit pool rather than a hidden one, because worker pools have a
+lifecycle and pretending otherwise leaks. A convenience wrapper over a
+lazily-created default pool can sit on top for the single-image case:
+
+```js
+transform.transformArray(pixels, ..., { workers: 'auto' });
+```
+
+`workers` accepts a number, `'max'` (reported count, falling back to 4
+when the runtime reports nothing) or `'auto'` (a fraction of reported,
+floor of 4, then capped by the measured slice rule).
 
 ## Getting the LUT to the workers
 
@@ -406,7 +410,7 @@ The memory objection is smaller than it appears — `workers + 1` images
 need to be resident, not the whole batch, so lazy loading as workers
 free up keeps the peak bounded.
 
-### The unified dispatcher — one queue, one task shape
+## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task
 uniform:
@@ -498,18 +502,11 @@ sits once worker spin-up is counted.
 7. Does the imported-memory change cost anything single-threaded?
    (Model B only.)
 
-## First experiment
+## First experiment — done
 
-Nothing here needs the engine modified. A standalone bench can answer
-questions 1, 3 and 5 today:
+Run, and written up under MEASURED above. `bench/multicore_poc/` is the
+harness; it needed no engine changes and uses the public API only.
 
-- split a large image into N `ArrayBuffer`s
-- N workers, each with its own `Transform` built from the same LUT JSON
-- transfer in, convert with the existing `transformArray`, transfer out
-- reassemble, verify byte-identical against a single-threaded run,
-  report MPx/s at 1/2/4/8 workers
-
-If that shows near-linear scaling, the design above is worth building.
-If it does not, the reason will be visible before anything is committed
-to — and the same harness measures Model A's copy overhead directly,
-which is the number the whole choice turns on.
+Outcome in one line: **5.46x peak, byte-identical, and Model B is
+probably never worth building** because the copies it would eliminate
+cost only 4-7%.
