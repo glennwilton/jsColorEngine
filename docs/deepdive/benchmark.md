@@ -1541,10 +1541,76 @@ Two practical consequences:
   the three, so it has the most to gain from locality and the most to
   lose without it.
 
-Both generators (`sweep`, `noisy:N`) are kept in the harness. The chart
-regenerates with `plot_noise_curve.cjs`; the shape is expected to be
-processor-dependent, since it is ultimately a cache-hierarchy
-measurement.
+### Every starting content converges on the same answer
+
+The photograph sweep raises an obvious follow-up: does the *starting*
+content matter, or does everything end up in the same place? `noisy` can
+blend from any base, so this is directly answerable — `solid`,
+`gradient` and `photo`, all blended toward the identical noise buffer.
+
+![Three starting contents blended toward the same noise](./images/noise-locality-bases.svg)
+
+RGB → Lab, 1 M px:
+
+| base | 0 % noise | 1 % | 2 % | 100 % |
+|---|---:|---:|---:|---:|
+| **jsCE WASM SIMD** | | | | |
+| from `solid` | 181.8 | 108.7 | 98.9 | 97.6 |
+| from `gradient` | 183.2 | 106.4 | 98.8 | 98.6 |
+| from `photo` | 119.1 | 102.2 | 96.0 | 97.7 |
+| **lcms-wasm** | | | | |
+| from `solid` | **92.0** | **33.7** | 32.7 | 31.2 |
+| from `gradient` | 64.8 | 31.9 | 31.4 | 30.8 |
+| from `photo` | 35.6 | 32.9 | 32.6 | 31.2 |
+
+**Three starting points spanning 182 / 183 / 119 MPx/s agree to within a
+few per cent once 2 % noise is added.** The differences between content
+types — the entire content axis this project has spent so long
+measuring — are largely an artifact of unrealistically clean input, not
+a property of the engines. Beyond a few per cent of noise, content
+almost stops mattering.
+
+Two mechanisms are visible and they are not the same mechanism:
+
+- **lcms falls off a cliff, from 92.0 to 33.7 at one per cent noise.**
+  That is the memo cache, and the cause is in the adjacency column, not
+  the colour count: 1 % noise takes adjacency from 100 % to 4.2 %. The
+  `NOCACHE` column shows no cliff at all, which confirms it.
+- **jsCE falls too, 181.8 → 108.7, with only 36 distinct colours in the
+  buffer.** That cannot be working set — 36 colours is trivially
+  L1-resident — so a third mechanism is in play, most plausibly branch
+  predictability in tetrahedron selection: one colour means one
+  tetrahedron and a perfectly predicted branch, 36 colours means a
+  mispredicting one. Worth confirming with counters before it is stated
+  as fact.
+
+### What this means for designing a benchmark
+
+The whole episode is one lesson repeated at three scales, and it is
+worth stating plainly for whoever designs the next harness:
+
+1. **Adjacency measures the memo cache. Coverage measures whether the
+   table was touched. Neither measures access order, and order costs
+   more than either.** Report all three, or accept that a number is
+   unattributable.
+2. **A clean synthetic input measures the generator, not the
+   transform.** `solid`, `gradient` and `sweep` at 0 % noise are all
+   L1-resident in different ways, and all three flatter whichever engine
+   is most memory-bound.
+3. **Sweep a curve, do not quote a point.** A single figure cannot
+   distinguish "fast engine" from "easy input"; the shape of a
+   noise sweep can, because the plateau is the transform and the
+   left-hand end is the content.
+4. **The interesting region is 0–5 % noise.** Beyond that everything is
+   flat, so a benchmark spending its time at 50 % and 100 % is
+   measuring the same thing repeatedly.
+5. **Expect it to be processor-dependent.** This is ultimately a
+   cache-hierarchy measurement; the knee position is a property of this
+   Ryzen's L1/L2, not of colour management.
+
+All three generators (`sweep`, `noisy:<base>:<n>`, and the corrected
+`noise`) are kept in the harness, and both charts regenerate from run
+output via `plot_noise_curve.cjs` and `plot_noise_bases.cjs`.
 
 ### The defect was shared, but it was not neutral
 

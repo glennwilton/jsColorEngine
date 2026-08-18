@@ -148,7 +148,7 @@ it is the only mode whose rows can be compared.
 | `solid` | one colour everywhere — the cache ceiling | 100 % |
 | `photo` | the decoded corpus, tiled | ~17 % (corpus mean) |
 | `sweep` | ordered walk of the colour cube — same coverage as `noise`, opposite locality | 0.0 % |
-| `noisy:N` | photo blended N % toward `noise`; 0 = photo, 100 = noise, deterministic | varies |
+| `noisy:<base>:<n>` | any base blended n % toward `noise` — base ∈ photo·gradient·solid·blocks16·sweep, deterministic, endpoints exact | varies |
 
 The synthetic four bracket the cache — nothing at one end, everything at
 the other — but no real image sits at either. That is what the photo row
@@ -218,3 +218,29 @@ overstated by 24–52 %, not just the MPx/s. Detail:
 
 Keep the flag. The next time a harness change moves the numbers, this is
 how you find out whether it moved them evenly.
+
+## Sweeping locality instead of quoting a point
+
+`noisy:<base>:<n>` blends any base content toward the noise buffer, so
+locality can be swept as a curve rather than sampled at one arbitrary
+content:
+
+```bash
+node run.js --isolate --sizes 1048576 --workflows Lab \
+  --content "noisy:solid:0,noisy:solid:1,noisy:solid:2,noisy:solid:5,noisy:solid:10,noisy:solid:100"
+
+node plot_noise_bases.cjs ../../docs/deepdive/images/noise-locality-bases.svg "RGB -> Lab" \
+  photo=curve_photo.txt gradient=curve_gradient.txt solid=curve_solid.txt
+```
+
+`--workflows` takes a substring (`Lab`, `CMYK -> CMYK`), because a sweep
+of ten points should not pay for six workflows it is not asking about.
+
+**What it showed.** Three bases starting at 182 / 183 / 119 MPx/s
+converge to within a few per cent once 2 % noise is added — so most of
+the apparent difference between content types is unrealistically clean
+input rather than anything about the engines. lcms drops off a cliff
+(92.0 → 33.7 at 1 % noise) as its memo cache stops hitting; jsCE drops
+for a different reason entirely. Detail and the benchmark-design rules
+that follow from it:
+[deepdive/benchmark.md](../../docs/deepdive/benchmark.md#every-starting-content-converges-on-the-same-answer).

@@ -84,6 +84,10 @@ const PIXEL_CACHE  = process.argv.indexOf('--pixelcache') !== -1;
 const CELL         = argString('cell', null);
 const ISOLATE      = process.argv.indexOf('--isolate') !== -1;
 const LEGACY_NOISE = process.argv.indexOf('--legacy-noise') !== -1;
+// --workflows RGB -> Lab,CMYK -> CMYK  — substring match, so --workflows Lab is enough.
+// Content sweeps need many points; without this every point pays for six
+// workflows it is not asking about.
+const WORKFLOW_FILTER = argString('workflows', null);
 const TIMED_BATCHES = 5;
 const TARGET_BATCH_MS = 400;
 const WARMUP_MS       = 800;   // TurboFan tier-up; longer than the C harness needs
@@ -236,30 +240,52 @@ function loadSingleImage(stem, channels) {
 // locality can be plotted as a curve rather than inferred from two points.
 // It is also a realistic axis: film grain, dithering, sensor noise and heavy
 // JPEG artefacts all push a real image along it.
-// Blends the photo plane against the SAME noise buffer the `noise` row uses,
-// so the endpoints are exact: noisy:0 is byte-identical to `photo`, noisy:100
-// is byte-identical to `noise`. Fully deterministic, no per-call PRNG state,
-// and every intermediate point is a straight lerp between two known rows.
-function genNoisy(buf, npx, channels, percent) {
-    const src = photoPlane[channels];
-    const have = (src.length / channels) | 0;
+// Blends ANY base content against the SAME noise buffer the `noise` row uses,
+// so both endpoints are exact: `noisy:photo:0` is byte-identical to `photo`
+// and `noisy:<any>:100` is byte-identical to `noise`. Deterministic, no
+// per-call PRNG state, every intermediate point a straight lerp between two
+// rows that already appear in the tables.
+//
+// The base matters as much as the noise level, because each base starts from a
+// different mechanism:
+//   photo     natural locality      -> shows how fragile that locality is
+//   gradient  minimal CLUT pressure -> isolates locality with no cache effects
+//   solid     100% memo-cache hits  -> shows lcms's cache as a cliff, not a curve
+// Sweeping from each reveals which effect is being measured, which a single
+// number never can.
+function genNoisy(buf, npx, channels, base, percent) {
     const t = Math.max(0, Math.min(100, percent)) / 100;
+
+    const src = new Uint8ClampedArray(npx * channels);
+    buildBase(base, src, npx, channels);
 
     const noise = new Uint8ClampedArray(npx * channels);
     genNoise(noise);
 
-    for (let p = 0; p < npx; p++) {
-        const s = (p % have) * channels, o = p * channels;
-        for (let c = 0; c < channels; c++) {
-            buf[o + c] = Math.round(src[s + c] * (1 - t) + noise[o + c] * t);
-        }
+    for (let i = 0; i < src.length; i++) {
+        buf[i] = Math.round(src[i] * (1 - t) + noise[i] * t);
+    }
+}
+
+function buildBase(base, buf, npx, channels) {
+    switch (base) {
+        case 'gradient': genGradient(buf, npx, channels); break;
+        case 'blocks16': genBlocks16(buf, npx, channels); break;
+        case 'solid':    genSolid(buf, npx, channels); break;
+        case 'sweep':    genSweep(buf, npx, channels); break;
+        case 'noise':    genNoise(buf); break;
+        default:         genPhoto(buf, npx, channels); break;
     }
 }
 
 function buildContent(kind, npx, channels) {
+    // noisy:<pct>  or  noisy:<base>:<pct>   (base defaults to photo)
     if (kind.startsWith('noisy:')) {
+        const parts = kind.split(':');
+        const base    = parts.length === 3 ? parts[1] : 'photo';
+        const percent = Number(parts[parts.length - 1]);
         const buf = new Uint8ClampedArray(npx * channels);
-        genNoisy(buf, npx, channels, Number(kind.slice(6)));
+        genNoisy(buf, npx, channels, base, percent);
         return buf;
     }
     if (kind.startsWith('image:')) {
@@ -476,6 +502,8 @@ function runIsolated() {
         console.log('='.repeat(104));
 
         for (let w = 0; w < WORKFLOWS.length; w++) {
+            if (WORKFLOW_FILTER && !WORKFLOWS[w].name.toLowerCase()
+                    .includes(WORKFLOW_FILTER.toLowerCase())) continue;
             const shape = clutCells(WORKFLOWS[w]);
             console.log('\n ' + WORKFLOWS[w].name +
                 (shape ? '   CLUT ' + shape.grid.join('x') + ' = ' + shape.cells.toLocaleString() + ' cells' : ''));
