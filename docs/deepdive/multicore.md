@@ -427,16 +427,17 @@ than it sounds, not more complex.
 The planner is pure, synchronous, and runs once per batch:
 
 ```js
-function plan(images, workers, minSlice = 65536) {
+function plan(images, workers, capacity = 262144, minSlice = 16384) {
     const tasks = [];
     for (let i = 0; i < images.length; i++) {
         const px = images[i].pixelCount;
-        // MEASURED CORRECTION: capping at the worker count is the WORST
-        // configuration -- one task per worker leaves a slow task with
-        // nothing to overlap, costing 30-48%. Over-decompose instead and
-        // let the queue balance it. See MEASURED, per-task overhead.
-        const slices = Math.min(Math.max(1, Math.floor(px / minSlice)), workers * 6);
-        const per = Math.ceil(px / slices / 64) * 64;          // 64-px aligned
+        // MEASURED: one task per worker is the WORST configuration -- a slow
+        // task lands last with nothing to overlap it, costing 30-48%. Aim for
+        // ~10 tasks per worker instead, clamped by what a worker's buffer can
+        // hold and by a floor that keeps per-task overhead under ~1%.
+        // See "The buffer is a ceiling, not a quantum".
+        const wanted = Math.ceil(px / (workers * 10));
+        const per = Math.ceil(Math.min(capacity, Math.max(minSlice, wanted)) / 64) * 64;
         for (let start = 0; start < px; start += per) {
             tasks.push({ imageIndex: i, start, length: Math.min(per, px - start) });
         }
@@ -605,6 +606,58 @@ planner heuristic to get wrong.
 16-worker pool at **~28 MB resident** rather than ~190 MB. The earlier
 5 MB estimate was ~10× too large, and the cost of getting it wrong is
 paid in memory rather than speed — which is the easier mistake to miss.
+
+### The buffer is a ceiling, not a quantum
+
+Fixed chunks over-decompose large images automatically, which is their
+main virtue. They do the opposite on small ones: a 2 MP image at 256 K
+px/chunk is 8 tasks, so on an 8-worker pool every worker gets exactly
+one — the configuration already shown to be the worst. Cutting *only* at
+chunk boundaries reintroduces the problem the chunk size was meant to
+avoid.
+
+Measured, 2 MP through **8** workers:
+
+| tasks | per worker | px/task | best ms | MPx/s |
+|---:|---:|---:|---:|---:|
+| 8 | 1 | 262 K | 10.8 | 194.5 |
+| 16 | 2 | 131 K | 9.7 | 217.0 |
+| 24 | 3 | 87 K | 8.4 | 249.7 |
+| **96** | **12** | **22 K** | **7.6** | **275.9** |
+| 192 | 24 | 11 K | 8.3 | 252.9 |
+
+**One task per worker costs 30 %** against ~12 tasks per worker. Note
+also that the best slice here is 22 K px — *below* the 32 K figure the
+4-worker sweep suggested. The useful task size is not a constant: it
+falls as worker count rises, because balancing needs more pieces.
+
+The fix is to treat the fixed buffer as **maximum capacity, not a unit
+of work**. A worker's buffer never has to be full, so pick the slice
+length from the image and the pool, then clamp it to what the buffer can
+hold:
+
+```js
+// K ~ 8-12 measured; minSlice keeps per-task overhead under ~1%
+function sliceLength(px, workers, chunkCapacity, K = 10, minSlice = 16384) {
+    const wanted = Math.ceil(px / (workers * K));
+    return Math.min(chunkCapacity, Math.max(minSlice, wanted));
+}
+```
+
+Which behaves correctly across the range:
+
+| image | slice chosen | tasks (8 workers) | why |
+|---|---|---:|---|
+| 20 MP | 250 K → capped at 256 K | 80 | capacity binds; over-decomposed anyway |
+| 2 MP | 26 K | 80 | pool binds; spreads across all workers |
+| 500 K px | 16 K (floor) | 31 | floor binds; overhead stays under 1 % |
+| 100 K px | 16 K (floor) | 6 | below the parallel floor entirely — run it on the calling thread |
+
+This keeps every benefit of fixed allocation — buffers sized once, never
+grown, never reclaimed — while removing the only case where fixed chunks
+lose to dynamic slicing. The planner stays a pure function of
+`(px, workers, capacity)`, with no image inspection and nothing to tune
+per workload.
 
 **The grow-only variant** is worth including as a third arm: start each
 worker small, let its buffer grow to the high-water mark, never shrink,
