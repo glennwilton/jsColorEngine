@@ -307,16 +307,16 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--photo-dir") && i + 1 < argc) photo_dir = argv[++i];
         else if (!strcmp(argv[i], "--sizes") && i + 1 < argc) {
             n_sizes = 0;
-            char *tok = strtok(argv[++i], ",");
-            while (tok && n_sizes < MAX_SIZES) { sizes[n_sizes++] = (size_t)strtoull(tok, NULL, 10); tok = strtok(NULL, ","); }
+            char *save; char *tok = strtok_r(argv[++i], ",", &save);
+            while (tok && n_sizes < MAX_SIZES) { sizes[n_sizes++] = (size_t)strtoull(tok, NULL, 10); tok = strtok_r(NULL, ",", &save); }
         }
         else if (!strcmp(argv[i], "--content") && i + 1 < argc) {
             content_mask = 0;
-            char *tok = strtok(argv[++i], ",");
+            char *save; char *tok = strtok_r(argv[++i], ",", &save);
             while (tok) {
                 for (int k = 0; k < C_COUNT; k++)
                     if (!strcmp(tok, CONTENT_NAME[k])) content_mask |= (1 << k);
-                tok = strtok(NULL, ",");
+                tok = strtok_r(NULL, ",", &save);
             }
             if (!content_mask) content_mask = (1 << C_COUNT) - 1;
         }
@@ -371,8 +371,11 @@ int main(int argc, char **argv) {
                 if (height < 1) height = 1;
                 npx = (size_t)width * (size_t)height;
 
-                uint8_t *in  = malloc(npx * (size_t)wf->in_ch);
-                uint8_t *out = malloc(npx * (size_t)wf->out_ch);
+                if (npx > SIZE_MAX / (size_t)wf->in_ch || npx > SIZE_MAX / (size_t)wf->out_ch) {
+                    fprintf(stderr, "size overflow\n"); return 2;
+                }
+                uint8_t *in  = calloc(npx, (size_t)wf->in_ch);
+                uint8_t *out = calloc(npx, (size_t)wf->out_ch);
                 if (!in || !out) { fprintf(stderr, "malloc failed\n"); return 2; }
                 build_content((content_t)k, in, npx, wf->in_ch);
                 if (adj < 0.0) adj = adjacency(in, npx, wf->in_ch) * 100.0;
