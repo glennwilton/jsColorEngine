@@ -1030,6 +1030,77 @@ per (worker, LUT) pair rather than per task.
 Which makes the signature work do a job it was not designed for, and is
 a reason to prefer it over an ad-hoc pool-per-Transform shortcut.
 
+## How lcms does it, and where the batch queue wins
+
+Worth reading the reference implementation before claiming a design is
+better. lcms's `threaded` plugin is vendored under
+`bench/lcms_c/lcms2-2.18/plugins/threaded/`, and it makes two choices
+that differ from everything measured above.
+
+**It splits evenly, one slice per thread** (`threaded_split.c`):
+
+```c
+// Each thread takes 128K at least
+WorkerCount = (MaxInputMem + MaxOutputMem) / (128 * 1024);
+if (WorkerCount < 1) WorkerCount = 1;
+else if (WorkerCount > MaxWorkers) WorkerCount = MaxWorkers;   // = CPU count
+```
+
+So any image larger than ~128 KB × nCPUs is cut into exactly nCPUs
+slices — the configuration measured here at 30–48 % off on homogeneous
+hardware and **2.6× off when cores are uneven**. Their 128 KB per-thread
+floor is worth noting as independent agreement, though: for RGB→CMYK
+that is ~18 K px, and we arrived at 16 K by a different route.
+
+**It creates threads per call and joins before returning**
+(`threaded_scheduler.c` — `_cmsThrJoinWorker` in a loop). There is no
+persistent pool, and **every image ends with a barrier.**
+
+Both choices are reasonable for what lcms is: a library whose API is
+"convert this buffer", called once per image, in C where spawning a
+thread costs tens of microseconds rather than the ~8 ms a JS worker
+costs. Neither is a mistake in context. But both are avoidable when the
+API accepts a *batch*.
+
+### MEASURED — what the per-image barrier costs
+
+`bench/multicore_poc/batch_barrier.js`, identical work either way:
+**BARRIER** plans, dispatches and joins each image in turn; **MERGED**
+puts every image's tasks in one queue with no image boundaries. 8
+workers, `lutMode:'int'`:
+
+| batch | barrier | merged | merged faster by |
+|---|---:|---:|---:|
+| 20 × 0.1 MP | 11.66 ms | 7.27 ms | **37.6 %** |
+| 7 × mixed, 0.15–8.4 MP | 63.33 ms | 59.53 ms | 6.0 % |
+| 4 × 2 MP | 32.90 ms | 30.62 ms | 6.9 % |
+
+**The gap tracks how badly each image fills the pool.** A 0.1 MP image
+produces about seven tasks for eight workers, so a barrier leaves a
+worker idle for the whole image and repeats that twenty times — 37.6 %
+of the run. Large images produce enough tasks to keep everyone busy, so
+the barrier only costs the ragged tail of each one, and merging buys the
+~6–7 % that tail is worth.
+
+Which makes the batch API a genuine structural advantage rather than
+API sugar:
+
+- **A worker finishing image 1 starts on image 3 immediately.** There is
+  nothing to wait for, because the queue has no image boundaries in it.
+- **Small images stop being a problem.** Individually they cannot fill a
+  pool; collectively they always can. This is the case a per-image
+  threading model cannot fix from inside, no matter how well it splits.
+- **Sorting across the whole batch actually helps here.** Within a
+  single image the LPT sort sees equal-length slices and contributes
+  nothing; across a mixed batch the lengths genuinely differ, so the big
+  slices go first and the small ones backfill the tail. It is the same
+  sort doing real work only once it can see more than one image.
+
+The honest limit: on a batch of uniformly large images the advantage is
+~6 %, because a barrier costs little when every image saturates the pool
+on its own. The 37 % case is a batch of thumbnails, which is also a very
+common workload — contact sheets, web pipelines, catalogue processing.
+
 ## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task
