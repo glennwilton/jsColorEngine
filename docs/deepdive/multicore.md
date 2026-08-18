@@ -715,7 +715,7 @@ const t = new Transform({
 | `minSlicePx` | `16384` | never cut smaller than this | keeps per-task overhead (~7 µs) under ~1 % of a task |
 | `parallelFloorPx` | `65536` | total pixels below which the work runs on the calling thread | measured floor where splitting stops paying at all |
 | `keepAlive` | `true` | reuse the pool between batches; `false` tears it down after each | per-batch spin-up costs 66.5 ms every time — ten batches would burn 665 ms re-creating pools that repay in 3.5 MP each |
-| `idleTimeoutMs` | `30000` | tear the pool down after this long idle, rebuild on demand | spin-up is 66.5 ms and repays in 3.5 MP, so rebuilding is nearly free and bounds the damage from a caller who never releases |
+| `idleTimeoutMs` | `30000` | tear the pool down after this long idle; **`0` or `Infinity` = never expire**, hold until `releaseWorkers()` — the right setting for an interactive app that wants workers warm before the first slider drag | spin-up is 66.5 ms and repays in 3.5 MP, so rebuilding is nearly free and bounds the damage from a caller who never releases |
 | `allocation` | `'fixed'` | `'fixed'` \| `'dynamic'` \| `'grow'` | fixed slots remove `Memory.grow()` and the reclaim path from the hot loop; the other two remain for the jitter comparison that is still unmeasured |
 
 Notes that matter more than the table:
@@ -847,21 +847,54 @@ on the caller:
 with `keepAlive: false` available for the memory-constrained case that
 genuinely wants teardown after every batch.
 
+**`idleTimeoutMs: 0` means never expire** — hold the pool until an
+explicit `releaseWorkers()`. That is the right setting for an
+interactive application: a photo editor wants the workers spun up, the
+LUT already shipped and the kernels already warm *before* the user
+touches a slider, because the 66.5 ms spin-up is invisible at load time
+and very visible mid-drag. Same for a long-lived server process handling
+a stream of requests.
+
+The value is deliberately unambiguous in the docs because it reads both
+ways: **0 means "no timeout", not "time out immediately"**. `Infinity`
+is accepted as a synonym for callers who find that clearer, and
+`keepAlive: false` remains the way to ask for teardown after every
+batch. A caller setting `idleTimeoutMs: 0` is opting into holding
+~15–20 MB and eight parked threads until they say otherwise, which is a
+reasonable trade for interactive latency and a poor one for a CLI that
+converts a single file.
+
 **A "release when the Transform closes" watcher cannot be layer 1**, for
 the reason measured above: there is no reliable close event in
 JavaScript. `FinalizationRegistry` can *log* that it happened, which is
 worth having as a diagnostic, but the timer is what actually reclaims.
 
-### Pool ownership is the bigger question
+### One machine, one pool
 
 Per-`Transform` pools are the obvious design and the wrong one: ten
 Transforms would mean eighty workers, each with its own WASM instance
 and slot buffers — hundreds of megabytes and heavy oversubscription for
-what is still one CPU.
+what is still **one CPU**. Threads do not become more parallel by being
+owned by different objects; they just contend.
 
-The pool should therefore be **shared and reference-counted**, keyed by
-`(cores, lutMode)`, with each `Transform` holding a lease rather than a
-pool. Released on the last lease, or on idle timeout.
+So the pool is a **process-level singleton**, not a member of anything:
+shared, reference-counted, keyed by `(cores, lutMode)`, with each
+`Transform` holding a *lease* rather than a pool. The hardware is the
+thing being modelled, and there is only one of it.
+
+Consequences worth stating, because they are easy to get wrong:
+
+- **`releaseWorkers()` drops a lease, it does not kill the pool.** The
+  pool goes away on the last lease or on idle timeout. One Transform
+  finishing must never strand another mid-batch.
+- **Concurrent batches from different Transforms share the queue.** That
+  is correct — it is one machine — and it means fairness is a queue
+  property, not something each Transform can decide for itself.
+- **`cores` is resolved once, by the first lease.** A second Transform
+  asking for a different worker count gets the existing pool, not a
+  second one; changing it should require the pool to drain. Silently
+  honouring both would recreate exactly the oversubscription this
+  design exists to avoid.
 
 That raises one real problem: a worker holds a `Transform` rebuilt from
 *one* LUT, so a shared pool has to serve several. The existing portable
