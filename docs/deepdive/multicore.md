@@ -1165,22 +1165,42 @@ Two things that probe taught, both now guarded:
   itself keeps the typed arrays exact, which is what makes
   byte-identity achievable rather than merely "close".
 
-### Mode 2 — ship the profiles (not built)
+### Mode 2 — ship the profiles (not built, but cheaper than it looks)
 
 Send the ICC bytes and the chain, and let each worker run `create()`.
-Costs a profile parse plus a pipeline build — and, in LUT mode, a full
-LUT bake — per worker, so roughly 25 ms each, paid once per pool.
+The obvious objection is cost — and measured, there is almost none:
 
-Worth building, because it reaches what Mode 1 cannot:
+| step | cost |
+|---|---:|
+| profile bytes on the wire | 2,684 KB |
+| profile parse | 12.3 ms |
+| **`create()` with `buildLut: false`** | **0.08 ms** |
+| `create()` with `buildLut: true` | 7.0 ms |
+
+**Building a pipeline without a LUT is essentially free** — no bake, no
+heavy maths, and deterministic, so every worker independently builds the
+identical thing. The whole per-worker cost is the profile parse, ~12.4 ms
+including the build, and those run in parallel across workers. That is
+*less than the 66.5 ms pool spin-up already being paid*.
+
+Which makes Mode 2 reach everything Mode 1 cannot, for no meaningful
+extra cost:
 
 - **The LUT-free accuracy path** (`buildLut: false`) runs at ~5–9
   MPx/s. A 20 MP image is ~3 seconds single-threaded, so this is where
-  8× is worth the most — and there is no LUT to ship, so Mode 1 cannot
-  serve it at all.
-- **N-channel and anything else pipeline-driven**, without needing the
-  probe to bless it.
-- **No equivalence question.** The worker reproduces `create()` exactly,
-  so there is nothing to prove.
+  8× is worth most — and there is no LUT to ship, so Mode 1 cannot serve
+  it at all.
+- **N-channel and anything else pipeline-driven**, with no probe needed.
+- **No equivalence question whatsoever.** The worker runs the same
+  `create()` on the same bytes and gets the same Transform by
+  construction. Nothing to prove, nothing to fail closed on.
+
+On the evidence, **Mode 2 should probably become the primary hand-off
+and Mode 1 the optimisation**, rather than the other way round — Mode 1
+is worth keeping only where the LUT is materially smaller than the
+profiles, or where the profiles are no longer available (a Transform
+restored from a portable LUT has no profiles to send). The probe then
+stops being a correctness guard and becomes a routing hint.
 
 ### Mode 3 — clone the pipeline (rejected)
 
@@ -1689,7 +1709,16 @@ sits once worker spin-up is counted.
    server, a phone — to check that the *rule* transfers even though the
    *numbers* do not. If the derived `tasksPerWorker` lands outside 4–16
    anywhere, the model is missing a term.
-9. **How much do heterogeneous cores widen the variance, and does SIMD
+9. **Should Mode 2 replace Mode 1 as the default hand-off?** Measured,
+   `create()` without a LUT costs 0.08 ms and the whole per-worker cost
+   is the profile parse (~12.4 ms, in parallel, against a 66.5 ms
+   spin-up already being paid). That would remove the equivalence probe
+   entirely and unlock the accuracy path, which is where parallelism is
+   worth most. The open part is what to do when the profiles are gone —
+   a Transform restored from a portable LUT has none to send — so the
+   answer is probably "Mode 2 when profiles are available, Mode 1 when
+   only a LUT is", with the probe demoted from guard to routing hint.
+10. **How much do heterogeneous cores widen the variance, and does SIMD
    suffer more?** Every measurement here is from a homogeneous Zen 4
    part. On an Intel P/E or Apple Silicon machine the prediction is that
    core-type variance is *larger for the SIMD kernel* than the JS one,
