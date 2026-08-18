@@ -406,6 +406,71 @@ The memory objection is smaller than it appears — `workers + 1` images
 need to be resident, not the whole batch, so lazy loading as workers
 free up keeps the peak bounded.
 
+### The unified dispatcher — one queue, one task shape
+
+The two modes above should not be two implementations. Make the task
+uniform:
+
+```js
+{ imageIndex, start, length }      // a whole image is just start=0, length=all
+```
+
+and the worker never knows which mode it is in. The split/whole
+distinction lives **only in the planner**, which means this design
+*removes* a code path rather than adding one — the reason it is simpler
+than it sounds, not more complex.
+
+The planner is pure, synchronous, and runs once per batch:
+
+```js
+function plan(images, workers, minSlice = 65536) {
+    const tasks = [];
+    for (let i = 0; i < images.length; i++) {
+        const px = images[i].pixelCount;
+        // measured rule: never make a slice smaller than minSlice, and
+        // never use more slices than there are workers
+        const slices = Math.max(1, Math.min(Math.floor(px / minSlice), workers));
+        const per = Math.ceil(px / slices / 64) * 64;          // 64-px aligned
+        for (let start = 0; start < px; start += per) {
+            tasks.push({ imageIndex: i, start, length: Math.min(per, px - start) });
+        }
+    }
+    // longest-processing-time-first: dispatch big tasks early so the tail
+    // does not end with one long task and idle workers
+    return tasks.sort((a, b) => b.length - a.length);
+}
+```
+
+That is the whole "smart" part — a pure function, trivially unit
+testable, no async, no I/O. Glenn's 128 K example falls straight out:
+`floor(131072 / 65536) = 2`, so it takes two workers and leaves the
+other two for the next image in the batch.
+
+The LPT sort is worth the one line. Without it a long task can be
+dispatched last and every other worker sits idle waiting for it; it is
+the standard makespan heuristic and costs nothing at this scale.
+
+**Where to stop.** Plan once, flat queue, workers pull the next task
+when they finish. Do *not* add dynamic re-planning, cost models, or
+cross-image work stealing beyond the queue pull — none of it is
+justified by anything measured, and each would make the scheduler
+harder to reason about than the kernels it is feeding.
+
+Two things the planner still owns:
+
+- **Reassembly.** Each task carries `imageIndex` and `start`, so a
+  finished slice knows exactly where to write. Whole-image tasks use the
+  same path with `start = 0`.
+- **In-flight memory.** Cap resident images at roughly `workers + 1`
+  rather than materialising a whole batch, so a 200-file job does not
+  need 200 images in memory at once.
+
+Public shape, then, is one call that covers both cases:
+
+```js
+await pool.transformImages([img1, img2, ...]);   // 1..n, planner decides
+```
+
 ### What this leaves open
 
 Model B, the imported-memory change and the reclaim rework are all
