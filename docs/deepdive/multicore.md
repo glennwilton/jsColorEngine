@@ -496,8 +496,11 @@ cached across sessions rather than recomputed. Detail in
 **Why this is the balanced answer**, in one line each:
 
 - **Over-decompose, never one-slice-per-thread.** The tidy split is the
-  worst measured, by 30–48 %, because a LUT transform is not fixed-cost
-  per pixel and the slowest slice sets the makespan.
+  worst measured, by 30–48 % on homogeneous hardware and by **2.6× when
+  two of eight cores run at a third speed** — a LUT transform is not
+  fixed-cost per pixel, cores are not equal, and the slowest slice sets
+  the makespan. The penalty for under-decomposing scales with how uneven
+  the machine is, which is why the default leans on the safe side.
 - **Fixed buffers, variable slices.** Allocate once, never grow, never
   reclaim — the churn that makes a UI stutter disappears — while the
   slice still adapts to image and pool size.
@@ -937,12 +940,49 @@ Two consequences:
   once against observed throughput before being trusted, which is what
   the ~2× drift rule already provides.
 
-**Untested here.** Every measurement in this document is from a
-homogeneous 8-core Zen 4 part with no efficiency cores, so the
-core-type effect is reasoned rather than measured. It needs an Intel
-12th-gen-or-later, an Apple Silicon part, or a big.LITTLE ARM device to
-confirm — and `autotune.js` on those machines is the obvious first
-experiment.
+#### MEASURED — simulating asymmetric cores
+
+The core-type effect can be tested without hybrid hardware: throttle
+part of the pool. `--slow-workers 2 --slow-factor 3` makes two of eight
+workers busy-wait to three times their true duration — busy-wait rather
+than sleep, because a weak core is *executing slowly*, not idle. 2 MP,
+`lutMode:'int'`:
+
+| tasks | per worker | homogeneous | 2 of 8 at ⅓ speed |
+|---:|---:|---:|---:|
+| 8 | 1 | 10.8 ms | **27.4 ms** |
+| 16 | 2 | 9.2 ms | 11.2 ms |
+| **40** | **5** | **8.1 ms** | **10.7 ms** |
+| 80 | 10 | 8.1 ms | 11.6 ms |
+| **gain from over-decomposition** | | **25 %** | **61 %** |
+
+**Over-decomposition is worth 2.4× more on asymmetric hardware**, and it
+very nearly erases the penalty. Losing two of eight workers to a third
+of their speed cuts effective capacity to 6.67/8, a theoretical floor of
+**1.20×** — and the queue lands at **1.32×**. One task per worker
+instead costs **2.6×**, because the batch cannot finish until the slow
+worker completes its single oversized slice and there is nothing left to
+overlap it with.
+
+Put plainly: **a pull-queue turns a 3× slow core from a catastrophe into
+a rounding error.** No detection, no core-type probing, no affinity —
+the slow worker simply asks for less work. This is the clearest
+demonstration of why the queue matters more than any of the individual
+variance sources that motivated it.
+
+It also sharpens the guidance for hybrid parts. On homogeneous hardware
+the sweet spot was ~10 tasks per worker and the penalty for getting it
+wrong was 25 %; with asymmetric cores the *same* setting is right but
+the penalty for one-per-worker is 2.6×. **The cost of under-decomposing
+scales with how uneven the machine is** — which is the argument for
+defaulting to over-decomposition rather than tuning per platform.
+
+**Still reasoned, not measured, for real E-cores.** This simulates
+uniform slowness; a genuine E-core also differs in cache size, vector
+width and clock behaviour, and the SIMD kernel may fare worse than the
+JS one for the port-width reason above. An Intel 12th-gen-or-later,
+Apple Silicon, or big.LITTLE ARM device is still needed to confirm, and
+`autotune.js` there is the obvious first experiment.
 
 **SMT is why `cores: 'auto'` takes ~50 %.** `os.availableParallelism()`
 reports *logical* threads, not physical cores — on the 7700X used for

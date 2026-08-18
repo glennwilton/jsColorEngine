@@ -51,7 +51,18 @@ parentPort.on('message', (msg) => {
     // a property of the kernel and the content, not of how the work was cut.
     const computeStart = process.hrtime.bigint();
     const out = transform.transformArray(input, false, false, false, pixelCount);
-    const computeMs = Number(process.hrtime.bigint() - computeStart) / 1e6;
+    let computeMs = Number(process.hrtime.bigint() - computeStart) / 1e6;
+
+    // Simulate a slower core (Intel E-core, ARM LITTLE) on homogeneous test
+    // hardware: busy-wait so this worker takes `slowFactor` times as long.
+    // Busy-wait rather than sleep because a real weak core is *executing*, not
+    // idle -- a sleep would let the OS schedule someone else onto it.
+    if (workerData.slowFactor > 1) {
+        const target = computeMs * (workerData.slowFactor - 1);
+        const until = process.hrtime.bigint() + BigInt(Math.round(target * 1e6));
+        while (process.hrtime.bigint() < until) { /* spin */ }
+        computeMs *= workerData.slowFactor;
+    }
 
     // transformArray may hand back a Uint8ClampedArray whose buffer is exactly
     // the right size; if not, copy into one so the transfer is clean.

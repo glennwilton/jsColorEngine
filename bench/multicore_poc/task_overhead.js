@@ -56,6 +56,10 @@ const REPEATS   = Number(arg('repeats', 5));
 const LUT_MODE  = arg('lutMode', 'int');
 const RAGGED    = has('ragged');
 const CONTENT   = arg('content', 'uniform');   // uniform | mixed
+// --slow-workers N --slow-factor F : make N of the pool run F times slower,
+// simulating Intel P/E or ARM big.LITTLE asymmetry on homogeneous hardware.
+const SLOW_WORKERS = Number(arg('slow-workers', 0));
+const SLOW_FACTOR  = Number(arg('slow-factor', 3));
 const TASK_COUNTS = arg('tasks', '1,4,16,64,256,1024')
     .split(',').map(s => parseInt(s.trim(), 10));
 
@@ -100,9 +104,10 @@ function splitRagged(total, n, seed) {
 // ---- pool --------------------------------------------------------------
 
 function startPool(lutJson, count) {
-    return Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
+    return Promise.all(Array.from({ length: count }, (_, i) => new Promise((resolve, reject) => {
         const w = new Worker(path.join(__dirname, 'worker.js'), {
-            workerData: { lutJson, lutMode: LUT_MODE, warmupPixels: 200000, inChannels: IN_CH },
+            workerData: { lutJson, lutMode: LUT_MODE, warmupPixels: 200000, inChannels: IN_CH,
+                          slowFactor: i < SLOW_WORKERS ? SLOW_FACTOR : 1 },
         });
         w.once('message', m => m.type === 'ready' ? resolve(w) : reject(new Error('bad handshake')));
         w.once('error', reject);
