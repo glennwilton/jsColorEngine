@@ -705,7 +705,7 @@ const t = new Transform({
 
 | option | default | what it does | measured basis |
 |---|---|---|---|
-| `cores` | `'auto'` | `1` disables; a number pins it; `'auto'` uses ~50 % of logical cores; `'max'` uses all | efficiency falls from 95 % at 1 worker to 34 % at 16 — past ~8 you buy little and cost the rest of the machine |
+| `cores` | `'auto'` | `1` disables; a number pins it; `'auto'` uses ~50 % of logical cores; `'max'` uses all | efficiency falls from 95 % at 1 worker to 34 % at 16; `availableParallelism()` reports LOGICAL threads (16 on an 8-core 7700X), so 50 % lands on physical cores, which is what actually parallelises |
 | `minThreads` | `2` | never spin up a pool smaller than this; below it, run single-threaded | one worker is *slower* than no pool (0.95×) once copies are counted |
 | `maxThreads` | `16` | hard ceiling regardless of `cores` | measured scaling flattens: 5.38× at 12 workers, 5.46× at 16 |
 | `autoTune` | `'lazy'` | `false` uses defaults; `true` calibrates before first use; `'lazy'` calibrates off the critical path after the first batch; or pass a **stored tuning object** | calibration costs ~300 ms and repays only after ~369 × 8 MP images, so it must never block first use and must be cached |
@@ -868,6 +868,46 @@ converts a single file.
 the reason measured above: there is no reliable close event in
 JavaScript. `FinalizationRegistry` can *log* that it happened, which is
 worth having as a diagnostic, but the timer is what actually reclaims.
+
+### Workers are not pinned to cores, and cannot be
+
+A worker is an OS thread with **no CPU affinity**. Windows, Linux and
+macOS place it wherever they like and may migrate it between cores
+mid-task. Neither `worker_threads` nor the Web Worker API exposes any
+way to pin one — that needs a native addon (`SetThreadAffinityMask`,
+`sched_setaffinity`), which is exactly why the native C benchmarks in
+`bench/lcms_c/` can use `taskset -c 0` and the JS ones cannot.
+
+Three consequences, and they all argue for the design already arrived
+at rather than against it:
+
+**Migration costs cache.** A worker moved from one core to another loses
+its L1/L2, and everything measured about CLUT residency says that
+matters. This is a real part of the jitter that over-decomposition
+absorbs, and it cannot be prevented from JavaScript.
+
+**Cores are not equal, and increasingly not even the same kind.** Intel
+P/E cores from 12th gen, Apple performance/efficiency cores, ARM
+big.LITTLE — a worker landing on an efficiency core may run at a third
+the speed of one on a performance core. That is a large, *systematic*
+variance the scheduler hands you unasked, on top of the content
+variance already measured.
+
+**Which is the strongest argument for the pull-queue.** A static split —
+"worker N gets slice N" — is wrong twice over: it assumes equal pixels
+cost equal time (they do not) *and* that equal work runs at equal speed
+on every core (it does not). A pull-queue needs neither assumption: a
+worker parked on an E-core simply pulls fewer tasks, and nobody has to
+detect or model that. **Never assume worker N is as fast as worker M** —
+with heterogeneous cores it may be permanently three times slower.
+
+**SMT is why `cores: 'auto'` takes ~50 %.** `os.availableParallelism()`
+reports *logical* threads, not physical cores — on the 7700X used for
+every measurement here it returns **16 for an 8-core part**. Two workers
+on the same physical core share execution units and do not add
+throughput proportionally, so the 50 % default lands on the physical
+core count by construction, which is the number that actually
+parallelises.
 
 ### One machine, one pool
 
