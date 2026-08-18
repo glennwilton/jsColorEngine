@@ -901,6 +901,49 @@ worker parked on an E-core simply pulls fewer tasks, and nobody has to
 detect or model that. **Never assume worker N is as fast as worker M** —
 with heterogeneous cores it may be permanently three times slower.
 
+**Does SIMD availability vary by core? No — but its *speed* does.**
+
+Availability is uniform by necessity: the scheduler migrates threads
+freely, so a thread running an instruction its next core lacks would
+fault. The ISA must therefore be homogeneous across cores, and the
+clearest proof is Intel's own choice — **AVX-512 was fused off on Alder
+Lake P-cores precisely because the E-cores lack it.** They removed it
+from the fast cores rather than permit a mismatch. ARM is the same:
+NEON is on every core, big or LITTLE. WASM SIMD is 128-bit `v128`
+lowering to SSE2/NEON, both universal, and the feature is detected once
+at instantiation rather than per core. **A worker cannot land on a core
+without SIMD.**
+
+Throughput is another matter, and it likely cuts *against* SIMD. E-cores
+have narrower and fewer vector ports — Gracemont has 2×128-bit where
+Golden Cove has 3×256-bit — so a vector workload loses more from landing
+on an efficiency core than a scalar one does. The core-type variance
+should therefore be **wider for the SIMD kernel than for the JS kernel**,
+which is the opposite of the intuition that the faster kernel is the
+safer one.
+
+Two consequences:
+
+- **The pull-queue already handles it.** A worker on a weak core pulls
+  fewer tasks; nothing needs to detect core type. This is the same
+  mechanism absorbing content variance, migration and SMT contention,
+  which is why it is worth more than any of the individual measurements
+  suggested.
+- **`autoTune` is exposed to it.** A calibration lasting ~300 ms could
+  be scheduled largely onto E-cores and derive a throughput figure for
+  the wrong hardware — and unlike a production batch, it has no chance
+  to average out. Taking best-of-3 (as `autotune.js` does) mitigates it;
+  on a hybrid part the calibration should probably also be re-checked
+  once against observed throughput before being trusted, which is what
+  the ~2× drift rule already provides.
+
+**Untested here.** Every measurement in this document is from a
+homogeneous 8-core Zen 4 part with no efficiency cores, so the
+core-type effect is reasoned rather than measured. It needs an Intel
+12th-gen-or-later, an Apple Silicon part, or a big.LITTLE ARM device to
+confirm — and `autotune.js` on those machines is the obvious first
+experiment.
+
 **SMT is why `cores: 'auto'` takes ~50 %.** `os.availableParallelism()`
 reports *logical* threads, not physical cores — on the 7700X used for
 every measurement here it returns **16 for an 8-core part**. Two workers
@@ -1430,6 +1473,15 @@ sits once worker spin-up is counted.
    server, a phone — to check that the *rule* transfers even though the
    *numbers* do not. If the derived `tasksPerWorker` lands outside 4–16
    anywhere, the model is missing a term.
+9. **How much do heterogeneous cores widen the variance, and does SIMD
+   suffer more?** Every measurement here is from a homogeneous Zen 4
+   part. On an Intel P/E or Apple Silicon machine the prediction is that
+   core-type variance is *larger for the SIMD kernel* than the JS one,
+   because E-cores have narrower vector ports — which would mean SIMD
+   needs deeper over-decomposition on hybrid hardware, the reverse of
+   what was measured here. Run `task_overhead.js` and `autotune.js` on a
+   hybrid part; a calibration that lands mostly on E-cores is also the
+   most likely way for `autoTune` to derive a wrong constant.
 6. Browser vs Node: how much worse is the browser path in practice,
    given slower worker spin-up (and COOP/COEP if Model B).
 7. Does the imported-memory change cost anything single-threaded?
