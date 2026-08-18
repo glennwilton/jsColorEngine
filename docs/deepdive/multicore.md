@@ -508,6 +508,77 @@ motivates them. That needs the pool built and judged on p95/p99 task
 latency, GC pause count and peak RSS — not mean throughput, which may
 show no difference at all.
 
+### Self-tuning: calibrate once, do not adapt continuously
+
+The two constants that matter — kernel throughput and per-task overhead
+— are both machine properties. A 3D V-Cache part with 96 MB of L3 keeps
+far more of the CLUT resident and shifts throughput up; a 48-core server
+has different jitter and different message costs. Hard-coding
+`500 MPx/s` is a guess that will be wrong on most hardware.
+
+The tempting fix is to measure production traffic and adapt as you go.
+**It has a feedback loop in it.** Slice size affects the very number you
+would feed back: smaller slices measure lower throughput, which raises
+the floor, which enlarges slices, which measure higher... Reporting
+worker-side *compute* time rather than wall time was the obvious way to
+break that, and it only half works — measured across slice sizes, the
+per-worker kernel figure still moved 24 → 32 MPx/s, largely because at
+one task per worker you are timing a cold first call:
+
+| tasks | px/task | wall MPx/s | kernel MPx/s (per worker) |
+|---:|---:|---:|---:|
+| 8 | 262 K | 233.8 | 24.2 |
+| 24 | 87 K | 232.3 | 30.9 |
+| 96 | 22 K | 205.3 | 27.5 |
+| 192 | 11 K | 216.9 | 32.6 |
+
+So prefer **a short calibration at startup** — a controlled experiment
+rather than an inference from whatever traffic happens to arrive:
+
+```js
+// ~1 s, once. Returns constants the caller can persist and pass back.
+const tuning = await pool.autoTune({ budgetMs: 1000 });
+// { kernelMPxPerSec, perTaskOverheadUs, tasksPerWorker, capacity, measuredAt }
+localStorage.setItem('jsce.tuning', JSON.stringify(tuning));
+```
+
+What it should do, and why each part:
+
+1. **Two synthetic passes, not a sweep.** One with large slices to read
+   kernel throughput with overhead amortised away, one with small slices
+   where overhead dominates. Two points determine both unknowns —
+   `T = px/throughput + n·overhead` — and a full sweep is not needed.
+2. **Warm first, discard the first task per worker.** The 24 vs 32
+   MPx/s spread above is mostly cold-start; a calibration that includes
+   it will under-estimate the machine.
+3. **Use synthetic content deliberately in the middle of the range.**
+   Not `solid` (measures L1), not `noise` (measures the worst case).
+   The corrected noise generator blended ~5 % — the plateau from
+   [benchmark.md §21](./benchmark.md#21-noise-is-the-great-equaliser) —
+   is the representative choice, and this is exactly the case that
+   argument was made for.
+4. **Clamp hard.** `kernelMPxPerSec` into something like 20–2000,
+   `tasksPerWorker` 4–16, slice into `[floor, capacity]`. A pathological
+   calibration on a throttled or contended machine must degrade to
+   "slightly wrong", never to "one pixel per task".
+5. **Persist it, keyed by worker count and kernel mode.** The result is
+   a property of the machine and the kernel, not of the image, so it
+   should survive a page reload and only be recomputed when the pool
+   shape changes.
+
+Why calibration beats continuous adaptation here: it is deterministic
+and reproducible, it has no feedback loop because *we* choose the slice
+sizes being measured, it costs a bounded one second rather than an
+unbounded fraction of every batch, and it can be cached. The obvious
+hybrid is cheap insurance rather than a second mechanism: keep a rolling
+average of observed throughput and re-calibrate only if it drifts by
+more than ~2× from the stored value, which catches a laptop dropping to
+battery or a container being throttled.
+
+**Not yet built.** The numbers to seed it with are in the tables above,
+and `task_overhead.js` already reports both quantities — it is most of a
+calibration harness with a different front end.
+
 ## The unified dispatcher — one queue, one task shape
 
 The two modes above should not be two implementations. Make the task
@@ -985,6 +1056,12 @@ sits once worker spin-up is counted.
    argument for it is smoothness rather than throughput, so it has to be
    judged on p95/p99 task latency, GC pause count and peak RSS — not on
    mean MPx/s, which may show no difference at all.
+8. **How stable is a calibration across machines?** The two constants
+   are machine properties, so `autoTune()` should be run on a spread of
+   hardware — a laptop on battery, a 3D V-Cache desktop, a many-core
+   server, a phone — to check that the *rule* transfers even though the
+   *numbers* do not. If the derived `tasksPerWorker` lands outside 4–16
+   anywhere, the model is missing a term.
 6. Browser vs Node: how much worse is the browser path in practice,
    given slower worker spin-up (and COOP/COEP if Model B).
 7. Does the imported-memory change cost anything single-threaded?

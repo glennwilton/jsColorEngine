@@ -43,7 +43,15 @@ parentPort.on('message', (msg) => {
     const input = new Uint8ClampedArray(msg.buffer);
     const pixelCount = msg.pixelCount;
 
+    // Time the KERNEL ONLY, not the round trip. An adaptive dispatcher that
+    // feeds wall-time-per-task back into its own slice sizing builds a
+    // feedback loop: smaller slices measure slower (overhead is a bigger
+    // share), which raises the floor, which enlarges slices, which measure
+    // faster... Reporting pure compute time breaks that loop, because it is
+    // a property of the kernel and the content, not of how the work was cut.
+    const computeStart = process.hrtime.bigint();
     const out = transform.transformArray(input, false, false, false, pixelCount);
+    const computeMs = Number(process.hrtime.bigint() - computeStart) / 1e6;
 
     // transformArray may hand back a Uint8ClampedArray whose buffer is exactly
     // the right size; if not, copy into one so the transfer is clean.
@@ -57,7 +65,7 @@ parentPort.on('message', (msg) => {
     }
 
     parentPort.postMessage(
-        { type: 'done', index: msg.index, buffer: outBuffer, pixelCount: pixelCount },
+        { type: 'done', index: msg.index, buffer: outBuffer, pixelCount: pixelCount, computeMs: computeMs },
         [outBuffer]
     );
 });

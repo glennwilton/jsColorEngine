@@ -111,7 +111,7 @@ function startPool(lutJson, count) {
 
 // Dispatch a task list across the pool, pulling the next task as each worker
 // frees up. Returns wall time for the whole set.
-function runTasks(pool, tasks, source, output) {
+function runTasks(pool, tasks, source, output, stats) {
     return new Promise((resolve, reject) => {
         // longest first, so the tail is not one long task behind idle workers
         const queue = [...tasks].sort((a, b) => b.length - a.length);
@@ -136,6 +136,10 @@ function runTasks(pool, tasks, source, output) {
                 const chunk = new Uint8ClampedArray(msg.buffer);
                 const task = tasks[msg.index];
                 output.set(chunk.subarray(0, task.length * OUT_CH), task.start * OUT_CH);
+                // Worker-side compute only: the signal an adaptive dispatcher
+                // would feed back, and the thing that must stay stable as the
+                // slice size changes or the feedback loop is unstable.
+                if (stats) { stats.px += task.length; stats.computeMs += msg.computeMs; }
                 if (++done === queue.length) {
                     resolve(Number(process.hrtime.bigint() - t0) / 1e6);
                 } else {
@@ -203,8 +207,8 @@ async function main() {
     console.log(' split        : ' + (RAGGED ? 'RAGGED — uneven lengths, one 3-px task per row' : 'uniform'));
  console.log(' content      : ' + (CONTENT === 'mixed' ? 'MIXED — half flat, half noise (equal pixels, unequal cost)' : 'uniform noise'));
     console.log(' repeats      : ' + REPEATS + ', best taken\n');
-    console.log('  tasks   px/task (median)      best ms      MPx/s    vs 1 task');
-    console.log('  ------  ------------------  ---------  ---------  ----------');
+    console.log('  tasks   px/task (median)      best ms   wall MPx/s   kernel MPx/s    vs 1 task');
+    console.log('  ------  ------------------  ---------  -----------  -------------  ----------');
 
     const pool = await startPool(lutJson, WORKERS);
     const points = [];
@@ -216,9 +220,12 @@ async function main() {
         await runTasks(pool, tasks, source, output);          // warm this shape
 
         let best = Infinity;
+        const stats = { px: 0, computeMs: 0 };
         for (let r = 0; r < REPEATS; r++) {
-            best = Math.min(best, await runTasks(pool, tasks, source, output));
+            best = Math.min(best, await runTasks(pool, tasks, source, output, stats));
         }
+        // kernel-only throughput, summed across workers
+        const kernelMpx = (stats.px / 1e6) / (stats.computeMs / 1000);
         const lens = tasks.map(t => t.length).sort((a, b) => a - b);
         const med = lens[lens.length >> 1];
         const mpx = (TOTAL_PX / 1e6) / (best / 1000);
@@ -230,7 +237,7 @@ async function main() {
         if (saturated) points.push({ n: tasks.length, ms: best });
         console.log('  ' + String(tasks.length).padStart(6) + '  ' +
             (med.toLocaleString() + (RAGGED ? '  (min ' + lens[0] + ')' : '')).padEnd(18) + '  ' +
-            best.toFixed(1).padStart(9) + '  ' + mpx.toFixed(1).padStart(9) + '  ' +
+            best.toFixed(1).padStart(9) + '  ' + mpx.toFixed(1).padStart(11) + '  ' + kernelMpx.toFixed(1).padStart(13) + '  ' +
             (saturated ? ((best / baseline - 1) * 100).toFixed(1).padStart(9) + '%'
                        : '   idle wk'));
     }
