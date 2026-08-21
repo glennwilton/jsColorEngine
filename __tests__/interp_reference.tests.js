@@ -189,8 +189,20 @@ describe('optimised interpolators match the reference implementation', () => {
         // covered; what is not covered is the channel loop past 4.
         //
         // This test asserts the limitation so nobody assumes coverage that is
-        // not there. If a wider reference is ever written, delete this and add
-        // the comparison.
+        // not there.
+        //
+        // WIDENING _Master IS NOT THE FIX. It is a useful oracle for the 3-D
+        // unrolled variants because it is structurally different from them --
+        // helpers as separate functions rather than inlined and specialised.
+        // Extending it to N channels would just be our generic implementation
+        // written a second time by the same hand, and two copies of one idea
+        // share that idea's blind spots. tetrahedralInterp3D_NCh already IS
+        // reference-grade; what it lacks is an outside opinion.
+        //
+        // The oracle is Little CMS, as it is for every other channel count in
+        // bench/lcms_compat/. The blocker is input: real n-colour profiles are
+        // licensed and cannot be committed. See the synthetic colour-wheel
+        // profile plan in docs/NChannel.md.
         const lut = makeLut(3, 17, 6, 4321);
         const ref = interp.tetrahedralInterp3D_Master.call(T, [0.3, 0.6, 0.4], lut, 0);
         const got = interp.tetrahedralInterp3D_NCh.call(T, [0.3, 0.6, 0.4], lut);

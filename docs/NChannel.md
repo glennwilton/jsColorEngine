@@ -103,6 +103,55 @@ separation, zero ink → paper white (L≈100), full ink → near black, single
 inks land in distinct hue directions, array and `{c0..cN}` inputs agree.
 Tighten to ΔE tolerances when lcms validation numbers arrive.
 
+### TODO: synthetic N-channel profiles, then lcms as the oracle
+
+The blocker is not the harness, it is the *profiles*. Real n-colour press
+profiles are licensed vendor artefacts that cannot be committed (see
+[`bench/lcms_compat/profiles/README.md`](../bench/lcms_compat/profiles/README.md)),
+so there is nothing to validate against that ships with the repo.
+
+**Not the answer: a wider `_Master`.** `tetrahedralInterp3D_Master` is the
+reference for the *unrolled* 3-D variants, and it works because it is
+structurally different from them — helpers as separate functions rather than
+inlined and hand-specialised. Widening it to cover 5+ output channels would
+just be our generic implementation written a second time by the same hand.
+Two copies of one idea share the blind spots of that idea. It would prove the
+code matches itself, which is not the question. **`tetrahedralInterpND_NCh`
+already is the reference-grade implementation** — there is no faster variant it
+needs to be checked against, only an outside opinion.
+
+**The oracle is Little CMS**, as it is for every other channel count in
+[`bench/lcms_compat/`](../bench/lcms_compat/). What is missing is input.
+
+**Synthesise the profiles.** An n-channel device→PCS mapping plausible enough
+to exercise the code paths does not need to be a real press. Build one from a
+colour wheel:
+
+1. Take HSB around 0–360°, and place the n colourants at their hue angles.
+   Black sits at the origin, `0,0,0`.
+2. Blend between adjacent colourants on the wheel to generate the mixes
+   between them.
+3. **Above L\*50**, blend toward zero ink — lighter means less of everything,
+   converging on paper white.
+4. **At or below L\*50**, blend toward a synthetically derived black: each
+   chromatic channel at `1/(n-1)` of full, plus black. That gives a
+   GCR-ish under-colour behaviour rather than a flat ramp, so the black
+   generation logic actually gets exercised.
+
+Bake that into a CLUT, write it as an ICC profile, and it is committable —
+it is arithmetic, not a measurement of anyone's press.
+
+**Then test both engines against it.** Same stimuli through lcms and through
+jsColorEngine, same comparison the existing `lcms_compat` harness already
+does for 1–4 channels. Neither engine is trusted a priori; agreement is the
+signal, and disagreement is the interesting case — it would be the first
+n-channel divergence either of us has looked at.
+
+Two things fall out that are worth having regardless: a committable n-channel
+profile set for the test suite, and the first real coverage of the generic
+channel loop past 4 outputs, which today has no oracle at all (see
+`__tests__/interp_reference.tests.js`).
+
 ## CLUT memory reference (why N-channel input LUTs are declined)
 
 | Dimensions | 17-pt grid cells | f64 | u16 |
