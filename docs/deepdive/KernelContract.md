@@ -1078,6 +1078,50 @@ will not — then `arrayFor` is justified by the `compile()` path and by
 ownership, or not at all. Building it for speed and then finding no speed is
 the failure mode this section exists to prevent.
 
+## Helpers reach the kernel through `init`, not through an export
+
+A third-party kernel already works with nothing but the public surface —
+`Transform.registerKernel(descriptor)`, a `floatFor` and an `array` — and it
+drives **both** paths, which is what phases 2 and 3 were for. Verified rather
+than assumed: an independent Kernel3D returning its own maths shows up in
+`kernelInfo()`, in `transform(colour)` and in `transformArray()` together.
+
+What is *not* reachable is the dispatch machinery: the fallback resolver, the
+key format, the gate predicates, the break-even constant. A kernel that wants
+several variants — SIMD, scalar, JS, with eligibility gates and a degradation
+ladder — currently has to write its own version of what
+`src/lutKernelTable.js` already does.
+
+**The answer is to hand them over at `init()`, not to export them.**
+
+```js
+init: function(pipeline, opts){
+    this.helpers = opts.helpers;   // makeKey, resolveChain, gates, threshold
+    return { pipeline: pipeline };
+}
+```
+
+`init(pipeline, opts)` already takes an options bag, so this adds no new
+surface. That matters more than it sounds:
+
+- **Nothing new becomes public.** An exported `Transform.lutKernelTable` is a
+  promise about a shape that is still moving — it changed twice today. Passing
+  it in is dependency injection, and the contract is the `opts` shape, which is
+  already versioned by this document.
+- **A kernel that does not want them never sees them.** The built-ins reach
+  their own tables directly; the helpers exist for strangers.
+- **Drift is visible at the boundary.** If a helper changes, `opts` changes,
+  and a kernel notices at `init()` — at create time, in one place — rather than
+  through a deep import that silently resolves to something different.
+
+**One ordering constraint.** `init()` runs during `create()`, on the instance,
+after the pipeline exists. `resolveRuns()` and `arrayFor()` come later, so a
+kernel can stash the helpers at `init` and use them there. `floatFor()` cannot:
+it is called on the *descriptor* while the pipeline is still being built, before
+any `init`. That is fine — picking a single-colour function needs no dispatch
+machinery — but it means the helpers are for the image path only, and the
+contract should say so rather than let someone discover it.
+
 ## Open questions
 
 - **Does `createLut()`'s bake walk an optimised pipeline?** It affects whether
