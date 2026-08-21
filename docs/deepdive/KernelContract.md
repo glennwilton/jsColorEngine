@@ -1133,6 +1133,41 @@ surface. That matters more than it sounds:
   and a kernel notices at `init()` — at create time, in one place — rather than
   through a deep import that silently resolves to something different.
 
+### A kernel owning its output buffer — allowed, and usually wrong
+
+Output allocation is the kernel's business, so nothing stops a kernel keeping
+one buffer and returning it every call. For a fixed-size stream — frames off a
+camera, tiles of a known size — that removes an allocation per image, and the
+temptation is obvious.
+
+It is still the wrong place for the decision, and the reason is the same one
+that runs through this whole document: **the kernel cannot see the caller's
+lifetime.** It does not know whether the result is consumed before the next
+call or held. Return a reused buffer to someone who stashes it and the data
+changes underneath them, with no error and no wrong-looking output until much
+later.
+
+`transformImages()` makes it concrete. Its documented pattern is an `onImage`
+callback that writes each result out as it completes — safe, because the
+callback consumes immediately. Anyone who instead pushes the buffer onto an
+array ends up with N references to one buffer holding the last image.
+
+**And the safe version already exists, on the side that has the knowledge.**
+The caller passes its own buffer and gets it back:
+
+```js
+var mine = new Uint8ClampedArray(px * outCh);
+t.transformArrayViaLUT(input, false, false, false, px, mine);   // returns mine
+```
+
+Same allocation saved, decided by the party that knows whether reuse is safe.
+A kernel that wants this should want its *caller* to do it.
+
+So: permitted, occasionally right behind an explicit option the caller sets,
+never the default. It is the one case so far where the answer to "can a kernel
+do this?" is yes but you probably should not, rather than yes and Transform
+does not care.
+
 ### The built-ins should take them the same way
 
 If the built-in kernels also receive helpers rather than requiring them, then
