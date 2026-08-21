@@ -105,17 +105,16 @@ industry-standard tabular format. They're not the profile. They're
 what anyone with the same profile + the same lcms version would
 compute.
 
-> **Changed after 1.5.5: `reference/` is no longer committed.** That
-> paragraph is the argument for treating derived data as
-> redistributable, and it may well be right — but "may well be right"
-> is a thin basis for putting 63 MB derived from licensed profiles on
-> a public repo, and nobody needs *our* copy. The last sentence above
-> is the whole point: anyone with the same profiles and the same lcms
-> version computes the same numbers. So generate your own.
+> **Changed after 1.5.5: `reference/` is no longer committed.** Not a
+> licensing retreat — the paragraph above still stands. It is simply
+> 63 MB that nobody needs a copy of, and the last sentence is the
+> reason: anyone with the same profiles and the same lcms version
+> computes the same numbers. Shipping ours saves no one anything and
+> makes every clone pay for it.
 >
-> The generator is here and unchanged. Nothing is hidden and nothing
-> is lost — the set is reproducible from a profile library plus the
-> instrumented lcms2 in `lcms_patch/`.
+> Nothing is hidden and nothing is lost. The generator is here and
+> unchanged, and the set is reproducible from a profile library plus
+> the instrumented lcms2 in `lcms_patch/`.
 
 **The design:**
 
