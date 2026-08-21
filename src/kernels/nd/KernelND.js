@@ -1,7 +1,9 @@
 // src/kernels/nd/KernelND.js
 //
-// N-channel catch-all kernel (5CLR-15CLR). Registered under the special 'ND'
-// key — Transform.setKernel() routes any inputChannels > 4 here.
+// N-channel catch-all kernel (5CLR-15CLR). Registered across the whole 5..15
+// span of the dense kernel registry — one descriptor object in eleven slots,
+// so any single dimension can later be replaced with a tuned kernel without
+// forking the other ten. See docs/deepdive/KernelContract.md.
 // Float-only: N-channel press profiles are a proof/measurement use case, not
 // a throughput path, so correctness over speed is the right trade-off.
 'use strict';
@@ -10,7 +12,11 @@ var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 
 module.exports = {
-    dimensions: 'ND',   // special key — setKernel maps inputChannels > 4 here
+    name: 'kernelND',
+
+    // Inclusive [from, to] — registerKernel() fills every slot in the range
+    // with this same object. 15 is the ICC ceiling (FCLR).
+    dimensions: [5, 15],
 
     supports: {
         float: true,

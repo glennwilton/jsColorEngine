@@ -9,6 +9,7 @@ var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 
 module.exports = {
+    name: 'kernel1D',
     dimensions: 1,
 
     _variant: null,

@@ -8,6 +8,13 @@
 > DeviceLink/NChannel landing) and MPx/s parity across all bench rows,
 > including ~212 MPx/s RGB→RGB `int-wasm-simd` in Node — matching the
 > README's headline number through the kernel boundary.
+>
+> **Superseded in part by [KernelContract.md](./KernelContract.md)**
+> (DESIGN, v1.6). That document moves the single-colour interpolators,
+> the tuned loops and the WASM state onto the kernels themselves, makes
+> the registry a dense 1-15 array, and replaces `claims`/`displacesLut`/
+> `provideLut` with `init()` + `wantsLut()`. Read this file for what ships
+> today and that one for where it is going.
 
 ---
 
@@ -26,10 +33,16 @@ algorithm is found. The kernel module architecture splits them:
   WASM lifecycle, output allocation/validation, and per-call dispatch.
 
 Single-pixel accuracy (`transform(color)`) always walks the ICC pipeline in
-Transform.js — it never touches a kernel. Kernels are **LUT-only** batch
-processors; the no-LUT array fallback (a dimension-generic per-pixel
+Transform.js — it never touches a kernel. Dimensional kernels are **LUT-only**
+batch processors; the no-LUT array fallback (a dimension-generic per-pixel
 pipeline walk) also stays in Transform.js, because duplicating it in every
 kernel would be copy-paste risk for zero gain.
+
+> **Revised.** That "LUT-only" rule held while every kernel was a table
+> walker. The matrix-shaper kernel has no CLUT at all — two 1-D tables and
+> nine coefficients — and is the fast path precisely when there is *no* LUT.
+> It joins the registry as a **claiming** kernel rather than a dimensional
+> one; see [Claiming kernels](#claiming-kernels--selected-by-pipeline-shape-not-channel-count).
 
 ---
 
@@ -50,6 +63,10 @@ src/
     2d/
       Kernel2D.js            — duotone descriptor (JS only)
       kernel2D_loops.js      — bilinearInterp2DArray_NCh_loop
+    matrixShaper/
+      KernelMatrixShaper.js  — CLAIMING descriptor (see below) — no CLUT
+      matrixShaperKernel.js  — inspect / build / wantsInsteadOfLut
+      matrix_shaper_int{8,16}_{simd,scalar}.wat / .wasm.js
     3d/
       Kernel3D.js            — RGB/Lab descriptor (WASM SIMD/scalar + JS variants)
       kernel3D_loops.js      — 8 tuned 3D array loops (3Ch/4Ch/NCh × int/int16/16bit)
@@ -59,7 +76,7 @@ src/
       kernel4D_loops.js      — 7 tuned 4D array loops
       tetra4d_*.wat / *.wasm.js
     nd/
-      KernelND.js            — N-channel catch-all (5CLR-15CLR), float only
+      KernelND.js            — N-channel catch-all, registered across slots 5..15, float only
 ```
 
 The `*_loops.js` files were moved **verbatim** from Transform.js and are
@@ -82,18 +99,23 @@ test suites — get them too):
 ```js
 Transform.registerKernel(require('./kernels/1d/Kernel1D.js'));  // '1d'
 ...
-Transform.registerKernel(require('./kernels/nd/KernelND.js'));  // 'nd' (dimensions: 'ND')
+Transform.registerKernel(require('./kernels/nd/KernelND.js'));  // slots 5..15 (dimensions: [5, 15])
 ```
 
-`registerKernel(descriptor)` validates `descriptor.dimensions` (1–4 or
-`'ND'`) and stores it in `Transform.kernels` keyed `'1d'…'4d','nd'`.
+`registerKernel(descriptor)` validates `descriptor.dimensions` and stores the
+descriptor in `Transform.kernels`, **an array indexed by input channel count
+over 1..15** — the full ICC range (`FCLR` is 15 channels). `dimensions` is
+either one channel count or an inclusive `[from, to]` range; `KernelND`
+registers `[5, 15]`, putting one descriptor object into eleven independently
+replaceable slots. Legacy `'ND'` is still accepted and means `[5, 15]`.
+*(Landed 2026-08-21, phase 1 of [KernelContract.md](./KernelContract.md).)*
 Registering again for the same dimensions replaces the slot for all future
 `create()` calls — that's the **global override** path for kernel
 developers. Live transforms keep the kernel instance they resolved at
 create() time; swapping a descriptor never changes pixel math mid-run.
 
 Per-Transform instancing happens in `setKernel(inChannels)` at create()
-time (`inputChannels > 4` routes to `'nd'`):
+time (one array index — no key string, no `> 4` special case):
 
 ```js
 var instance = Object.create(descriptor);   // descriptor IS the prototype
@@ -118,11 +140,120 @@ override `setKernel()`.
 
 ---
 
+## Claiming kernels — selected by pipeline shape, not channel count
+
+> **This section revises two statements above.** "Kernels are LUT-only batch
+> processors" and "kernel selection is by input channel count" were both true
+> of every kernel until the matrix shaper. They are now the description of
+> *dimensional* kernels specifically.
+
+A dimensional kernel owns a channel count and is chosen in `setKernel()`,
+**before the pipeline is built** — three channels in means Kernel3D, always.
+That works because a table walker only needs to know the table's shape.
+
+It does not work for a kernel whose applicability depends on what the
+optimiser did. `*sRGB → *AdobeRGB` and `*sRGB → GRACoL` are both 3-channel
+input; only the first folds to a curve, a 3×3 and another curve. `*sRGB →
+*sRGB` with identity detection on is 3-channel too, and collapses to a copy
+with nothing left to accelerate. **No channel count separates those three
+cases. Only the built pipeline does.**
+
+So a descriptor may declare `claims(transform)` instead, and is offered the
+transform after `pipelineCreated`:
+
+```js
+module.exports = {
+    name: 'matrix-shaper',
+    dimensions: 3,                       // informational; does NOT take the slot
+    claims: function(transform){ ... },  // cheap, post-pipeline, {ok, why}
+    displacesLut: function(transform){ ... },   // optional, see below
+    create, resolveRuns, array, release, provideLut     // the usual contract
+};
+```
+
+`registerKernel()` routes on the presence of `claims`: a claiming descriptor
+goes into `Transform.claimKernels` in registration order, a dimensional one
+into `Transform.kernels[key]` as before. **A claiming kernel never occupies a
+dimensional slot** — decline it and the transform still gets Kernel3D, which
+is what every LUT-based RGB pair continues to use.
+
+### The two decision points, and why they are different hooks
+
+```
+create()
+  ├─ setKernel(inputChannels)          dimensional kernel, by channel count
+  ├─ kernel.provideLut(lutMode)        may refuse to build a LUT at all
+  ├─ [LUT build]
+  │    └─ displacesLut(transform)      ← asked of claiming kernels, against the
+  │                                       TEMPORARY device-to-device pipeline,
+  │                                       to skip the CLUT grid walk entirely
+  ├─ createPipeline(...)
+  ├─ pipelineCreated = true
+  ├─ kernel.create(lutMode)            WASM lifecycle for the dimensional kernel
+  └─ _claimKernel()                    ← claims(transform), against the FINAL
+                                          pipeline; first yes takes this.kernel
+```
+
+They cannot be one hook because they run against different pipelines at
+different times. `displacesLut` sees the three-stage device-to-device pipeline
+the LUT builder makes before walking the grid; `claims` sees the five-stage
+final one with its int conversions. Both matter: the first decides whether a
+214 KB table gets built, the second decides who runs the pixels.
+
+`displacesLut` is deliberately conservative. Saying yes means **no CLUT is
+built**, so a later refusal by `claims` would strand the caller on the generic
+loops at ~8 MPx/s — worse than the table that was skipped. Both hooks therefore
+check the same conditions against their respective pipelines.
+
+### Contract notes
+
+- **`claims()` must be cheap.** It runs on every `create()`. The matrix shaper
+  walks five stage names and samples the two curves at 33 points. Table
+  building — 3–8 ms — is deferred to the first `array()` call, so a Transform
+  that only ever converts single colours never pays for it.
+- **`array()` may return `null`** to mean "I declined after all"; the caller
+  falls through to the generic loops rather than being stranded.
+- **A claim that throws is treated as a decline.** A third-party kernel is
+  registered code running inside `create()`, and declining is always an
+  available answer, so an exception must not take the Transform down.
+- **`clear()` releases the kernel.** A claimed kernel is bound to the pipeline
+  that earned it the claim and holds a WASM instance — up to 512 KB of tables
+  at int16, plus pixel buffers. `create()` re-runs both selection steps.
+- **Registering the same `name` again replaces in place**, keeping order
+  stable, rather than appending a second copy that would never be reached.
+
+### Inspecting the result
+
+`transform.kernelInfo()` reports which kernel holds the batch path:
+
+```js
+t.kernelInfo()
+// { name: 'matrix-shaper', dimensions: 3, claimed: true, lutMode: 'float',
+//   hasLut: false, built: true, variant: '8-simd', bits: 8, simd: true }
+
+// a LUT-based pair, same channel count:
+// { name: 'kernel3D', dimensions: 3, claimed: false,
+//   lutMode: 'int-wasm-simd', hasLut: true }
+```
+
+`built` is false between the claim and the first batch call — a real state,
+worth being able to see rather than an implementation detail to hide.
+
+### Cost
+
+None measurable. The claim pass is one predicate per registered claiming
+kernel per `create()`, and dispatch is the same single indirect call it was
+before — the matrix shaper measured 338.6 MPx/s through the kernel boundary
+against 331 when it was hard-coded into `transformArray`, which is inside the
+run-to-run spread.
+
+---
+
 ## The kernel descriptor API
 
 | Member | Required | Purpose |
 |---|---|---|
-| `dimensions` | yes | 1–4, or `'ND'` for the 5+-channel catch-all |
+| `dimensions` | yes | 1–15, or `[from, to]` for a range (`'ND'` = `[5, 15]`) |
 | `supports` | no | declarative variant capability map — diagnostics only |
 | `create(lutMode)` | yes | settle WASM states, demote lutMode if the host can't run the request; returns the settled mode |
 | `resolveRuns()` | yes | resolve BIG/SMALL run refs onto the instance (see Dispatch) |
@@ -159,6 +290,123 @@ A failed `int16-wasm-scalar` load demotes to `'int16'`, never `'int'` — the
 output container type (`Uint16Array` vs `Uint8ClampedArray`) is fixed by the
 settled mode. `float` is the only cross-family landing point because the
 float LUT scales via `lut.outputScale` at run time.
+
+---
+
+## Coverage — what exists, per kernel
+
+Derived from each descriptor's `supports` block and confirmed by probing a
+built Transform, not from memory. `transform.kernelInfo()` reports which of
+these a given Transform actually resolved to.
+
+### Numeric variants
+
+| kernel | channels in | float | int8 JS | int8 WASM scalar | int8 WASM SIMD | int16 JS | int16 scalar | int16 SIMD |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `Kernel1D` grey | 1 | ✅ | ✅ | — | — | ✅ | — | — |
+| `Kernel2D` duotone | 2 | ✅ | ✅ | — | — | ✅ | — | — |
+| `Kernel3D` RGB/Lab | 3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `Kernel4D` CMYK | 4 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `KernelND` | 5–15 | ✅ | — | — | — | — | — | — |
+| **matrix-shaper** *(claiming)* | 3 | — | ✅ ⁽ᵃ⁾ | ✅ | ✅ | ✅ ⁽ᵃ⁾ | ✅ | ✅ |
+
+Two things that table is there to make visible:
+
+**`lutMode` is not the same question as "what ran".** A 1D or 2D transform with
+`dataFormat: 'int8'` reports `lutMode: 'int-wasm-simd'`, because the mode is
+settled from the dataFormat before the kernel is known — but 1D and 2D have no
+WASM variant at all, and their JS interpolation loops run regardless. The mode
+string is the *request*, resolved; `kernelInfo()` is the answer.
+
+**The matrix-shaper kernel is the inverse of the others.** No float variant,
+because it is not a table walker — it exists only where there is no LUT. It
+also does not own a dimensional slot: a 3-channel pair it declines still gets
+`Kernel3D`.
+
+⁽ᵃ⁾ **The JS implementation is `matrixShaperJS.js`**, reading the same fused
+3×3 and the same curves off `stage_matrix_rgb.stageData` — no LUT, no WASM.
+62 MPx/s at int8 and 57 at int16, ≤ 1 LSB, one function for both depths,
+against 8 for the stage pipeline it replaces and 329 / 220 for WASM.
+
+**It is not a speed feature and should not be sold as one** — WASM beats it
+5×. It exists for two things WASM cannot do:
+
+- **Per-channel TRCs.** The WASM kernel keeps one input and one output table
+  shared across R/G/B, so a profile whose `rTRC`/`gTRC`/`bTRC` genuinely differ
+  would otherwise drop to the stage pipeline at ~8 MPx/s. JS has no table-size
+  pressure and carries three. When the curves ARE grey — every ordinary working
+  space — all three references point at one table, so the common case allocates
+  once and the hot loop cannot tell the difference.
+- **Hosts with no WebAssembly.**
+
+Note this is a **no-LUT problem only**: `createLut()` walks the grid through
+the gamma stages, so a CLUT has per-channel curves baked into its samples, and
+the WASM LUT kernels can be pure interpolators. And no profile in
+`testbed/profiles/rgb/` actually trips it — so treat it as coverage insurance
+until a calibrated display profile says otherwise.
+
+`matrixShaper.useVariant('simd' | 'scalar' | 'js' | null)` pins the choice.
+It exists because every machine that runs the test suite has WASM with SIMD, so
+both fallbacks are otherwise unreachable — and unreachable code is untested
+code.
+
+### dataFormat
+
+| dataFormat | `transform(colour)` | `transformArray` | `transformImages` (multicore) | LUT export (`toJSON`) | matrix-shaper kernel |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `object` | ✅ | throws | throws | ✅ with `buildLut` | ✕ |
+| `objectFloat` | ✅ | throws | throws | ✅ with `buildLut` | ✕ |
+| `int8` | ✅ | ✅ | ✅ | ✅ with `buildLut` | ✅ |
+| `int16` | ✅ | ✅ | ✅ | ✅ with `buildLut` | ✅ |
+| `device` | ✅ | ✅ | ✅ | ✅ with `buildLut` | ✕ ⁽⁷⁾ |
+
+`transformArray` throws for the object formats rather than guessing: a flat
+array cannot carry a colour object, and the pipeline would return NaN. That is
+also why multicore excludes them — the worker path is the array path.
+
+⁽⁷⁾ `device` declines at the first gate — `dataFormat is not int8 or int16` —
+because the kernel's tables are indexed by an integer code and `device` carries
+normalised floats. Verified by probe, not assumed.
+
+### Features
+
+| feature | 1D | 2D | 3D | 4D | ND | matrix-shaper |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| alpha (skip / fill / preserve) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| multicore | ✅ | ✅ | ✅ | ✅ | ✅ ⁽¹⁾ | ✅ |
+| pixel cache — accuracy path (`pixelCache`, beta) | ✅ | ✅ | ✅ | ✅ | ✅ | n/a ⁽²⁾ |
+| pixel cache — in-kernel (1.6, beta, **off by default**) | ✕ ⁽³⁾ | ✕ ⁽³⁾ | **measured** ⁽⁵⁾ | planned ⁽⁶⁾ | ✕ | ✕ ⁽⁴⁾ |
+
+⁽¹⁾ N-channel reaches the workers by shipping the profile chain rather than a
+LUT, because an N-channel CLUT would be enormous. Same result, different
+payload.
+
+⁽²⁾ The accuracy-path cache sits in the stage pipeline; a matrix-shaper
+transform bypasses that pipeline entirely on the array path.
+
+⁽³⁾ 1D and 2D input spaces are *enumerable* — 256 or 65,536 entries. Precompute
+the whole answer instead of caching part of it.
+
+⁽⁴⁾ ~3 ns/pixel. A probe costs more than the pixel it would save; the cache is
+worth least exactly where the kernel is best.
+
+⁽⁵⁾ Measured on the **SIMD** kernel, not the scalar fallback — the original
+scoping ruled SIMD out on the grounds that "a scalar check serialises what
+f32x4 vectorises", which is true of a pixel-parallel kernel and `tetra3d_simd`
+is not one: its lanes are the four channels at a CLUT corner, one iteration is
+one pixel. Paired exports against the shipped binary, all outputs
+byte-identical: **3.07× solid, 2.40× on a 5% logo, 2.57× on a 30% logo**,
+1.04× on an illustration, 0.93–0.96× on photographs, 0.99× on noise. The
+uncached export measures 0.985–1.008×, a tie, because there is no cache code
+in it. Alpha is **not** in the key and must not be — a solid RGB under a
+per-pixel alpha gradient hits every pixel, measured 2.80× with alpha preserved
+exactly.
+
+⁽⁶⁾ 4D is the same five-anchor insertion; only the key differs, packing four
+input bytes instead of three. Worth measuring rather than assuming: a 4D
+tetrahedral pixel is dearer, so the break-even hit rate is lower and the case
+should be stronger — but that is the direction the 3D scoping was wrong in
+once already.
 
 ---
 
@@ -295,12 +543,12 @@ The dispatch-history lessons (why the v1.3 table beat closures, why
 
 | Item | Notes |
 |---|---|
-| `Transform.kernelInfo()` / `transform.currentMode()` diagnostics | read `supports` + settled state; no runtime effect |
-| Co-locate lutKernelTable entries into kernel files | cosmetic — resolution is create-time only |
+| ~~`Transform.kernelInfo()` diagnostics~~ | **shipped v1.5.5** — reports name, dimensions, claimed, lutMode, hasLut, and once built, variant/bits/simd |
+| Co-locate lutKernelTable entries into kernel files | cosmetic *while the loops live on `Transform.prototype`* — under [KernelContract.md](./KernelContract.md) the 22 `run_` thunks do not move, they cease to exist |
 | `emitKernel(opts)` → `compile()` integration | descriptor hook reserved; see CompiledPipeline.md |
 | N-channel-input u16 LUT bake via `KernelND.provideLut` | only if a real workload needs image-rate N-ch input |
-| Per-dimension WASM module loading | currently both families load on every create (test-asserted) |
-| Matrix-shaper `provideLut` stub kernel | see MatrixShaperKernel.md |
+| Per-dimension WASM module loading | currently both families load on every create (test-asserted). Phase 7 of [KernelContract.md](./KernelContract.md) — needs the loadout test re-expressed against a host-capability probe first |
+| ~~Matrix-shaper `provideLut` stub kernel~~ | **superseded v1.5.5** — it is a claiming kernel with a `displacesLut` hook, not a dimensional one with a `provideLut` stub. `provideLut` is asked before the pipeline exists, which is too early for this decision. |
 | 1D/2D loop inlining (TODO B3 markers in loop files) | gray/duo loops still delegate per pixel |
 
 ---

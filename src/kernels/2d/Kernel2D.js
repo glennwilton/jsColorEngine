@@ -9,6 +9,7 @@ var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 
 module.exports = {
+    name: 'kernel2D',
     dimensions: 2,
 
     supports: {

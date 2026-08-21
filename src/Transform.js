@@ -465,14 +465,236 @@
      */
      class Transform{
 
-        // Kernel module descriptors, keyed '1d'..'4d' plus 'nd' (5+ channels).
+        // Kernel module descriptors, indexed by INPUT CHANNEL COUNT, 1..15 —
+        // the full ICC range (FCLR is 15 channels, see Profile.js). Dense, so
+        // setKernel() is one array index with no key string to build, and any
+        // single dimension can be replaced without disturbing its neighbours.
+        //
+        // Slots 5..15 hold the SAME KernelND descriptor object today. That is
+        // deliberate: eleven independently replaceable slots cost nothing (one
+        // object, therefore one hidden class), and they let someone with a real
+        // 7-channel workload register a tuned Kernel7D — or a test park a probe
+        // at dimension 9 — without forking the generic implementation.
+        //
         // Registered once via Transform.registerKernel(); instantiated per
         // Transform in setKernel() via Object.create(descriptor).
-        static kernels = {};
+        // See docs/deepdive/KernelContract.md.
+        static kernels = [];
+
+        // Highest input channel count a kernel can be registered for. ICC tops
+        // out at FCLR = 15.
+        static MAX_KERNEL_DIMENSIONS = 15;
+
+        // Claiming kernels, in registration order — asked after the pipeline is
+        // built, because what they need to know is its shape rather than its
+        // channel count. See registerKernel() and _claimKernel().
+        static claimKernels = [];
+
+        // Set by Transform.compatibility(); null means current defaults.
+        static _compatDefaults = null;
+
+        /**
+         * Pin construction defaults to an earlier release's behaviour.
+         *
+         *     Transform.compatibility('1.5');      // 1.5.0 output
+         *     Transform.compatibility(null);       // back to current
+         *     Transform.compatibility();           // returns the active pin
+         *
+         * WHY A NAMED SNAPSHOT RATHER THAN A SETTINGS BAG. An upgrade should
+         * not require finding and setting each changed default by hand — that
+         * is a research task with a silent failure mode. A version is one call,
+         * it documents itself, and it cannot drift: the list below IS the
+         * changelog of defaults that move output.
+         *
+         * NOT AN ENVIRONMENT VARIABLE, deliberately. This changes PIXELS, and
+         * `process.env` does not exist in a browser — a setting that worked in
+         * Node and silently did nothing in the browser would be worse than no
+         * setting. (Pool sizing is environment-configurable, because that is a
+         * Node-only subsystem and cannot change a pixel; see src/pool.js.)
+         *
+         * CALL IT BEFORE CONSTRUCTING ANYTHING. Defaults are read at
+         * construction, so a Transform built earlier keeps what it was built
+         * with. That is the one sharp edge, and it is why this is a single call
+         * at startup rather than a mutable configuration object.
+         *
+         * @param {string|null} [version]  '1.5' | null | omitted to read
+         * @returns {string|null} the version now pinned
+         */
+        /**
+         * Start the worker pool now, and report whether it worked.
+         *
+         * STATIC, NOT PER-INSTANCE, because the pool is process-wide: workers
+         * are shared across every Transform, which is what makes the
+         * per-worker transform cache worth having. `t.enablePool()` would
+         * imply two Transforms get two pools.
+         *
+         *     await Transform.enablePool();                       // Node
+         *     await Transform.enablePool({cores: 4});
+         *
+         * Everything else falls back to sequential silently on failure, which
+         * is right — multicore is an optimisation, never a capability. This is
+         * for the caller who deliberately wants parallelism and would rather
+         * find out at startup than ship something that quietly runs on one
+         * thread. It also warms the pool, so the first batch is not the one
+         * paying for spawning.
+         *
+         * Rejects with the reason. In a browser that reason is currently "no
+         * worker backend" — the Web Worker pool is 1.6 work; see the Roadmap.
+         *
+         * @param {object} [options]  pool options, e.g. {cores, maxThreads}
+         * @returns {Promise<{workers:number, host:string}>}
+         */
+        static enablePool(options){
+            var o = Transform._normalisePoolOptions(options);
+            var restart     = o.restart === true;
+            var cancelQueue = o.cancelQueue === true;
+            delete o.restart; delete o.cancelQueue;
+
+            // ALREADY ENABLED IS A NO-OP, not an error. Two modules that both
+            // want a pool should both be able to say so; making the second
+            // caller throw would mean every caller has to know whether it is
+            // first, which is the kind of coupling a process-wide resource
+            // should absorb rather than export.
+            if(Transform._poolDefault && !restart){
+                // Different options, though, are worth a word: silently
+                // ignoring them means someone believes they reconfigured the
+                // pool and did not.
+                if(Transform._poolOptionsDiffer(o, Transform._poolDefault)
+                   && !Transform._warnedPoolReconfig){
+                    Transform._warnedPoolReconfig = true;
+                    console.warn('jsColorEngine: enablePool() called again with different ' +
+                        'options — ignored, the pool is already running. Use ' +
+                        'enablePool({restart: true, ...}) to reconfigure it, or ' +
+                        'restartPool(...).');
+                }
+                return Promise.resolve(Transform._poolInfo
+                    ? Object.assign({alreadyEnabled: true}, Transform._poolInfo)
+                    : {alreadyEnabled: true});
+            }
+
+            var settle = Promise.resolve();
+            if(restart && Transform._poolDefault){
+                // RECONFIGURING MEANS REPLACING THE WORKERS, and workers hold
+                // fragments. Draining first is the safe default: in-flight
+                // images finish and their callbacks fire. cancelQueue trades
+                // that for immediacy — the work stops and every affected image
+                // fires its callback with a cancelled result, so nothing is
+                // left waiting either way.
+                if(cancelQueue){ try { _pool.cancelAll(); } catch(e){ /* nothing queued */ } }
+                settle = _pool.onQueueFree();
+            }
+
+            return settle.then(function(){
+                // Tear down BEFORE starting: pools are keyed by worker count,
+                // so enabling 6 after 2 without this leaves both alive and the
+                // process holding 8 workers for a pool of 6.
+                Transform.disablePool();
+                return _pool.enable(o);
+            }).then(function(info){
+                // Enabling is also SWITCHING ON. A caller who starts a pool
+                // means their batches to use it; making them repeat
+                // `multicore: true` at every call site is a papercut that
+                // produces exactly one bug — the call that forgot.
+                Transform._poolDefault = o;
+                Transform._poolInfo    = info;
+                return info;
+            });
+        }
+
+        /**
+         * Reconfigure a running pool. Sugar for `enablePool({restart: true})`,
+         * and the honest name for what a test wants between cases.
+         *
+         *     await Transform.restartPool({workers: 4});
+         *     await Transform.restartPool({workers: 4, cancelQueue: true});
+         *
+         * Waits for in-flight work to finish unless `cancelQueue` is set.
+         */
+        static restartPool(options){
+            var o = {};
+            for(var k in (options || {})) o[k] = options[k];
+            o.restart = true;
+            return Transform.enablePool(o);
+        }
+
+        /** Do two normalised option sets ask for a different pool? */
+        static _poolOptionsDiffer(a, b){
+            var keys = {};
+            for(var i in a) keys[i] = true;
+            for(var j in b) keys[j] = true;
+            for(var k in keys){ if(a[k] !== b[k]) return true; }
+            return false;
+        }
+
+        /**
+         * Tear the pool down and stop defaulting batches to it.
+         * Anything explicitly asking for `multicore` still gets its own pool.
+         */
+        static disablePool(){
+            Transform._poolDefault = null;
+    Transform._poolInfo = null;
+    Transform._warnedPoolReconfig = false;
+            Transform._poolInfo    = null;
+            _pool.destroyAll();
+        }
+
+        /**
+         * Accept the words people actually reach for.
+         *
+         * The pool's own vocabulary is `cores` / `maxThreads` / `minThreads`,
+         * which is accurate — but they are workers, and callers write
+         * `workers` / `maxWorkers`. Same spirit as buildLut/builtLut and
+         * matrixShaper/wasmMatrixShaper: one concept, more than one spelling,
+         * resolved in one place rather than checked for in several.
+         */
+        static _normalisePoolOptions(options){
+            var o = {};
+            for(var k in (options || {})) o[k] = options[k];
+            if(o.workers    !== undefined && o.cores      === undefined) o.cores      = o.workers;
+            if(o.maxWorkers !== undefined && o.maxThreads === undefined) o.maxThreads = o.maxWorkers;
+            if(o.minWorkers !== undefined && o.minThreads === undefined) o.minThreads = o.minWorkers;
+            delete o.workers; delete o.maxWorkers; delete o.minWorkers;
+            // `url` is where the Web Worker bundle lives. Carried, not used:
+            // the browser backend is 1.6 work, and enable() rejects there with
+            // that spelled out rather than pretending the URL did something.
+            return o;
+        }
+
+        static compatibility(version){
+            if(version === undefined) return Transform._compatVersion || null;
+
+            if(version === null || version === 'latest' || version === false){
+                Transform._compatDefaults = null;
+                Transform._compatVersion  = null;
+                return null;
+            }
+
+            var key = String(version).split('.').slice(0, 2).join('.');
+            var known = Transform.COMPAT_DEFAULTS[key];
+            if(!known){
+                throw new Error('Transform.compatibility: unknown version "' + version +
+                    '". Known: ' + Object.keys(Transform.COMPAT_DEFAULTS).join(', ') +
+                    ', or null for current defaults.');
+            }
+            Transform._compatDefaults = known;
+            Transform._compatVersion  = key;
+            return key;
+        }
 
         constructor(options){
 
             options = options || {};
+
+            // COMPATIBILITY DEFAULTS, if a version was pinned. Applied UNDER
+            // the caller's options, never over them: an explicit setting always
+            // wins, so pinning changes what you get by default and nothing you
+            // asked for. See Transform.compatibility().
+            if(Transform._compatDefaults){
+                var _merged = {};
+                for(var _c in Transform._compatDefaults) _merged[_c] = Transform._compatDefaults[_c];
+                for(var _o in options) if(options[_o] !== undefined) _merged[_o] = options[_o];
+                options = _merged;
+            }
 
             this.kernel = null;
 
@@ -493,6 +715,64 @@
             // "precompute and store a LUT for the fast image path". Internally we
             // normalise to `this.builtLut` to keep all downstream code untouched.
             this.builtLut = (options.builtLut === true) || (options.buildLut === true);
+
+            // `builtLut` doubles as intent ("build one") and state ("have
+            // one") — setLut() sets it true on a Transform that never asked.
+            // clear() has to restore the INTENT, so the constructor's answer
+            // is kept separately rather than inferred from the current value.
+            this._buildLutRequested = this.builtLut;
+
+            // THE WASM IMPLEMENTATION of the matrix-shaper maths. Named for
+            // the WASM part because the pipeline is ALREADY a matrix shaper —
+            // the optimiser folds an RGB->RGB pair into
+            // stage_Gamma_Inverse -> stage_matrix_rgb -> stage_Gamma, in JS
+            // float, and that is the exact reference everything here is
+            // measured against. It is simply slow: ~8 MPx/s against ~229 for
+            // the same arithmetic in WASM SIMD. Nothing about the maths
+            // changes; only who executes it.
+            //
+            // Three modes,
+            // because there are three genuinely different answers:
+            //
+            //   'auto'   (default) use it where there is no LUT to displace.
+            //                      Nothing the caller asked for changes.
+            //   'prefer'           ALSO replace a CLUT that was asked for.
+            //                      331 MPx/s against 123 on a photo, and
+            //                      within 1 LSB
+            //                      of the exact pipeline where the CLUT can be
+            //                      25 LSB out. Opt-in because a LUT is also an
+            //                      object callers export, clone and inspect.
+            //   false              never. The honest reference for comparing
+            //                      against, and a way out if a host misbehaves.
+            //
+            // Note "prefer" rather than "force": the kernel declines for a
+            // list of ordinary reasons — identity pairs, LUT-based RGB
+            // profiles, per-channel TRCs, a dataFormat other than int8 or
+            // int16 — and a mode named force would either have to throw on
+            // all of them or quietly not force. A host without WASM SIMD is
+            // NOT one of those reasons: it gets the scalar build, which is
+            // bit-identical and merely slower.
+            // `wasmMatrixShaper` is the name; `matrixShaper` and
+            // `preferMatrixShaperOverLUT` are accepted spellings, in the same
+            // spirit as buildLut/builtLut above.
+            var _ms = options.wasmMatrixShaper;
+            if(_ms === undefined) _ms = options.matrixShaper;
+            if(options.preferMatrixShaperOverLUT === true) _ms = 'prefer';
+            if(_ms === true) _ms = 'prefer';
+            if(_ms === false || _ms === 'off' || _ms === 'none') _ms = 'off';
+            if(_ms !== 'prefer' && _ms !== 'off') _ms = 'auto';
+            this.wasmMatrixShaper = _ms;
+
+            // PER-TRANSFORM MULTICORE DEFAULT. _multicoreHandoff() has always
+            // read `this.multicore` as the fallback when a call passes no
+            // `multicore` option — but nothing ever set it, so the fallback was
+            // permanently undefined and `new Transform({multicore: true})`
+            // silently did nothing. Wired here so the option a caller passes to
+            // the constructor means what it looks like it means.
+            this.multicore = (options.multicore === undefined) ? false : options.multicore;
+
+            // Derived flags so the decisions downstream read plainly.
+            this.preferMatrixShaperOverLUT = (_ms === 'prefer');
 
             // Gamut mode: 'none', 'color', 'map'. bakeLutGamut:true is legacy for 'color'.
             if (options.lutGamutMode && options.lutGamutMode !== 'none') {
@@ -771,6 +1051,18 @@
             this.chain = [];
             this.customStages = false;
 
+            // Multicore bookkeeping. `_workerKey` is this Transform's identity
+            // in the worker pool, assigned on first use and dropped by
+            // createMultiStage(); `_multicoreSafe` caches whether its LUT
+            // survives a worker rebuild. Both are per-Transform and neither
+            // means anything until transformImages() runs.
+            this._workerKey = null;
+            this._multicoreSafe = undefined;
+
+            // Which claiming kernel took the batch path, if any — set by
+            // _claimKernel() at the end of create(). See kernelInfo().
+            this._kernelClaim = null;
+
             this.inputChannels = 0;
             this.outputChannels = 0;
         };
@@ -784,18 +1076,174 @@
          * @param {object} descriptor  Kernel module export (see docs/deepdive/KernelModules.md)
          */
         static registerKernel(descriptor){
+            var MAX = Transform.MAX_KERNEL_DIMENSIONS;
             var dims = descriptor ? descriptor.dimensions : undefined;
-            var isND = (typeof dims === 'string' && dims.toLowerCase() === 'nd');
-            if(!descriptor || (!isND && !(typeof dims === 'number' && dims >= 1 && dims <= 4))){
-                throw new Error('Transform.registerKernel: descriptor.dimensions must be 1-4 or "ND"');
+
+            // `dimensions` is either one channel count, or an inclusive
+            // [from, to] range so a generic kernel claims its whole span in one
+            // call (KernelND registers 5..15 that way). Legacy 'ND' is accepted
+            // and means the same thing.
+            var from, to;
+            if(typeof dims === 'string' && dims.toLowerCase() === 'nd'){
+                from = 5; to = MAX;
+            } else if(Array.isArray(dims) && dims.length === 2
+                      && typeof dims[0] === 'number' && typeof dims[1] === 'number'){
+                from = dims[0]; to = dims[1];
+            } else if(typeof dims === 'number'){
+                from = to = dims;
+            } else {
+                // Deliberately NOT Number(dims): a one-element array coerces to
+                // its element, so `dimensions: [3]` would silently register at 3
+                // instead of being rejected as the malformed range it is.
+                from = to = NaN;
             }
-            var key = isND ? 'nd' : dims + 'd';
-            Transform.kernels[key] = descriptor;
+
+            var valid = descriptor
+                && isFinite(from) && isFinite(to)
+                && from === Math.floor(from) && to === Math.floor(to)
+                && from >= 1 && to <= MAX && from <= to;
+            if(!valid){
+                throw new Error('Transform.registerKernel: descriptor.dimensions must be '
+                    + '1-' + MAX + ', or [from, to] within that range');
+            }
+
+            // TWO KINDS OF KERNEL, ONE REGISTRATION CALL.
+            //
+            // A DIMENSIONAL kernel owns a channel count and is chosen before
+            // the pipeline exists — 3 channels in means Kernel3D, always.
+            //
+            // A CLAIMING kernel declares `claims(transform)` and is offered the
+            // transform AFTER the pipeline is built, because what it needs to
+            // know is not the channel count but the SHAPE the optimiser folded
+            // the conversion into. sRGB->AdobeRGB and sRGB->GRACoL are both
+            // 3-channel input; only one of them is a matrix shaper.
+            //
+            // Claiming kernels are held in registration order and asked in that
+            // order, so a later registration is a lower priority than an
+            // earlier one. They do not displace the dimensional slot: a pair
+            // that is not claimed still gets Kernel3D, and so does every LUT.
+            if(typeof descriptor.claims === 'function'){
+                for(var i = 0; i < Transform.claimKernels.length; i++){
+                    if(Transform.claimKernels[i].name === descriptor.name){
+                        Transform.claimKernels[i] = descriptor;      // replace in place
+                        return;
+                    }
+                }
+                Transform.claimKernels.push(descriptor);
+                return;
+            }
+
+            // One descriptor object into every slot in the range. Sharing the
+            // object is what keeps this free: Object.create(descriptor) in
+            // setKernel() produces one hidden class for the whole span.
+            for(var d = from; d <= to; d++){
+                Transform.kernels[d] = descriptor;
+            }
+        }
+
+        /**
+         * Offer this Transform to the claiming kernels, in registration order.
+         *
+         * Called once at the end of create(), after `pipelineCreated`. The
+         * first kernel to claim replaces `this.kernel` for the batch path; the
+         * dimensional kernel it displaces is simply dropped, because a claimed
+         * transform has no LUT for that kernel to walk.
+         *
+         * The reason it cannot happen in setKernel(): the answer depends on the
+         * pipeline, and at setKernel() time there is not one yet.
+         */
+        /**
+         * The first claiming kernel that wants this transform INSTEAD of a
+         * CLUT, or null. Asked during the LUT build, against the temporary
+         * device-to-device pipeline — earlier than the claim pass, and on a
+         * different pipeline, which is why it is a separate hook.
+         */
+        _kernelWantingInsteadOfLut(){
+            var list = Transform.claimKernels;
+            for(var i = 0; i < list.length; i++){
+                var d = list[i];
+                if(typeof d.displacesLut !== 'function') continue;
+                try {
+                    if(d.displacesLut(this) === true) return d;
+                } catch(e){ /* a broken hook must not break create() */ }
+            }
+            return null;
+        }
+
+        /** Release and detach the current kernel instance, if any. */
+        _releaseKernel(){
+            if(this.kernel && typeof this.kernel.release === 'function'){
+                try { this.kernel.release(); } catch(e){ /* nothing held */ }
+            }
+            this.kernel = null;
+        }
+
+        _claimKernel(){
+            this._kernelClaim = null;
+            var list = Transform.claimKernels;
+            for(var i = 0; i < list.length; i++){
+                var descriptor = list[i];
+                var verdict;
+                try {
+                    verdict = descriptor.claims(this);
+                } catch(e){
+                    continue;                       // a broken claim must not break create()
+                }
+                if(!verdict || verdict.ok !== true) continue;
+
+                var instance = Object.create(descriptor);
+                instance.transform = this;
+                instance.claimed = true;
+                instance._impl = undefined;
+                instance._variant = null;
+                if(typeof instance.create === 'function'){
+                    this.lutMode = instance.create(this.lutMode);
+                }
+                this.kernel = instance;
+                this._kernelClaim = {name: descriptor.name, why: verdict.why || null};
+                if(this.verbose){
+                    console.log('Kernel "' + descriptor.name + '" claimed this transform');
+                }
+                return;
+            }
+        }
+
+        /**
+         * Which kernel is actually running the batch path, and how.
+         *
+         * `claimed` distinguishes a kernel that asked for this transform from
+         * the dimensional default. Diagnostic only — nothing dispatches on it.
+         *
+         * @returns {object|null}
+         */
+        kernelInfo(){
+            if(!this.kernel) return null;
+            var info = {
+                name:       this.kernel.name || ('kernel' + (Array.isArray(this.kernel.dimensions)
+                                ? 'ND' : this.kernel.dimensions + 'D')),
+                dimensions: this.kernel.dimensions,
+                claimed:    this.kernel.claimed === true,
+                lutMode:    this.lutMode,
+                hasLut:     this.lut !== false && !!this.lut
+            };
+            // A claiming kernel builds lazily, so `built` is false until the
+            // first array call — which is a real state worth being able to see,
+            // not an implementation detail to hide.
+            if(info.claimed){
+                info.built = !!this.kernel._impl;
+                if(this.kernel._impl){
+                    info.variant = this.kernel._impl.variant;
+                    info.bits    = this.kernel._impl.bits;
+                    info.simd    = this.kernel._impl.simd;
+                }
+            }
+            return info;
         }
 
         setKernel(inChannels) {
-            var key = inChannels > 4 ? 'nd' : inChannels + 'd';
-            var descriptor = Transform.kernels[key];
+            // One array index. No key string to build, no `> 4` special case —
+            // the registry is dense over 1..15 and KernelND occupies 5..15.
+            var descriptor = Transform.kernels[inChannels];
             if(!descriptor){
                 // No kernel module registered for this dimension (yet) —
                 // no kernel module is registered for this dimension.
@@ -1016,6 +1464,16 @@
          */
         toJSON(opts){
             if(!this.lut || !this.lut.CLUT){
+                // The caller may have passed buildLut:true and still be here,
+                // because wasmMatrixShaper:'prefer' skipped the CLUT. Telling
+                // them to pass buildLut:true would be advice they already took.
+                if(this._buildLutRequested && this.preferMatrixShaperOverLUT){
+                    throw 'Transform.toJSON: no LUT to serialise — `wasmMatrixShaper: "prefer"` ' +
+                          'took this transform, so no CLUT was built even though `buildLut: true` ' +
+                          'was requested. The matrix-shaper kernel is not a LUT and has nothing to ' +
+                          'export. Drop to `wasmMatrixShaper: "auto"` (the default) if you need the ' +
+                          'CLUT for toJSON(); the kernel still runs wherever there is no LUT to displace.';
+                }
                 throw 'Transform.toJSON: no LUT to serialise. ' +
                       'Construct the Transform with `buildLut: true` so a LUT is built during create(), ' +
                       'or call setLut() to install one. ' +
@@ -1287,6 +1745,56 @@
         createMultiStage(profileChain, customStages) {
             customStages = customStages || [];
 
+            // DO NOT RE-CREATE WITH A STALE LUT ATTACHED. Re-creating over an
+            // existing pipeline left the OLD LUT in place: outputChannels
+            // updated to the new space but `lut.outputChannels` did not, so
+            // transformArray kept emitting the previous space's channel count
+            // and transform() returned values interpolated through the wrong
+            // table — silently, with no error.
+            //
+            // Rebuilding IS supported, but it has to be asked for: clear()
+            // drops the LUT, the pipeline, compiled WASM state and this
+            // object's worker-pool registration in one place. Reaching in and
+            // setting `lut = false` happened to work — verified byte-identical
+            // on int, int-wasm-scalar and int-wasm-simd — but it is not a
+            // contract worth having, because it only covers the field the
+            // caller happens to know about.
+            //
+            // Throwing beats silently rebuilding: every documented path
+            // already builds one Transform per conversion, so nothing loses a
+            // capability, and the guard costs one boolean.
+            if(this.pipelineCreated){
+                throw 'This Transform already has a pipeline. Build a new ' +
+                      'Transform for a new conversion — re-creating would ' +
+                      'reuse the existing LUT and silently produce the old ' +
+                      'colour space. To deliberately rebuild this one, call ' +
+                      'transform.clear() first.';
+            }
+
+            // REBUILDING MAKES THIS A DIFFERENT TRANSFORM, so anything cached
+            // about the old one has to go. Every route in funnels through
+            // here — create() delegates to it and setLut() ends by calling
+            // create() — so this is the one place that needs to say it.
+            //
+            // The worker key matters most. It is ASSIGNED rather than derived
+            // from content, so unlike a hash it does not change on its own
+            // when the profiles do: a Transform re-created over different
+            // profiles would otherwise keep its old key and be handed the old
+            // pipeline out of the workers' registry. Drop the key, and tell
+            // the workers to drop what it pointed at — fire and forget,
+            // because this is a synchronous method and the only cost of a
+            // missed forget is memory, not correctness.
+            //
+            // _multicoreSafe is the probe result for the OLD lut, and was
+            // never reset before; same staleness, smaller blast radius.
+            if(this._workerKey){
+                var staleKey = this._workerKey;
+                this._workerKey = null;
+                try { _pool.forgetEverywhere(staleKey); } catch(e){ /* no pool, nothing held */ }
+            }
+            this._multicoreSafe = undefined;
+            this._kernelClaim = null;               // re-decided from THIS pipeline
+
             if(!Array.isArray(profileChain)){
                 throw 'Invalid profileChain, must be an array';
             }
@@ -1487,6 +1995,7 @@
             }
 
             // Built lut or if lut pre-supplied use it
+            var _skipLutForMatrixShaper = false;
             if(this.builtLut || this.lut !== false){
                 //
                 // Prebuilt luts are faster as they only need 1-2 stages, but they are less accurate
@@ -1522,14 +2031,43 @@
                         }
                     }
 
+                    // preferMatrixShaperOverLUT: an RGB->RGB matrix-shaper
+                    // conversion is a curve, a 3x3 and another curve, and the
+                    // WASM kernel runs it at 331 MPx/s against 123 for a
+                    // CLUT while staying within 1 LSB of the exact pipeline
+                    // rather than carrying interpolation error. Opt-in,
+                    // because a LUT is also an object callers export, clone
+                    // and inspect.
+                    //
+                    // Decided HERE, against the temporary pipeline just built,
+                    // rather than predicted from profile types — an identity
+                    // pair collapses to three stages, and a LUT-based RGB
+                    // profile produces interpolation stages, neither of which
+                    // is visible before the pipeline exists.
+                    // Asked of every registered claiming kernel, in order,
+                    // rather than of one hard-coded module — the same list
+                    // _claimKernel() walks later. This is the earlier of the
+                    // two decisions and runs against a different pipeline.
+                    var _displacer = this._kernelWantingInsteadOfLut();
+                    if(_displacer){
+                        _skipLutForMatrixShaper = true;
+                        this.builtLut = false;
+                        this.lut = false;
+                        if(this.verbose){
+                            console.log('Kernel "' + _displacer.name + '" displaced the CLUT; none built');
+                        }
+                    }
+
                     var _pluginEntry = Transform._plugins[this.lutMode];
 
                     // create the prebuilt Lut.  opts.builder replaces createLut() when
                     // provided; null/absent means use the standard CLUT builder
                     // (with any hooks that initialise installed).
-                    this.lut = (_pluginEntry && _pluginEntry.builder)
-                        ? _pluginEntry.builder(this)
-                        : this.createLut();
+                    if(!_skipLutForMatrixShaper){
+                        this.lut = (_pluginEntry && _pluginEntry.builder)
+                            ? _pluginEntry.builder(this)
+                            : this.createLut();
+                    }
                     // Signature is NOT stamped here — for speed. The hot path
                     // (create + transformArray) shouldn't pay the hash cost.
                     // toJSON() lazy-computes a signature on demand, and explicit
@@ -1537,6 +2075,12 @@
                     // stamp at extraction time when audit semantics are wanted.
                 }
 
+                if(_skipLutForMatrixShaper){
+                    // The ordinary stage pipeline — which is what the kernel
+                    // reads its matrix and curves from.
+                    this.createPipeline(profileChain, this.convertInputOutput, this.convertInputOutput, false);
+                    this.lut = false;
+                } else {
                 // rebuild pipeline to use LUT and the LUTinterpolation method, seriously just stay with tetrahedral
                 var defaultInterpolation3D = this.interpolation3D
                 var defaultInterpolation4D = this.interpolation4D
@@ -1548,6 +2092,7 @@
                 // restore interpolation
                 this.interpolation3D = defaultInterpolation3D;
                 this.interpolation4D = defaultInterpolation4D;
+                }
 
             } else {
                 // standard pipeline without a prebuilt lut
@@ -1606,6 +2151,12 @@
             if(this.kernel){
                 this.lutMode = this.kernel.create(this.lutMode);
             }
+
+            // CLAIM PASS. The dimensional kernel above was chosen from the
+            // channel count before the pipeline existed; a claiming kernel is
+            // offered the transform now that its SHAPE is known, and may take
+            // over the batch path. See registerKernel().
+            this._claimKernel();
 
             this._propagateWasmMemorySettings();
 
@@ -1780,11 +2331,15 @@
          * boundary.
          *
          * `functions` lists any option holding a function —
-         * `gamutDeFn`, `lutInputHook`, `lutOutputHook`. Those cannot be
-         * structured-cloned (`postMessage` throws `DataCloneError`), so they
-         * are the reason a Transform may not be rebuildable in a worker from
-         * options alone. Custom stages are baked into the LUT at build time,
-         * so they do not appear here and do not travel either.
+         * `gamutDeFn`, `lutInputHook`, `lutOutputHook` — which cannot be
+         * structured-cloned (`postMessage` throws `DataCloneError`).
+         *
+         * All three are LUT-BUILD-TIME only: the hooks run inside
+         * `buildIntLut()`'s grid walk, and `gamutDeFn` is reached through
+         * `gamutCheck()` in the same loop. So once a LUT exists they have
+         * already done their work and are irrelevant to conversion — which is
+         * why shipping a baked LUT to a worker carries them for free, and why
+         * they only matter if something would REBUILD the LUT elsewhere.
          *
          *     const o = t.getOptions();
          *     o.lutMode          // 'int-wasm-simd', not 'auto'
@@ -1818,6 +2373,7 @@
                 clipRGBinPipeline:          this.clipRGBinPipeline,
                 useCurveLut:                this.useCurveLut,
                 pipelineDebug:              this.pipelineDebug,
+                wasmMatrixShaper:           this.wasmMatrixShaper,
                 validateOnCreate:           this.validateOnCreate,
                 bindTransformArrayFn:       this.bindTransformArrayFn,
                 wasmShrinkRatio:            this._wasmShrinkRatio,
@@ -1835,6 +2391,236 @@
             out.functions = fns;
 
             return out;
+        }
+
+        /**
+         * Choose how this Transform crosses a worker boundary, if it can.
+         *
+         * ONE PLACE, TWO CALLERS. `transformImages()` uses it to dispatch and
+         * `getWorkerInfo()` uses it to interrogate — and the second is only
+         * evidence about the first if both ask the same question. Leaving the
+         * choice inline in the dispatcher was how the two would quietly
+         * diverge.
+         *
+         * MODE 1 ships the baked LUT. Cheapest, and the only mode that carries
+         *   custom stages, hooks and a custom deltaE function, because those
+         *   are baked in at build time. Not universally valid: N-channel
+         *   output stays on the pipeline on purpose — a 6-channel CLUT would
+         *   be enormous — and a LUT-only rebuild of one diverged by 27,204
+         *   bytes in 35,000, max delta 254. So it is proved on a probe rather
+         *   than assumed.
+         *
+         * MODE 2 ships the profile chain and rebuilds with create() in the
+         *   worker. Exact by construction, and the only mode that reaches the
+         *   LUT-free accuracy path and N-channel — which is where the speedup
+         *   is worth the most, those being the slow paths — but functions
+         *   cannot be structured-cloned, so it cannot carry hooks.
+         *
+         * Neither available means sequential, which is always correct.
+         *
+         * @param {Object} [opts]   as passed to transformImages
+         * @param {Object} [flags]  alpha flags; derived from opts when absent
+         * @returns {{payload: Object|null, signature: string|null, multicore: *}}
+         */
+        _multicoreHandoff(opts, flags){
+            opts = opts || {};
+            flags = flags || {
+                inputHasAlpha:  opts.inputHasAlpha  || false,
+                outputHasAlpha: opts.outputHasAlpha || false,
+                preserveAlpha:  opts.preserveAlpha  || false
+            };
+
+            // PRECEDENCE: the call, then the Transform, then a pool enabled
+            // at startup. Explicit always beats ambient, so `multicore: false`
+            // on one batch still opts that batch out of an enabled pool.
+            var multicore = opts.multicore !== undefined ? opts.multicore
+                          : (this.multicore ? this.multicore
+                          : (Transform._poolDefault || false));
+            var none = {payload: null, signature: null, multicore: multicore};
+            if(!multicore) return none;
+
+            var resolved = this.getOptions();
+
+            // ONE ASSIGNED KEY PER TRANSFORM, for both modes. Not derived from
+            // the LUT or the chain: a content hash has to cover every input
+            // that changes what the worker builds, forever, and getting that
+            // list wrong silently serves one Transform another one's pipeline.
+            // See pool.nextKey(). createMultiStage() drops the key when the
+            // Transform is rebuilt, which is what keeps an assigned key honest.
+            var signature = this._workerKey;
+
+            if(this.lut){
+                if(this._multicoreSafe === undefined){
+                    this._multicoreSafe = _probeLutEquivalence(this, flags);
+                }
+                if(this._multicoreSafe){
+                    if(!signature) signature = this._workerKey = _pool.nextKey();
+                    return {
+                        payload:   {mode: 'lut', lut: this.lut, lutMode: this.lutMode},
+                        signature: signature,
+                        multicore: multicore
+                    };
+                }
+            }
+
+            if(Array.isArray(this.chain) && this.chain.length >= 3){
+                // `lutInputHook`, `lutOutputHook` and `gamutDeFn` are all
+                // LUT-BUILD-TIME only — the hooks run inside buildIntLut()'s
+                // grid walk and gamutDeFn is reached through gamutCheck() in
+                // the same loop. So:
+                //
+                //   Mode 1            already baked; workers only read the
+                //                     LUT, so none of them matter.
+                //   Mode 2, no LUT    no bake happens at all, so they are
+                //                     inert and it is safe to proceed.
+                //   Mode 2, with LUT  the worker RE-BAKES via create(), and
+                //                     the functions cannot cross the wire, so
+                //                     it would bake a different LUT.
+                //
+                // Only that last case is unsafe. It warns and drops to
+                // sequential rather than throwing: multicore is an
+                // optimisation, never a capability, so the one thing that must
+                // not happen is plausible-but-differently-baked output. Losing
+                // the speedup is an acceptable price; losing correctness is
+                // not, and neither is failing a call that has a correct answer
+                // available.
+                if(resolved.buildLut && resolved.functions.length){
+                    if(typeof console !== 'undefined' && console.warn){
+                        console.warn('jsColorEngine: transformImages fell back to ' +
+                            'single-threaded. This Transform has no reusable LUT (its ' +
+                            'output needs the pipeline), so a worker would have to ' +
+                            're-bake it — but ' + resolved.functions.join(', ') +
+                            ' cannot cross a worker boundary, so the re-bake would ' +
+                            'differ. Drop the hook to parallelise.');
+                    }
+                    return none;
+                }
+                if(!signature) signature = this._workerKey = _pool.nextKey();
+                return {
+                    payload:   {mode: 'chain', chain: this.chain, options: resolved},
+                    signature: signature,
+                    multicore: multicore
+                };
+            }
+
+            return none;
+        }
+
+        /**
+         * Everything about this Transform that a second copy of it would have
+         * to match, as plain JSON.
+         *
+         * This exists to be COMPARED. `transformImages()` hands work to
+         * workers that rebuild the Transform at the far end — from a baked LUT
+         * (mode 1) or by re-running create() on cloned profiles (mode 2) — and
+         * "it produced plausible pixels" is not evidence that the rebuild
+         * matched. `getWorkerInfo()` collects this same structure from every
+         * worker and diffs it against the master, so a divergence shows up as
+         * a named field rather than as slightly-wrong colour.
+         *
+         * The case that motivates it: a master holding a u16 int LUT while a
+         * worker holds an f64 float one. Both convert, both look right, and
+         * `lut.intLut.dataType` is where they differ.
+         *
+         *     const i = t.getInfo();
+         *     i.lut                     // false when there is no LUT
+         *     i.lut.bytes               // 287496
+         *     i.lut.intLut.dataType     // 'u16'
+         *     i.options.lutMode         // 'int'
+         *
+         * `lut` is `false`, not null or absent, when the Transform runs the
+         * pipeline instead — N-channel output and the LUT-free accuracy path
+         * both do, deliberately (a 6-channel CLUT would be enormous).
+         *
+         * @returns {Object}
+         */
+        getInfo(){
+            var info = {
+                inputChannels:  this.inputChannels,
+                outputChannels: this.outputChannels,
+                dataFormat:     this.dataFormat,
+                chain:          _describeChain(this.chain),
+                options:        this.getOptions(),
+                lut:            _describeLut(this.lut, this.signLut())
+            };
+            return info;
+        }
+
+        /**
+         * Ask every worker what it actually built, and diff it against this
+         * Transform.
+         *
+         * Returns without spawning anything if the pool is unavailable or this
+         * Transform has no worker-safe hand-off — `workers` is then empty and
+         * `inSync` is true, because nothing disagreed.
+         *
+         *     const {inSync, differences, workers} = await t.getWorkerInfo();
+         *
+         * `differences` is a list of `{worker, path, master, worker: value}`,
+         * empty when everything matches.
+         *
+         * @returns {Promise<{master: Object, workers: Object[], inSync: boolean, differences: Object[]}>}
+         */
+        getWorkerInfo(opts){
+            var master = this.getInfo();
+
+            // Asking what the workers built IS a request for workers, so this
+            // defaults multicore on rather than inheriting the Transform's own
+            // setting — otherwise the diagnostic reports "nothing disagreed"
+            // for a Transform that simply never opted in, which is true and
+            // useless. Pass {multicore: false} to suppress it deliberately.
+            var ask = {};
+            for(var k in (opts || {})) ask[k] = opts[k];
+            if(ask.multicore === undefined) ask.multicore = true;
+
+            var picked = this._multicoreHandoff(ask, null);
+
+            if(!picked || !picked.payload){
+                return Promise.resolve({master: master, workers: [],
+                                        inSync: true, differences: []});
+            }
+
+            var poolOptions = (picked.multicore === true) ? {} : picked.multicore;
+            var pool;
+            try { pool = _pool.acquire(poolOptions); } catch(e){ pool = null; }
+            if(!pool){
+                return Promise.resolve({master: master, workers: [],
+                                        inSync: true, differences: []});
+            }
+
+            return pool.workerInfo(picked.signature, picked.payload).then(function(infos){
+                _pool.release(pool);
+
+                var mode = picked.payload.mode;
+                var all = [];
+                infos.forEach(function(info, i){
+                    _diffInfo(master, info, '', i, all);
+                });
+
+                // Some fields cannot match and should not: a mode-1 worker
+                // rebuilt from a bare LUT genuinely has no profiles to
+                // describe. Reporting those as faults would make every healthy
+                // Transform read as out of sync, and a diagnostic that cries
+                // wolf is one nobody reads. They are explained, not hidden.
+                var differences = [], expected = [];
+                all.forEach(function(d){
+                    var why = _expectedDivergence(mode, d.path);
+                    if(why){ d.reason = why; expected.push(d); }
+                    else differences.push(d);
+                });
+
+                return {
+                    master:      master,
+                    workers:     infos,
+                    mode:        mode,
+                    inSync:      differences.length === 0,
+                    differences: differences,
+                    expected:    expected
+                };
+            }, function(e){
+                _pool.release(pool);
+                throw e;
+            });
         }
 
         /**
@@ -1860,10 +2646,39 @@
          * Design, and why the splitting looks the way it does:
          * docs/deepdive/multicore.md
          *
-         * @param {Array}  images  [{data, pixelCount}, …]
+         * PER-IMAGE RESULTS. Each image may carry an `id`; one is generated
+         * from its position if absent. Images finish OUT OF SUBMISSION ORDER —
+         * slices are dispatched longest-first and pulled by whichever worker
+         * frees up — so the id is the stable handle, not the index.
+         *
+         *     await t.transformImages(images, {
+         *         multicore: true,
+         *         onImage: (index, data, info) => {
+         *             // fires as each image completes, before the batch does,
+         *             // so results can be written out instead of accumulating
+         *             fs.writeFileSync(info.id, encode(data));
+         *         }
+         *     });
+         *
+         * `info` carries `{id, index, pixelCount, outputChannels, ms,
+         * computeMs, source}`. `ms` is wall time from the start of the call —
+         * what a progress bar wants; `computeMs` is summed worker time for
+         * that image, which is the work actually done and can EXCEED `ms`,
+         * because one image's slices run on several workers at once. `source`
+         * is the caller's own descriptor, so any metadata hung on it comes
+         * back without the engine defining a shape for it.
+         *
+         * The same records are returned as `imageInfo`, in submission order.
+         * `onImage` fires on the sequential path too: multicore is an
+         * optimisation, never a capability, so a caller must not have to know
+         * which path ran. A callback that throws is warned about and skipped —
+         * the conversion has already succeeded by then.
+         *
+         * @param {Array}  images  [{data, pixelCount, id?, …metadata}, …]
          * @param {Object} [opts]  {inputHasAlpha, outputHasAlpha, preserveAlpha,
-         *                          multicore: false|true|{…pool options}}
-         * @returns {Promise<{images: Array, workersUsed: number, tasks: number}>}
+         *                          multicore: false|true|{…pool options},
+         *                          onImage: (index, data, info) => void}
+         * @returns {Promise<{images: Array, imageInfo: Array, workersUsed: number, tasks: number}>}
          */
         transformImages(images, opts){
             var self = this;
@@ -1877,77 +2692,218 @@
             var flags = {
                 inputHasAlpha:  opts.inputHasAlpha  || false,
                 outputHasAlpha: opts.outputHasAlpha || false,
-                preserveAlpha:  opts.preserveAlpha  || false
+                preserveAlpha:  opts.preserveAlpha  || false,
+                // `|| false` above destroys the difference between "the caller
+                // said false" and "the caller said nothing", and the per-image
+                // default needs it: unstated means "preserve if both sides
+                // have an alpha", the same rule transformArray uses.
+                _preserveStated: opts.preserveAlpha !== undefined
+            };
+
+            // Per-image completion callback. Fires as each image finishes
+            // rather than waiting for the batch, so a long run can report
+            // progress — and, more usefully, hand each result off (written to
+            // disk, encoded, posted on) instead of holding every output in
+            // memory until the end.
+            //
+            // Fires on the SEQUENTIAL path too. Multicore is an optimisation,
+            // never a capability, so a caller must not have to know which path
+            // ran to get their callbacks.
+            //
+            // A throwing callback must not take the batch with it: the
+            // conversion has already succeeded by then, and losing it because
+            // a progress bar failed would be absurd.
+            var onImage = (typeof opts.onImage === 'function') ? opts.onImage : null;
+
+            // IDs are the caller's if they supplied one, and generated if not,
+            // so a callback always has something stable to key on. Images
+            // finish out of submission order, so the array index alone is a
+            // poor handle for anything the caller is tracking — and generating
+            // when absent means callers who do not care never have to think
+            // about it.
+            var ids = images.map(function(img, i){
+                return (img && img.id !== undefined && img.id !== null) ? img.id : ('image-' + i);
+            });
+
+            // ONE NORMALISED PLAN PER IMAGE, resolved before either path
+            // runs. Both the sequential and the pooled route read from this,
+            // so they cannot resolve a descriptor differently — the same
+            // reason the alpha overrides are resolved here rather than twice.
+            var plans;
+            try {
+                plans = images.map(function(img, i){
+                    return _imagePlan(self, img, flags, ids[i]);
+                });
+            } catch(e){
+                // REJECT, DO NOT THROW. This method returns a Promise, so a
+                // caller writing `.catch()` rather than `try/await` must still
+                // see the error — a validation failure that throws
+                // synchronously from an async API is an uncaught exception in
+                // half the call styles that are perfectly reasonable.
+                return Promise.reject(e);
+            }
+
+            // Per-image records, filled as each finishes and returned
+            // alongside the buffers. Additive: `res.images` keeps its shape.
+            var imageInfo = new Array(images.length);
+            var batchStarted = Date.now();
+
+            var announce = function(index, data, stats){
+                var info = {
+                    id:             ids[index],
+                    index:          index,
+                    pixelCount:     plans[index].pixelCount,
+                    outputChannels: self.outputChannels,
+                    // Wall time from the start of the call — what a progress
+                    // bar wants. `computeMs` is the work actually done, which
+                    // is the honest per-image cost.
+                    ms:             Date.now() - batchStarted,
+                    computeMs:      (stats && stats.computeMs !== undefined) ? stats.computeMs : null,
+                    // A cancelled image still announces — a caller awaiting one
+                    // callback per image would otherwise wait forever for work
+                    // that will never run. `data` is null in that case: tasks
+                    // already with a worker cannot be recalled, so the buffer
+                    // may be partly written and is not worth handing back.
+                    cancelled:      !!(stats && stats.cancelled),
+                    // The caller's own descriptor, so any metadata they hung
+                    // on it rides along without the engine having to define a
+                    // shape for it.
+                    source:         images[index]
+                };
+                imageInfo[index] = info;
+
+                if(!onImage) return;
+                try {
+                    onImage(index, data, info);
+                } catch(e){
+                    if(typeof console !== 'undefined' && console.warn){
+                        console.warn('jsColorEngine: transformImages onImage callback threw for ' +
+                                     'image ' + index + ' (' + ids[index] + ') — the conversion ' +
+                                     'itself succeeded.', e);
+                    }
+                }
             };
 
             var runSequential = function(){
-                var out = images.map(function(img){
-                    return self.transformArray(img.data, flags.inputHasAlpha,
-                        flags.outputHasAlpha, flags.preserveAlpha, img.pixelCount);
+                var out = images.map(function(img, i){
+                    var t0 = Date.now();
+                    // The SAME per-image resolution the pool path uses. If
+                    // these two disagreed, a batch would convert differently
+                    // depending on whether workers happened to be available —
+                    // which is the one thing the sequential fallback exists to
+                    // rule out.
+                    var pl = plans[i], f = pl.flags;
+                    var converted = self.transformArray(pl.data, f.inputHasAlpha,
+                        f.outputHasAlpha, f.preserveAlpha, pl.pixelCount);
+                    announce(i, converted, {computeMs: Date.now() - t0});
+                    return converted;
                 });
-                return Promise.resolve({images: out, workersUsed: 0, tasks: images.length});
+                return Promise.resolve({images: out, imageInfo: imageInfo,
+                                        cancelled: images.map(function(){ return false; }),
+                                        workersUsed: 0, tasks: images.length});
             };
 
-            var multicore = opts.multicore !== undefined ? opts.multicore : this.multicore;
+            // PRECEDENCE: the call, then the Transform, then a pool enabled
+            // at startup. Explicit always beats ambient, so `multicore: false`
+            // on one batch still opts that batch out of an enabled pool.
+            var multicore = opts.multicore !== undefined ? opts.multicore
+                          : (this.multicore ? this.multicore
+                          : (Transform._poolDefault || false));
             if(!multicore) return runSequential();
 
-            // The LUT is what a worker needs — no profiles, no ICC parsing.
-            // Without one there is nothing to ship, so stay on this thread.
-            var signature = this.signLut();
-            if(!signature || !this.lut) return runSequential();
-
-            // A worker rebuilds from the LUT alone, which is only valid if a
-            // LUT-rebuilt Transform reproduces this one exactly. That is NOT
-            // universally true: an N-channel output (measured on a 7-channel
-            // profile) walks the pipeline and a LUT-only rebuild diverges
-            // wildly — 27,204 wrong bytes in 35,000, max delta 254.
-            //
-            // Rather than maintain a list of which cases are safe, prove it
-            // once per Transform on a small probe and fall back if it fails.
-            // Costs a few hundred pixels; the alternative is silently wrong
-            // colour, which is the one outcome worth any amount of caution.
-            if(this._multicoreSafe === undefined){
-                this._multicoreSafe = _probeLutEquivalence(this, flags);
+            var picked = this._multicoreHandoff(opts, flags);
+            // MULTICORE WAS ASKED FOR BUT THE HANDOFF DECLINED, or it was
+            // never asked for at all. Only the first is worth a word.
+            if(!picked.payload){
+                return (picked.multicore)
+                    ? _noWorkers(this, opts, runSequential)
+                    : runSequential();
             }
-            if(!this._multicoreSafe) return runSequential();
 
+            var payload     = picked.payload;
+            var signature   = picked.signature;
             var poolOptions = (multicore === true) ? {} : multicore;
             var pool;
             try {
-                pool = _pool.acquire(this.lutMode || 'int', poolOptions);
+                pool = _pool.acquire(poolOptions);
             } catch(e){ pool = null; }
-            if(!pool) return runSequential();
+            if(!pool) return _noWorkers(this, opts, runSequential);
 
-            var totalPx = images.reduce(function(a, img){ return a + img.pixelCount; }, 0);
+            // COUNTED FROM HERE — the point this call commits to the pool,
+            // and synchronous, so a producer loop sees its own submissions in
+            // queueDepth() immediately. Counting inside pool.run() instead
+            // read 0 for work already submitted, because run() is only reached
+            // after pool.start() resolves a microtask later, and
+            // onQueueBelow() then waved a whole loop through unpaced.
+            //
+            // Released on settle, success or failure alike: a rejected batch
+            // that left the depth raised would wedge every later waiter.
+            // Bytes as well as batches, so onMemoryBelow() has something to
+            // hold. Input plus output: four thumbnails and four 60 MP scans are
+            // the same queue depth and three orders of magnitude apart in
+            // memory, and the second is the number a caller has a budget for.
+            var inBPP  = self.inputChannels  + (flags.inputHasAlpha  ? 1 : 0);
+            var outBPP = self.outputChannels + (flags.outputHasAlpha ? 1 : 0);
+            var unit   = (self.dataFormat === 'int16') ? 2 : 1;
+            var batchBytes = 0;
+            for(var bi = 0; bi < images.length; bi++){
+                batchBytes += plans[bi].pixelCount * (plans[bi].inChannels + plans[bi].outChannels) * unit;
+            }
+
+            _pool.enterQueue(batchBytes);
+            var counted = true;
+            var release = function(){
+                if(counted){ counted = false; _pool.leaveQueue(batchBytes); }
+            };
+            var settled = function(v){ release(); return v; };
+            var settledErr = function(e){ release(); throw e; };
+
+            var totalPx = plans.reduce(function(a, pl){ return a + pl.pixelCount; }, 0);
             if(totalPx < pool.opts.parallelFloorPx){
                 // Below the measured floor, splitting costs more than it saves.
                 _pool.release(pool);
+                release();
                 return runSequential();
             }
 
-            var meta = images.map(function(img){
-                return {
-                    data: img.data,
-                    pixelCount: img.pixelCount,
-                    inChannels:  self.inputChannels  + (flags.inputHasAlpha  ? 1 : 0),
-                    outChannels: self.outputChannels + (flags.outputHasAlpha ? 1 : 0)
-                };
-            });
+            // PER-IMAGE ALPHA. The batch flags are the default; an image may
+            // override any of them. A folder of mixed PNG and JPEG is the
+            // ordinary case for a batch converter, and forcing one answer
+            // means either two calls or padding every JPEG with an alpha
+            // channel nobody wanted.
+            //
+            // Alpha is the ONLY thing that may vary: it is a stride and a copy,
+            // never colour. The Transform's own channel counts are fixed, so
+            // this cannot turn into "different conversions in one batch".
+            var meta = plans;
 
-            // The LUT object itself, not toJSON() -- the portable format quantises
-            // and would cost 1 LSB on some pixels. Structured clone keeps the
-            // typed arrays exact, so parallel output is byte-identical.
-            var lutObject = this.lut;
 
             return pool.start().then(function(){
                 var tasks = _pool.planBatch(meta, pool.all.length, pool.opts);
-                var outputs = meta.map(function(m){
-                    return new Uint8ClampedArray(m.pixelCount * m.outChannels);
-                });
-                return pool.run(tasks, meta, outputs, signature, lutObject, flags)
+
+                // Passed as a FUNCTION so the pool can allocate when the batch
+                // actually starts. Batches run one at a time; allocating here
+                // meant every queued batch sat on a full set of output buffers
+                // while it waited, and a caller submitting faster than the
+                // pool drains grew memory without bound (measured: 668 MB for
+                // 40 queued 4 MPx batches, against 65 MB one at a time).
+                var makeOutputs = function(){
+                    return meta.map(function(m){
+                        return new Uint8ClampedArray(m.pixelCount * m.outChannels);
+                    });
+                };
+
+                return pool.run(tasks, meta, makeOutputs, signature, payload, flags, announce, ids)
                     .then(function(res){
                         _pool.release(pool);
-                        return {images: outputs, workersUsed: res.workersUsed, tasks: tasks.length};
+                        // Cancelled images report null rather than a partially
+                        // converted buffer.
+                        var out = res.outputs.map(function(buf, i){
+                            return (res.cancelled && res.cancelled[i]) ? null : buf;
+                        });
+                        return {images: out, imageInfo: imageInfo,
+                                cancelled: res.cancelled || [],
+                                workersUsed: res.workersUsed, tasks: tasks.length};
                     });
             }).catch(function(){
                 // Anything at all goes wrong with the pool — no worker_threads,
@@ -1955,7 +2911,7 @@
                 // correct pixels.
                 _pool.release(pool);
                 return runSequential();
-            });
+            }).then(settled, settledErr);
         }
 
         /**
@@ -1968,6 +2924,93 @@
          */
         releaseWorkers() {
             _pool.destroyAll();
+        }
+
+        /**
+         * Reset this Transform so it can be built again.
+         *
+         * create()/createMultiStage() refuse to run over an existing pipeline,
+         * because re-creating used to leave the OLD LUT attached and silently
+         * convert through the previous colour space. This is the supported way
+         * to say "I really do want to rebuild this object" — it drops
+         * everything the next create() must not inherit:
+         *
+         *   - the built LUT (and its int mirror), the actual stale-output risk
+         *   - the pipeline and its stages
+         *   - compiled WASM state and kernel bindings
+         *   - this Transform's registration in the worker pool, so workers do
+         *     not keep serving the old pipeline under a key this object still
+         *     holds — and so the memory comes back now rather than waiting for
+         *     LRU to push it out
+         *   - the cached multicore probe result, which described the old LUT
+         *
+         * The POOL ITSELF IS LEFT RUNNING. Other Transforms are using it, and
+         * a reset here is not a reason to take their workers away —
+         * releaseWorkers() is the blunt instrument for that.
+         *
+         * Hooks, plugins and constructor options survive, which is the point:
+         * a plugin can rebuild its table without re-installing its hooks and
+         * double-counting them.
+         *
+         * PREFER `new Transform()`. This exists for the case where the hooks
+         * and options genuinely must be kept, and it carries the risk that
+         * goes with any hand-maintained reset: it drops what is listed above,
+         * and a field added later without a line here would survive when it
+         * should not. A fresh object cannot have that problem.
+         *
+         * @returns {Transform} this (for chaining)
+         */
+        clear() {
+            this.forgetWorkers();          // fire and forget; see forgetWorkers()
+            this._workerKey = null;
+            this._multicoreSafe = undefined;
+
+            // DROP THE KERNEL WITH THE PIPELINE. A claimed kernel is bound to
+            // the pipeline that earned it the claim and holds a WASM instance
+            // — up to 512 KB of tables at int16, plus pixel buffers. Leaving it
+            // attached across clear() would keep that memory and, worse, offer
+            // the next create() a kernel chosen for a conversion it no longer
+            // performs. create() re-runs setKernel() and the claim pass.
+            this._releaseKernel();
+            this._kernelClaim = null;
+
+            try { this.releaseWasmMemory(); } catch(e){ /* nothing compiled yet */ }
+
+            this.lut = false;
+            this.builtLut = this._buildLutRequested;   // intent, not state
+            this.pipeline = [];
+            this.pipelineCreated = false;
+            this.pipelineHistory = [];
+            this.debugHistory = [];
+            this.transformArrayFn = null;
+
+            return this;
+        }
+
+        /**
+         * Drop just THIS Transform from the workers, leaving the pool running
+         * for everything else.
+         *
+         * `releaseWorkers()` is the blunt instrument — it tears the whole pool
+         * down, which is wrong when other Transforms are still using it. This
+         * is the one to call when a document closes in an app that holds the
+         * pool open (`idleTimeoutMs: 0`): a 33-point CMYK LUT is about 1.4 MB
+         * in EVERY worker, so a finished Transform is ~11 MB across eight of
+         * them, and LRU alone will not reclaim it until eight more transforms
+         * come along to push it out.
+         *
+         * Purely an optimisation, never required for correctness. The worker
+         * copy is a cache and this Transform remains its source of truth, so
+         * using it again after forgetting simply re-registers it — the same
+         * thing that happens after an LRU eviction or an idle-timeout
+         * teardown.
+         *
+         * @returns {Promise<number>} how many workers were asked
+         */
+        forgetWorkers() {
+            var picked = this._multicoreHandoff({multicore: true}, null);
+            if(!picked.signature) return Promise.resolve(0);
+            return _pool.forgetEverywhere(picked.signature);
         }
 
         releaseWasmMemory() {
@@ -2822,6 +3865,47 @@
                 throw 'No Pipeline';
             }
 
+            // THE ONE SILENT HOLE. transform() is polymorphic by contract —
+            // {object|number[]} — and arrays work in every format that accepts
+            // them. A colour OBJECT into a DEVICE-source Transform in an
+            // int/device format is the exception: with a LUT it is absorbed
+            // fine, but on the LUT-free pipeline it comes back as
+            // [NaN, NaN, NaN, NaN]. Right length, right shape, no error,
+            // garbage values. Silence is the bug, not the restriction.
+            //
+            // LAB AND XYZ SOURCES ARE EXCLUDED at int8/int16, and must be:
+            // those pipelines accept an object at those formats, and guarding
+            // them would reject valid input and break validateOnCreate for
+            // every Lab/XYZ transform.
+            //
+            // NOT under `device`, though — `_buildValidationInput` gates its
+            // Lab/XYZ carve-out on `format !== 'device'`, so a device-format
+            // Lab source expects an ARRAY, and an object there returned
+            // [null, null, null]. Matching that gate exactly closes the last
+            // silent cell rather than inventing a second rule.
+            //
+            // Ordered for cost: `lut === false` is a boolean compare that
+            // short-circuits instantly for every LUT transform, and arrays
+            // exit on the third check. The LUT builder drives this method once
+            // per grid cell (35,937 for a 33-point RGB table), and only ever
+            // passes arrays, so it never reaches the profile-type checks.
+            if(this.lut === false &&
+               cmsColor !== null && typeof cmsColor === 'object' &&
+               typeof cmsColor.length !== 'number' &&
+               (this.dataFormat === 'int8' || this.dataFormat === 'int16' ||
+                this.dataFormat === 'device') &&
+               (this.dataFormat === 'device' ||
+                (this.inputProfile &&
+                 this.inputProfile.type !== eProfileType.Lab &&
+                 this.inputProfile.type !== eProfileType.XYZ))){
+                throw 'transform: this Transform has dataFormat "' +
+                      this.dataFormat + '" and no LUT, so it cannot take a ' +
+                      'colour object — the pipeline would return NaN. Pass a ' +
+                      'number array such as [128, 128, 128], or create the ' +
+                      'Transform with dataFormat "object", or with ' +
+                      'buildLut:true.';
+            }
+
             var pipeline = this.pipeline;
             var len = pipeline.length;
             var newResult;
@@ -3443,6 +4527,25 @@
 
             if(preserveAlpha === undefined){
                 preserveAlpha = outputHasAlpha && inputHasAlpha;
+            }
+
+            // A CLAIMING KERNEL TOOK THIS TRANSFORM AT create(). It has no LUT
+            // to walk — that is why it claimed — so it is dispatched here,
+            // ahead of the generic per-pixel loops below, which walk the
+            // pipeline stage by stage at ~8 MPx/s.
+            //
+            // The only claiming kernel today is the matrix shaper, at 331
+            // MPx/s and within 1 LSB of those same loops. It builds its tables
+            // LAZILY on this first call — 3-8 ms — so a Transform that only
+            // ever converts single colours never pays for them.
+            //
+            // A null return means it declined after all, which claims() should
+            // have prevented; falling through is the safe answer rather than
+            // stranding the caller.
+            if(this.kernel && this.kernel.claimed === true && this._pixelCacheData === null){
+                var claimedOut = this.kernel.array(inputArray, outputArray, pixelCount,
+                    null, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                if(claimedOut) return claimedOut;
             }
 
             // A pixel cache makes the per-pixel walks below wrong: they
@@ -4340,6 +5443,35 @@
                     break;
                 case eProfileType.Lab:
                     // Convert the input Lab to the inputput Profile whitePoint
+
+                    // ARRAY ENTRY POINT, mirroring what the device branch has
+                    // had all along. Without this a Lab source on the LUT-free
+                    // pipeline could not take an array at all: the stages below
+                    // want objects, so a bare triple threw (labInputAdaptation
+                    // on) or fell through to NaN (off). The device branch picks
+                    // an entry stage per dataFormat a few cases down; Lab now
+                    // does the same.
+                    //
+                    // An array is taken as ALREADY PCS-ENCODED FOR THIS
+                    // PROFILE'S VERSION — see stage_Int_to_cmsLab. Objects pass
+                    // straight through it, so nothing that worked before
+                    // changes, including validateOnCreate and the LUT builder.
+                    if(this.dataFormat === 'int8' || this.dataFormat === 'int16' ||
+                       this.dataFormat === 'device'){
+                        var labEnc = convert.labEncoding[
+                            this.inputProfile.version === 2 ? 'v2' : 'v4'];
+                        var labMaxIn = (this.dataFormat === 'int8')  ? 255
+                                     : (this.dataFormat === 'int16') ? labEnc.labNumerator
+                                     : 1;
+                        this.addStage(
+                            encoding.cmsLab,
+                            'stage_Int_to_cmsLab',
+                            this.stage_Int_to_cmsLab,
+                            {mul: labEnc.labNumerator / labMaxIn, enc: labEnc},
+                            encoding.cmsLab,
+                            '  [Input2Device : Lab : {name}]|({last}) > ({data})'
+                        );
+                    }
 
                     if(this.labInputAdaptation){
                         //
@@ -7898,6 +9030,154 @@
      * Proving it on a probe beats enumerating the safe cases: it stays correct
      * when new paths are added, and it fails closed.
      */
+    /**
+     * Describe a profile chain without hashing megabytes of decoded tags.
+     * Virtual profiles are strings; real ones are named by what identifies
+     * them on disc.
+     */
+    function _describeChain(chain){
+        if(!Array.isArray(chain)) return [];
+        return chain.map(function(slot, i){
+            if(i % 2) return {intent: slot};
+            if(typeof slot === 'string') return {virtual: slot};
+            return {
+                name:     slot && slot.name,
+                type:     slot && slot.type,
+                channels: slot && slot.outputChannels,
+                bytes:    slot && slot.header && slot.header.profileSize
+            };
+        });
+    }
+
+    /**
+     * Describe a built LUT: shape, precision and size, but never its contents.
+     * Returns `false` when there is no LUT, so the absence is a value that
+     * survives JSON rather than a missing key.
+     */
+    function _describeLut(lut, signature){
+        if(!lut) return false;
+
+        var out = {
+            signature:      signature,
+            version:        lut.version,
+            inputChannels:  lut.inputChannels,
+            outputChannels: lut.outputChannels,
+            gridPoints:     Array.isArray(lut.gridPoints)
+                                ? lut.gridPoints.slice() : lut.gridPoints,
+            dataType:       lut.dataType,
+            encoding:       lut.encoding,
+            precision:      lut.precision,
+            inputScale:     lut.inputScale,
+            outputScale:    lut.outputScale,
+            gamutMode:      lut.gamutMode,
+            gamutLimit:     lut.gamutLimit,
+            gamutMapScale:  lut.gamutMapScale,
+            inLab:          lut.inLab,
+            outLab:         lut.outLab,
+            cells:          lut.CLUT ? lut.CLUT.length : 0,
+            bytes:          lut.CLUT ? lut.CLUT.byteLength : 0,
+            intLut:         false
+        };
+
+        // The int path keeps a SECOND, quantised table alongside the f64 one,
+        // and it is the one the fast kernels actually read. A master/worker
+        // pair can agree on every field above and still differ here, which is
+        // exactly the mismatch this whole structure exists to catch.
+        if(lut.intLut){
+            out.intLut = {
+                dataType:         lut.intLut.dataType,
+                scale:            lut.intLut.scale,
+                accWidth:         lut.intLut.accWidth,
+                gpsPrecisionBits: lut.intLut.gpsPrecisionBits,
+                inputChannels:    lut.intLut.inputChannels,
+                outputChannels:   lut.intLut.outputChannels,
+                cells:            lut.intLut.CLUT ? lut.intLut.CLUT.length : 0,
+                bytes:            lut.intLut.CLUT ? lut.intLut.CLUT.byteLength : 0
+            };
+        }
+        return out;
+    }
+
+    /**
+     * Is this field allowed to differ between master and worker?
+     *
+     * Returns why, or null when the difference is a genuine fault. Kept as an
+     * explicit short list rather than a loose prefix match, so a new
+     * divergence shows up as a fault instead of being quietly absorbed by an
+     * over-broad rule.
+     *
+     * @param {string} mode  'lut' or 'chain'
+     * @param {string} path  dotted path into getInfo()
+     * @returns {string|null}
+     */
+    function _expectedDivergence(mode, path){
+        // getOptions() reports the RESOLVED lutMode, and that is what the
+        // worker is handed — so the worker asked for 'float' explicitly where
+        // the master asked for 'auto' and resolved to 'float'. `lutMode`
+        // itself must still match, and does; only the request differs.
+        if(path === 'options.lutModeRequested'){
+            return 'master resolved this from "auto"; the worker was handed the resolved value';
+        }
+
+        if(mode === 'lut'){
+            // A mode-1 worker is built by setLut() from a bare table. It has
+            // no Profile objects at all, so anything describing them is
+            // absent by construction — and irrelevant, since conversion only
+            // reads the LUT.
+            if(path === 'chain' || path.indexOf('chain[') === 0 ||
+               path.indexOf('chain.') === 0){
+                return 'worker rebuilt from the LUT alone and holds no profiles';
+            }
+            // setLut() decodes the CLUT in place, which rescales it. Master
+            // and worker hold the same table in two encodings.
+            if(path === 'lut.outputScale' || path === 'lut.inputScale' ||
+               path === 'lut.dataType'    || path === 'lut.encoding'){
+                return 'setLut() decodes the table in place, changing its encoding';
+            }
+            if(path === 'options.buildLut'){
+                return 'the worker builds from a supplied LUT rather than baking one';
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Structural diff of two getInfo() results. Reports the first difference
+     * per path rather than a deep dump, because the useful output is "worker 3
+     * has a float LUT" and not the two LUTs side by side.
+     */
+    function _diffInfo(master, worker, path, index, out){
+        if(master === worker) return;
+
+        var mType = Object.prototype.toString.call(master);
+        var wType = Object.prototype.toString.call(worker);
+
+        if(mType !== wType || mType !== '[object Object]'){
+            if(mType === '[object Array]' && wType === '[object Array]'){
+                if(master.length !== worker.length){
+                    out.push({worker: index, path: path + '.length',
+                              master: master.length, value: worker.length});
+                    return;
+                }
+                for(var a = 0; a < master.length; a++){
+                    _diffInfo(master[a], worker[a], path + '[' + a + ']', index, out);
+                }
+                return;
+            }
+            out.push({worker: index, path: path || '(root)',
+                      master: master, value: worker});
+            return;
+        }
+
+        var keys = Object.keys(master);
+        for(var k = 0; k < keys.length; k++){
+            var key = keys[k];
+            _diffInfo(master[key], worker[key],
+                      path ? path + '.' + key : key, index, out);
+        }
+    }
+
     function _probeLutEquivalence(transform, flags){
         try {
             var inCh = transform.inputChannels + (flags.inputHasAlpha ? 1 : 0);
@@ -7982,6 +9262,124 @@
     //
     // Licensing note: the core engine (MPL-2.0) provides the hooks; the other
     // packages can uses their onw licneses.
+
+    /**
+     * Defaults that MOVE OUTPUT, per release. One entry per version whose
+     * defaults changed; anything not listed did not change.
+     *
+     * 1.5  — `wasmMatrixShaper` defaults to 'auto' from 1.5.5, which puts the
+     *        WASM matrix-shaper kernel on the no-LUT int8/int16 RGB->RGB path.
+     *        That is within 1 LSB of the stage pipeline it replaced, and
+     *        measurably CLOSER to the exact maths than the CLUT alternative —
+     *        but it is not byte-identical to 1.5.0, so a caller pinned to
+     *        byte-for-byte reproducibility needs it off.
+     */
+    Transform.COMPAT_DEFAULTS = {
+        '1.5': { wasmMatrixShaper: false }
+    };
+    Transform._compatVersion = null;
+
+    /**
+     * Normalise one image descriptor: data, alpha, channel counts, pixel count.
+     *
+     * `pixelCount` IS OPTIONAL. Once the alpha flags are resolved the stride is
+     * known, so the count follows from the array length — and a caller who is
+     * decoding a file already has the array and would rather not restate what
+     * it obviously contains.
+     *
+     * It is still worth passing when the buffer is BIGGER than the image: a
+     * pooled or reused array, or a slab holding several frames. Inference would
+     * happily convert the padding. So an explicit count wins, and is checked
+     * against the array rather than trusted — a count that overruns is a buffer
+     * overrun waiting to happen, and it costs one comparison per image to
+     * refuse it.
+     */
+    function _imagePlan(transform, img, batch, id){
+        if(!img || !img.data) throw new Error(
+            'transformImages: image "' + id + '" has no `data`.');
+
+        var f = _imageAlpha(img, batch);
+        var inCh  = transform.inputChannels  + (f.inputHasAlpha  ? 1 : 0);
+        var outCh = transform.outputChannels + (f.outputHasAlpha ? 1 : 0);
+        var len = img.data.length;
+        var px  = img.pixelCount;
+
+        if(px === undefined || px === null){
+            px = len / inCh;
+            if(px !== Math.floor(px)) throw new Error(
+                'transformImages: image "' + id + '" has ' + len + ' values, which is ' +
+                'not a whole number of ' + inCh + '-channel pixels' +
+                (f.inputHasAlpha ? ' (including alpha)' : '') +
+                '. Pass `pixelCount` explicitly, or check the alpha flags.');
+        } else if(px * inCh > len){
+            throw new Error(
+                'transformImages: image "' + id + '" declares pixelCount ' + px +
+                ' x ' + inCh + ' channels = ' + (px * inCh) + ' values, but `data` ' +
+                'holds ' + len + '. Reading it would overrun the buffer.');
+        }
+
+        return {data: img.data, pixelCount: px, inChannels: inCh,
+                outChannels: outCh, flags: f};
+    }
+
+    /**
+     * One image's alpha flags: its own if it states them, the batch's if not.
+     *
+     * `preserveAlpha` follows the same rule transformArray uses — undefined
+     * means "preserve if both sides have one" — so an image that declares
+     * alpha in and out gets it preserved without having to say so a third time.
+     */
+    function _imageAlpha(img, batch){
+        var inA  = (img && img.inputHasAlpha  !== undefined) ? !!img.inputHasAlpha  : !!batch.inputHasAlpha;
+        var outA = (img && img.outputHasAlpha !== undefined) ? !!img.outputHasAlpha : !!batch.outputHasAlpha;
+        var pre;
+        if(img && img.preserveAlpha !== undefined)  pre = !!img.preserveAlpha;
+        else if(batch._preserveStated)              pre = !!batch.preserveAlpha;
+        else                                        pre = (inA && outA);
+        return {inputHasAlpha: inA, outputHasAlpha: outA, preserveAlpha: pre && inA};
+    }
+
+    /**
+     * Multicore was asked for and cannot be had. Say so ONCE, actionably, and
+     * carry on correctly.
+     *
+     * NOT A THROW, by default. `transformImages()` promises multicore is an
+     * optimisation and never a capability — isomorphic code must not pass in
+     * Node and fail in a browser, and the same call is also the batch API
+     * (per-image callbacks, queue depth, cancellation) which a caller may want
+     * regardless of thread count. But silence is the other failure: a
+     * developer who asked for parallelism should not discover months later
+     * that they never got it. So: warn once, with the fix in the message, the
+     * same shape as the hooks-cannot-cross-a-boundary warning.
+     *
+     * `requireWorkers: true` is for callers who would genuinely rather fail.
+     */
+    function _noWorkers(transform, opts, runSequential){
+        var why = _pool.unavailableReason();
+        if(opts && opts.requireWorkers === true){
+            return Promise.reject(new Error(
+                'jsColorEngine: transformImages was called with requireWorkers:true ' +
+                'and no workers are available. ' + why +
+                ' Drop requireWorkers to run sequentially instead — the results are ' +
+                'identical either way.'));
+        }
+        if(!Transform._warnedNoWorkers){
+            Transform._warnedNoWorkers = true;
+            console.warn('jsColorEngine: transformImages is running SEQUENTIALLY. ' +
+                why + ' The results are identical and your onImage callbacks still ' +
+                'fire — only the speed differs. Pass requireWorkers:true if you would ' +
+                'rather this were an error.');
+        }
+        return runSequential();
+    }
+    Transform._warnedNoWorkers = false;
+
+    // Set by Transform.enablePool(); null means batches are not defaulted to
+    // the pool. Holds the normalised options so every batch gets the worker
+    // count the caller asked for at startup.
+    Transform._poolDefault = null;
+    Transform._poolInfo = null;
+    Transform._warnedPoolReconfig = false;
 
     Transform._plugins = Object.create(null);  // lutMode → plugin descriptor
 
@@ -8282,12 +9680,18 @@ _attachPrototypeLoops(require('./cache.js'));
 // require('./Transform.js') get them too. Registration is cheap — the
 // descriptors are plain objects; a per-Transform instance is only created at
 // create() time via setKernel(). Overridable: a later registerKernel() call
-// for the same dimensions replaces the slot for all future create() calls.
+// for the same dimensions replaces those slots for all future create() calls.
+// KernelND registers the whole 5..15 span in one call via its [from, to].
 // See docs/deepdive/KernelModules.md.
 Transform.registerKernel(require('./kernels/1d/Kernel1D.js'));
 Transform.registerKernel(require('./kernels/2d/Kernel2D.js'));
 Transform.registerKernel(require('./kernels/3d/Kernel3D.js'));
 Transform.registerKernel(require('./kernels/4d/Kernel4D.js'));
 Transform.registerKernel(require('./kernels/nd/KernelND.js'));
+
+// Claiming kernels — offered every Transform after its pipeline is built, in
+// registration order, and free to take over the batch path. They do not occupy
+// a dimensional slot: an RGB pair this one declines still gets Kernel3D.
+Transform.registerKernel(require('./kernels/matrixShaper/KernelMatrixShaper.js'));
 
 module.exports = Transform;
