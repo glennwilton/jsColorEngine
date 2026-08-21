@@ -15,21 +15,20 @@
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
+var strategyHost = require('../strategyHost.js');
 var encoding = require('../../def.js').encoding;
+
+var _host = strategyHost.makeStrategyHost();
 
 module.exports = {
     name: 'kernel3D',
-    dimensions: 3,
 
-    supports: {
-        float: true,
-        int8_js: true,
-        int8_scalar: true,
-        int8_simd: true,
-        int16_js: true,
-        int16_scalar: true,
-        int16_simd: true,
-    },
+    // Strategies for this dimension — alternatives offered after the
+    // pipeline is built. See src/kernels/strategyHost.js.
+    strategies:       _host.strategies,
+    registerStrategy: _host.registerStrategy,
+    init:             _host.init,
+    dimensions: 3,
 
     /**
      * The single-colour stage function for a 3-D LUT, and the stage name.

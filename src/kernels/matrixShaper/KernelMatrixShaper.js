@@ -74,16 +74,20 @@ module.exports = {
      * Returns the same {ok, why} shape as matrixShaperKernel.inspect(), so a
      * caller can report why a transform was not claimed rather than guessing.
      */
-    claims: function(transform){
-        if(transform.wasmMatrixShaper === 'off'){
+    claims: function(pipeline, opts){
+        if(opts.wasmMatrixShaper === 'off'){
             return {ok: false, why: 'wasmMatrixShaper is off'};
         }
         // A pixel cache makes the batch path memoised, which is a different
         // execution model — see the cache discussion in Transform.transformArray.
-        if(transform._pixelCacheData !== null && transform._pixelCacheData !== undefined){
+        if(opts.pixelCacheActive){
             return {ok: false, why: 'a pixel cache is active'};
         }
-        return matrixShaper.inspect(transform);
+        // inspect() walks the stages, so it still needs the Transform. What it
+        // no longer does is reach for transform._pixelCacheData — a kernel
+        // reading a private field of the thing it is meant to be decoupled from
+        // was the boundary leaking, and opts carries that answer now.
+        return matrixShaper.inspect(opts.transform);
     },
 
     /**

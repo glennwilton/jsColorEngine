@@ -11,9 +11,18 @@
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
+var strategyHost = require('../strategyHost.js');
+
+var _host = strategyHost.makeStrategyHost();
 
 module.exports = {
     name: 'kernelND',
+
+    // Strategies for this dimension — alternatives offered after the
+    // pipeline is built. See src/kernels/strategyHost.js.
+    strategies:       _host.strategies,
+    registerStrategy: _host.registerStrategy,
+    init:             _host.init,
 
     // Inclusive [from, to] — registerKernel() fills every slot in the range
     // with this same object. 15 is the ICC ceiling (FCLR).

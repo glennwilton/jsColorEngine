@@ -716,3 +716,104 @@ describe('arrayFor — the image path as a bound result', () => {
         expect(r.smallName).toBe('i_3_4');
     });
 });
+
+describe('init() and the per-kernel strategy registry', () => {
+
+    // v1.6 phase 5. Strategies — kernels chosen on the SHAPE the optimiser
+    // folded a conversion into, rather than on channel count — used to live in
+    // one list on Transform and be asked of every create(), whatever the
+    // dimension. A 3-channel strategy has nothing to say about a CMYK
+    // conversion, so the list now belongs to the kernel that owns the
+    // dimension, and Transform asks one question of one object.
+
+    test('the matrix shaper is registered with Kernel3D, not with Transform', () => {
+        expect(Transform.kernels[3].strategies.map(s => s.name)).toContain('matrix-shaper');
+        // The old name is a live view of the same array, so existing code keeps
+        // working — including code that splices it.
+        expect(Transform.claimKernels).toBe(Transform.kernels[3].strategies);
+    });
+
+    test('a strategy is offered the pipeline and can take the batch path', () => {
+        const restore = snapshot(3, 3);
+        const seen = {};
+        try {
+            const host = Object.create(Transform.kernels[3]);
+            host.name = 'kernel3D-host';
+            host.strategies = [];
+            host.registerStrategy = Transform.kernels[3].registerStrategy.bind(host);
+            // Rebind the shared closure list by giving this host its own init.
+            host.init = function(pipeline, opts){
+                seen.pipeline = Array.isArray(pipeline);
+                seen.opts = Object.keys(opts).sort();
+                return { pipeline: pipeline, kernel: null, claim: null };
+            };
+            Transform.kernels[3] = host;
+
+            const t = new Transform({ dataFormat: 'int8', buildLut: true });
+            t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+
+            expect(seen.pipeline).toBe(true);
+            // What a kernel is allowed to know, by name rather than by reaching
+            // for private fields.
+            expect(seen.opts).toContain('transform');
+            expect(seen.opts).toContain('wasmMatrixShaper');
+            expect(seen.opts).toContain('pixelCacheActive');
+            expect(seen.opts).toContain('kernelOptions');
+        } finally { restore(); }
+    });
+
+    test('a strategy that throws is a decline, not a crash', () => {
+        const restore = snapshot(3, 3);
+        try {
+            Transform.registerKernel({
+                name: 'test-throwing-strategy', dimensions: 3,
+                claims: function(){ throw new Error('deliberate'); },
+                create: m => m, resolveRuns(){}, array: () => null,
+                release(){}, provideLut: () => null,
+            });
+            const t = new Transform({ dataFormat: 'int8', buildLut: false });
+            expect(() => t.create('*sRGB', '*AdobeRGB', eIntent.relative)).not.toThrow();
+            // The real strategy still wins.
+            expect(t.kernelInfo().name).toBe('matrix-shaper');
+        } finally {
+            const list = Transform.kernels[3].strategies;
+            const i = list.findIndex(s => s.name === 'test-throwing-strategy');
+            if(i >= 0) list.splice(i, 1);
+            restore();
+        }
+    });
+
+    test('registerKernel routes a strategy to the kernel owning its dimension', () => {
+        const list4 = Transform.kernels[4].strategies;
+        const before3 = Transform.kernels[3].strategies.length;
+        expect(Array.isArray(list4)).toBe(true);
+        try {
+            Transform.registerKernel({
+                name: 'test-4ch-strategy', dimensions: 4,
+                claims: () => ({ ok: false, why: 'never' }),
+                create: m => m, resolveRuns(){}, array: () => null,
+                release(){}, provideLut: () => null,
+            });
+            expect(list4.map(s => s.name)).toContain('test-4ch-strategy');
+            // and it does NOT land in the 3-channel list
+            expect(Transform.kernels[3].strategies.length).toBe(before3);
+        } finally {
+            const i = list4.findIndex(s => s.name === 'test-4ch-strategy');
+            if(i >= 0) list4.splice(i, 1);
+        }
+    });
+
+    test('the matrix shaper no longer reads private Transform fields', () => {
+        // It used to test transform._pixelCacheData directly — a kernel reading
+        // a private field of the thing it is decoupled from. opts carries the
+        // answer now, so the same decision is made without the reach.
+        let src = require('fs').readFileSync(
+            path.join(__dirname, '..', 'src', 'kernels', 'matrixShaper', 'KernelMatrixShaper.js'), 'utf8');
+        // Strip comments first. The file explains what it no longer does, and
+        // that explanation names the field — which defeated this check on its
+        // first run. Assert on code, not on prose about the code.
+        src = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        expect(src).not.toMatch(/transform\._pixelCacheData/);
+        expect(src).toMatch(/opts\.pixelCacheActive/);
+    });
+});

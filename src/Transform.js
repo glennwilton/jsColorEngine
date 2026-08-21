@@ -485,10 +485,18 @@
         // out at FCLR = 15.
         static MAX_KERNEL_DIMENSIONS = 15;
 
-        // Claiming kernels, in registration order — asked after the pipeline is
-        // built, because what they need to know is its shape rather than its
-        // channel count. See registerKernel() and _claimKernel().
-        static claimKernels = [];
+        // DEPRECATED VIEW, kept so existing code and tests keep working.
+        //
+        // Strategies now belong to the kernel that owns their dimension
+        // (v1.6 phase 5). This returns the 3-channel list, which is where the
+        // only shipped strategy — the matrix shaper — lives. It is the live
+        // array, not a copy, so push/splice still work on it. A strategy
+        // registered for another dimension will not appear here; ask that
+        // kernel's `strategies` instead.
+        static get claimKernels(){
+            var k = Transform.kernels[3];
+            return (k && k.strategies) ? k.strategies : [];
+        }
 
         // Set by Transform.compatibility(); null means current defaults.
         static _compatDefaults = null;
@@ -1122,14 +1130,19 @@
             // order, so a later registration is a lower priority than an
             // earlier one. They do not displace the dimensional slot: a pair
             // that is not claimed still gets Kernel3D, and so does every LUT.
+            // A STRATEGY GOES TO THE KERNEL THAT OWNS ITS DIMENSION (v1.6
+            // phase 5). Descriptors with `claims` are not dimensional kernels —
+            // they are alternatives offered to one, chosen on the shape the
+            // optimiser folded the conversion into rather than on channel
+            // count. They used to be held in one list on Transform and asked of
+            // every conversion; now the owning kernel holds them.
             if(typeof descriptor.claims === 'function'){
-                for(var i = 0; i < Transform.claimKernels.length; i++){
-                    if(Transform.claimKernels[i].name === descriptor.name){
-                        Transform.claimKernels[i] = descriptor;      // replace in place
-                        return;
-                    }
+                var owner = Transform.kernels[from];
+                if(!owner || typeof owner.registerStrategy !== 'function'){
+                    throw new Error('Transform.registerKernel: no kernel at dimension ' + from
+                        + ' accepts strategies (descriptor "' + descriptor.name + '")');
                 }
-                Transform.claimKernels.push(descriptor);
+                owner.registerStrategy(descriptor);
                 return;
             }
 
@@ -1159,7 +1172,10 @@
          * different pipeline, which is why it is a separate hook.
          */
         _kernelWantingInsteadOfLut(){
-            var list = Transform.claimKernels;
+            // Phase 6 folds this into wantsLut(); until then it reads the same
+            // per-kernel list init() does, rather than a registry on Transform.
+            var owner = Transform.kernels[this.inputChannels];
+            var list = (owner && owner.strategies) ? owner.strategies : [];
             for(var i = 0; i < list.length; i++){
                 var d = list[i];
                 if(typeof d.displacesLut !== 'function') continue;
@@ -1178,33 +1194,79 @@
             this.kernel = null;
         }
 
-        _claimKernel(){
-            this._kernelClaim = null;
-            var list = Transform.claimKernels;
-            for(var i = 0; i < list.length; i++){
-                var descriptor = list[i];
-                var verdict;
-                try {
-                    verdict = descriptor.claims(this);
-                } catch(e){
-                    continue;                       // a broken claim must not break create()
-                }
-                if(!verdict || verdict.ok !== true) continue;
+        /**
+         * What a kernel is allowed to know about this Transform.
+         *
+         * Passed to init() rather than handing over the Transform itself, so a
+         * kernel does not have to reach for private fields to answer a
+         * question. `transform` is still here because a strategy may need to
+         * walk the pipeline, but everything a strategy actually *decides* on
+         * should be a named entry rather than a field it went looking for.
+         *
+         * This is also where kernel-scoped options arrive — see the
+         * `kernelOptions` discussion in docs/deepdive/KernelContract.md.
+         */
+        _kernelOpts(){
+            return {
+                transform:         this,
+                lutMode:           this.lutMode,
+                dataFormat:        this.dataFormat,
+                verbose:           this.verbose,
+                wasmMatrixShaper:  this.wasmMatrixShaper,
+                pixelCacheActive:  this._pixelCacheData !== null && this._pixelCacheData !== undefined,
+                kernelOptions:     this.kernelOptions || null,
+            };
+        }
 
-                var instance = Object.create(descriptor);
-                instance.transform = this;
-                instance.claimed = true;
-                instance._impl = undefined;
-                instance._variant = null;
+        /**
+         * Let the kernel that owns this dimension settle the pipeline and,
+         * if it wants to, hand the batch path to something better.
+         *
+         * v1.6 phase 5. This used to walk Transform.claimKernels — one registry
+         * on Transform, asked of every conversion whatever its channel count,
+         * even though the only entry in it has nothing to say about CMYK. The
+         * list now belongs to the kernel that owns the dimension, and Transform
+         * asks one question of one object.
+         *
+         * IT OWNS BOTH SURFACES OR NEITHER. A kernel returning a rewritten
+         * pipeline must also settle the batch path, or transform(colour) and
+         * transformArray() can disagree — see the red-kernel note in the
+         * contract. Nothing built-in rewrites the pipeline yet; when something
+         * does, the re-optimise and re-validate below is what keeps it honest.
+         */
+        _initKernel(){
+            this._kernelClaim = null;
+
+            var descriptor = Transform.kernels[this.inputChannels];
+            if(!descriptor || typeof descriptor.init !== 'function') return;
+
+            var result;
+            try {
+                result = descriptor.init(this.pipeline, this._kernelOpts());
+            } catch(e){
+                return;                 // a broken init must not break create()
+            }
+            if(!result) return;
+
+            if(result.pipeline && result.pipeline !== this.pipeline){
+                this.pipeline = result.pipeline;
+                this.optimisePipeline();
+                if(this.validateOnCreate && !this.validatePipeline()){
+                    throw new Error('jsColorEngine: a kernel rewrote the pipeline and it '
+                        + 'no longer validates. See kernel "' + descriptor.name + '".');
+                }
+            }
+
+            if(result.kernel){
+                var instance = result.kernel;
                 if(typeof instance.create === 'function'){
                     this.lutMode = instance.create(this.lutMode);
                 }
                 this.kernel = instance;
-                this._kernelClaim = {name: descriptor.name, why: verdict.why || null};
-                if(this.verbose){
-                    console.log('Kernel "' + descriptor.name + '" claimed this transform');
+                this._kernelClaim = result.claim || null;
+                if(this.verbose && result.claim){
+                    console.log('Kernel "' + result.claim.name + '" claimed this transform');
                 }
-                return;
             }
         }
 
@@ -2168,7 +2230,7 @@
             // channel count before the pipeline existed; a claiming kernel is
             // offered the transform now that its SHAPE is known, and may take
             // over the batch path. See registerKernel().
-            this._claimKernel();
+            this._initKernel();
 
             this._propagateWasmMemorySettings();
 
