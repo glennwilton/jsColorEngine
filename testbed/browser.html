@@ -1,0 +1,43 @@
+<html>
+
+
+<head>
+    <title>Browser Test</title>
+    <script src="../browser-dev/jsColorEngineWeb.js"></script>
+    <script>
+
+        let labProfile = new jsColorEngine.Profile();
+        labProfile.load('*lab');
+
+        let rgbProfile = new jsColorEngine.Profile();
+        rgbProfile.load('*srgb');
+
+        let lab2RGB = new jsColorEngine.Transform();
+        try {
+            lab2RGB.create(labProfile, rgbProfile, jsColorEngine.eIntent.relative );
+        } catch (e) {
+            alert(e);
+        }
+
+        let RGB2Lab = new jsColorEngine.Transform();
+        try {
+            RGB2Lab.create(rgbProfile, labProfile, jsColorEngine.eIntent.relative );
+        } catch (e) {
+            alert(e);
+        }
+
+
+        let RGB = lab2RGB.transform(jsColorEngine.convert.Lab(70, 30, 30))
+        console.log('RGB = ' + RGB.R + ', ' + RGB.G + ', ' + RGB.B);
+
+        let Lab = RGB2Lab.transform(jsColorEngine.convert.RGB(10, 240, 55))
+        console.log('Lab = ' + Lab.L + ', ' + Lab.a + ', ' + Lab.b);
+
+    </script>
+</head>
+
+<body>
+
+
+</body>
+</html>

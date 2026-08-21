@@ -91,6 +91,12 @@ bench/results/[0-9]*/
 /testbed/profiles/*
 !/testbed/profiles/README.md
 
+# Reference .it8 measurements are DERIVED from those licensed profiles by
+# running lcms against them. Whether derived measurement data inherits the
+# restriction is unsettled, so it is treated as if it does. The harness code
+# is tracked; the data it compares against is generated locally.
+/testbed/testData/
+
 # Loose reproduce/pool logs and one-off dumps beside the timestamped runs.
 /bench/results/*.log
 /bench/results/multicore_matrix*.json
