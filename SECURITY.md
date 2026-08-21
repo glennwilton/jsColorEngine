@@ -7,9 +7,9 @@ transforms pixel data. It runs in Node and in the browser, in-process, on data
 the host application hands it.
 
 The repository also contains benchmark harnesses (`bench/`), a comparison
-testbed (`testbed/`), and samples (`samples/`). Those are developer tooling.
-They are not published to npm — the package is `src/` only, 64 files — and they
-are not part of the library's attack surface.
+testbed (`testbed/`), and samples (`samples/`). None of these are published to
+npm — the package is `src/` only, 64 files — but they are not all the same
+kind of thing, and reports are treated differently for each. See below.
 
 ## The real attack surface
 
@@ -29,14 +29,31 @@ and reports there are genuinely welcome:
 Transform code reachable from a parsed profile counts too — a crafted CLUT or
 curve that drives an out-of-range index, for instance.
 
+## Samples — welcome, but low severity
+
+`samples/` is different from the rest of the tooling. It exists for other
+developers to run, read and copy into their own projects — the LUT builder, the
+TIFF CLI, the ICCImage wrapper. Code that people paste into their own
+applications is worth getting right, so **issues against samples are welcome**.
+
+They are triaged as low severity, because nothing there runs as part of the
+engine: a sample is not reachable from `require('jscolorengine')`, is not in
+the published package, and only executes when a developer deliberately runs it
+on their own machine. Fixes land in ordinary maintenance rather than urgently.
+
+If a sample demonstrates a pattern that would be unsafe when copied — building
+a path from unvalidated input, say, or a parser that trusts its input shape —
+that is worth reporting even though the sample itself is harmless where it
+sits. That is the case where a sample bug can become somebody else's real bug.
+
 ## What is out of scope
 
-**`bench/`, `testbed/` and `samples/` are not a security boundary.** They are
-programs a developer compiles and invokes with arguments they type, against
-corpora they generate on their own machine. Reports that assume an attacker
-controls a benchmark's command line, its pixel counts, or its input files
-describe a situation where the attacker is already running code as the
-developer, and will be closed.
+**`bench/` and `testbed/` are not a security boundary.** They are programs a
+developer compiles and invokes with arguments they type, against corpora they
+generate on their own machine. Reports that assume an attacker controls a
+benchmark's command line, its pixel counts, or its input files describe a
+situation where the attacker is already running code as the developer, and will
+be closed.
 
 Concretely, and to save anyone the trouble of re-reporting:
 
