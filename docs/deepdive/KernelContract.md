@@ -338,17 +338,18 @@ That is what separates `*sRGB → *AdobeRGB`, which folds, from
 inspecting `inputProfile.type` distinguishes them. It also rejects identity
 pairs, which collapse to three different stages.
 
-### The cost, measured
+### The one case that pays for nothing
 
-The temporary pipeline is built **before** the hook is asked, so a kernel that
-declines has cost one pipeline construction: **0.155 ms**. Against the 33³ LUT
-bake it avoids — **6.95 ms** — that is a 45× win for the matrix shaper.
+The temporary pipeline is built before the hook is asked, so a kernel that
+declines has built one it did not need. That is `KernelND`, which declines for
+reasons that never involved a pipeline (an N-D CLUT bake is impractical at
+grid^N cells).
 
-It is pure waste in exactly one case: `KernelND` declines for reasons that
-never needed a pipeline (an N-D CLUT bake is impractical at grid^N cells). It
-pays 0.155 ms on a path that then runs at ~8 MPx/s, so roughly 0.1% of a single
-megapixel. Not worth a second hook to reclaim — which is what the second hook
-was.
+It does not matter, and it is worth saying why rather than measuring it:
+**this is `create()`, which runs once.** Loading the profile that fed it took
+longer. The only costs worth a number in this document are per-pixel ones, and
+nothing here is on that path — the second hook existed to save work that was
+never hot.
 
 ### `provideLut` is not only a yes/no
 
