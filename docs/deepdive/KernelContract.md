@@ -29,6 +29,25 @@ does not decide how a colour is interpolated, at any batch size, in any
 numeric format. That is the kernel's, and it is the kernel's for both the
 single-colour path and the image path.
 
+### Everything Transform offers a kernel is optional
+
+This turns out to be the shape of the whole contract, and it is worth stating
+once rather than rediscovering per feature. A kernel's obligations are small —
+answer `floatFor`, answer `array`, clean up after itself. Everything else
+Transform provides is a **convenience with an escape hatch**:
+
+| Transform offers | a kernel that wants something else |
+|---|---|
+| `hints` — the caller's interpolation preferences | ignores them; it is the authority on its own dimension |
+| `{big, small, threshold}` — the two-tier dispatch shape | returns its own dispatcher in both slots and routes however it likes |
+| the LUT the builder baked | supplies its own through `wantsLut`, in whatever representation suits it |
+| `opts.helpers` — the resolver, key format, gates | never touches them and writes its own dispatch |
+
+None of these is a requirement, and **nothing degrades if a kernel declines
+one**. That is the property to preserve when adding to this contract: if a new
+member cannot be ignored, it is an obligation rather than an offer, and it
+needs a much better reason than convenience.
+
 ---
 
 ## What we found
