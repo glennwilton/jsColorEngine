@@ -910,6 +910,40 @@ grounds should be shown this paragraph and the flag that already exists.
   WASM check become one function the kernel wrote, rather than three files that
   must agree.
 
+### The threshold belongs to the kernel, which is the point
+
+Today `WASM_DISPATCH_MIN_PIXELS = 256` is **one number shared by everything** —
+every kernel, every lutMode, every channel count — and it is written twice,
+in `Transform.js` and again in `lutKernelTable.js`, kept in step by a comment.
+
+Those break-evens are not the same number. A 3-D int8 SIMD run copies 3 bytes
+per pixel in and 4 out, against a table of a few hundred KB; a 4-D int16 run
+copies 8 in and 8 out against a much larger one; the matrix-shaper kernel has no
+CLUT to upload at all. One constant is standing in for at least three different
+crossovers.
+
+`arrayFor` returning the threshold makes it the kernel's answer rather than a
+class static every kernel inherits, and removes the duplicated constant. That
+is a better reason to build it than the dispatch saving, which is nil.
+
+### `threshold: 0` means `small` is unreachable — mirror `big`, never stub it
+
+The dispatch is `pixelCount >= threshold ? big : small`, and `pixelCount` is
+never negative, so **a threshold of 0 means `big` is always taken and `small`
+is dead**.
+
+Put the same reference in both slots, as the current resolver does when it
+collapses. Do **not** put a stub `function(){}` in `small` on the grounds that
+it can never be called:
+
+- it is a landmine if the comparison is ever written as `>` rather than `>=`,
+  where a zero-pixel call would hit the stub and silently produce nothing
+- it makes `smallName` lie, and that string is what `verbose` prints and what
+  `kernelInfo()` should report
+
+An unreachable slot holding a real function costs one reference. An unreachable
+slot holding a stub costs a debugging session.
+
 ### The threshold is real, and must not be optimised away
 
 WASM has a memcpy break-even: below it, the JS variant wins. `pixelCount` is
