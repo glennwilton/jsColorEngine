@@ -17,6 +17,28 @@
     /**
      * ACCURACY PATH single-colour interpolators — the built-in float library.
      *
+     * ONE COLOUR AT A TIME. Everything in this file converts a single colour and
+     * returns a new array. **For images, look in `src/kernels/` instead** — each
+     * kernel carries its own array loop, tuned for its dimension and its output
+     * channel count, writing straight into the destination buffer:
+     *
+     *     1 -> N   src/kernels/1d/kernel1D_loops.js
+     *     2 -> N   src/kernels/2d/kernel2D_loops.js
+     *     3 -> 3, 4, N + WASM variants   src/kernels/3d/kernel3D_loops.js
+     *     4 -> 3, 4, N + WASM variants   src/kernels/4d/kernel4D_loops.js
+     *
+     * The two families are the same maths written twice, deliberately, and must
+     * stay that way: one function serving both a per-colour caller and a
+     * million-iteration loop gets deoptimised by V8 and the array path loses
+     * 2-3x. `__tests__/interp_reference.tests.js` holds them to agreeing
+     * bit-for-bit, which is what makes the duplication safe rather than a
+     * liability.
+     *
+     * So this file is the readable, correctness-first statement of what each
+     * conversion means. It is the reference the loops were derived from, the
+     * code the accuracy path actually runs, and the place to fix a definition
+     * -- but it is not where image throughput lives.
+     *
      * These are the per-colour stage LUT evaluators used by transform(), the
      * per-pixel path of transformArray(), and the LUT bake (createLut) — NOT
      * the image *_loop kernels, which live in src/kernels/.

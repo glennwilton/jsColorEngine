@@ -130,6 +130,7 @@ var descriptor = Transform.kernels[inChannels];
 | `name` | yes | stable identity; re-registering the same name replaces in place |
 | `supports` | no | declarative variant capability map — diagnostics only |
 | **`floatFor(lut, hints)`** | **yes** | **NEW** — returns `{funct, stageName}` for a single-colour pipeline stage |
+| **`arrayFor(lut, hints)`** | no | **PROPOSED** — returns one bound function for the image path, resolved once at create. See [arrayFor](#arrayfor) |
 | **`wantsLut(pipeline, opts)`** | no | **NEW** — replaces `provideLut` + `displacesLut` |
 | **`init(pipeline, opts)`** | no | **NEW** — replaces `claims`; returns `{pipeline, kernel}` |
 | `create(lutMode)` | yes | settle WASM state, demote lutMode if the host can't run the request; returns the settled mode |
@@ -668,7 +669,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 | ~~1~~ | ~~Dense 1–15 registry; `setKernel` becomes an array index; `registerKernel` accepts a range~~ **LANDED 2026-08-21** — descriptors gained `name`, `KernelND` registers `[5, 15]`, `MAX_KERNEL_DIMENSIONS = 15`. New suite `__tests__/kernel_registry.tests.js` (17 tests) | Mechanical, no behaviour change, unblocks test injection |
 | ~~2~~ | ~~`floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups~~ **LANDED 2026-08-21**, and it closed `TODO (B3)` with it — see [Phase 2 as built](#phase-2-as-built) | No WASM in the way. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
 | ~~3~~ | ~~`floatFor` on KernelND, then Kernel3D, then Kernel4D~~ **LANDED 2026-08-21** — `addStageLUT` went from 133 lines to 34. See [Phase 3 as built](#phase-3-as-built) | Ascending risk. 3D and 4D one at a time |
-| 4 | Loops and WASM state move onto the kernel; the 22 `run_` thunks in `lutKernelTable.js` collapse | They exist only to rename `t.method` — they do not move, they cease to exist |
+| 4 | Loops and WASM state move onto the kernel; the 22 `run_` adapters in `lutKernelTable.js` follow the loops they call | ~~They exist only to rename `t.method`~~ **Corrected:** they are real adapters — they insert the `0, 0` position arguments, and the WASM ones do a `bind` + `run` pair with computed bytes-per-pixel. They relocate; they do not vanish |
 | 5 | `init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire | Needs 3 and 4 landed first |
 | 6 | `wantsLut()` merges `provideLut` + `displacesLut` | Smallest surface, last |
 | 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
@@ -790,6 +791,76 @@ move onto the kernels.
 Throughput unchanged, as a create-time-only change should be: jsCE **median
 +0.21%** across 132 cells, isolated `solo` bench **worst −0.61%**, accuracy
 identical. Phase 2's gray and duotone gains held.
+
+<a id="arrayfor"></a>
+
+## `arrayFor(lut, hints)` — one bound function for the image path
+
+`floatFor` gives the kernel ownership of the single-colour path. `arrayFor` is
+its counterpart: the kernel returns **one function, bound once at create()**,
+and `transformArray` calls it with no dispatch on either side.
+
+```js
+// at create()
+this._arrayFn = kernel.arrayFor(lut, hints);
+
+// per call — one indirect call, nothing else
+this._arrayFn(input, output, pixelCount, inAlpha, outAlpha, preserve);
+```
+
+Today the same journey is: `transformArrayViaLUT` preamble → `kernel.array()` →
+`ensureOutputArray` → `runTableKernel` → threshold compare → the resolved run
+ref → `_postRunWasmCheck`. Every step is cheap, but the decisions are spread
+across `Transform.js`, `kernelUtils.js` and `lutKernelTable.js`, and none of
+them can change without touching all three.
+
+### It is not a speed feature, and the evidence is already in the repo
+
+**This was built and measured.** `bindTransformArrayFn` exists, binds exactly
+these closures, and is **off by default**, with the reason recorded at
+[Transform.js:4160](../../src/Transform.js:4160):
+
+> V8 method dispatch through the kernel is equally fast for images and faster
+> for tiny batches.
+
+The arithmetic says the same thing. On a 1 M px call the dispatch is a property
+lookup, a compare and an indirect call — call it 10 ns against ~10 ms of pixel
+work. **One part in a million.** It cannot show up in a measurement, and a
+bound closure that skips it will not either.
+
+So `arrayFor` should not be sold as throughput. Anyone proposing it on those
+grounds should be shown this paragraph and the flag that already exists.
+
+### What it is actually for
+
+- **Ownership.** A third-party kernel currently controls what runs but not how
+  it is reached: allocation, the BIG/SMALL threshold and the post-run WASM check
+  all live outside it. With `arrayFor` the kernel returns the whole path.
+- **`compile()`.** This is the real payoff. The descriptor already reserves
+  `emitKernel(opts)` for feeding `Transform.compile()`, and a kernel that can
+  hand back one bound function is one step from handing back *source* for one.
+  See [CompiledPipeline.md](./CompiledPipeline.md).
+- **One place to look.** The BIG/SMALL threshold, output allocation and the
+  WASM check become one function the kernel wrote, rather than three files that
+  must agree.
+
+### The one real complication
+
+The BIG/SMALL threshold is a genuine per-call decision — WASM has a memcpy
+break-even, so a small batch is faster on the JS variant. `pixelCount` is not
+known at bind time, so `arrayFor` cannot bind it away. It can only move the
+compare inside the returned closure, which is where it effectively is now.
+
+That is fine, and worth stating plainly so nobody "optimises" it out later and
+sends 64-pixel calls through a WASM path that loses on the memcpy.
+
+### Before building it
+
+Turn `bindTransformArrayFn` on and measure. It is the same idea already wired,
+and if it still shows nothing at image sizes — which the note above says it
+will not — then `arrayFor` is justified by the `compile()` path and by
+ownership, or not at all. Building it for speed and then finding no speed is
+the failure mode this section exists to prevent.
 
 ## Open questions
 
