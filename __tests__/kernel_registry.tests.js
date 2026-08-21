@@ -135,12 +135,24 @@ describe('registerKernel — dimensions forms', () => {
     });
 
     test('out-of-range and malformed dimensions throw', () => {
-        const bad = [0, -1, MAX + 1, undefined, null, 'xx', [3], [4, 2], [0, 3], [3, MAX + 1]];
+        // 0 is IN range: it is the identity kernel's slot. The registry is
+        // indexed by input DIMENSION, and identity has none -- an identity
+        // RGB->RGB still has 3 input channels, it just needs no interpolation.
+        const bad = [-1, MAX + 1, undefined, null, 'xx', [3], [4, 2], [-1, 3], [3, MAX + 1]];
         for(const dims of bad){
             expect(() => Transform.registerKernel(probe('test-bad', dims)))
                 .toThrow(/dimensions must be/);
         }
         expect(() => Transform.registerKernel(null)).toThrow(/dimensions must be/);
+    });
+
+    test('dimension 0 is registrable — the identity slot', () => {
+        const restore = snapshot(0, 0);
+        try {
+            Transform.registerKernel(probe('test-identity', 0));
+            expect(Transform.kernels[0].name).toBe('test-identity');
+        } finally { restore(); }
+        expect(Transform.kernels[0].name).toBe('kernelIdentity');
     });
 
     test('re-registering a dimension replaces that slot for future create()s', () => {
@@ -826,5 +838,112 @@ describe('init() — a kernel settles its own dimension, and may yield', () => {
                       'KernelMatrixShaper.js'), 'utf8');
         src = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
         expect(src).not.toMatch(/transform\._pixelCacheData/);
+    });
+});
+
+describe('KernelIdentity — identity is a kernel, not a branch', () => {
+
+    // Until now identity was the one dimension-shaped special case left in
+    // Transform: an isIdentity branch that built its own pipeline, bound its
+    // own closure, and returned from create() before the registry was ever
+    // consulted. It is Transform.kernels[0] now.
+    //
+    // THE DISTINCTION THAT MADE IT POSSIBLE: input dimension is not input
+    // channel count. An identity RGB->RGB conversion still has three input
+    // channels; it needs no 3-D kernel because there is nothing to
+    // interpolate. Transform sets inputDimension to 0 and hands over.
+
+    const { eIntent } = require('../src/main');
+
+    function identity(opts){
+        const t = new Transform(Object.assign({ dataFormat: 'int8' }, opts));
+        t.create('*sRGB', '*sRGB', eIntent.relative);
+        return t;
+    }
+
+    test('an identity pair selects kernel 0, and says so', () => {
+        const t = identity();
+        expect(t.isIdentity).toBe(true);
+        expect(t.inputDimension).toBe(0);
+        expect(t.inputChannels).toBe(3);        // still three channels
+        expect(t.kernelInfo().name).toBe('kernelIdentity');
+    });
+
+    test('the kernel builds the pipeline, and create() derives the flag from it', () => {
+        const t = identity();
+        expect(t.pipeline.length).toBeGreaterThan(0);
+        expect(t.pipelineCreated).toBe(true);
+    });
+
+    test('a kernel whose init() throws leaves pipelineCreated false, not a silent empty pipeline', () => {
+        // _initKernel swallows a throwing init() so one bad kernel cannot
+        // break create(). For a kernel that BUILDS the pipeline that would
+        // otherwise leave nothing behind and no sign of it, which is why the
+        // flag is derived rather than asserted.
+        const restore = snapshot(0, 0);
+        const warn = console.warn;
+        console.warn = () => {};
+        const warned = Transform._warnedKernelInit;
+        try {
+            const broken = Object.create(Transform.kernels[0]);
+            broken.name = 'test-throwing-identity';
+            broken.init = function(){ throw new Error('deliberate'); };
+            Transform.kernels[0] = broken;
+
+            const t = identity();
+            expect(t.pipeline.length).toBe(0);
+            expect(t.pipelineCreated).toBe(false);
+        } finally {
+            Transform._warnedKernelInit = warned;
+            console.warn = warn;
+            restore();
+        }
+    });
+
+    test('copies, through both surfaces, and they agree', () => {
+        const t = identity();
+        const px = new Uint8ClampedArray([10, 20, 30, 200, 150, 100]);
+        expect(Array.from(t.transformArray(px, false, false, false, 2)))
+            .toEqual([10, 20, 30, 200, 150, 100]);
+        expect(t.transform([10, 20, 30], false)).toEqual([10, 20, 30]);
+    });
+
+    test('array() honours alpha the same way every other kernel does', () => {
+        const t = identity();
+        const withA = new Uint8ClampedArray([10, 20, 30, 77]);
+        expect(Array.from(t.transformArray(withA, true, true, true, 1)))
+            .toEqual([10, 20, 30, 77]);                       // preserved
+        expect(Array.from(t.transformArray(withA, true, true, false, 1)))
+            .toEqual([10, 20, 30, 255]);                      // opaque
+        expect(Array.from(t.transformArray(withA, true, false, false, 1)))
+            .toEqual([10, 20, 30]);                           // dropped
+    });
+
+    test('swapping kernel 0 changes what identity does, with no edit to Transform', () => {
+        // The point of the slot. A stranger's identity kernel can return any
+        // pipeline it likes -- or ignore the pipeline and answer differently.
+        const restore = snapshot(0, 0);
+        try {
+            const inverting = Object.create(Transform.kernels[0]);
+            inverting.name = 'test-inverting-identity';
+            inverting.array = function(input, output, px, lut, inA, outA, preserve){
+                const n = this.transform.inputChannels;
+                output = output || new Uint8ClampedArray(px * n);
+                for(let i = 0; i < px * n; i++) output[i] = 255 - input[i];
+                return output;
+            };
+            Transform.kernels[0] = inverting;
+
+            const t = identity();
+            expect(t.kernelInfo().name).toBe('kernelIdentity');   // inherited info()
+            expect(Array.from(t.transformArray(new Uint8ClampedArray([0, 10, 255]), false, false, false, 1)))
+                .toEqual([255, 245, 0]);
+        } finally { restore(); }
+    });
+
+    test('release() is safe and holds nothing', () => {
+        const t = identity();
+        expect(() => t.kernel.release()).not.toThrow();
+        expect(t.kernel.arrayFnBig).toBeNull();   // never resolves a run
     });
 });

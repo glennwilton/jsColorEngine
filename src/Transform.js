@@ -927,18 +927,18 @@
             this._expectsU16         = false; // cached: lutMode is int16 family
             this._isIntegerMode      = false; // cached: lutMode is any integer family
 
-            // Bound hot-path closure, set once by _bindTransformArrayFn() at
-            // the end of every create() / setLut() call.  Starts as
-            // _transformArrayNotReady so any direct call before create()
-            // produces a clear diagnostic rather than a TypeError.  After
-            // binding: a real closure (skips a layer of routing) or null
-            // (fall through to transformArrayViaLUT).
+            // REMOVED IN v1.6: transformArrayFn / bindTransformArrayFn.
             //
-            // bindTransformArrayFn: false (default) — LUT closures are NOT bound;
-            //   identity still binds (avoids real kernel work, not just dispatch).
-            //   Enabled in a future release once kernel modules land in v1.7.
-            this.transformArrayFn       = _transformArrayNotReady;
-            this.bindTransformArrayFn   = options.bindTransformArrayFn === true;
+            // A closure bound at create() so transformArray() could skip a
+            // layer of routing. The Roadmap recorded the measurement that
+            // killed it -- "no faster for images and slower for tiny batches"
+            // -- and it shipped defaulted to off. Once the kernels owned
+            // dispatch, its LUT branch was a wrapper that called
+            // kernel.array(), so it could not be faster than the thing it
+            // called. transformArray() now reaches the kernel directly.
+            //
+            // bindTransformArrayFn is still accepted and ignored, so option
+            // objects written against v1.5 keep working.
 
             // LUT build hooks — run per grid cell during createNDDeviceLUT,
             // zero per-pixel cost. Each array holds functions chained in
@@ -1108,10 +1108,10 @@
             var valid = descriptor
                 && isFinite(from) && isFinite(to)
                 && from === Math.floor(from) && to === Math.floor(to)
-                && from >= 1 && to <= MAX && from <= to;
+                && from >= 0 && to <= MAX && from <= to;
             if(!valid){
                 throw new Error('Transform.registerKernel: descriptor.dimensions must be '
-                    + '1-' + MAX + ', or [from, to] within that range');
+                    + '0-' + MAX + ', or [from, to] within that range');
             }
 
             // TWO KINDS OF KERNEL, ONE REGISTRATION CALL.
@@ -2050,16 +2050,24 @@
                 this.chain          = profileChain; // update
             }
 
-            // Identity — build the copy pipeline directly, skip LUT entirely.
+            // INPUT DIMENSION IS NOT INPUT CHANNEL COUNT. An identity RGB→RGB
+            // conversion still has three input channels; it just needs no
+            // interpolation, so it needs no 3-D kernel. Separating the two is
+            // what lets identity be a registry entry instead of a branch.
+            this.inputDimension = this.isIdentity ? 0 : this.inputChannels;
+            this.setKernel(this.inputDimension);
+
+            // Identity — the kernel at index 0 builds the copy pipeline and
+            // there is no LUT to build, so the rest of create() has nothing to
+            // do. pipelineCreated is derived rather than asserted: _initKernel
+            // deliberately swallows a throwing init() so one bad kernel cannot
+            // break create(), and for a kernel whose init BUILDS the pipeline
+            // that would otherwise leave a silently empty one behind.
             if(this.isIdentity){
-                this._buildIdentityPipeline();
-                this.pipelineCreated = true;
-                this._bindTransformArrayFn();
+                this._initKernel();
+                this.pipelineCreated = this.pipeline.length > 0;
                 return;
             }
-
-            // Set the kernal based on inputChannels
-            this.setKernel(this.inputChannels);
 
 
             // The Kernel can take over and build a LUT
@@ -2274,10 +2282,6 @@
                 || lm === 'int-wasm-scalar'  || lm === 'int-wasm-simd'
                 || lm === 'int16-wasm-scalar' || lm === 'int16-wasm-simd');
 
-            // The kernel already resolved its own image path, in the init()
-            // call above. This binds only the optional transformArrayFn.
-            this._bindTransformArrayFn();
-
             // Validate intLut compatibility once at create() time. The only way
             // an incompatible intLut can exist is if someone attached a foreign
             // one from a different engine version — buildIntLut() always produces
@@ -2466,7 +2470,6 @@
                 pipelineDebug:              this.pipelineDebug,
                 wasmMatrixShaper:           this.wasmMatrixShaper,
                 validateOnCreate:           this.validateOnCreate,
-                bindTransformArrayFn:       this.bindTransformArrayFn,
                 wasmShrinkRatio:            this._wasmShrinkRatio,
                 wasmMaxMemory:              this._wasmMaxMemory
             };
@@ -3073,8 +3076,6 @@
             this.pipelineCreated = false;
             this.pipelineHistory = [];
             this.debugHistory = [];
-            this.transformArrayFn = null;
-
             return this;
         }
 
@@ -4122,92 +4123,6 @@
          * @throws {string} 'No LUT loaded' if the Transform was built without
          *                  buildLut: true.
          */
-        // =====================================================================
-        // THE OPTIONAL BOUND CLOSURE
-        // =====================================================================
-        //
-        // This used to be the dispatch orchestrator: it called
-        // kernel.resolveRuns(), then read kernel._runBig / _runSmall /
-        // _threshold back out and baked them into a closure. Both halves were
-        // Transform holding a decision that was never its own.
-        //
-        // WHY THE KERNEL IS THE ONLY ONE WHO KNOWS NOW. Transform's whole job
-        // is three things: pick a kernel by input channel count, init it, and
-        // hand it a colour or an array. Batch size is not on that list - a
-        // kernel with a WASM path above some pixel count and a JS path below
-        // keeps both and picks inside its own array(). Nothing out here has to
-        // learn that a choice was made, which is what makes a stranger's
-        // kernel a drop-in rather than a special case.
-        //
-        // What is left is one genuinely Transform-side thing: binding
-        // transformArrayFn so transformArray() can skip a layer of routing.
-        // Opt-in via bindTransformArrayFn (off by default - V8 method dispatch
-        // through the kernel is equally fast for images and faster for tiny
-        // batches), so this is a convenience, not a mechanism.
-        // =====================================================================
-
-        /**
-         * Bind (or clear) the transformArrayFn closure.
-         *
-         * Two shapes, and neither reaches inside a kernel:
-         *   identity  - _kernelCopy directly, no LUT and no kernel involved
-         *   LUT path  - kernel.array() with the LUT and the alpha preamble
-         *               captured, so transformArray() calls one closure
-         *               instead of re-deriving them per image
-         *
-         * @returns {void}
-         */
-        _bindTransformArrayFn(){
-            this.transformArrayFn = null;   // reset: real closure or null after this
-
-            // Identity: bind _kernelCopy directly - no LUT lookup needed.
-            //
-            // TODO (KernelIdentity): this is the last dimension-shaped
-            // special case left out here, and it does not need to be one.
-            // Register KernelIdentity at Transform.kernels[0] -- its array()
-            // IS the copy -- have setKernel(0) run when isIdentity, and this
-            // branch goes away along with the isIdentity check below it. The
-            // identity case becomes a kernel like every other, selected the
-            // same way. (Named for the role, not the implementation: copying
-            // is how it works, identity is what it is.)
-            //
-            // It buys more than tidiness: it would get init(pipeline) like
-            // the rest, so an identity transform could rewrite its own
-            // pipeline (an alpha-only pass, a copy with a stride change)
-            // without any of it being Transform's business. And a test kernel
-            // could sit at index 0 and count identity conversions.
-            if(this.isIdentity){
-                var identityTransform = this;
-                this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                    return identityTransform._kernelCopy(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray);
-                };
-                return;
-            }
-
-            // Only covers int8 / int16 pixel array formats, and only when
-            // bindTransformArrayFn:true was asked for.
-            var lut = this.lut;
-            if(!lut || !this.kernel) return;
-            if(!this.bindTransformArrayFn) return;
-            if(this.dataFormat !== 'int8' && this.dataFormat !== 'int16') return;
-
-            // ONE SHAPE FOR EVERY DIMENSION. This used to be three: a 1-D
-            // closure calling linearInterp1DArray_NCh_loop, a 2-D one calling
-            // bilinearInterp2DArray_NCh_loop, and a 3-D/4-D one built by
-            // _bindLutTransformArrayFn out of the kernel's private run refs
-            // plus its own copy of the output-allocation rules. All three were
-            // Transform re-implementing what the kernel already does.
-            var kernel = this.kernel;
-            this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
-                if(pixelCount === undefined){
-                    pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inputHasAlpha ? 1 : 0)));
-                }
-                return kernel.array(inputArray, outputArray, pixelCount, lut,
-                                    inputHasAlpha, outputHasAlpha, preserveAlpha);
-            };
-        }
-
         /**
          * IMAGE FAST PATH. Pre-built LUT → buffered pixel transform.
          * v1.3 table-driven dispatcher.
@@ -4446,8 +4361,17 @@
                     'create() time via dataFormat. Remove outputFormat from your call.');
             }
 
-            if(this.transformArrayFn !== null){
-                return this.transformArrayFn(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray);
+            // IDENTITY GOES STRAIGHT TO ITS KERNEL. There is no LUT to route
+            // through, and without this it would fall into the generic
+            // per-pixel pipeline walk below -- correct, but orders of
+            // magnitude slower for what is a memcpy with alpha handling.
+            //
+            // This is what the bound closure used to be for. It is a direct
+            // call now because kernels[0] has an array() like every other
+            // kernel; the preamble it needs is its own.
+            if(this.isIdentity && this.kernel){
+                return this.kernel.array(inputArray, outputArray, pixelCount, this.lut,
+                                         inputHasAlpha, outputHasAlpha, preserveAlpha);
             }
 
             if((this.dataFormat === 'int8' || this.dataFormat === 'int16') && this.lut !== false){
@@ -8611,14 +8535,6 @@
 
 
 
-    // Sentinel for Transform.transformArrayFn before _bindTransformArrayFn() runs.
-    // Throws a diagnostic message so a missing _bindTransformArrayFn() call surfaces
-    // immediately rather than silently producing a TypeError on the hot path.
-    function _transformArrayNotReady() {
-        throw new Error('transformArrayFn: not bound — _bindTransformArrayFn() was not called after create()');
-    }
-
-
     function uint8ArrayToBase64(uint8Array) {
         var binaryString = '';
 
@@ -9567,6 +9483,7 @@ _attachPrototypeLoops(require('./cache.js'));
 // for the same dimensions replaces those slots for all future create() calls.
 // KernelND registers the whole 5..15 span in one call via its [from, to].
 // See docs/deepdive/KernelModules.md.
+Transform.registerKernel(require('./kernels/identity/KernelIdentity.js'));
 Transform.registerKernel(require('./kernels/1d/Kernel1D.js'));
 Transform.registerKernel(require('./kernels/2d/Kernel2D.js'));
 Transform.registerKernel(require('./kernels/3d/Kernel3D.js'));

@@ -720,7 +720,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 | ~~5~~ | ~~`init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire~~ **LANDED 2026-08-21** — no claim registry at all in the end: Kernel3D reads the pipeline and yields to the matrix shaper itself, and Transform never learns a choice was made. The 42-row dispatch table became a `resolve()` switch in each kernel file, verified against a 560-decision oracle; the u16 wide-output gap it hid (CMYK→5CLR threw at 16 bits) is fixed | Needs 3 and 4 landed first |
 | 6 | `wantsLut()` merges `provideLut` + `displacesLut` | Smallest surface, last |
 | 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
-| **8** | **`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business. See [What Transform actually does](#the-principle) |
+| ~~8~~ | ~~`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business~~ **LANDED 2026-08-21**, and it took `transformArrayFn` with it: identity became `kernels[0]`, so the last closure Transform had a reason to bind stopped being a special case. See [What Transform actually does](#the-principle) |
 
 ---
 
@@ -1039,11 +1039,11 @@ any `init`. That is fine — picking a single-colour function needs no dispatch
 machinery — but it means the helpers are for the image path only, and the
 contract should say so rather than let someone discover it.
 
-## Future: `KernelIdentity` at index 0, so identity stops being a special case
+## `KernelIdentity` at index 0 — identity stops being a special case
 
-`Transform.kernels` runs 1 to 15 because those are the input widths ICC can
-express. Identity has no input width in that sense — it copies — so it sits
-outside the registry as an `isIdentity` branch:
+**Built.** `Transform.kernels` ran 1 to 15 because those are the input widths
+ICC can express. Identity has no input width in that sense — it copies — so it
+used to sit outside the registry as an `isIdentity` branch:
 
 ```js
 if(this.isIdentity){
@@ -1067,8 +1067,10 @@ alpha-only pass, a copy with a stride change, a clamp — with none of it
 becoming Transform's business. And index 0 becomes a place to put a test
 kernel that counts identity conversions, which today there is nowhere to hook.
 
-The registry already tolerates it: `registerKernel` takes a number or a range,
-and `MAX_KERNEL_DIMENSIONS` is a ceiling, not a floor.
+`registerKernel` now accepts 0 as a lower bound (`MAX_KERNEL_DIMENSIONS` was
+always a ceiling, not a floor), and `Transform.inputDimension` carries the
+distinction that made the whole thing possible: **input dimension is not input
+channel count.** See [Identity.md](./Identity.md) §6 for the as-built detail.
 
 ## Future: a registration chain, so wrappers do not have to capture
 

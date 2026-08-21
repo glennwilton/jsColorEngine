@@ -492,45 +492,95 @@ chain, not a substitute for application-level no-op checks.
 
 ---
 
-## 6. Connection to kernel binding
+## 6. Identity is a kernel
 
-Kernel binding shipped (v1.5 "fully-bound `transformArrayFn`", since
-reshaped by the v1.7 kernel modules), and identity slots into it as
-designed. As built, `_resolveLutKernels()` — called at `create()` time —
-checks identity first:
+Until v1.6 identity was the one dimension-shaped special case left in
+Transform. It had its own branch in `create()`, its own pipeline-builder call,
+its own bound closure, and it returned before the kernel registry was ever
+consulted:
 
 ```js
-// _resolveLutKernels(), src/Transform.js:
-this.transformArrayFn = null;   // reset: real closure or null after resolve
+if(this.isIdentity){
+    this._buildIdentityPipeline();
+    this.pipelineCreated = true;
+    this._bindTransformArrayFn();      // bound _kernelCopy in a closure
+    return;
+}
+this.setKernel(this.inputChannels);
+```
 
-// Identity: bind _kernelCopy directly — no LUT lookup needed.
-if (this.isIdentity) {
-    var identityTransform = this;
-    this.transformArrayFn = function (inputArray, inputHasAlpha, outputHasAlpha,
-                                      preserveAlpha, pixelCount, outputArray) {
-        return identityTransform._kernelCopy(inputArray, inputHasAlpha,
-            outputHasAlpha, preserveAlpha, pixelCount, outputArray);
-    };
+It is `Transform.kernels[0]` now.
+
+### The distinction that made it possible
+
+**Input dimension is not input channel count.** An identity RGB→RGB conversion
+still has three input channels; it needs no 3-D kernel because there is nothing
+to interpolate. Those two were the same variable, which is why identity had to
+duck out of `create()` before `setKernel` rather than flow through it:
+
+```js
+this.inputDimension = this.isIdentity ? 0 : this.inputChannels;
+this.setKernel(this.inputDimension);
+
+if(this.isIdentity){
+    this._initKernel();                             // the kernel builds the pipeline
+    this.pipelineCreated = this.pipeline.length > 0;
     return;
 }
 ```
 
-(Closures over a captured `identityTransform`, not `.bind()` — same
-function identity every call, which is what V8's inline caches want.)
+`pipelineCreated` is **derived, not asserted**. `_initKernel()` deliberately
+swallows a throwing `init()` so one bad kernel cannot break `create()` — a
+reasonable policy when the kernel is choosing a variant, and the wrong one when
+the kernel is *building the pipeline*, because it would leave an empty one
+behind with nothing to show for it. Deriving the flag turns that into a clean
+`pipelineCreated: false`.
 
-`transformArray()` checks `this.transformArrayFn !== null` and calls it
-directly, so for identity transforms the per-call path is one null check
-plus the `_kernelCopy` stride copy — no LUT lookup, no kernel dispatch.
+### What moved, and what did not
 
-For non-identity transforms the same resolve step delegates BIG/SMALL run
-selection to the per-dimension kernel instance
-(`kernel.resolveRuns()` — see
-[Kernel modules](./KernelModules.md)); binding a full `transformArrayFn`
-closure for the LUT path is opt-in via `bindTransformArrayFn: true`
-(off by default — method dispatch through the kernel measured equally
-fast for images and faster for tiny batches).
+`KernelIdentity.init()` calls `_buildIdentityPipeline()`, which stays on
+Transform along with `createPipeline_Input_to_Device` and the rest — those are
+shared with every other conversion and are not identity's to own. What moved is
+the **decision** that an identity transform gets a device-to-device copy
+between them. Register a different kernel at index 0 and that changes, with
+nothing in `Transform.js` to edit.
 
----
+That is the same shape as Kernel3D yielding to the matrix shaper, and it is
+what the slot buys beyond symmetry: `init()` receives the pipeline, so an
+identity transform can now **rewrite its own pipeline** — an alpha-only pass, a
+copy with a stride change, a clamp — without any of it becoming Transform's
+business. Index 0 is also somewhere to hang a probe that counts identity
+conversions, which there was previously nowhere to hook.
+
+### `transformArrayFn` is gone
+
+The bound closure that used to carry identity was removed in the same change.
+For the LUT path it had been measured worthless before any of this — the
+[Roadmap](../Roadmap.md) records "no faster for images and slower for tiny
+batches", which is why it shipped defaulted off — and once the kernels owned
+dispatch, its LUT branch was a wrapper calling `kernel.array()`, so it could
+not be faster than the thing it called.
+
+Identity was the half that was doing real work: without it, an identity
+`transformArray()` fell through to the generic per-pixel pipeline walk. So it
+was replaced rather than simply deleted. `transformArray()` reaches the kernel
+directly:
+
+```js
+if(this.isIdentity && this.kernel){
+    return this.kernel.array(inputArray, outputArray, pixelCount, this.lut,
+                             inputHasAlpha, outputHasAlpha, preserveAlpha);
+}
+```
+
+`bindTransformArrayFn` is still accepted and ignored, so v1.5 option objects
+keep working.
+
+**Not measurable, and said plainly.** An identity copy runs at 4–5 GPx/s and is
+bounded by memory bandwidth: repeated A/B runs spanned 4020–5280 MPx/s on the
+old code and 4252–5098 on the new, with the sign flipping between rounds. No
+claim is made either way. The LUT paths, which are slow enough to measure, were
+flat across the same runs.
 
 ## Open questions
 

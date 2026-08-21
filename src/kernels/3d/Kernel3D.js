@@ -187,6 +187,20 @@ module.exports = {
      */
     array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve){
         var transform = this.transform;
+
+        // THE PREAMBLE IS THE KERNEL'S. Both defaults used to be applied by
+        // whichever caller happened to be in front -- transformArrayViaLUT did
+        // them, the bound closure did them again, and a third caller did not,
+        // which is how transformArray(input, false, false) on a matrix-shaper
+        // pair once returned [] : pixelCount arrived undefined and sized the
+        // output as undefined * 3. One place to get it right.
+        if(pixelCount === undefined){
+            pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inAlpha ? 1 : 0)));
+        }
+        if(preserve === undefined){
+            preserve = outAlpha && inAlpha;
+        }
+
         outputArray = kernelUtils.ensureOutputArray(transform, lut, pixelCount, outAlpha, outputArray);
 
         if(this.arrayFnBig === null){

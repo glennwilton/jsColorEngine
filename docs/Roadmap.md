@@ -1225,7 +1225,15 @@ top few entries of a 1D gamma LUT). The v1.8 full Profile deep scan
 
 **Full design** in [deepdive/Identity.md](./deepdive/Identity.md).
 
-### Fully-bound `transformArrayFn` (dispatch optimisation) — shipped
+### Fully-bound `transformArrayFn` (dispatch optimisation) — shipped v1.5, **removed v1.6**
+
+> **Removed in v1.6.** The measurement below is the reason: it was never
+> faster, and it shipped defaulted off. Once the kernels owned dispatch its
+> LUT branch became a wrapper around `kernel.array()`, and identity — the half
+> that was doing real work — became `Transform.kernels[0]` with an `array()`
+> of its own. `transformArray()` reaches the kernel directly now.
+> `bindTransformArrayFn` is accepted and ignored. See
+> [deepdive/Identity.md](./deepdive/Identity.md) §6.
 
 `this.transformArrayFn` is set once at the end of `_resolveLutKernels()`
 after every `create()` / `setLut()` call.  `transformArray()` checks it
