@@ -80,6 +80,22 @@ const PROFILES = [
 // therefore stops at 10 — see Profile.gridFor(). PCS -> device (B2A) is a 3-D
 // grid with a long output stride and goes to 15; that needs B2A encoding,
 // which is the next piece.
+// PCS -> device (B2A): a 3-D Lab grid with an n-channel output. The grid stays
+// 17^3 however many inks there are and only the stride grows, which is why
+// this direction reaches 15 channels and A2B cannot -- and why real 12- and
+// 15-colour profiles are built around it.
+//
+// It also drives Kernel3D's WIDE-OUTPUT runs (fl_3_n / i_3_n) rather than
+// KernelND: 3 channels in, n out. Different code from everything above.
+for(const channels of [2, 4, 6, 8, 10, 12, 15]){
+    PROFILES.push({
+        file: 'synthetic_' + channels + 'clr_b2a_g17.icc',
+        make: () => Profile.createNChannelB2AICC({ channels }),
+        note: 'Lab -> ' + channels + '-channel device, 17^3 grid, smooth ink model'
+            + (channels > 10 ? ' — a width A2B cannot reach at any useful density' : ''),
+    });
+}
+
 for(const channels of [2, 5, 6, 7, 8, 9, 10]){
     const grid = Profile.gridFor(channels);
     PROFILES.push({

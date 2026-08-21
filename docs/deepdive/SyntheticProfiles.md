@@ -1,7 +1,7 @@
 # Synthetic profiles, and testing what you cannot buy
 
-> **Status: gray and n-channel device→PCS built and passing 2026-08-22.
-> PCS→device (`B2A`) not built.**
+> **Status: gray, device→PCS (`A2B`) and PCS→device (`B2A`) built and passing
+> 2026-08-22. B2A reaches all 15 channels.**
 
 Most of this engine has never been compared against another colour management
 system. Not because nobody thought to — because there was nothing to compare
@@ -66,9 +66,10 @@ So `src/encodeICC.js` is the mirror of `decodeICC.js`:
 | `encodeICC.js` | primitive writers, tag types, `mft2`, profile assembly |
 | `Profile.toICC()` | encode a loaded profile |
 | `Profile.createGrayICC()` | synthesise gray |
-| `Profile.createNChannelICC()` | synthesise 2CLR–10CLR |
+| `Profile.createNChannelICC()` | synthesise 2CLR–10CLR, device→PCS |
+| `Profile.createNChannelB2AICC()` | synthesise 2CLR–15CLR, PCS→device |
 | `scripts/make_test_profiles.js` | write them to `__tests__/profiles/` once |
-| `accuracy_gray.js`, `accuracy_nchannel.js` | hand them to lcms |
+| `accuracy_gray.js` / `_nchannel.js` / `_b2a.js` | hand them to lcms |
 
 It is also a feature rather than only scaffolding: decode a profile, change a
 TRC or a CLUT cell, write it back. That is profile editing.
@@ -91,9 +92,11 @@ rather than emitting one.
 
 ---
 
-## Three bugs, found immediately
+## Four bugs, found immediately
 
-The oracle earned itself on its first runs.
+The oracle earned itself on its first runs. Three below; the fourth — int16
+being unable to reach a wide profile at all — is in the B2A section, because
+that is the run that found it.
 
 **1. `transformArray()` returned `undefined` for every input above 4 channels.**
 The per-pixel fallback switched on `inputChannels` with cases 1, 2, 3, 4 — and
@@ -233,6 +236,67 @@ evidence for not using it.
 
 ---
 
+## PCS → device: the direction that reaches 15
+
+`B2A` is the other table, and the one real 12- and 15-colour profiles are built
+around. Its grid is **3-D whatever the ink count** — only the output stride
+grows — so 17³ × 15 is 73,695 cells and 145 KB, where the same width in `A2B`
+is not encodable at any useful density.
+
+It exercises different code, too: 3 channels in, n out is `Kernel3D`'s
+**wide-output** runs (`fl_3_n`, `i_3_n`, `i16_3_n`), not `KernelND`.
+
+sRGB → nCLR, 4096 random colours, both depths:
+
+| profile | out | int8 max / mean | int16 max / mean |
+|---|---|---|---|
+| 2CLR | 2 | 1 / 0.0059 | 0.01 / 0.0024 |
+| 4CLR | 4 | 1 / 0.0078 | 0.01 / 0.0016 |
+| 6CLR | 6 | 1 / 0.0033 | 0.01 / 0.0022 |
+| 8CLR | 8 | 1 / 0.0015 | 0.01 / 0.0022 |
+| 10CLR | 10 | 1 / 0.0031 | 0.02 / 0.0022 |
+| 12CLR | 12 | 1 / 0.0016 | 0.01 / 0.0022 |
+| 15CLR | 15 | 1 / 0.0026 | 0.01 / 0.0022 |
+
+**100% within 1 LSB at every width, both depths.** (int16 figures are in
+8-bit-equivalent units, so 0.01 is roughly 3 raw u16 LSB out of 65535.)
+
+Feeding sRGB rather than Lab is deliberate: Lab on the interface would put the
+v2-versus-v4 encoding between the two engines, where a mismatch looks exactly
+like an interpolation error. sRGB keeps the PCS internal to each and still
+drives the table under test.
+
+### The fourth bug: int16 could not reach a wide profile at all
+
+The **first int16 run** threw:
+
+```
+lutKernelTable: fallback chain exhausted from "i16wsi_3_n" (no float fallback?)
+```
+
+`buildIntLut()` produces no table above 4 output channels. At int8 that is
+harmless — the u8 ladder degrades to float. The u16 ladder had no float rung,
+so **every `dataFormat: 'int16'` conversion into a 5-or-more-channel profile
+died**, while the identical conversion at int8 worked.
+
+The omission was inherited: the v1.3 dispatch table had no u16 float terminus,
+and the v1.6 switch rewrite reproduced it faithfully — verified against a
+560-case oracle, which is exactly why the bug survived the rewrite. An oracle
+that asks "does the new code agree with the old code" cannot find a fault they
+share.
+
+The guard's reasoning was sound and its scope was not. "You asked for 16-bit
+kernels and never built the table" is fair when a u16 run *exists*; above 4
+output channels none does, and `u16Run` was already the float run. Float is a
+legal landing point for an int16 mode because `outputScale` is folded to 65535
+and the float run scales at call time.
+
+The narrow case still throws, and the asymmetry with int8 — which falls to
+float silently — is worth a second look. It is a different decision, and
+nothing has demonstrated it wrong.
+
+---
+
 ## Why `A2B` stops at 10 channels
 
 The device→PCS table is `gridPoints ^ inputChannels` cells:
@@ -265,8 +329,9 @@ found during the v1.6 kernel work.
 node scripts/make_test_profiles.js            # regenerate, deterministic
 node scripts/make_test_profiles.js --check    # verify, write nothing
 cd bench/lcms-comparison
-node accuracy_gray.js
-node accuracy_nchannel.js
+node accuracy_gray.js        # 1 channel
+node accuracy_nchannel.js    # 2-10 channels, device -> PCS
+node accuracy_b2a.js         # 2-15 channels, PCS -> device, both depths
 ```
 
 The profiles are ordinary ICC files. Open them in any inspector — a

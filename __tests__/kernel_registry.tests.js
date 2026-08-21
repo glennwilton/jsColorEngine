@@ -989,3 +989,77 @@ describe('KernelIdentity — identity is a kernel, not a branch', () => {
         expect(t.kernel.arrayFnBig).toBeNull();   // never resolves a run
     });
 });
+
+describe('int16 wide output reaches float instead of throwing', () => {
+
+    // buildIntLut() produces no table above 4 output channels, and the u16
+    // dispatch ladder had no float rung -- so EVERY dataFormat:'int16'
+    // conversion into a 5-or-more-channel profile threw, while the same
+    // conversion at int8 worked because the u8 ladder degrades to float.
+    //
+    // Float is a legal landing point for an int16 mode: lut.outputScale is
+    // folded to 65535 and the float run scales at call time. The guard that
+    // threw was written for the case where a u16 run EXISTS and the caller
+    // simply did not build its table -- it should never have covered the case
+    // where no u16 run exists at all.
+    //
+    // Found by the first int16 run of bench/lcms-comparison/accuracy_b2a.js,
+    // on a 6-channel profile. Nothing in this repo could reach it before,
+    // because there were no profiles above 4 channels.
+
+    const t3 = require('../src/kernels/3d/kernel3D_table.js');
+    const t4 = require('../src/kernels/4d/kernel4D_table.js');
+    const SLOTS = ['wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
+                   'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'];
+
+    function kernelFor(mode, outputChannels){
+        const k = { transform: { lutMode: mode, outputChannels } };
+        for(const s of SLOTS) k[s] = {};
+        return k;
+    }
+    const lutFor = (inCh, outCh, intLut) =>
+        ({ inputChannels: inCh, outputChannels: outCh, intLut: intLut ? {} : null });
+
+    const MODES = ['int16', 'int16-wasm-scalar', 'int16-wasm-simd'];
+
+    test('wide output with NO intLut resolves to float rather than throwing', () => {
+        for(const [dim, mod] of [[3, t3], [4, t4]]){
+            for(const mode of MODES){
+                for(const outCh of [5, 6, 8, 12, 15]){
+                    const picked = mod.resolve(kernelFor(mode, outCh), lutFor(dim, outCh, false));
+                    expect(picked.bigName).toBe('fl_' + dim + '_n');
+                    expect(picked.smallName).toBe('fl_' + dim + '_n');
+                }
+            }
+        }
+    });
+
+    test('NARROW output with no intLut still throws — a u16 run exists, its table does not', () => {
+        for(const [dim, mod] of [[3, t3], [4, t4]]){
+            for(const mode of MODES){
+                for(const outCh of [3, 4]){
+                    expect(() => mod.resolve(kernelFor(mode, outCh), lutFor(dim, outCh, false)))
+                        .toThrow(/fallback chain exhausted/);
+                }
+            }
+        }
+    });
+
+    test('end to end: int16 into a wide profile converts instead of throwing', () => {
+        const path = require('path');
+        const fs = require('fs');
+        const { eIntent } = require('../src/main');
+        const file = path.join(__dirname, 'profiles', 'synthetic_6clr_b2a_g17.icc');
+        const prof = new Profile();
+        prof.loadBinary(new Uint8Array(fs.readFileSync(file)));
+
+        const t = new Transform({ dataFormat: 'int16', buildLut: true });
+        t.create('*sRGB', prof, eIntent.relative);
+        expect(t.kernel.arrayFnBigName).toBe('fl_3_n');
+
+        const out = t.transformArray(new Uint16Array([2570, 5140, 7710]), false, false, false, 1);
+        expect(out.length).toBe(6);
+        expect(out).toBeInstanceOf(Uint16Array);
+        for(const v of out) expect(v).toBeGreaterThan(0);
+    });
+});

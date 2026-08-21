@@ -1757,6 +1757,103 @@ class Profile {
         return g;
     }
 
+
+    /**
+     * Build a synthetic n-channel profile with a PCS -> device table (B2A).
+     *
+     * THE DIRECTION THAT ACTUALLY MATTERS AT HIGH CHANNEL COUNTS, and the one
+     * real 10-to-15-colour profiles are built for.
+     *
+     * A2B is device -> PCS, so its grid is gridPoints^channels and the table
+     * becomes impossible above about ten channels: a 15-D A2B is only
+     * encodable at 2 points per axis, which is a table with no interior. B2A
+     * is the other way round -- a 3-D Lab grid with an n-channel output -- so
+     * the grid stays 17^3 or 33^3 however many inks there are and only the
+     * output stride grows. 33^3 x 15 is 538K cells.
+     *
+     * That distinction is not an implementation detail. The Lab gamut is a
+     * lobed solid rather than a box, so a 3- or 4-point grid cannot describe
+     * it at all, let alone resolve a gamut boundary. A2B at high channel
+     * counts is preview-grade by construction; B2A is not.
+     *
+     * IT ALSO EXERCISES DIFFERENT CODE. 3-channel input with n-channel output
+     * lands on Kernel3D's wide-output runs (fl_3_n, i_3_n) -- the same path
+     * where the u16 wide-output gap was found during the v1.6 kernel work,
+     * where CMYK -> 5CLR worked at 8 bits and threw at 16.
+     *
+     * THE TABLE IS A SMOOTH INK MODEL: darkness sets total ink, chroma and hue
+     * distribute it across the channels through a cosine bump per colourant.
+     * Not a characterisation of any press, but smooth in L, a and b, which is
+     * the property that makes a cross-engine comparison mean anything. See
+     * docs/deepdive/SyntheticProfiles.md for why smooth rather than noise.
+     *
+     * @param {object}  opts
+     * @param {number}  opts.channels          output channels, 2..15
+     * @param {number}  [opts.gridPoints=17]   per Lab axis
+     * @param {boolean} [opts.withA2B]         also emit the device->PCS table
+     * @param {string}  [opts.description]
+     * @returns {Uint8Array} ICC bytes
+     */
+    static createNChannelB2AICC(opts) {
+        opts = opts || {};
+        const outCh = opts.channels;
+        if (!(outCh >= 2 && outCh <= 15)) {
+            throw new Error('Profile.createNChannelB2AICC: channels must be 2-15, got ' + outCh);
+        }
+        const grid = opts.gridPoints || 17;
+        const cells = grid * grid * grid;
+
+        const CLUT = new Uint16Array(cells * outCh);
+        let w = 0;
+        for (let li = 0; li < grid; li++) {
+            const L = li / (grid - 1) * 100;
+            for (let ai = 0; ai < grid; ai++) {
+                const a = ai / (grid - 1) * 255 - 128;
+                for (let bi = 0; bi < grid; bi++) {
+                    const b = bi / (grid - 1) * 255 - 128;
+
+                    // Total ink rises as the colour darkens; chroma and hue
+                    // decide how it is split between the colourants.
+                    const dark   = 1 - L / 100;
+                    const chroma = Math.min(1, Math.sqrt(a * a + b * b) / 128);
+                    const hue    = Math.atan2(b, a);
+
+                    for (let c = 0; c < outCh; c++) {
+                        // One colourant per hue, evenly spaced round the wheel,
+                        // each a cosine bump so the result is smooth in a and b
+                        // rather than piecewise.
+                        const centre = (c / outCh) * 2 * Math.PI - Math.PI;
+                        const bump   = 0.5 + 0.5 * Math.cos(hue - centre);
+                        const v      = dark * (0.3 + 0.7 * chroma * bump);
+                        CLUT[w++] = Math.max(0, Math.min(65535, Math.round(v * 65535)));
+                    }
+                }
+            }
+        }
+
+        const b2a = encode.lut16Type({
+            inputChannels: 3, outputChannels: outCh, gridPoints: grid, CLUT,
+        });
+
+        const tags = [
+            ['B2A0', b2a],
+            ['B2A1', b2a],
+            ['B2A2', b2a],
+            ['cprt', encode.textType(SYNTHETIC_COPYRIGHT)],
+            ['desc', encode.textDescriptionType(opts.description
+                || ('jsColorEngine synthetic ' + outCh + 'CLR B2A grid' + grid
+                    + ' - test profile, not for production'))],
+            ['wtpt', encode.XYZType(encode.D50)],
+        ];
+
+        return encode.assemble({
+            colorSpace: encode.COLOUR_SPACE_SIG[outCh],
+            profileClass: 'prtr',
+            pcs: 'Lab ',
+            intent: 0,
+        }, tags);
+    }
+
 }
 
 

@@ -142,8 +142,26 @@ function resolve(kernel, lut){
     // can serve: the caller asked for 16-bit integer kernels and the table they
     // read from was never built. Loud, because the alternative is a silent
     // fall to a path they did not ask for.
+    //
+    // ONLY WHEN A u16 RUN ACTUALLY EXISTS, i.e. narrow output. Above 4 output
+    // channels there is no u16 kernel at all and u16Run is already the FLOAT
+    // run -- float being a legal landing point for an int16 mode, because
+    // lut.outputScale is folded to 65535 and it scales at call time. Throwing
+    // there said "you did not build a table" about a table that could not have
+    // helped.
+    //
+    // It was reachable and it threw. buildIntLut() does not produce a table for
+    // more than 4 output channels, so EVERY dataFormat:'int16' conversion into
+    // a 5-or-more-channel profile died here -- while the same conversion at
+    // int8 worked, because the u8 ladder degrades to float. The u16 ladder had
+    // no such rung. Found by the first int16 run of the B2A oracle, on a
+    // 6-channel profile.
+    //
+    // The narrow case keeps throwing, and that asymmetry with int8 (which falls
+    // to float silently) is worth a second look -- but it is a different
+    // decision from this one and nothing has demonstrated it wrong.
     if(mode === 'int16' || mode === 'int16-wasm-scalar' || mode === 'int16-wasm-simd'){
-        if(!hasIntLut){
+        if(!hasIntLut && narrow){
             throw 'lutKernelTable: fallback chain exhausted from "'
                 + (mode === 'int16' ? 'i16' : mode === 'int16-wasm-simd' ? 'i16wsi' : 'i16ws')
                 + '_3_' + (narrow ? outCh : 'n') + '" (no float fallback?)';
@@ -163,8 +181,8 @@ function resolve(kernel, lut){
             }
             /* falls through */
         case 'int16':
-            // No float rung here, deliberately — see note 2 above. The
-            // unserviceable cases already threw before the switch.
+            // u16Run is the float run when the output is wider than 4 channels
+            // — see the guard above. Narrow output with no intLut already threw.
             return pick(u16Run, u16Name, u16Run, u16Name);
 
         case 'int-wasm-simd':
