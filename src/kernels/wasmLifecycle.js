@@ -19,181 +19,91 @@ var wasmLoader = require('../wasm/wasm_loader.js');
 var SLOTS = ['wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
              'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'];
 
+/** Where a WASM lutMode lands when no WASM module can serve this kernel. */
+var NO_WASM = {
+    'int-wasm-simd': 'int',      'int-wasm-scalar': 'int',
+    'int16-wasm-simd': 'int16',  'int16-wasm-scalar': 'int16',
+};
+
 /**
- * Try to compile/instantiate the tetrahedral WASM kernels for the
- * transform's current lutMode, demoting transform.lutMode on any failure
- * (simd → scalar → JS int / int16). Mutates transform.lutMode and the
- * transform.wasmTetra* state slots. Soft-fail-loud-log: warning in verbose
- * mode, silent otherwise.
+ * Load this kernel's WASM modules, demoting lutMode to what the host can run.
  *
- * @param {Transform} transform
+ * ONE KERNEL, ONE DIMENSION'S MODULES (v1.6 phase 7). Until now every create()
+ * loaded BOTH families whatever the input width, so a CMYK conversion compiled
+ * and instantiated four 3-D modules it could never reach, and a gray
+ * conversion compiled all eight. The dispatch switches confirm they were never
+ * needed: kernel3D_table.js names no wasmTetra4D* slot, and kernel4D_table.js
+ * names no wasmTetra3D* slot.
+ *
+ * THE LADDER IS THE KERNEL'S, DECLARED IN ITS OWN FILE as `wasmLadder` and
+ * HANDED IN by its create(). This module only walks what it is given. Open Kernel3D.js and you can see every module it can
+ * load and the order it gives up in, next to the dispatch switch that decides
+ * which one runs -- the same reason the 42-row dispatch table moved out of
+ * here in phase 4d.
+ *
+ * Each rung names the module whose failure DEMOTES lutMode, and optionally one
+ * loaded best-effort for the shapes the lead does not cover (the SIMD kernels
+ * handle 3 and 4 output channels; anything wider needs the scalar module).
+ * Failing to load that one is not a demotion -- the dispatch switch picks a
+ * lower rung for those shapes by itself.
+ *
+ * A KERNEL WITH NO LADDER demotes straight to the JS mode. That is a behaviour
+ * change and an honest one: 1-D, 2-D and N-D have no WASM kernels, so a gray
+ * transform reporting lutMode 'int-wasm-simd' was reporting something that
+ * could not happen. It used to, because the 3-D module loaded on its behalf
+ * and nothing checked whether it was reachable.
+ *
+ * EXPLICIT ARGUMENTS, NOT A MAGIC PROPERTY NAME. The caller says which
+ * transform's lutMode may be demoted, which kernel the module states land on,
+ * and which ladder to walk. Reaching into `kernel.wasmLadder` from in here
+ * would have made the contract invisible at the call site and impossible to
+ * override for a wrapper kernel that wants a different set.
+ *
+ * @param {Transform} transform  its lutMode is demoted in place
+ * @param {object}    kernel     the module states are written onto this
+ * @param {object}    [ladder]   this kernel's rungs; omit for none
  * @returns {string} the settled transform.lutMode
  */
-function settleWasmStates(transform){
-    // WASM KERNEL INIT (lutMode begins with 'int-wasm-'): try to
-    // compile and instantiate the tetrahedral WASM kernel(s) once,
-    // at create() time. On any failure (no WebAssembly global, SIMD
-    // unsupported by host, module bytes missing, instantiate throws)
-    // demote lutMode to the next-best mode (simd → scalar → int) so
-    // the best available kernel runs instead. The dispatcher
-    // then sees the demoted lutMode and skips inapplicable WASM
-    // routing on every call — zero per-call overhead from the
-    // demotion.
-    //
-    // For 'int-wasm-simd' we try to load BOTH the SIMD module
-    // (for 3D cMax ∈ {3, 4}) and the scalar module (for everything
-    // else the SIMD kernel doesn't cover — currently just 3D with
-    // cMax ∉ {3, 4}). If the SIMD module compile fails but the
-    // scalar compile succeeds, we demote to 'int-wasm-scalar'.
-    if(transform.lutMode === 'int-wasm-simd'){
-        var simdState = wasmLoader.createTetra3DSimdState({ wasmCache: transform.wasmCache });
-        if(simdState !== null){
-            transform.wasmTetra3DSimd = simdState;
-            // Also load scalar as a fallthrough step for cMax ∉ {3,4}.
-            // Scalar compile rarely fails when SIMD compile succeeds
-            // (SIMD is a strict superset of scalar capability in V8),
-            // but we still check — on failure we leave wasmTetra3D
-            // null and let the dispatcher fall through to 'int' JS
-            // for those off-path cases.
-            var scalarState = wasmLoader.createTetra3DState({ wasmCache: transform.wasmCache });
-            if(scalarState !== null){
-                transform.wasmTetra3D = scalarState;
-            }
+function settleWasmStates(transform, kernel, ladder){
+
+    if(!ladder){
+        var landed = NO_WASM[transform.lutMode];
+        if(landed){
             if(transform.verbose){
-                console.log('  lutMode=int-wasm-simd: WebAssembly SIMD kernel loaded'
-                    + (scalarState !== null ? ' (+ scalar fallthrough)' : ' (scalar fallthrough unavailable)'));
+                console.log('  lutMode=' + transform.lutMode + ': no WebAssembly kernels exist for '
+                    + (kernel.name || 'this kernel') + ' - using "' + landed + '"');
             }
-        } else {
-            if(transform.verbose){
-                console.warn('  lutMode=int-wasm-simd: WebAssembly SIMD unavailable — demoting to "int-wasm-scalar"');
-            }
-            transform.lutMode = 'int-wasm-scalar';
+            transform.lutMode = landed;
         }
+        return transform.lutMode;
     }
 
-    if(transform.lutMode === 'int-wasm-scalar'){
-        var wasmState = wasmLoader.createTetra3DState({ wasmCache: transform.wasmCache });
-        if(wasmState !== null){
-            transform.wasmTetra3D = wasmState;
-            if(transform.verbose){
-                console.log('  lutMode=int-wasm-scalar: WebAssembly kernel loaded');
-            }
-        } else {
-            if(transform.verbose){
-                console.warn('  lutMode=int-wasm-scalar: WebAssembly unavailable — demoting to "int"');
-            }
-            transform.lutMode = 'int';
-        }
-    }
+    while(ladder[transform.lutMode]){
+        var rung = ladder[transform.lutMode];
+        var state = wasmLoader[rung.load]({ wasmCache: transform.wasmCache });
 
-    // INT16 WASM SIMD (v1.3 — u16 I/O SIMD, 3D + 4D). Sibling of
-    // 'int-wasm-simd' for u16 image workloads. The SIMD 3D u16
-    // module determines lutMode demotion: if it fails to compile
-    // (host lacks WebAssembly SIMD) we demote to 'int16-wasm-scalar'
-    // and the block below picks up the scalar u16 modules instead.
-    // On success we ALSO load the scalar u16 3D module as a
-    // fallthrough for cMax ∉ {3, 4} cases the SIMD kernel doesn't
-    // cover (mirrors the u8 SIMD-block fallthrough convention),
-    // plus the SIMD u16 4D module (best-effort) and the scalar u16
-    // 4D module (fallthrough).
-    if(transform.lutMode === 'int16-wasm-simd'){
-        var simd3DInt16State = wasmLoader.createTetra3DInt16SimdState({ wasmCache: transform.wasmCache });
-        if(simd3DInt16State !== null){
-            transform.wasmTetra3DInt16Simd = simd3DInt16State;
-            var scalar3DInt16State = wasmLoader.createTetra3DInt16State({ wasmCache: transform.wasmCache });
-            if(scalar3DInt16State !== null){
-                transform.wasmTetra3DInt16 = scalar3DInt16State;
-            }
-            var simd4DInt16State = wasmLoader.createTetra4DInt16SimdState({ wasmCache: transform.wasmCache });
-            if(simd4DInt16State !== null){
-                transform.wasmTetra4DInt16Simd = simd4DInt16State;
-            }
-            var scalar4DInt16State = wasmLoader.createTetra4DInt16State({ wasmCache: transform.wasmCache });
-            if(scalar4DInt16State !== null){
-                transform.wasmTetra4DInt16 = scalar4DInt16State;
-            }
+        if(state === null){
             if(transform.verbose){
-                console.log('  lutMode=int16-wasm-simd: WebAssembly SIMD u16 kernels loaded'
-                    + ' (3D SIMD' + (scalar3DInt16State !== null ? ' + scalar fallthrough' : ' only')
-                    + ', 4D ' + (simd4DInt16State !== null ? 'SIMD' : 'no SIMD')
-                    + (scalar4DInt16State !== null ? ' + scalar fallthrough' : '')
-                    + ')');
+                console.warn('  lutMode=' + transform.lutMode + ': ' + rung.load
+                    + ' unavailable - demoting to "' + rung.demoteTo + '"');
             }
-        } else {
-            if(transform.verbose){
-                console.warn('  lutMode=int16-wasm-simd: WebAssembly SIMD unavailable — demoting to "int16-wasm-scalar"');
-            }
-            transform.lutMode = 'int16-wasm-scalar';
+            transform.lutMode = rung.demoteTo;
+            continue;
         }
-    }
 
-    // INT16 WASM SCALAR (v1.3 — u16 I/O scalar, 3D + 4D). Sibling of
-    // 'int-wasm-scalar' for u16 image workloads. The 3D module
-    // determines lutMode demotion: if it fails to instantiate
-    // we drop to JS 'int16'. The 4D module is best-effort and
-    // mirrors the u8 4D-load policy (no demotion on 4D failure;
-    // 4D inputs fall through to the JS 'int16' kernel).
-    if(transform.lutMode === 'int16-wasm-scalar'){
-        var wasmInt16State = wasmLoader.createTetra3DInt16State({ wasmCache: transform.wasmCache });
-        if(wasmInt16State !== null){
-            transform.wasmTetra3DInt16 = wasmInt16State;
-            if(transform.verbose){
-                console.log('  lutMode=int16-wasm-scalar: WebAssembly 3D int16 kernel loaded');
-            }
-            var wasm4DInt16State = wasmLoader.createTetra4DInt16State({ wasmCache: transform.wasmCache });
-            if(wasm4DInt16State !== null){
-                transform.wasmTetra4DInt16 = wasm4DInt16State;
-                if(transform.verbose){
-                    console.log('  lutMode=int16-wasm-scalar: WebAssembly 4D int16 kernel loaded');
-                }
-            } else if(transform.verbose){
-                console.warn('  lutMode=int16-wasm-scalar: WebAssembly 4D int16 kernel unavailable — 4D u16 inputs will use JS int16 fallback');
-            }
-        } else {
-            if(transform.verbose){
-                console.warn('  lutMode=int16-wasm-scalar: WebAssembly unavailable — demoting to "int16"');
-            }
-            transform.lutMode = 'int16';
-        }
-    }
+        kernel[rung.slot] = state;
 
-    // 4D WASM (CMYK input). Loaded alongside 3D any time lutMode is
-    // still 'int-wasm-*' after the 3D blocks above ran. If the 3D
-    // path just demoted to 'int' we don't try 4D either — there's
-    // no meaningful scenario where the 4D module would instantiate
-    // on a host where the 3D one didn't.
-    //
-    // For 'int-wasm-simd' we also load the 4D SIMD kernel for
-    // cMax ∈ {3, 4} (which covers CMYK → RGB and CMYK → CMYK, i.e.
-    // every real-world 4D pipeline). The scalar 4D state stays
-    // loaded as a fallthrough for other cMax values.
-    //
-    // On 4D-load failure we DON'T demote lutMode — 3D can still run
-    // through WASM; 4D just falls through to the JS 'int' kernel on
-    // the dispatcher side. Soft degradation, matches pre-4D-WASM
-    // behaviour exactly.
-    if(transform.lutMode === 'int-wasm-simd'){
-        var wasm4DSimdState = wasmLoader.createTetra4DSimdState({ wasmCache: transform.wasmCache });
-        if(wasm4DSimdState !== null){
-            transform.wasmTetra4DSimd = wasm4DSimdState;
-            if(transform.verbose){
-                console.log('  lutMode=int-wasm-simd: WebAssembly 4D SIMD kernel loaded');
-            }
-        } else if(transform.verbose){
-            console.warn('  lutMode=int-wasm-simd: WebAssembly 4D SIMD kernel unavailable — 4D inputs will use scalar 4D WASM or JS int fallback');
+        var extra = null;
+        if(rung.alsoLoad){
+            extra = wasmLoader[rung.alsoLoad]({ wasmCache: transform.wasmCache });
+            if(extra !== null) kernel[rung.alsoSlot] = extra;
         }
-    }
 
-    if(transform.lutMode === 'int-wasm-scalar' || transform.lutMode === 'int-wasm-simd'){
-        var wasm4DState = wasmLoader.createTetra4DState({ wasmCache: transform.wasmCache });
-        if(wasm4DState !== null){
-            transform.wasmTetra4D = wasm4DState;
-            if(transform.verbose){
-                console.log('  lutMode=' + transform.lutMode + ': WebAssembly 4D scalar kernel loaded');
-            }
-        } else if(transform.verbose){
-            console.warn('  lutMode=' + transform.lutMode + ': WebAssembly 4D scalar kernel unavailable — 4D inputs will use JS int fallback');
+        if(transform.verbose){
+            console.log('  lutMode=' + transform.lutMode + ': ' + rung.load + ' loaded'
+                + (rung.alsoLoad ? (extra !== null ? ' (+ scalar fallthrough)' : ' (scalar fallthrough unavailable)') : ''));
         }
+        return transform.lutMode;
     }
 
     return transform.lutMode;

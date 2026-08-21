@@ -460,20 +460,21 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
         const wasmT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
         wasmT.create(cmykProfile, '*srgb', eIntent.relative);
 
-        // Both WASM states loaded; 3D must NOT fire for CMYK input.
-        expect(wasmT.wasmTetra3D).not.toBeNull();
         expect(wasmT.wasmTetra4D).not.toBeNull();
         expect(wasmT.lutMode).toBe('int-wasm-scalar');
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(wasmT.wasmTetra3D).toBeNull();
 
-        const before3D = wasmT.wasmTetra3D.dispatchCount;
         const before4D = wasmT.wasmTetra4D.dispatchCount;
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
 
-        // 4D kernel fired exactly once; 3D kernel must NOT have fired.
+        // 4D kernel fired exactly once.
         expect(wasmT.wasmTetra4D.dispatchCount).toBe(before4D + 1);
-        expect(wasmT.wasmTetra3D.dispatchCount).toBe(before3D);
 
         // Bit-exact vs JS int reference.
         expect(maxAbsDiff(oInt, oWasm).max).toBe(0);

@@ -113,7 +113,7 @@ module.exports = {
         // 'int-wasm-*' lutMode demotes exactly as it did in v1.5 (the init
         // block ran for every input dimension).
         this._variant = 'float';
-        return wasmLifecycle.settleWasmStates(this.transform);
+        return wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
     },
 
     // NO DISPATCH. One implementation, called directly by array() below —

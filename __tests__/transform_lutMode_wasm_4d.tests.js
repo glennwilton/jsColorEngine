@@ -94,23 +94,26 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
     // ---------------------------------------------------------------
     // 1. create() populates BOTH WASM states
     // ---------------------------------------------------------------
-    test('create(): both wasmTetra3D and wasmTetra4D populated (no silent demotion)', async () => {
+    test('create(): wasmTetra4D populated, wasmTetra3D not loaded at all', async () => {
         const cmykProfile = new Profile();
         await cmykProfile.loadPromise('file:' + cmykFilename);
 
         const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
         t.create(cmykProfile, '*srgb', eIntent.relative);
 
-        // Hard "WASM actually wired up" guarantee for both states.
-        expect(t.wasmTetra3D).not.toBeNull();
+        // Hard "WASM actually wired up" guarantee, and no silent demotion.
         expect(t.wasmTetra4D).not.toBeNull();
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(t.wasmTetra3D).toBeNull();
         expect(t.lutMode).toBe('int-wasm-scalar');
         expect(typeof t.wasmTetra4D.kernel).toBe('function');
         expect(t.wasmTetra4D.memory).toBeInstanceOf(WebAssembly.Memory);
 
         expect(t.lut.intLut).toBeTruthy();
         expect(t.wasmTetra4D.dispatchCount).toBe(0);
-        expect(t.wasmTetra3D.dispatchCount).toBe(0);
     });
 
 
@@ -353,7 +356,10 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
         const cache4DKey = '__jsColorEngine_tetra4d_nch_module__';
         const cache3DKey = '__jsColorEngine_tetra3d_nch_module__';
         expect(cache[cache4DKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[cache3DKey]).toBeInstanceOf(WebAssembly.Module); // sibling still cached
+        // PHASE 7: the 3-D sibling is never compiled for a CMYK transform, so
+        // it never reaches the cache either. The cache is shared across
+        // Transforms, so an RGB one would still put it there.
+        expect(cache[cache3DKey]).toBeUndefined();
 
         const expect1 = assertWasm4DRouted(t1);
         const expect2 = assertWasm4DRouted(t2);
@@ -386,22 +392,22 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
         const wasmT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar'});
         wasmT.create('*srgb', '*adobergb', eIntent.relative);
 
-        // 4D state still loaded — it's input-independent — but the
-        // dispatcher MUST NOT fire it for RGB-input pipelines.
-        expect(wasmT.wasmTetra4D).not.toBeNull();
         expect(wasmT.wasmTetra3D).not.toBeNull();
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(wasmT.wasmTetra4D).toBeNull();
 
         const nPixels = 2048;
         const input = new Uint8ClampedArray(nPixels * 3);
         for(let i = 0; i < input.length; i++) input[i] = (i * 37) & 0xff;
 
         const before3D = wasmT.wasmTetra3D.dispatchCount;
-        const before4D = wasmT.wasmTetra4D.dispatchCount;
 
         wasmT.transformArray(input, false, false, false);
 
         expect(wasmT.wasmTetra3D.dispatchCount).toBe(before3D + 1);
-        expect(wasmT.wasmTetra4D.dispatchCount).toBe(before4D); // untouched
     });
 
 
@@ -410,18 +416,22 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
     //     alongside 4D SIMD (diagnostic check — the SIMD 4D suite
     //     covers the SIMD-fires-on-{3,4}-cMax case).
     // ---------------------------------------------------------------
-    test('lutMode=int-wasm-simd: both 4D scalar and 4D SIMD states are loaded', async () => {
+    test('lutMode=int-wasm-simd: 4D scalar and 4D SIMD load, 3D neither', async () => {
         const cmykProfile = new Profile();
         await cmykProfile.loadPromise('file:' + cmykFilename);
 
         const simdT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
         simdT.create(cmykProfile, '*srgb', eIntent.relative);
 
-        // All four WASM states should be loaded under int-wasm-simd.
-        expect(simdT.wasmTetra3DSimd).not.toBeNull();
-        expect(simdT.wasmTetra3D).not.toBeNull();
+        // SIMD leads, scalar loads behind it for output widths SIMD skips.
         expect(simdT.wasmTetra4DSimd).not.toBeNull();
         expect(simdT.wasmTetra4D).not.toBeNull();
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(simdT.wasmTetra3DSimd).toBeNull();
+        expect(simdT.wasmTetra3D).toBeNull();
         expect(simdT.lutMode).toBe('int-wasm-simd');
 
         const nPixels = 2048;
@@ -429,16 +439,12 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
 
         const before4DSimd = simdT.wasmTetra4DSimd.dispatchCount;
         const before4D     = simdT.wasmTetra4D.dispatchCount;
-        const beforeSimd   = simdT.wasmTetra3DSimd.dispatchCount;
-        const before3D     = simdT.wasmTetra3D.dispatchCount;
 
         const oSimd = simdT.transformArray(input, false, false, false);
 
         // cMax=3 is a SIMD sweet spot — 4D SIMD fires, everything else sits.
         expect(simdT.wasmTetra4DSimd.dispatchCount).toBe(before4DSimd + 1);
         expect(simdT.wasmTetra4D.dispatchCount).toBe(before4D);
-        expect(simdT.wasmTetra3DSimd.dispatchCount).toBe(beforeSimd);
-        expect(simdT.wasmTetra3D.dispatchCount).toBe(before3D);
 
         // Bit-exact vs lutMode='int'.
         const intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});

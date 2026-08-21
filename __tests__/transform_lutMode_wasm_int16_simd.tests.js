@@ -131,33 +131,32 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
     // ---------------------------------------------------------------
     // 2. create() populates wasmTetra3DInt16Simd + scalar fallthroughs
     // ---------------------------------------------------------------
-    test('create(): all four u16 states populated for a real RGB pipeline (no silent demotion)', () => {
+    test('create(): both 3D u16 states populated for an RGB pipeline, no 4D', () => {
         const t = new Transform({dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-simd'});
         t.create('*srgb', '*adobergb', eIntent.relative);
 
-        // SIMD u16 states — the headline kernels for this mode.
+        // SIMD u16 state — the headline kernel for this mode.
         expect(t.wasmTetra3DInt16Simd).not.toBeNull();
-        expect(t.wasmTetra4DInt16Simd).not.toBeNull();
         expect(t.wasmTetra3DInt16Simd.isSimd).toBe(true);
-        expect(t.wasmTetra4DInt16Simd.isSimd).toBe(true);
 
-        // Scalar u16 fallthroughs — loaded for cMax ∉ {3, 4} cases the
-        // SIMD kernels can't service (mirrors u8 SIMD-mode loadout).
+        // Scalar u16 fallthrough — loaded for cMax ∉ {3, 4} cases the
+        // SIMD kernel can't service.
         expect(t.wasmTetra3DInt16).not.toBeNull();
-        expect(t.wasmTetra4DInt16).not.toBeNull();
         expect(t.wasmTetra3DInt16.isSimd).toBe(false);
-        expect(t.wasmTetra4DInt16.isSimd).toBe(false);
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(t.wasmTetra4DInt16Simd).toBeNull();
+        expect(t.wasmTetra4DInt16).toBeNull();
 
         expect(t.lutMode).toBe('int16-wasm-simd'); // no demotion since SIMD is available
         expect(typeof t.wasmTetra3DInt16Simd.kernel).toBe('function');
-        expect(typeof t.wasmTetra4DInt16Simd.kernel).toBe('function');
         expect(t.wasmTetra3DInt16Simd.memory).toBeInstanceOf(WebAssembly.Memory);
-        expect(t.wasmTetra4DInt16Simd.memory).toBeInstanceOf(WebAssembly.Memory);
 
         expect(t.lut.intLut).toBeTruthy();
         expect(t.lut.intLut.gridPointsScale_fixed_u16).toBeGreaterThan(0);
         expect(t.wasmTetra3DInt16Simd.dispatchCount).toBe(0);
-        expect(t.wasmTetra4DInt16Simd.dispatchCount).toBe(0);
     });
 
 
@@ -276,11 +275,14 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
         const simdT = new Transform({dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-simd'});
         simdT.create(cmykProfile, '*srgb', eIntent.relative);
 
-        expect(simdT.wasmTetra3DInt16Simd).not.toBeNull();
         expect(simdT.wasmTetra4DInt16Simd).not.toBeNull();
         expect(simdT.lut.intLut.inputChannels).toBe(4);
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(simdT.wasmTetra3DInt16Simd).toBeNull();
 
-        const before3D = simdT.wasmTetra3DInt16Simd.dispatchCount;
         const before4D = simdT.wasmTetra4DInt16Simd.dispatchCount;
 
         const oJs   = jsT.transformArray(input, false, false, false);
@@ -289,7 +291,7 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
         // 4D SIMD u16 WAS invoked for CMYK input...
         expect(simdT.wasmTetra4DInt16Simd.dispatchCount).toBe(before4D + 1);
         // ...3D SIMD u16 was NOT (cross-contamination guardrail).
-        expect(simdT.wasmTetra3DInt16Simd.dispatchCount).toBe(before3D);
+
 
         expect(oJs).toBeInstanceOf(Uint16Array);
         expect(oSimd).toBeInstanceOf(Uint16Array);
@@ -352,14 +354,16 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
         const scalar3DKey = '__jsColorEngine_tetra3d_nch_int16_module__';
         const scalar4DKey = '__jsColorEngine_tetra4d_nch_int16_module__';
         expect(cache[simd3DKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[simd4DKey]).toBeInstanceOf(WebAssembly.Module);
         expect(cache[scalar3DKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[scalar4DKey]).toBeInstanceOf(WebAssembly.Module);
+        // PHASE 7: these are RGB transforms, so the 4-D modules are never
+        // compiled and never reach the shared cache. A CMYK transform sharing
+        // this cache would put them there.
+        expect(cache[simd4DKey]).toBeUndefined();
+        expect(cache[scalar4DKey]).toBeUndefined();
 
         // Each Transform has its own Instance + memory for each state.
         expect(t1.wasmTetra3DInt16Simd).not.toBe(t2.wasmTetra3DInt16Simd);
         expect(t1.wasmTetra3DInt16Simd.memory).not.toBe(t2.wasmTetra3DInt16Simd.memory);
-        expect(t1.wasmTetra4DInt16Simd).not.toBe(t2.wasmTetra4DInt16Simd);
     });
 
 

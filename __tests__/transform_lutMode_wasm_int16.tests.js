@@ -119,23 +119,24 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
     // ---------------------------------------------------------------
     // 2. create() populates wasmTetra3DInt16 + wasmTetra4DInt16
     // ---------------------------------------------------------------
-    test('create(): wasmTetra3DInt16 + wasmTetra4DInt16 are populated for a real RGB pipeline (no silent demotion)', () => {
+    test('create(): wasmTetra3DInt16 populated for an RGB pipeline, 4D not loaded', () => {
         const t = new Transform({dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-scalar'});
         t.create('*srgb', '*adobergb', eIntent.relative);
 
         // Hard guarantees — fail fast if WASM didn't actually load.
         expect(t.wasmTetra3DInt16).not.toBeNull();
-        expect(t.wasmTetra4DInt16).not.toBeNull();   // both u16 modules eagerly loaded
         expect(t.lutMode).toBe('int16-wasm-scalar'); // no demotion since WASM is available
         expect(typeof t.wasmTetra3DInt16.kernel).toBe('function');
-        expect(typeof t.wasmTetra4DInt16.kernel).toBe('function');
         expect(t.wasmTetra3DInt16.memory).toBeInstanceOf(WebAssembly.Memory);
-        expect(t.wasmTetra4DInt16.memory).toBeInstanceOf(WebAssembly.Memory);
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(t.wasmTetra4DInt16).toBeNull();
 
         expect(t.lut.intLut).toBeTruthy();
         expect(t.lut.intLut.gridPointsScale_fixed_u16).toBeGreaterThan(0);
         expect(t.wasmTetra3DInt16.dispatchCount).toBe(0);
-        expect(t.wasmTetra4DInt16.dispatchCount).toBe(0);
     });
 
 
@@ -253,14 +254,14 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
         const wasmT = new Transform({dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-scalar'});
         wasmT.create(cmykProfile, '*srgb', eIntent.relative);
 
-        // Both 3D and 4D u16 modules are loaded at create() time
-        // (Transform-level resources, not per-call). The dispatcher
-        // routes by inputChannels; 4D=CMYK → wasmTetra4DInt16.
-        expect(wasmT.wasmTetra3DInt16).not.toBeNull();
         expect(wasmT.wasmTetra4DInt16).not.toBeNull();
         expect(wasmT.lut.intLut.inputChannels).toBe(4);
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(wasmT.wasmTetra3DInt16).toBeNull();
 
-        const before3D = wasmT.wasmTetra3DInt16.dispatchCount;
         const before4D = wasmT.wasmTetra4DInt16.dispatchCount;
 
         const oJs   = jsT.transformArray(input, false, false, false);
@@ -271,7 +272,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
         // ...and the 3D u16 WASM kernel was NOT (cross-contamination
         // guardrail: a 4D pipeline must never silently route through
         // a 3D kernel even when both states are loaded).
-        expect(wasmT.wasmTetra3DInt16.dispatchCount).toBe(before3D);
+
 
         // u16 outputs on both sides
         expect(oJs).toBeInstanceOf(Uint16Array);

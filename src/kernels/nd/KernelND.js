@@ -46,7 +46,7 @@ module.exports = {
         // block ran for every input dimension). The design-doc "always
         // return 'float'" demotion lands with the NChannel LUT work.
         this._variant = 'float';
-        return wasmLifecycle.settleWasmStates(this.transform);
+        return wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
     },
 
     // NO DISPATCH. One implementation, called directly by array() below —

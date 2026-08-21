@@ -478,18 +478,21 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
         const simdT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd'});
         simdT.create(cmykProfile, '*srgb', eIntent.relative);
 
-        expect(simdT.wasmTetra3DSimd).not.toBeNull();
         expect(simdT.wasmTetra4DSimd).not.toBeNull();
         expect(simdT.lutMode).toBe('int-wasm-simd');
+        // PHASE 7: a kernel loads only its own dimension's modules, so the
+        // other family is null rather than loaded-and-never-fired. That is a
+        // stronger guarantee than a dispatch counter staying flat -- there is
+        // nothing there that COULD fire.
+        expect(simdT.wasmTetra3DSimd).toBeNull();
 
-        const before3DSimd = simdT.wasmTetra3DSimd.dispatchCount;
         const before4DSimd = simdT.wasmTetra4DSimd.dispatchCount;
 
         simdT.transformArray(input, false, false, false);
 
-        // 3D SIMD counter MUST NOT have moved — this pipeline is 4D.
-        expect(simdT.wasmTetra3DSimd.dispatchCount).toBe(before3DSimd);
-        // 4D SIMD counter DID move.
+        // 4D SIMD counter DID move. (The 3-D module is not loaded at all for
+        // a 4-D pipeline since phase 7, which is a stronger statement than a
+        // counter that stayed flat -- asserted above.)
         expect(simdT.wasmTetra4DSimd.dispatchCount).toBe(before4DSimd + 1);
     });
 

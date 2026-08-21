@@ -597,18 +597,60 @@ describe('WASM state belongs to the kernel', () => {
         expect(t.wasmMemoryBytes()).toBe(0);
     });
 
-    (HAS_WASM ? test : test.skip)('both families still load — the phase 7 tripwire', () => {
-        // Deliberate: phase 7 makes each kernel load only its own dimension,
-        // at which point a CMYK transform stops carrying 3D modules and this
-        // test SHOULD fail. It is here so that change is a decision rather than
-        // a surprise, and so the 128 KB it recovers is visible when it happens.
+    (HAS_WASM ? test : test.skip)('a kernel loads its own dimension and nothing else', () => {
+        // This was the phase 7 tripwire: it asserted that BOTH families
+        // loaded, deliberately written to fail the day each kernel started
+        // loading only its own dimension, so that change would be a decision
+        // rather than a surprise. It has now fired and been turned around.
+        //
+        // A CMYK transform used to compile and instantiate four 3-D modules it
+        // could never reach -- kernel4D_table.js names no wasmTetra3D* slot at
+        // all -- and a gray transform compiled all eight.
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
-        const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
-        t.create(cmyk, '*sRGB', eIntent.relative);
 
-        expect(t.kernelInfo().name).toBe('kernel4D');
-        expect(t.kernel.wasmTetra4D).not.toBeNull();
-        expect(t.kernel.wasmTetra3D).not.toBeNull();   // ← phase 7 changes this
+        const cmykT = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
+        cmykT.create(cmyk, '*sRGB', eIntent.relative);
+        expect(cmykT.kernelInfo().name).toBe('kernel4D');
+        expect(cmykT.kernel.wasmTetra4DSimd).not.toBeNull();
+        expect(cmykT.kernel.wasmTetra4D).not.toBeNull();
+        expect(cmykT.kernel.wasmTetra3DSimd).toBeNull();
+        expect(cmykT.kernel.wasmTetra3D).toBeNull();
+
+        const rgbT = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
+        rgbT.create('*sRGB', cmyk, eIntent.relative);
+        expect(rgbT.kernelInfo().name).toBe('kernel3D');
+        expect(rgbT.kernel.wasmTetra3DSimd).not.toBeNull();
+        expect(rgbT.kernel.wasmTetra3D).not.toBeNull();
+        expect(rgbT.kernel.wasmTetra4DSimd).toBeNull();
+        expect(rgbT.kernel.wasmTetra4D).toBeNull();
+    });
+
+    (HAS_WASM ? test : test.skip)('a kernel with no WASM at all says so in its lutMode', () => {
+        // 1-D, 2-D and N-D have no WASM kernels. They used to report
+        // lutMode 'int-wasm-simd' anyway, because the 3-D module loaded
+        // successfully on their behalf and nothing checked whether it was
+        // reachable from a gray transform. It was not.
+        //
+        // No virtual gray profile exists in createVirtualProfile(), so drive
+        // the kernel directly -- what is being checked is the settle, which
+        // reads lutMode and the kernel's ladder and nothing else.
+        // NOTE create(lutMode) ignores its argument and reads
+        // transform.lutMode -- longstanding, and why this sets the field
+        // rather than passing a value.
+        for(const dims of [1, 2, 5, 15]){
+            for(const [asked, landed] of [['int-wasm-simd', 'int'],
+                                          ['int-wasm-scalar', 'int'],
+                                          ['int16-wasm-simd', 'int16'],
+                                          ['int16-wasm-scalar', 'int16'],
+                                          ['float', 'float'],
+                                          ['int', 'int']]){
+                const t = new Transform({ dataFormat: 'int8', buildLut: true });
+                t.setKernel(dims);
+                t.lutMode = asked;
+                expect(t.kernel.wasmLadder).toBeUndefined();
+                expect(t.kernel.create(asked)).toBe(landed);
+            }
+        }
     });
 });
 

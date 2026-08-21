@@ -95,11 +95,37 @@ module.exports = {
         kernelUtils.bindArrayRuns(this);
     },
 
+    /**
+     * THE WASM MODULES THIS KERNEL CAN LOAD, and the order it gives up in.
+     *
+     * Walked by wasmLifecycle.settleWasmStates() at create() time. `load` is
+     * the module whose failure demotes lutMode to `demoteTo`; `alsoLoad` is
+     * best-effort, covering the output widths the SIMD kernel does not (it
+     * handles 4 and 4 output channels; wider needs the scalar module), and its
+     * absence demotes nothing -- resolve() below simply picks a lower rung.
+     *
+     * NOTHING FROM THE OTHER DIMENSION IS HERE. Before v1.6 every create()
+     * loaded both families whatever the input width; resolve() has never named
+     * a wasmTetra3D* slot, so those compiles were pure cost.
+     */
+    wasmLadder: {
+        'int-wasm-simd':     { load: 'createTetra4DSimdState',      slot: 'wasmTetra4DSimd',
+                               alsoLoad: 'createTetra4DState',      alsoSlot: 'wasmTetra4D',
+                               demoteTo: 'int-wasm-scalar' },
+        'int-wasm-scalar':   { load: 'createTetra4DState',          slot: 'wasmTetra4D',
+                               demoteTo: 'int' },
+        'int16-wasm-simd':   { load: 'createTetra4DInt16SimdState', slot: 'wasmTetra4DInt16Simd',
+                               alsoLoad: 'createTetra4DInt16State', alsoSlot: 'wasmTetra4DInt16',
+                               demoteTo: 'int16-wasm-scalar' },
+        'int16-wasm-scalar': { load: 'createTetra4DInt16State',     slot: 'wasmTetra4DInt16',
+                               demoteTo: 'int16' },
+    },
+
     create: function(lutMode){
         // Load the WASM kernels (3D + 4D families — see wasmLifecycle.js for
         // why both) and demote lutMode if the host can't run the request.
         this._variant = null;
-        return wasmLifecycle.settleWasmStates(this.transform);
+        return wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
     },
 
     /**
