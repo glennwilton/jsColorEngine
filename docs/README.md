@@ -235,16 +235,21 @@ worse.
 
 ### deepdive/SyntheticProfiles.md
 Testing what you cannot buy. Real ICC profiles are licensed, so this repo
-ships two — which left `Kernel1D`, `Kernel2D` and `KernelND` with no
-oracle at all, checkable only against themselves. A profile the engine
-WRITES has no licensing question, so `src/encodeICC.js` makes them: gray
-and 2CLR-10CLR, committed, handed to Little CMS. `Kernel2D` agrees bit
-for bit; gray lands 100% within 1 LSB. Records the three bugs the oracle
-found on its first runs (`transformArray()` returning `undefined` for
-every input above 4 channels, silently), the noise-versus-smooth mistake
-that reported max 144 LSB on a working engine, why `toICC()` REFUSES to
-write RGB, and why the n-channel interpolator changed to match lcms while
-the old one is kept behind a toggle with the numbers that retired it.
+ships two — which left `Kernel1D`, `Kernel2D` and `KernelND` with no second
+opinion, checkable only against themselves. A profile the engine WRITES
+carries no licensing question, so `src/encodeICC.js` makes them: fifteen
+dual-table profiles at 1–15 channels, committed, handed to Little CMS.
+Every input width converts into every output width, both depths;
+`Kernel2D` agrees bit for bit and gray lands 100% within 1 LSB.
+
+Written as a journey. What the oracle reached that nothing else could —
+including a stage name assembled by string concatenation that left 165 of
+225 conversions with nowhere to go, and an int16 route that had been
+inherited intact through a 560-case equivalence check. Why `toICC()`
+REFUSES to write RGB. And the two routes that looked right and measured
+something else: noise CLUTs, which turn a legitimate interpolation-scheme
+difference into a number resembling failure, and a preallocation that
+removed 8,000 allocations per pixel and made things slower.
 
 ### deepdive/PixelCache.md
 The pixel cache: design space, as-built notes for the accuracy-path

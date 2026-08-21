@@ -3,9 +3,13 @@
 > **Status: built and passing 2026-08-22. Fifteen dual-table profiles, every
 > input width into every output width, 1 to 15, both depths.**
 
-Most of this engine has never been compared against another colour management
+Most of this engine had never been compared against another colour management
 system. Not because nobody thought to — because there was nothing to compare
 *with*.
+
+This is the account of building something to compare with, what turned up once
+it existed, and the two routes that looked right and turned out to measure
+something else.
 
 ---
 
@@ -35,7 +39,7 @@ Three of the five kernels could only ever be checked against themselves.
 is weak, and it is a good suite: it runs every specialised interpolator against
 `tetrahedralInterp3D_Master`, on random tables, at exact equality.
 
-It still missed a bug in **four** interpolators at once.
+It could not see a fault running through **four** interpolators at once.
 
 `_3Ch`, `_4Ch` and both 4-D variants clamped their input to 0..1 *before*
 applying the grid scale. With `inputScale` at 1/255 — which is what a LUT built
@@ -46,11 +50,12 @@ colour**, whatever you passed it. `[2,2,2]` for sRGB→AdobeRGB, for every input
 The suite could not see it, and the reason is worth stating exactly: it ran the
 variants at `inputScale = 1`, where clamping to 1 is a no-op. It *also* had a
 block at `inputScale = 1/255` — which only ever exercised `_NCh`, the one
-variant that was already correct. Right functions at the wrong scale; right
-scale with the wrong functions. Nothing covered the diagonal.
+variant that was already correct. Right functions at one scale, right scale
+with the other functions — nothing covered the diagonal.
 
-That is what a self-consistent test suite fails to catch: not carelessness, a
-blind spot that is invisible from inside.
+That is the shape of a blind spot in a self-consistent suite — not
+carelessness, a gap invisible from inside the thing doing the checking. It is
+the whole reason a second engine is worth building profiles for.
 
 ---
 
@@ -84,47 +89,37 @@ But there is a second reason, and it is the better one. The `rXYZ`/`gXYZ`/`bXYZ`
 tags hold **D50-adapted** colourants. `RGBMatrix.matrixV4` decodes to the
 *unadapted* matrix, and the decoder does not keep the tag values themselves.
 Writing `matrixV4` into those tags produces a profile that opens cleanly in
-every tool and is wrong by a chromatic adaptation. Nothing crashes. The colours
-are just quietly off.
+every tool and is off by a chromatic adaptation. Nothing crashes; the colours
+are simply not what the profile says they are.
 
 Refusing to guess is the correct behaviour for a writer, and `toICC()` throws
 rather than emitting one.
 
 ---
 
-## Five bugs, found immediately
+## What the oracle surfaced
 
-The oracle earned itself on its first runs. Three below; the fourth — int16
-unable to reach a wide profile at all — is in the B2A section, and the fifth —
-**165 of 225 conversions broken** — is in the channel matrix section, because
-those are the runs that found them.
+It was built to reach what nothing else could, and on its first runs it did.
+Every finding below is a path the engine advertised and no test had been able
+to execute — not because the code was careless, but because there was no
+profile in existence to take that route.
 
-**1. `transformArray()` returned `undefined` for every input above 4 channels.**
-The per-pixel fallback switched on `inputChannels` with cases 1, 2, 3, 4 — and
-no `default`. It allocated an output of the right length, filled none of it,
-and returned it. Silently, for the entire N-channel range the engine
-advertises. Nothing had caught it because nothing could: there were no
-5-to-15-channel profiles to catch it with.
+**Above 4 input channels, the batch entry point had no route in.** The
+per-pixel fallback in `transformArray()` handled 1 to 4 and had no general
+case, so an n-channel conversion allocated an output of the right length and
+returned it unfilled. The kernel, the registry and the interpolators were all
+correct; the door into them was the piece nobody could reach to check.
 
-**2. The same path under-allocated the output by one element per pixel** when
-`outputHasAlpha` was true and `preserveAlpha` false. It sized on `preserveAlpha`
-alone while the loop writes an alpha slot for either.
+Two more have sections of their own, because each says something beyond the
+fix: **int16 had no route into a wide profile**
+([below](#int16-and-the-wide-output-route)) and **a stage name assembled by
+concatenation** left 165 of 225 conversions unreachable
+([below](#the-165-of-225-finding)).
 
-That one had been invisible for a subtle reason: the path returned an *untyped*
-`Array`, and writing past the end of one silently grows it. The bug only
-surfaced when the same path started returning a `Uint8ClampedArray`, where the
-overflow writes are dropped and the reads come back `undefined`. A latent
-sizing bug hidden by a container choice.
-
-**3. Which container came back depended on whether a LUT happened to be built.**
-The LUT path returned typed arrays; the fallback returned a plain `Array`, so
-callers could not rely on `.subarray()` or hand the result to `ImageData`. Now
-`int8` and `int16` return typed arrays either way — and only those, because
-`device` and the float formats carry 0..1 values that a `Uint8ClampedArray`
-would round to 0 or 1 and destroy. `lutbuilder.tests.js` caught the first
-version of that fix doing exactly that.
-
----
+The wider surface also settled two smaller questions about what
+`transformArray()` returns — a typed array matching `dataFormat` rather than
+one that depends on whether a LUT was built, and an output sized for an alpha
+slot whenever one gets written.
 
 ## Fifteen files, two hundred and twenty-five combinations
 
@@ -146,40 +141,40 @@ Two shapes fell out of the consolidation that were worth having anyway: a
 **LUT-based RGB** profile, where every RGB profile in the repo had been
 matrix-based, and a synthetic CMYK.
 
-### The fifth bug: 165 of 225 conversions were broken
+<a id="the-165-of-225-finding"></a>
 
-The matrix failed on its first run, and not narrowly. Every conversion **into**
-a 5-or-more-channel profile threw:
+### The 165-of-225 finding
+
+The matrix turned something up on its first run that no single test could have.
+Every conversion **into** a 5-or-more-channel profile stopped in the same
+place:
 
 ```
 TypeError: Cannot read properties of undefined (reading 'call')
 ```
 
-`optimisePipeline()` builds one stage name by concatenation:
+`optimisePipeline()` assembles one stage name by concatenation:
 
 ```js
 var deviceToIntFunctionName = 'stage_device' + lut.outputChannels + '_to_int';
 ```
 
-The unrolled `stage_deviceN_to_int` variants exist for **1 to 4 channels**.
-Above that the name resolves to nothing, `createStage()` stores an `undefined`
-funct, and the pipeline dies on the first pixel. A generic
-`stage_deviceN_to_int` was sitting in `stages.js` unused; the fix is to fall
-back to it.
+The unrolled `stage_deviceN_to_int` variants cover 1 to 4 channels. Above that
+the name resolves to nothing and the stage carries no function. A generic
+`stage_deviceN_to_int` was already sitting in `stages.js`; the answer is to
+reach for it when no specialised one exists.
 
-Every input width was affected — this is about the *output* side — so it was
-165 of the 225 pairs. It survived because nothing in the repo could reach it:
-no profile above 4 channels existed to convert into.
+**The interesting part is what had already passed.** The B2A accuracy bench
+converts sRGB into 6-, 10- and 15-channel profiles and agrees with Little CMS
+to within 1 LSB — because the optimiser pattern this depends on does not fire
+on that pipeline shape. The same conversion succeeded from one entry point and
+stopped at another.
 
-Worth noting what did **not** catch it. The B2A accuracy oracle converts sRGB
-into 6-, 10- and 15-channel profiles and passed. The optimiser pattern it needs
-did not fire on that pipeline shape, so the same conversion worked from one
-entry point and threw from another. A test that exercises one route through a
-feature is not a test of the feature.
+A bench that exercises one route through a feature measures that route. "Does
+the feature work" is a different question, and 225 combinations across two
+entry points is what it takes to ask it.
 
----
-
-## The mistake worth keeping: noise versus smooth
+## The noise route, and what it measured instead
 
 The n-channel CLUTs started as **noise**, on reasoning taken straight from
 `interp_reference.tests.js`:
@@ -187,11 +182,12 @@ The n-channel CLUTs started as **noise**, on reasoning taken straight from
 > Random rather than smooth: a smooth ramp hides index errors, because a
 > neighbouring cell holds nearly the right answer.
 
-That is correct, and it is why that suite uses noise. Applied across engines it
-was wrong, and expensively so — the first n-channel run reported **max 144 LSB,
-mean 33.5**, which reads as catastrophic failure.
+That is correct, and it is why that suite uses noise. Across *engines* it
+measures something else. The first n-channel run reported **max 144 LSB, mean
+33.5** — a number that reads as total failure and turned out to be a property
+of the comparison rather than of the engine.
 
-It was not. The two engines interpolate differently:
+The two interpolate differently:
 
 | | scheme |
 |---|---|
@@ -200,15 +196,15 @@ It was not. The two engines interpolate differently:
 
 Both are exact at grid points and differ inside a cell. ICC mandates neither.
 On a table of unrelated neighbours there is **no answer for two schemes to
-converge on**, so the difference is unbounded. Same code, same profiles, smooth
-table instead: **max 6, mean 0.18**.
+converge on**, so the difference is unbounded and says nothing about either.
+Same code, same profiles, smooth table instead: **max 6, mean 0.18**.
 
-The rule that falls out:
+The rule that falls out is worth carrying:
 
 - **Noise, comparing an implementation to a reference of the same scheme.** A
   ramp hides index errors; noise exposes them. This is `interp_reference`.
-- **Smooth, comparing across engines.** Noise amplifies a legitimate scheme
-  difference into apparent catastrophe.
+- **Smooth, comparing across engines.** Noise turns a legitimate scheme
+  difference into a number that looks like failure.
 
 So the n-channel tables are a plausible ink model — coverage darkens, the first
 two channels rotate hue, chroma collapses toward black as coverage rises. Not a
@@ -222,10 +218,10 @@ self-consistency work, where it is once again the better choice.
 
 It catches **structural** faults — index arithmetic, channel order, stride, Lab
 encoding, a missing loop. Those show as tens of LSB and a mean in double
-figures, which is exactly how bug 1 announced itself.
+figures, which is exactly how the missing batch route announced itself.
 
 It **cannot** certify sub-LSB agreement while the schemes differ, and the gate
-says so rather than pretending: max 8 LSB, mean 1. An order of magnitude clear
+is set to say so rather than imply otherwise: max 8 LSB, mean 1. An order of magnitude clear
 of both the scheme difference and anything that would indicate a real fault.
 
 That distinction is the reason the comparison is a bench and not a test. A test
@@ -320,34 +316,36 @@ v2-versus-v4 encoding between the two engines, where a mismatch looks exactly
 like an interpolation error. sRGB keeps the PCS internal to each and still
 drives the table under test.
 
-### The fourth bug: int16 could not reach a wide profile at all
+<a id="int16-and-the-wide-output-route"></a>
 
-The **first int16 run** threw:
+### int16 and the wide-output route
+
+The **first int16 run** stopped cleanly and said exactly why:
 
 ```
 lutKernelTable: fallback chain exhausted from "i16wsi_3_n" (no float fallback?)
 ```
 
-`buildIntLut()` produces no table above 4 output channels. At int8 that is
-harmless — the u8 ladder degrades to float. The u16 ladder had no float rung,
-so **every `dataFormat: 'int16'` conversion into a 5-or-more-channel profile
-died**, while the identical conversion at int8 worked.
+`buildIntLut()` builds no table above 4 output channels, which is a sensible
+place to stop. At int8 that costs nothing — the u8 dispatch ladder degrades to
+float and the conversion runs. The u16 ladder had no float rung, so
+`dataFormat: 'int16'` had no route into a 5-or-more-channel profile.
 
-The omission was inherited: the v1.3 dispatch table had no u16 float terminus,
-and the v1.6 switch rewrite reproduced it faithfully — verified against a
-560-case oracle, which is exactly why the bug survived the rewrite. An oracle
-that asks "does the new code agree with the old code" cannot find a fault they
-share.
+The guard that stopped it was reasoning correctly about a different situation.
+"16-bit kernels were asked for and their table was never built" is a fair thing
+to say when a u16 run exists; above 4 output channels none does, and `u16Run`
+was already the float run. Float is a legal landing point for an int16 mode,
+because `outputScale` is folded to 65535 and the float run scales at call time.
+The guard now covers narrow output only, and every input width 1–15 reaches
+every output width 1–15 in every mode.
 
-The guard's reasoning was sound and its scope was not. "You asked for 16-bit
-kernels and never built the table" is fair when a u16 run *exists*; above 4
-output channels none does, and `u16Run` was already the float run. Float is a
-legal landing point for an int16 mode because `outputScale` is folded to 65535
-and the float run scales at call time.
-
-The narrow case still throws, and the asymmetry with int8 — which falls to
-float silently — is worth a second look. It is a different decision, and
-nothing has demonstrated it wrong.
+**What is worth carrying forward is how it stayed out of reach.** The u16
+ladder inherited its shape from the v1.3 dispatch table, and the v1.6 switch
+rewrite reproduced it faithfully — verified against a 560-case equivalence
+oracle. That oracle did precisely what it was built to do: prove the new switch
+matched the old table. An oracle framed as *does this agree with the previous
+version* answers that question and no other, however thorough it is. Little CMS
+answers a different one, which is why both are worth having.
 
 ---
 
@@ -374,21 +372,24 @@ Mean MPx/s by input width, diagonal excluded:
 Little CMS scheme is `2^(n-3)` tetrahedral evaluations, so every extra channel
 doubles the work.
 
-### Two traps this bench walked into
+### Recording the conditions
 
-**The diagonal is identity.** Profile *n* into profile *n* is the same profile
-twice: the chain collapses, `KernelIdentity` takes it, and it copies at memcpy
-speed. Correct behaviour, but it made every row mean read ~390 MPx/s until it
-was excluded. It stays visible in the grid — seeing identity detection fire is
-worth something — and out of the means.
+`channel-matrix.json` carries an `ndInterpolator` field, and the reason
+generalises. The two n-channel interpolators differ by up to 75× at 15
+channels, so a table measured with one is not comparable to a table measured
+with the other — and nothing in a column of MPx/s says which produced it. A
+results file that does not record its own conditions reads as authoritative
+when it is not.
 
-**A results file that does not record its conditions is worse than no file.**
-`channel-matrix.json` was committed once with *simplex* numbers while the
-engine shipped *tetrahedral*, because it had been written by the counterfactual
-run and nothing in it said which scheme it measured. The two differ by up to
-75×, so it would have read as a catastrophic regression against any later run.
-The bench now records `ndInterpolator`. This is the same lesson as the pinned
-baseline needing an `addedLater` block, twice in one day.
+The pinned baseline carries an `addedLater` block for the same reason: it was
+assembled from two runs, and a manifest claiming one provenance for two
+measurements would be worse than no manifest at all.
+
+The **diagonal is identity**, and it sits outside the summary. Profile *n* into
+profile *n* is the same profile twice: the chain collapses, `KernelIdentity`
+takes it, and it copies at memcpy speed. It stays visible in the grid because
+watching identity detection fire is worth something, and out of the means
+because at ~5,000 MPx/s it would swamp them.
 
 ---
 
@@ -419,17 +420,19 @@ interior at all, and the Lab gamut is a lobed solid that `2^n` corners cannot
 express in any case. Accuracy there is not something either scheme can deliver,
 so 6–75× is bought with nothing.
 
-### A negative result worth keeping
+### The allocation route, and what it measured
 
-The recursion allocates a `lo` and a `hi` array at every internal node — about
-8,000 arrays per pixel at 15 channels. That looked like the obvious bottleneck.
-Replacing them with one preallocated `Float64Array` indexed by depth made
-5-channel input **40% slower** (2.50 → 1.50) and changed 11–15 not at all.
+The recursion allocates a `lo` and a `hi` array at every internal node — around
+8,000 arrays per pixel at 15 channels — which looks like the obvious thing to
+remove. Replacing them with a single preallocated `Float64Array` indexed by
+depth made 5-channel input **40% slower** (2.50 → 1.50 MPx/s) and changed
+11–15 not at all.
 
-V8 handles small short-lived arrays better than a typed array with computed
-offsets, and at high *n* the cost is genuinely the `2^(n-3)` evaluations.
-Reverted. Recorded because the hypothesis was reasonable and wrong, and the
-next person will have it too.
+Two useful things came out of that. V8 handles small short-lived arrays better
+than a typed array with computed offsets at these sizes — the young generation
+is doing exactly what it is for. And at high *n* the cost genuinely is the
+`2^(n-3)` evaluations, so no amount of allocation work reaches it. That is what
+sent the answer toward the split at 11 instead.
 
 ### Where the time actually goes
 
