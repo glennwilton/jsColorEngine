@@ -186,7 +186,7 @@ function makeKey(modeShort, inCh, outCh){
 // win 99% of the time — but on hosts where intuition is wrong (SIMD
 // bridge cost on Bun, L1-fit pathology, etc.) the bencher quietly
 // picks the better path. See the matching TODO in
-// Transform._resolveLutKernels for the full sketch.
+// each kernel's own resolve() switch for the full sketch.
 //
 // This function is the natural injection point — bench mode would
 // collect candidates from the same chain walk that already powers

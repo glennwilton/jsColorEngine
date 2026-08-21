@@ -121,7 +121,9 @@ function build(lut){
     t.inputChannels  = lut.inputChannels;
     t.outputChannels = lut.outputChannels;
     t.setKernel(lut.inputChannels);
-    t._resolveLutKernels();
+    // Nothing else to do: the 1-D and 2-D kernels have one implementation
+    // each and call it straight from array(), so there is no dispatch to
+    // resolve and no init() to resolve it in.
     return t;
 }
 

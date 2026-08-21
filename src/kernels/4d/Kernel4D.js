@@ -3,13 +3,12 @@
 // CMYK (4-channel input) kernel — tetrahedral interpolation with
 // WASM SIMD / WASM scalar / JS int8 / JS int16 / float variants.
 //
-// MIGRATION NOTE (v1.7 phase A): identical shape to Kernel3D — the tuned
-// unrolled loops stay on Transform.prototype and WASM load/demotion stays in
-// Transform.createMultiStage(). The lutKernelTable resolution (cached as
-// kernel._runBig/_runSmall at create() time) already keys on the LUT's
-// input/output channels, so this kernel and Kernel3D share the dispatch
-// helper. They diverge when WASM lifecycle ownership moves in here — see
-// docs/deepdive/KernelModules.md.
+// The same shape as Kernel3D, one dimension up, minus the matrix shaper --
+// that fold is a 3-channel idea and has no 4-channel equivalent. So this
+// kernel's init() does nothing but resolve its own image path, through the
+// switch in kernel4D_table.js next door.
+//
+// See docs/deepdive/KernelContract.md.
 'use strict';
 
 var kernelUtils = require('../kernelUtils.js');
@@ -83,13 +82,17 @@ module.exports = {
     },
 
     /**
-     * The image path, bound once. See kernelUtils.resolveArrayRuns.
+     * Everything the image path depends on is final by the time init() runs:
+     * the pipeline is built and optimised, the LUT exists, and create() has
+     * already demoted lutMode to what this host can actually run. So this is
+     * where the decision gets made, and it gets made once.
      *
-     * Returns {big, small, threshold, bigName, smallName}. A caller holding
-     * both picks with one compare, or none at all when the threshold is 0.
+     * The decision itself is the resolve() switch in kernel4D_table.js, next
+     * to this file. Open it and you can see every variant this kernel can
+     * land on and the order it degrades in.
      */
-    arrayFor: function(lut, hints){
-        return kernelUtils.resolveArrayRuns(this);
+    init: function(pipeline, opts){
+        kernelUtils.bindArrayRuns(this);
     },
 
     create: function(lutMode){
@@ -99,16 +102,38 @@ module.exports = {
         return wasmLifecycle.settleWasmStates(this.transform);
     },
 
-    // Resolve BIG/SMALL run refs onto this instance (v1.7 phase C) —
-    // called at create() time and again whenever dispatch inputs change
-    // (releaseWasmMemory, setLut). See kernelUtils.resolveTableRuns.
-    resolveRuns: function(){
-        kernelUtils.resolveTableRuns(this);
-    },
-
+    /**
+     * THE IMAGE PATH. One entry point, whatever the batch size.
+     *
+     * The BIG/SMALL split is this kernel's own business and stops here: above
+     * `threshold` the WASM variant wins, below it the memcpy into linear
+     * memory costs more than the interpolation saves. `threshold` is 0 when
+     * both slots hold the same implementation, so a kernel with no WASM
+     * variant available pays nothing for the split existing.
+     *
+     * Resolution happens in init(). The check below is the one case init()
+     * cannot cover: a LUT attached out-of-band onto a Transform that never
+     * ran create(). Once per image, so ~10ns.
+     */
     array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve){
-        outputArray = kernelUtils.ensureOutputArray(this.transform, lut, pixelCount, outAlpha, outputArray);
-        kernelUtils.runTableKernel(this, inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve);
+        var transform = this.transform;
+        outputArray = kernelUtils.ensureOutputArray(transform, lut, pixelCount, outAlpha, outputArray);
+
+        if(this.arrayFnBig === null){
+            kernelUtils.bindArrayRuns(this);
+            if(this.arrayFnBig === null){
+                throw 'kernel4D: failed to resolve the image path for inputChannels=' + lut.inputChannels
+                    + ', outputChannels=' + lut.outputChannels + ', lutMode=' + transform.lutMode;
+            }
+        }
+
+        var run = (pixelCount >= this.threshold) ? this.arrayFnBig : this.arrayFnSml;
+        run(transform, inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve);
+
+        // The kernel compacts its own WASM memory. The POLICY is Transform's
+        // (setWasmMaxMemory / setWasmShrinkRatio are public API) but the
+        // states being compacted have belonged to the kernel since phase 4c.
+        wasmLifecycle.compactIfNeeded(this, transform._wasmMaxMemory, transform._wasmShrinkRatio);
         return outputArray;
     },
 

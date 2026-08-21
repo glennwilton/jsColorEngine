@@ -1039,6 +1039,37 @@ any `init`. That is fine — picking a single-colour function needs no dispatch
 machinery — but it means the helpers are for the image path only, and the
 contract should say so rather than let someone discover it.
 
+## Future: `KernelIdentity` at index 0, so identity stops being a special case
+
+`Transform.kernels` runs 1 to 15 because those are the input widths ICC can
+express. Identity has no input width in that sense — it copies — so it sits
+outside the registry as an `isIdentity` branch:
+
+```js
+if(this.isIdentity){
+    this.transformArrayFn = function(...){ return t._kernelCopy(...); };
+    return;
+}
+```
+
+That is the last dimension-shaped special case left in Transform, and it does
+not have to be one. **Register `KernelIdentity` at index 0** — its `array()`
+is the copy — call `setKernel(0)` when `isIdentity`, and the branch goes away
+along with the `isIdentity` check under it. Identity becomes a kernel selected
+the same way as every other kernel.
+
+Named for the role rather than the implementation, which is why not
+`KernelCopy`: copying is how it works, identity is what it is, and the rest of
+the registry is named the same way (`Kernel3D`, not `KernelTetrahedral`).
+
+It buys more than symmetry. It gets `init(pipeline, opts)` like the rest, so an identity transform could **rewrite its own pipeline** — an
+alpha-only pass, a copy with a stride change, a clamp — with none of it
+becoming Transform's business. And index 0 becomes a place to put a test
+kernel that counts identity conversions, which today there is nowhere to hook.
+
+The registry already tolerates it: `registerKernel` takes a number or a range,
+and `MAX_KERNEL_DIMENSIONS` is a ceiling, not a floor.
+
 ## Future: a registration chain, so wrappers do not have to capture
 
 `init()` yielding to another kernel turns out to be the composition primitive.

@@ -87,7 +87,6 @@ module.exports = {
     },
 
     /** No dispatch table to walk: one entry point per alpha shape, chosen per call. */
-    resolveRuns: function(){ },
 
     /**
      * The batch path. `lut` is always null here — that is the point of this

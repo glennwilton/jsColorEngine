@@ -286,7 +286,6 @@ describe('floatFor — the kernel owns its single-colour stage function', () => 
                 t.inputChannels = 1;
                 t.outputChannels = outCh;
                 t.setKernel(1);
-                t._resolveLutKernels();
 
                 const PX = 512;
                 const inp = new Uint8ClampedArray(PX);
@@ -601,18 +600,26 @@ describe('WASM state belongs to the kernel', () => {
     });
 });
 
-describe('arrayFor — the image path as a bound result', () => {
+describe('the image path — resolved in init(), kept inside the kernel', () => {
 
-    // v1.6 phase 4e. floatFor gives the kernel the single-colour path; this is
-    // its counterpart for images. It returns {big, small, threshold, bigName,
-    // smallName} rather than one function that branches inside, so the
-    // threshold is data — inspectable, assertable, and hoistable by a caller
-    // that knows its pixel count.
+    // floatFor gives the kernel the single-colour path. This is its
+    // counterpart for images, and the shape it landed on is the plainest one:
+    // Transform calls kernel.array() and the kernel works it out.
     //
-    // NOT A THROUGHPUT CHANGE. It resolves once per create() and the returned
-    // function runs once per image, not once per pixel. bindTransformArrayFn
-    // already measured that idea and is off by default because it showed
-    // nothing. The value is ownership.
+    // THREE DRAFTS GOT HERE. First kernelUtils.runTableKernel() reached back
+    // into Transform for a resolve; then arrayFor() returned a bound function;
+    // then arrayFor() returned {big, small, threshold} so a caller could pick.
+    // The last one still leaked -- telling the caller there is a threshold
+    // makes batch size its business. It is not. The kernel keeps both runs and
+    // its own break-even, and picks inside array().
+    //
+    // These tests read arrayFnBig / arrayFnSml / threshold directly. They are
+    // the kernel's private fields; a test is allowed to look, and what it is
+    // checking is that create() alone settles them with no resolve step
+    // sequenced from outside.
+    //
+    // NOT A THROUGHPUT CHANGE. Resolution happens once per create() and the
+    // run executes once per image, not once per pixel.
 
     const cmykPath = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
     const HAS_WASM = typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS;
@@ -620,50 +627,49 @@ describe('arrayFor — the image path as a bound result', () => {
     function bound(opts, a, b){
         const t = new Transform(Object.assign({ buildLut: true }, opts));
         t.create(a, b, eIntent.relative);
-        return { t, bound: t.kernel.arrayFor(t.lut, {}) };
+        return t.kernel;
     }
 
-    test('every kernel answers with the full shape', () => {
+    test('every kernel settles both runs and a threshold at create()', () => {
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
         for(const [a, b] of [['*sRGB', '*AdobeRGB'], ['*sRGB', cmyk], [cmyk, '*sRGB']]){
-            const r = bound({ dataFormat: 'int8' }, a, b).bound;
-            expect(typeof r.big).toBe('function');
-            expect(typeof r.small).toBe('function');
-            expect(typeof r.threshold).toBe('number');
-            expect(r.threshold).toBeGreaterThanOrEqual(0);
+            const k = bound({ dataFormat: 'int8' }, a, b);
+            expect(typeof k.arrayFnBig).toBe('function');
+            expect(typeof k.arrayFnSml).toBe('function');
+            expect(typeof k.threshold).toBe('number');
+            expect(k.threshold).toBeGreaterThanOrEqual(0);
         }
     });
 
-    test('non-WASM modes collapse: one function, threshold 0, no compare', () => {
+    test('non-WASM modes collapse: one run, threshold 0, no compare', () => {
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
         for(const lutMode of ['float', 'int']){
-            const r = bound({ lutMode, dataFormat: 'int8' }, '*sRGB', cmyk).bound;
-            expect(r.big).toBe(r.small);
-            expect(r.threshold).toBe(0);
+            const k = bound({ lutMode, dataFormat: 'int8' }, '*sRGB', cmyk);
+            expect(k.arrayFnBig).toBe(k.arrayFnSml);
+            expect(k.threshold).toBe(0);
         }
     });
 
     (HAS_WASM ? test : test.skip)('WASM modes do not collapse — big and small differ', () => {
-        // The fast path for image work keeps the compare. Worth asserting so
-        // nobody "optimises" it away and sends 64-pixel calls through a path
-        // that loses on the memcpy.
+        // Worth asserting so nobody "optimises" the compare away and sends
+        // 64-pixel calls through a path that loses on the memcpy.
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
-        const r = bound({ lutMode: 'int-wasm-simd', dataFormat: 'int8' }, '*sRGB', cmyk).bound;
-        expect(r.big).not.toBe(r.small);
-        expect(r.threshold).toBeGreaterThan(0);
-        expect(r.bigName).not.toBe(r.smallName);
+        const k = bound({ lutMode: 'int-wasm-simd', dataFormat: 'int8' }, '*sRGB', cmyk);
+        expect(k.arrayFnBig).not.toBe(k.arrayFnSml);
+        expect(k.threshold).toBeGreaterThan(0);
+        expect(k.arrayFnBigName).not.toBe(k.arrayFnSmlName);
     });
 
     (HAS_WASM ? test : test.skip)('the threshold has one source, with the override winning', () => {
-        // It used to exist twice: entry.minPx baked into the table at load, and
-        // a read of the Transform static at resolve. Precedence now: an
+        // It used to exist twice: entry.minPx baked into the table at load,
+        // and a read of the Transform static at resolve. Precedence now: an
         // explicit global override, then the kernel's own wasmMinPixels, then
         // the shared default.
         const DEFAULT = require('../src/kernels/dispatchThreshold.js');
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
         const opts = { lutMode: 'int-wasm-simd', dataFormat: 'int8' };
 
-        expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(DEFAULT);
+        expect(bound(opts, '*sRGB', cmyk).threshold).toBe(DEFAULT);
 
         // A kernel that has measured its own break-even declares it.
         const restore = snapshot(3, 3);
@@ -672,23 +678,45 @@ describe('arrayFor — the image path as a bound result', () => {
             tuned.name = 'kernel3D-tuned';
             tuned.wasmMinPixels = 1024;
             Transform.kernels[3] = tuned;
-            expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(1024);
+            expect(bound(opts, '*sRGB', cmyk).threshold).toBe(1024);
 
             // The documented profiling override still beats it — `= 0` must
             // keep forcing the WASM path at every size.
             Transform.WASM_DISPATCH_MIN_PIXELS = 0;
-            expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(0);
+            expect(bound(opts, '*sRGB', cmyk).threshold).toBe(0);
         } finally {
             Transform.WASM_DISPATCH_MIN_PIXELS = DEFAULT;
             restore();
         }
     });
 
-    test('the names describe which table entry won', () => {
+    test('the names describe which run won', () => {
         const cmyk = new Profile(); cmyk.loadFile(cmykPath);
-        const r = bound({ lutMode: 'int', dataFormat: 'int8' }, '*sRGB', cmyk).bound;
-        expect(r.bigName).toBe('i_3_4');
-        expect(r.smallName).toBe('i_3_4');
+        const k = bound({ lutMode: 'int', dataFormat: 'int8' }, '*sRGB', cmyk);
+        expect(k.arrayFnBigName).toBe('i_3_4');
+        expect(k.arrayFnSmlName).toBe('i_3_4');
+    });
+
+    test('a kernel with one implementation has no dispatch at all', () => {
+        // 1-D, 2-D and N-D call their single loop straight from array().
+        // Nothing to choose between means no init(), no resolution, and the
+        // fields stay null -- the split is not a tax every kernel pays.
+        for(const dims of [1, 2, 5, 15]){
+            const k = Transform.kernels[dims];
+            expect(k.init).toBeUndefined();
+            expect(typeof k.array).toBe('function');
+        }
+    });
+
+    test('array() is the only entry point — no resolver survives on either side', () => {
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const t = new Transform({ buildLut: true, dataFormat: 'int8' });
+        t.create('*sRGB', cmyk, eIntent.relative);
+        expect(t.kernel.resolveRuns).toBeUndefined();
+        expect(t.kernel.arrayFor).toBeUndefined();
+        expect(t._resolveLutKernels).toBeUndefined();
+        expect(t._bindLutTransformArrayFn).toBeUndefined();
+        expect(require('../src/kernels/kernelUtils.js').runTableKernel).toBeUndefined();
     });
 });
 

@@ -210,61 +210,94 @@ describe('kernel dispatch — the switch that replaced the table', () => {
     });
 });
 
-describe('Transform — _resolveLutKernels integration', () => {
+describe('the kernel resolves its own image path, in init()', () => {
 
-    // v1.7 phase C — the BIG/SMALL run refs live on the kernel instance
-    // (t.kernel._runBig / _runSmall / _threshold), resolved by
-    // kernel.resolveRuns() via kernelUtils.resolveTableRuns().
+    // NOBODY OUTSIDE THE KERNEL READS THESE. arrayFnBig / arrayFnSml /
+    // threshold are the kernel's own fields, written by its init() and read
+    // only by its array(). These tests reach in because a test is allowed to;
+    // the point of the assertions is that create() alone is enough to settle
+    // them, with no resolve step sequenced from Transform.
+    //
+    // Until v1.6 there was one: Transform._resolveLutKernels() called
+    // kernel.resolveRuns() and then read the answers back out to bake a
+    // closure. Both are gone -- the kernel decides in init(), where the
+    // pipeline, the LUT and the settled lutMode are all final.
 
-    test('3a. _resolveLutKernels runs at create() and populates the kernel cache (RGB→RGB float)', () => {
+    test('create() alone settles the image path (RGB→RGB float)', () => {
         const t = new Transform({ buildLut: true, lutMode: 'float' });
         t.create('*srgb', '*adobergb', eIntent.relative);
 
-        expect(t.kernel._runBig).not.toBeNull();
-        expect(t.kernel._runSmall).not.toBeNull();
-        expect(t.kernel._runBigKey).toBe('fl_3_3');          // float mode → fl entry
-        expect(t.kernel._runSmallKey).toBe('fl_3_3');
-        expect(t.kernel._threshold).toBe(0);                 // collapsed → no per-call branch
+        expect(t.kernel.arrayFnBig).not.toBeNull();
+        expect(t.kernel.arrayFnSml).not.toBeNull();
+        expect(t.kernel.arrayFnBigName).toBe('fl_3_3');       // float mode wins outright
+        expect(t.kernel.arrayFnSmlName).toBe('fl_3_3');
+        expect(t.kernel.threshold).toBe(0);                   // collapsed → no per-call branch
     });
 
-    test('3a. RGB→RGB int populates with integer cache', () => {
+    test('RGB→RGB int lands on the integer run', () => {
         const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
         t.create('*srgb', '*adobergb', eIntent.relative);
-        expect(t.kernel._runBigKey).toBe('i_3_3');
-        expect(t.kernel._runSmallKey).toBe('i_3_3');
-        expect(t.kernel._threshold).toBe(0);
+        expect(t.kernel.arrayFnBigName).toBe('i_3_3');
+        expect(t.kernel.arrayFnSmlName).toBe('i_3_3');
+        expect(t.kernel.threshold).toBe(0);
     });
 
-    test('3b. inputChannels ∈ {1, 2} (gray / duotone) leaves run slots null', () => {
-        // No virtual gray profile in createVirtualProfile() — fake the
-        // post-create() shape directly. The bypass we're testing is in
-        // kernelUtils.resolveTableRuns() and only inspects
-        // this.lut.{inputChannels, outputChannels} + this.lutMode, so a
-        // minimal stub is enough. setKernel() picks the kernel by dims.
+    test('Transform has no dispatch state of its own', () => {
+        // The three fields it used to hold, and the two methods that
+        // maintained them. If any of these comes back, dispatch has leaked
+        // back out of the kernel.
         const t = new Transform({ buildLut: true, lutMode: 'float' });
-        t.lut = { inputChannels: 1, outputChannels: 3, intLut: null };
-        t.setKernel(1);
-        t._resolveLutKernels();
-        expect(t.kernel._runBig).toBeNull();
-        expect(t.kernel._runSmall).toBeNull();
-        expect(t.kernel._runBigKey).toBeNull();
+        t.create('*srgb', '*adobergb', eIntent.relative);
+        expect(t._lutKernelBig).toBeUndefined();
+        expect(t._lutKernelSmall).toBeUndefined();
+        expect(t._lutKernelThreshold).toBeUndefined();
+        expect(t._resolveLutKernels).toBeUndefined();
+        expect(t._bindLutTransformArrayFn).toBeUndefined();
+        expect(t.kernel.resolveRuns).toBeUndefined();
+    });
 
-        t.lut = { inputChannels: 2, outputChannels: 3, intLut: null };
-        t.setKernel(2);
-        t._resolveLutKernels();
-        expect(t.kernel._runBig).toBeNull();
-        expect(t.kernel._runSmall).toBeNull();
+    test('1-D and 2-D kernels have nothing to resolve, and no init() to do it in', () => {
+        // One implementation each, called directly by array(). No virtual gray
+        // profile exists in createVirtualProfile(), so fake the post-create()
+        // shape -- setKernel() picks the kernel by dimension.
+        for(const dims of [1, 2]){
+            const t = new Transform({ buildLut: true, lutMode: 'float' });
+            t.lut = { inputChannels: dims, outputChannels: 3, intLut: null };
+            t.setKernel(dims);
+            expect(t.kernel.init).toBeUndefined();
+            expect(t.kernel.arrayFnBig).toBeNull();
+            expect(t.kernel.arrayFnSml).toBeNull();
+            expect(t.kernel.arrayFnBigName).toBeNull();
+        }
     });
 
     if(HAS_WASM){
-        test('3c. WASM mode → threshold > 0 (BIG and SMALL diverge)', () => {
+        test('WASM mode → the kernel keeps a threshold, and keeps it to itself', () => {
             const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar' });
             t.create('*srgb', '*adobergb', eIntent.relative);
             expect(t.lutMode).toBe('int-wasm-scalar');       // not demoted
             expect(t.wasmTetra3D).not.toBeNull();
-            expect(t.kernel._runBigKey).toBe('i8ws_3_3');
-            expect(t.kernel._runSmallKey).toBe('i_3_3');
-            expect(t.kernel._threshold).toBe(Transform.WASM_DISPATCH_MIN_PIXELS);
+            expect(t.kernel.arrayFnBigName).toBe('i8ws_3_3');
+            expect(t.kernel.arrayFnSmlName).toBe('i_3_3');
+            expect(t.kernel.threshold).toBe(Transform.WASM_DISPATCH_MIN_PIXELS);
+        });
+
+        test('releasing WASM makes the kernel re-decide, not Transform', () => {
+            // releaseWasmMemory() used to re-run Transform's resolver. Now it
+            // drops the states and clears the kernel's path; the kernel
+            // resolves again on the next array(), with the slots empty, and
+            // lands on the JS variant by its own ladder.
+            const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar' });
+            t.create('*srgb', '*adobergb', eIntent.relative);
+            expect(t.kernel.arrayFnBigName).toBe('i8ws_3_3');
+
+            t.releaseWasmMemory();
+            expect(t.kernel.arrayFnBig).toBeNull();
+
+            const px = 4096;
+            const out = t.transformArray(new Uint8ClampedArray(px * 3), false, false, false, px);
+            expect(out.length).toBe(px * 3);
+            expect(t.kernel.arrayFnBigName).toBe('i_3_3');   // degraded to JS, on its own
         });
     }
 });

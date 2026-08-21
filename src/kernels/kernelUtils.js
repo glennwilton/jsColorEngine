@@ -14,8 +14,7 @@ var DEFAULT_WASM_MIN_PIXELS = require('./dispatchThreshold.js');
 /**
  * The batch size at which this kernel's WASM variant beats its JS one.
  *
- * See the note at the _threshold assignment below for why this exists and what
- * the precedence is.
+ * See bindArrayRuns() below for who owns this number and when it is read.
  *
  * @param {object} kernel  kernel instance (has .transform)
  * @returns {number}
@@ -66,30 +65,28 @@ function ensureOutputArray(transform, lut, pixelCount, outputHasAlpha, outputArr
 }
 
 /**
- * Resolve the BIG/SMALL run closures for a kernel instance — v1.7 phase C.
+ * Resolve this kernel's image path and store it ON ITSELF.
  *
- * The (lutMode × dataFormat × outputChannels) variant selection — WASM
- * availability, intLut presence, fallback degradation — is resolved ONCE per
- * create() (src/lutKernelTable.js is the single source of truth) and cached
- * ON THE KERNEL INSTANCE as _runBig / _runSmall / _threshold. Per-array
- * dispatch is then one threshold compare + one indirect call, inside the
- * kernel — Transform.js holds no dispatch state.
+ * Called from the kernel's own init(), which is the first moment everything
+ * this depends on is final: the pipeline is built and optimised, the LUT
+ * exists, and create() has already demoted lutMode to what the host can
+ * actually run.
  *
- * Plugin lutModes resolve here too (via _resolvePluginRuns): the plugin's
- * best run closure fills both slots with threshold 0.
- *
- * 1D/2D input LUTs never use the table (their kernels call the interp loop
- * directly) — the run slots stay null for them by design.
+ * THE THREE FIELDS ARE THE KERNEL'S OWN. Nothing outside reads them — not
+ * Transform, not this module after it returns. A kernel with one
+ * implementation leaves the threshold at 0 and never compares; a kernel with
+ * a WASM path above some pixel count and a JS path below keeps both and picks
+ * inside its array(). Batch size is not the caller's business.
  *
  * @param {object} kernel  kernel instance (has .transform)
  */
-function resolveTableRuns(kernel){
+function bindArrayRuns(kernel){
     var bound = resolveArrayRuns(kernel);
-    kernel._runBig      = bound.big;
-    kernel._runSmall    = bound.small;
-    kernel._threshold   = bound.threshold;
-    kernel._runBigKey   = bound.bigName;
-    kernel._runSmallKey = bound.smallName;
+    kernel.arrayFnBig     = bound.big;
+    kernel.arrayFnSml     = bound.small;
+    kernel.threshold      = bound.threshold;
+    kernel.arrayFnBigName = bound.bigName;
+    kernel.arrayFnSmlName = bound.smallName;
 }
 
 /**
@@ -169,39 +166,9 @@ function _resolvePluginRuns(kernel, plugin){
     return { big: run, small: run, threshold: 0, bigName: key, smallName: key };
 }
 
-/**
- * Table-driven BIG/SMALL dispatch for the 3D and 4D kernels — reads the
- * run refs resolved onto the kernel instance by resolveTableRuns().
- *
- * @param {object} kernel  kernel instance (has .transform, ._runBig, ...)
- */
-function runTableKernel(kernel, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha){
-    var transform = kernel.transform;
-
-    // Lazy resolve safety net — resolution normally fires at the end of
-    // create(). The only way to reach here with null refs is a LUT attached
-    // out-of-band after create(). Still cheap (~10ns).
-    if(kernel._runBig === null){
-        transform._resolveLutKernels();
-        if(kernel._runBig === null){
-            throw 'lutKernelTable: failed to resolve dispatcher for inputChannels=' + lut.inputChannels
-                + ', outputChannels=' + lut.outputChannels + ', lutMode=' + transform.lutMode;
-        }
-    }
-
-    // One branch, one call.
-    var run = (pixelCount >= kernel._threshold)
-        ? kernel._runBig
-        : kernel._runSmall;
-    run(transform, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-
-    transform._postRunWasmCheck();
-}
-
 module.exports = {
     ensureOutputArray: ensureOutputArray,
-    resolveTableRuns: resolveTableRuns,
-    runTableKernel: runTableKernel,
+    bindArrayRuns: bindArrayRuns,
     resolveThreshold: resolveThreshold,
     resolveArrayRuns: resolveArrayRuns,
 };

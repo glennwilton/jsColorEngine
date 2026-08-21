@@ -14,6 +14,11 @@
 
 var wasmLoader = require('../wasm/wasm_loader.js');
 
+// The eight module states a kernel can hold. Named once so the walkers below
+// cannot drift apart from each other.
+var SLOTS = ['wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
+             'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'];
+
 /**
  * Try to compile/instantiate the tetrahedral WASM kernels for the
  * transform's current lutMode, demoting transform.lutMode on any failure
@@ -202,17 +207,35 @@ function settleWasmStates(transform){
  * @param {Transform} transform
  */
 function releaseWasmStates(transform){
-    transform.wasmTetra3D          = null;
-    transform.wasmTetra3DSimd      = null;
-    transform.wasmTetra3DInt16     = null;
-    transform.wasmTetra3DInt16Simd = null;
-    transform.wasmTetra4D          = null;
-    transform.wasmTetra4DSimd      = null;
-    transform.wasmTetra4DInt16     = null;
-    transform.wasmTetra4DInt16Simd = null;
+    for(var i = 0; i < SLOTS.length; i++) transform[SLOTS[i]] = null;
+}
+
+/**
+ * Compact this kernel's WASM memory if the caller's policy asks for it.
+ *
+ * Runs after every batch that used a WASM variant. The thresholds are the
+ * Transform's — setWasmMaxMemory() / setWasmShrinkRatio() are public API and a
+ * per-Transform decision — but the module states are the kernel's, so the walk
+ * lives here rather than in Transform reaching back through eight forwarding
+ * accessors that bounce straight to the kernel anyway.
+ *
+ * Cheap when disabled, which is the default: two compares and a return.
+ *
+ * @param {object} holder       kernel instance or Transform — anything holding the slots
+ * @param {number} maxMemory    bytes, <= 0 to disable
+ * @param {number} shrinkRatio  <= 0 to disable
+ */
+function compactIfNeeded(holder, maxMemory, shrinkRatio){
+    if(maxMemory <= 0 && shrinkRatio <= 0) return;
+    for(var i = 0; i < SLOTS.length; i++){
+        var state = holder[SLOTS[i]];
+        if(state) state.compactIfNeeded();
+    }
 }
 
 module.exports = {
     settleWasmStates: settleWasmStates,
     releaseWasmStates: releaseWasmStates,
+    compactIfNeeded: compactIfNeeded,
+    SLOTS: SLOTS,
 };

@@ -102,16 +102,6 @@ module.exports = {
         return { funct: bilinearInterp2D_NCh, stageName: 'bilinearInterp2D' };
     },
 
-    /**
-     * The image path, bound once. See kernelUtils.resolveArrayRuns.
-     *
-     * Returns {big, small, threshold, bigName, smallName}. A caller holding
-     * both picks with one compare, or none at all when the threshold is 0.
-     */
-    arrayFor: function(lut, hints){
-        return kernelUtils.resolveArrayRuns(this);
-    },
-
     create: function(lutMode){
         // No 2D WASM kernels exist, but the WASM settle still runs so a
         // 'int-wasm-*' lutMode demotes exactly as it did in v1.5 (the init
@@ -120,11 +110,9 @@ module.exports = {
         return wasmLifecycle.settleWasmStates(this.transform);
     },
 
-    // 2D never uses the lutKernelTable — the shared resolver no-ops for
-    // non-3/4-channel LUTs, leaving the run slots null by design.
-    resolveRuns: function(){
-        kernelUtils.resolveTableRuns(this);
-    },
+    // NO DISPATCH. One implementation, called directly by array() below —
+    // there is nothing to choose between, so there is nothing to resolve and
+    // no init() hook to resolve it in.
 
     array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve){
         var transform = this.transform;

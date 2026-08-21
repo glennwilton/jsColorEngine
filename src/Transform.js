@@ -835,8 +835,8 @@
                     break;
                 default:
                     if(Transform._plugins[rawLutMode]){
-                        // Plugin-registered mode — accepted as-is.
-                        // Kernel is resolved at create() time by kernel.resolveRuns().
+                        // Plugin-registered mode — accepted as-is. The kernel
+                        // resolves the plugin's run in its own init().
                         this.lutMode = rawLutMode;
                         this.lutModeRequested = rawLutMode;
                         // initialise — per-instance, runs here in the constructor.
@@ -915,23 +915,24 @@
             // kernel's, which is what lets a kernel eventually load only its
             // own dimension's modules.
 
-            // v1.7 phase C — the table-driven BIG/SMALL dispatcher cache
-            // (formerly _lutKernelBig / _lutKernelSmall / _lutKernelThreshold
-            // on this Transform) now lives ON THE KERNEL INSTANCE as
-            // kernel._runBig / _runSmall / _threshold, resolved by
-            // kernel.resolveRuns() at the end of create() (after lutMode is
-            // settled and WASM states are loaded). Per-array dispatch is one
-            // threshold compare + one indirect call inside kernel.array().
-            // Single source of truth: src/lutKernelTable.js (resolution) via
-            // src/kernels/kernelUtils.js (resolveTableRuns / runTableKernel).
+            // NO DISPATCH STATE LIVES HERE. It used to: _lutKernelBig,
+            // _lutKernelSmall and _lutKernelThreshold were fields on this
+            // Transform, and a resolver method kept them current. They belong
+            // to the kernel -- which variant runs, and how big a batch has to
+            // be to be worth a WASM call, are the kernel's own business and
+            // nothing out here needs to know a choice was made.
+            //
+            // The two booleans below are Transform's, and are only a cache of
+            // its own lutMode string so the hot path stops re-comparing it.
             this._expectsU16         = false; // cached: lutMode is int16 family
             this._isIntegerMode      = false; // cached: lutMode is any integer family
 
-            // v1.5 — bound hot-path closure, set once by _resolveLutKernels() at the
-            // end of every create() / setLut() call.  Starts as _transformArrayNotReady
-            // so any direct call before create() produces a clear diagnostic message
-            // rather than a TypeError.  After _resolveLutKernels(): a real closure
-            // (fast path) or null (fall through to transformArrayViaLUT).
+            // Bound hot-path closure, set once by _bindTransformArrayFn() at
+            // the end of every create() / setLut() call.  Starts as
+            // _transformArrayNotReady so any direct call before create()
+            // produces a clear diagnostic rather than a TypeError.  After
+            // binding: a real closure (skips a layer of routing) or null
+            // (fall through to transformArrayViaLUT).
             //
             // bindTransformArrayFn: false (default) — LUT closures are NOT bound;
             //   identity still binds (avoids real kernel work, not just dispatch).
@@ -1334,16 +1335,19 @@
             var instance = Object.create(descriptor);
             instance.transform = this;
             instance._variant = null;
-            // BIG/SMALL run refs — resolved by kernel.resolveRuns() at
-            // create() time (see kernelUtils.resolveTableRuns):
-            //   _runBig    : run closure for pixelCount >= _threshold
-            //   _runSmall  : run closure for pixelCount <  _threshold
-            //   _threshold : WASM_DISPATCH_MIN_PIXELS, or 0 when collapsed
-            instance._runBig = null;
-            instance._runSmall = null;
-            instance._threshold = 0;
-            instance._runBigKey = null;
-            instance._runSmallKey = null;
+            // The kernel's own image path. Declared here only so every
+            // instance of a dimension shares one hidden class - written by the
+            // kernel's init(), read by nothing outside it:
+            //   arrayFnBig : run for pixelCount >= threshold
+            //   arrayFnSml : run for pixelCount <  threshold
+            //   threshold  : the kernel's break-even, or 0 when both slots
+            //                hold the same implementation and there is
+            //                nothing to pick between
+            instance.arrayFnBig = null;
+            instance.arrayFnSml = null;
+            instance.threshold = 0;
+            instance.arrayFnBigName = null;
+            instance.arrayFnSmlName = null;
             // Set by a kernel that is running an alternative implementation
             // instead of its table — see Kernel3D.init(). Declared here so
             // every instance of a dimension keeps one hidden class.
@@ -2050,7 +2054,7 @@
             if(this.isIdentity){
                 this._buildIdentityPipeline();
                 this.pipelineCreated = true;
-                this._resolveLutKernels();
+                this._bindTransformArrayFn();
                 return;
             }
 
@@ -2270,10 +2274,9 @@
                 || lm === 'int-wasm-scalar'  || lm === 'int-wasm-simd'
                 || lm === 'int16-wasm-scalar' || lm === 'int16-wasm-simd');
 
-            // v1.5 — resolve LUT dispatcher table refs and bind transformArrayFn.
-            // Must run AFTER _expectsU16 / _isIntegerMode are settled so the
-            // closure captures the correct isU16 value for output allocation.
-            this._resolveLutKernels();
+            // The kernel already resolved its own image path, in the init()
+            // call above. This binds only the optional transformArrayFn.
+            this._bindTransformArrayFn();
 
             // Validate intLut compatibility once at create() time. The only way
             // an incompatible intLut can exist is if someone attached a foreign
@@ -2380,16 +2383,11 @@
          * re-copy the LUT (~0.1 ms overhead).
          */
         _postRunWasmCheck() {
-            if (this._wasmMaxMemory <= 0 && this._wasmShrinkRatio <= 0) return;
-            var states = [
-                this.wasmTetra3D, this.wasmTetra3DSimd,
-                this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
-                this.wasmTetra4D, this.wasmTetra4DSimd,
-                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
-            ];
-            for (var i = 0; i < states.length; i++) {
-                if (states[i]) states[i].compactIfNeeded();
-            }
+            // Public surface over what the kernel now does for itself at the
+            // end of array(). Kept because it is documented API; the eight
+            // slots it used to list are forwarding accessors that bounce
+            // straight back to the kernel holding them.
+            wasmLifecycle.compactIfNeeded(this, this._wasmMaxMemory, this._wasmShrinkRatio);
         }
 
         compactWasmMemory() {
@@ -3108,7 +3106,12 @@
 
         releaseWasmMemory() {
             wasmLifecycle.releaseWasmStates(this);
-            this._resolveLutKernels();
+            // A kernel that resolved onto a WASM run is now pointing at a
+            // dropped module. Clearing its image path makes it re-resolve on
+            // the next array() - its own decision, taken again with the WASM
+            // slots empty, so it lands on the JS variant. Transform used to
+            // re-run the whole resolver here to achieve the same thing.
+            if(this.kernel) this.kernel.arrayFnBig = null;
         }
 
         /**
@@ -4120,111 +4123,59 @@
          *                  buildLut: true.
          */
         // =====================================================================
-        // v1.7 phase C — DISPATCH RESOLUTION ORCHESTRATOR
+        // THE OPTIONAL BOUND CLOSURE
         // =====================================================================
         //
-        // _resolveLutKernels()         — called once at end of create() (and
-        //                                 by releaseWasmMemory / lazy nets).
-        //                                 Binds the identity closure, then
-        //                                 delegates BIG/SMALL run resolution
-        //                                 to kernel.resolveRuns() — see
-        //                                 src/kernels/kernelUtils.js
-        //                                 (resolveTableRuns), which walks the
-        //                                 src/lutKernelTable.js fallback
-        //                                 chain and caches the run closures
-        //                                 ON THE KERNEL INSTANCE.
+        // This used to be the dispatch orchestrator: it called
+        // kernel.resolveRuns(), then read kernel._runBig / _runSmall /
+        // _threshold back out and baked them into a closure. Both halves were
+        // Transform holding a decision that was never its own.
         //
-        // transformArrayViaLUT()       — the public IMAGE FAST PATH. All
-        //                                 routing decisions are pre-resolved
-        //                                 into kernel._runBig / _runSmall;
-        //                                 per-call cost is one threshold
-        //                                 compare + one indirect call inside
-        //                                 kernel.array().
+        // WHY THE KERNEL IS THE ONLY ONE WHO KNOWS NOW. Transform's whole job
+        // is three things: pick a kernel by input channel count, init it, and
+        // hand it a colour or an array. Batch size is not on that list - a
+        // kernel with a WASM path above some pixel count and a JS path below
+        // keeps both and picks inside its own array(). Nothing out here has to
+        // learn that a choice was made, which is what makes a stranger's
+        // kernel a drop-in rather than a special case.
+        //
+        // What is left is one genuinely Transform-side thing: binding
+        // transformArrayFn so transformArray() can skip a layer of routing.
+        // Opt-in via bindTransformArrayFn (off by default - V8 method dispatch
+        // through the kernel is equally fast for images and faster for tiny
+        // batches), so this is a convenience, not a mechanism.
         // =====================================================================
 
         /**
-         * Re-resolve dispatch state for this Transform: reset/bind the
-         * transformArrayFn closure and delegate BIG/SMALL run resolution to
-         * the kernel instance (kernel.resolveRuns()).
+         * Bind (or clear) the transformArrayFn closure.
          *
-         * The resolution itself (documented in kernelUtils.resolveTableRuns)
-         * walks the src/lutKernelTable.js fallback chain twice — floor
-         * Infinity for the BIG (WASM-eligible) entry, floor 0 for the SMALL
-         * (JS) entry — and is a safe no-op for 1D/2D LUTs, the no-LUT path,
-         * and unknown lutMode strings.
+         * Two shapes, and neither reaches inside a kernel:
+         *   identity  - _kernelCopy directly, no LUT and no kernel involved
+         *   LUT path  - kernel.array() with the LUT and the alpha preamble
+         *               captured, so transformArray() calls one closure
+         *               instead of re-deriving them per image
          *
-         * ─────────────────────────────────────────────────────────────────
-         * TODO (v1.5 — auto-bench kernel selection)
-         * ─────────────────────────────────────────────────────────────────
-         * The fallback chain doesn't have to be picked on intuition
-         * (SIMD > scalar > JS > float). Now that every entry on the chain
-         * is a uniform-signature run closure sitting right there, we can
-         * MEASURE instead of GUESS at create() time:
-         *
-         *   1. Walk the chain via lutKernelTable.resolveLutKernel() with
-         *      different floors (Infinity, threshold, 0) to enumerate
-         *      every gate-passing kernel for the current
-         *      (lutMode, inCh, outCh, host, lut.gridSize) tuple.
-         *
-         *   2. Synthesise a small probe buffer (e.g. 16 KPx of LCG noise
-         *      sized to inCh * bytesPerSample) and a matching output
-         *      buffer.
-         *
-         *   3. For each candidate, do a 3-iteration warm-up + N-iteration
-         *      timed run via performance.now() and keep the median MPx/s.
-         *
-         *   4. Cache kernel._runBig := winner.run, kernel._runSmall :=
-         *      winner-on-small-batch.run, with the chosen keys exposed
-         *      via kernel._runBigKey for diagnostics.
-         *
-         *   5. Stash the (modeShort, inCh, outCh, gridSize, hostFingerprint)
-         *      → winnerKey result in wasmCache (or a sibling bag) so the
-         *      bench cost amortises across many Transforms in the same
-         *      session — same pattern as the WASM Module cache.
-         *
-         * Why this is exciting:
-         *   - Catches the cases where intuition is wrong: SIMD-on-cMax=3
-         *     unexpectedly losing to scalar because the LUT fits L1 and
-         *     the SIMD bind/unbind dominates; WASM losing to JS on Bun
-         *     where the bridge is slow; one specific Adobe profile that
-         *     pathologically thrashes the SIMD lane swizzle. We ship the
-         *     intuition as the *default* fallback graph, but let the
-         *     host's actual numbers override it on demand.
-         *
-         *   - Opt-in via `new Transform({ autoBenchKernel: true })` so
-         *     the create() cost penalty (~5-20ms per chain length) only
-         *     hits workloads big enough to amortise it. Workloads that
-         *     create-and-throw can stay on the static graph.
-         *
-         *   - Bench runs ONCE at create() and the winner is cached in
-         *     kernel._runBig / _runSmall — the per-call hot path
-         *     stays exactly as fast as v1.3 (one threshold compare +
-         *     one indirect call). The bench cost is amortised across
-         *     every subsequent transformArrayViaLUT() invocation on
-         *     this Transform, and across sibling Transforms via the
-         *     shared wasmCache.
-         *
-         *   - Knob it: `new Transform({ autoBenchKernel: true,
-         *     autoBenchPixels: 65536, autoBenchIterations: 5 })` for
-         *     callers who want more aggressive measurement (e.g. CI
-         *     perf gates, server-side workloads where create() cost
-         *     is irrelevant against many-MPx batches). Defaults
-         *     (16k pixels × 3 iterations median) are chosen to keep
-         *     the create() penalty below 20ms on typical hosts.
-         *
-         *   - Falls naturally out of the v1.3 refactor — no new kernel
-         *     wiring, no new gate predicates, no new fallback graph. We
-         *     just call run closures we already have, time them, pick a
-         *     winner. Pure additive.
-         *
-         * Tracked as roadmap "auto-bench kernel selection" — flag in the
-         * lutKernelTable header if the data shape (entry.run signature
-         * uniformity) ever changes, because this TODO assumes it.
+         * @returns {void}
          */
-        _resolveLutKernels(){
-            this.transformArrayFn = null;   // reset: real closure or null after resolve
+        _bindTransformArrayFn(){
+            this.transformArrayFn = null;   // reset: real closure or null after this
 
-            // Identity: bind _kernelCopy directly — no LUT lookup needed.
+            // Identity: bind _kernelCopy directly - no LUT lookup needed.
+            //
+            // TODO (KernelIdentity): this is the last dimension-shaped
+            // special case left out here, and it does not need to be one.
+            // Register KernelIdentity at Transform.kernels[0] -- its array()
+            // IS the copy -- have setKernel(0) run when isIdentity, and this
+            // branch goes away along with the isIdentity check below it. The
+            // identity case becomes a kernel like every other, selected the
+            // same way. (Named for the role, not the implementation: copying
+            // is how it works, identity is what it is.)
+            //
+            // It buys more than tidiness: it would get init(pipeline) like
+            // the rest, so an identity transform could rewrite its own
+            // pipeline (an alpha-only pass, a copy with a stride change)
+            // without any of it being Transform's business. And a test kernel
+            // could sit at index 0 and count identity conversions.
             if(this.isIdentity){
                 var identityTransform = this;
                 this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
@@ -4233,134 +4184,28 @@
                 return;
             }
 
-            // v1.7 phase C — BIG/SMALL run resolution lives on the kernel
-            // instance. The kernel consults src/lutKernelTable.js (3D/4D) or
-            // the plugin registry, and no-ops for 1D/2D LUTs (their kernels
-            // call the interp loops directly).
-            if(this.kernel){
-                this.kernel.resolveRuns();
-            }
-
+            // Only covers int8 / int16 pixel array formats, and only when
+            // bindTransformArrayFn:true was asked for.
             var lut = this.lut;
-            if(!lut){
-                return;
-            }
+            if(!lut || !this.kernel) return;
+            if(!this.bindTransformArrayFn) return;
+            if(this.dataFormat !== 'int8' && this.dataFormat !== 'int16') return;
 
-            var inCh         = lut.inputChannels;
-            var lutTransform = this;
-            var lutIsU16     = this._expectsU16;
-
-            // transformArrayFn fast path only covers int8 / int16 pixel array formats
-            // AND requires bindTransformArrayFn:true (off by default — V8 method
-            // dispatch through the kernel is equally fast for images and faster
-            // for tiny batches). Kernel run resolution above always runs so
-            // kernel.array() can dispatch regardless of this flag.
-            var bindFastPath = this.bindTransformArrayFn
-                && (this.dataFormat === 'int8' || this.dataFormat === 'int16');
-
-            if(!bindFastPath){
-                return;
-            }
-
-            // Gray (1-channel input): bind 1D interpolation closure directly.
-            if(inCh === 1){
-                this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                    preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
-                    var inputBytesPerPixel  = lut.inputChannels  + (inputHasAlpha  ? 1 : 0);
-                    var outputBytesPerPixel = lut.outputChannels + (outputHasAlpha ? 1 : 0);
-                    if(pixelCount === undefined) pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
-                    if(!outputArray) outputArray = lutIsU16 ? new Uint16Array(pixelCount * outputBytesPerPixel) : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
-                    lutTransform.linearInterp1DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                    return outputArray;
-                };
-                return;
-            }
-
-            // Duotone (2-channel input): bind 2D interpolation closure directly.
-            if(inCh === 2){
-                this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                    preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
-                    var inputBytesPerPixel  = lut.inputChannels  + (inputHasAlpha  ? 1 : 0);
-                    var outputBytesPerPixel = lut.outputChannels + (outputHasAlpha ? 1 : 0);
-                    if(pixelCount === undefined) pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
-                    if(!outputArray) outputArray = lutIsU16 ? new Uint16Array(pixelCount * outputBytesPerPixel) : new Uint8ClampedArray(pixelCount * outputBytesPerPixel);
-                    lutTransform.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                    return outputArray;
-                };
-                return;
-            }
-
-            // 3D/4D: bind only when the kernel resolved run refs (built-in
-            // table mode or plugin mode).
-            if(this.kernel && this.kernel._runBig !== null){
-                this._bindLutTransformArrayFn(lut, lutTransform, lutIsU16);
-            }
-        }
-
-        /**
-         * Build and store the transformArrayFn closure for 3-channel / 4-channel
-         * LUT paths (table kernels and plugin kernels).  Called at the end of
-         * _resolveLutKernels() once kernel._runBig / _runSmall / _threshold
-         * are all settled by kernel.resolveRuns().
-         *
-         * Two closure shapes are created:
-         *   threshold === 0  — no WASM split; bigKernel is the only kernel.
-         *                      Single direct call, no per-call branch.
-         *   threshold  >  0  — WASM split; choose bigKernel or smallKernel
-         *                      based on pixelCount at call time.
-         *
-         * @param {object}    lut            resolved LUT object (captured by closure)
-         * @param {Transform} transform      `this` at resolve time (captured by closure)
-         * @param {boolean}   isU16          whether to allocate Uint16Array output
-         */
-        _bindLutTransformArrayFn(lut, transform, isU16){
-            var bigKernel        = this.kernel._runBig;
-            var smallKernel      = this.kernel._runSmall;
-            var threshold        = this.kernel._threshold;
-            var currentLutMode   = this.lutMode;
-
-            function buildOutputArray(outputArray, pixelCount, outputBytesPerPixel){
-                var requiredLength = pixelCount * outputBytesPerPixel;
-                if(!outputArray){
-                    return isU16 ? new Uint16Array(requiredLength) : new Uint8ClampedArray(requiredLength);
+            // ONE SHAPE FOR EVERY DIMENSION. This used to be three: a 1-D
+            // closure calling linearInterp1DArray_NCh_loop, a 2-D one calling
+            // bilinearInterp2DArray_NCh_loop, and a 3-D/4-D one built by
+            // _bindLutTransformArrayFn out of the kernel's private run refs
+            // plus its own copy of the output-allocation rules. All three were
+            // Transform re-implementing what the kernel already does.
+            var kernel = this.kernel;
+            this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
+                preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
+                if(pixelCount === undefined){
+                    pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inputHasAlpha ? 1 : 0)));
                 }
-                // Validate pre-allocated buffer type and size.
-                if(isU16){
-                    if(!(outputArray instanceof Uint16Array)){
-                        throw new Error('transformArray: outputArray must be Uint16Array for lutMode="' + currentLutMode + '".');
-                    }
-                } else if(!(outputArray instanceof Uint8ClampedArray)){
-                    throw new Error('transformArray: outputArray must be Uint8ClampedArray for lutMode="' + currentLutMode + '".');
-                }
-                if(outputArray.length < requiredLength){
-                    throw new Error('transformArray: outputArray too small (got ' + outputArray.length + ', need ' + requiredLength + ').');
-                }
-                return outputArray;
-            }
-
-            if(threshold === 0){
-                this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                    preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
-                    var inputBytesPerPixel  = lut.inputChannels  + (inputHasAlpha  ? 1 : 0);
-                    var outputBytesPerPixel = lut.outputChannels + (outputHasAlpha ? 1 : 0);
-                    if(pixelCount === undefined) pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
-                    outputArray = buildOutputArray(outputArray, pixelCount, outputBytesPerPixel);
-                    bigKernel(transform, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                    transform._postRunWasmCheck();
-                    return outputArray;
-                };
-            } else {
-                this.transformArrayFn = function(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-                    preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha) && inputHasAlpha;
-                    var inputBytesPerPixel  = lut.inputChannels  + (inputHasAlpha  ? 1 : 0);
-                    var outputBytesPerPixel = lut.outputChannels + (outputHasAlpha ? 1 : 0);
-                    if(pixelCount === undefined) pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
-                    outputArray = buildOutputArray(outputArray, pixelCount, outputBytesPerPixel);
-                    (pixelCount >= threshold ? bigKernel : smallKernel)(transform, inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                    transform._postRunWasmCheck();
-                    return outputArray;
-                };
-            }
+                return kernel.array(inputArray, outputArray, pixelCount, lut,
+                                    inputHasAlpha, outputHasAlpha, preserveAlpha);
+            };
         }
 
         /**
@@ -4374,9 +4219,8 @@
          *     run(this, in, out, px, lut, ia, oa, pa);
          *
          * because all the gating (WASM state availability, intLut presence,
-         * cMax bucketing, fallback degradation) is resolved ONCE at
-         * create() time and cached on the kernel instance via _runBig /
-         * _runSmall / _threshold. Per-array overhead vs
+         * cMax bucketing, fallback degradation) is resolved ONCE at create()
+         * time, inside the kernel, and cached on the kernel. Per-array overhead vs
          * the legacy cascade: one less conditional pyramid, one extra
          * indirect call. Net ~zero on hot paths, massively cleaner to
          * read and extend.
@@ -8767,11 +8611,11 @@
 
 
 
-    // Sentinel value for Transform.transformArrayFn before _resolveLutKernels() runs.
-    // Throws a diagnostic message so a missing _resolveLutKernels() call surfaces
+    // Sentinel for Transform.transformArrayFn before _bindTransformArrayFn() runs.
+    // Throws a diagnostic message so a missing _bindTransformArrayFn() call surfaces
     // immediately rather than silently producing a TypeError on the hot path.
     function _transformArrayNotReady() {
-        throw new Error('transformArrayFn: kernels not resolved — _resolveLutKernels() was not called after create()');
+        throw new Error('transformArrayFn: not bound — _bindTransformArrayFn() was not called after create()');
     }
 
 

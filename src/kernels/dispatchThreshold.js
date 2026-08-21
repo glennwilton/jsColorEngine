@@ -22,7 +22,7 @@
 // table; the matrix-shaper kernel has no CLUT to upload at all. Those
 // crossovers are not the same, and this is a single measured compromise across
 // them. Phase 4e of docs/deepdive/KernelContract.md moves the threshold into
-// each kernel's `arrayFor()` so a kernel can answer for its own break-even —
+// each kernel's `init()` so a kernel can answer for its own break-even —
 // at which point this module becomes the default rather than the rule.
 //
 // OVERRIDABLE BEFORE create(). `Transform.WASM_DISPATCH_MIN_PIXELS = 0` forces

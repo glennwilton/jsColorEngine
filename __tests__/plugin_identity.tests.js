@@ -9,8 +9,8 @@
  *   5.  RGB→CMYK — builder throws on channel mismatch before create() completes
  *   6.  Alpha: preserveAlpha copies alpha channel through unchanged
  *   7.  Alpha: outputHasAlpha && !inputHasAlpha fills alpha with 255
- *   8.  Kernel is resolved once at create() time — kernel._runBig is non-null
- *       and kernel._threshold is 0 (no WASM split needed)
+ *   8.  Kernel is resolved once at create() time — kernel.arrayFnBig is
+ *       non-null and kernel.threshold is 0 (no WASM split needed)
  *   9.  registerKernel throws on missing descriptor.js
  *   10. registerBuilder throws on non-function builderFn
  *   11. Unknown lutMode still falls back to 'auto' (plugin not registered)
@@ -207,17 +207,17 @@ describe('plugin: identity kernel — RGB→RGB (3D 3ch)', () => {
 
     beforeAll(() => {
         // detectIdentity:false — this suite tests kernel resolution, not color correctness.
-        // The identity path skips LUT building so kernel._runBig would be null.
+        // The identity path skips LUT building so kernel.arrayFnBig would be null.
         transform = new Transform({ buildLut: true, lutMode: PLUGIN_MODE, dataFormat: 'int8', detectIdentity: false });
         transform.create('*sRGB', '*sRGB', eIntent.relative);
     });
 
-    test('kernel is resolved once — kernel._runBig is set', () => {
-        expect(transform.kernel._runBig).toBeInstanceOf(Function);
+    test('kernel is resolved once — kernel.arrayFnBig is set', () => {
+        expect(transform.kernel.arrayFnBig).toBeInstanceOf(Function);
     });
 
-    test('kernel._threshold is 0 (no WASM split)', () => {
-        expect(transform.kernel._threshold).toBe(0);
+    test('kernel.threshold is 0 (no WASM split)', () => {
+        expect(transform.kernel.threshold).toBe(0);
     });
 
     test('output is byte-identical to input', () => {
