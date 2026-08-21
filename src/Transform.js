@@ -900,14 +900,14 @@
             this._wasmShrinkRatio      = options.wasmShrinkRatio || 0;
             this._wasmMaxMemory        = options.wasmMaxMemory !== undefined
                 ? options.wasmMaxMemory : 128 * 1024 * 1024;
-            this.wasmTetra3D           = null;
-            this.wasmTetra3DSimd       = null;
-            this.wasmTetra3DInt16      = null;
-            this.wasmTetra3DInt16Simd  = null;
-            this.wasmTetra4D           = null;
-            this.wasmTetra4DInt16      = null;
-            this.wasmTetra4DInt16Simd  = null;
-            this.wasmTetra4DSimd       = null;
+            // WASM STATE LIVES ON THE KERNEL (v1.6 phase 4c —
+            // docs/deepdive/KernelContract.md). The eight wasmTetra* slots that
+            // used to be declared here are initialised by setKernel() on the
+            // kernel instance, because the kernel is what uses them. Reading
+            // `transform.wasmTetra3D` still works — see the forwarding
+            // accessors at the bottom of this file — but the state is the
+            // kernel's, which is what lets a kernel eventually load only its
+            // own dimension's modules.
 
             // v1.7 phase C — the table-driven BIG/SMALL dispatcher cache
             // (formerly _lutKernelBig / _lutKernelSmall / _lutKernelThreshold
@@ -1268,6 +1268,18 @@
             instance._threshold = 0;
             instance._runBigKey = null;
             instance._runSmallKey = null;
+            // WASM module states, owned by the kernel that runs them (v1.6
+            // phase 4c). Populated by kernel.create() via wasmLifecycle, nulled
+            // by kernel.release(). Declared here in a fixed order so every
+            // instance of a dimension keeps one hidden class.
+            instance.wasmTetra3D          = null;
+            instance.wasmTetra3DSimd      = null;
+            instance.wasmTetra3DInt16     = null;
+            instance.wasmTetra3DInt16Simd = null;
+            instance.wasmTetra4D          = null;
+            instance.wasmTetra4DSimd      = null;
+            instance.wasmTetra4DInt16     = null;
+            instance.wasmTetra4DInt16Simd = null;
             this.kernel = instance;
         }
 
@@ -9588,6 +9600,32 @@ _attachPrototypeLoops(require('./interp.js'));
 // the same way; inert unless the `pixelCache` option is set. See
 // docs/deepdive/PixelCache.md.
 _attachPrototypeLoops(require('./cache.js'));
+
+// ─── WASM state forwarding (v1.6 phase 4c) ──────────────────────────────────
+//
+// The eight wasmTetra* slots moved onto the kernel instance, because the kernel
+// is what loads, dispatches to and releases them. These accessors keep
+// `transform.wasmTetra3D` reading and writing as it always did.
+//
+// They are a COMPATIBILITY SURFACE, not the design. The public WASM API
+// (wasmMemoryBytes, compactWasmMemory, releaseWasmMemory) reads through them,
+// and the WASM test suites assert on them in ~210 places — keeping those tests
+// working unchanged is what makes them a real check on this move rather than a
+// check on a rewrite of themselves.
+//
+// Null-safe in both directions: before create() there is no kernel, so a read
+// gives null and a write is dropped. Nothing writes these before setKernel().
+[
+    'wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
+    'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'
+].forEach(function(slot){
+    Object.defineProperty(Transform.prototype, slot, {
+        configurable: true,
+        enumerable: false,
+        get: function(){ return this.kernel ? this.kernel[slot] : null; },
+        set: function(v){ if(this.kernel) this.kernel[slot] = v; }
+    });
+});
 
 // ─── Built-in kernel modules ────────────────────────────────────────────────
 // Registered here (not main.js) so Transforms created via a direct

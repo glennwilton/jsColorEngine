@@ -550,3 +550,78 @@ describe('the dispatch table lives with its kernels', () => {
         for(const k of wasmRows) expect(K[k].minPx).toBe(threshold);
     });
 });
+
+describe('WASM state belongs to the kernel', () => {
+
+    // v1.6 phase 4c. The eight wasmTetra* slots were declared on the Transform
+    // and mutated by wasmLifecycle. They now live on the kernel instance,
+    // because the kernel is what loads, dispatches to and releases them —
+    // and because a kernel that owns its state can eventually load only its own
+    // dimension's modules, which is phase 7.
+    //
+    // Transform keeps forwarding accessors. Those are a compatibility surface,
+    // not the design: the public WASM API reads through them and the WASM test
+    // suites assert on them in ~210 places. Keeping those suites working
+    // unchanged is what made them a real check on this move.
+
+    const SLOTS = ['wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
+                   'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'];
+
+    const cmykPath = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
+    const HAS_WASM = typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS;
+
+    test('the slots are the kernel instance\'s own properties, not the Transform\'s', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true });
+        t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+        for(const slot of SLOTS){
+            expect(Object.prototype.hasOwnProperty.call(t.kernel, slot)).toBe(true);
+            expect(Object.prototype.hasOwnProperty.call(t, slot)).toBe(false);
+        }
+    });
+
+    test('reads and writes forward to the kernel', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true });
+        t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+        const sentinel = { marker: true };
+        t.wasmTetra3D = sentinel;
+        expect(t.kernel.wasmTetra3D).toBe(sentinel);
+        t.kernel.wasmTetra3D = null;
+        expect(t.wasmTetra3D).toBeNull();
+    });
+
+    test('null-safe before a kernel exists', () => {
+        // The constructor no longer declares these, so a read before create()
+        // has no kernel to go to. It must answer null rather than throw.
+        const t = new Transform({ dataFormat: 'int8' });
+        for(const slot of SLOTS) expect(t[slot]).toBeNull();
+        expect(() => { t.wasmTetra3D = {}; }).not.toThrow();
+    });
+
+    (HAS_WASM ? test : test.skip)('release() clears the kernel\'s state, seen through both', () => {
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
+        t.create('*sRGB', cmyk, eIntent.relative);
+
+        expect(t.wasmTetra3D).not.toBeNull();
+        expect(t.wasmMemoryBytes()).toBeGreaterThan(0);
+
+        t.releaseWasmMemory();
+        expect(t.wasmTetra3D).toBeNull();
+        expect(t.kernel.wasmTetra3D).toBeNull();
+        expect(t.wasmMemoryBytes()).toBe(0);
+    });
+
+    (HAS_WASM ? test : test.skip)('both families still load — the phase 7 tripwire', () => {
+        // Deliberate: phase 7 makes each kernel load only its own dimension,
+        // at which point a CMYK transform stops carrying 3D modules and this
+        // test SHOULD fail. It is here so that change is a decision rather than
+        // a surprise, and so the 128 KB it recovers is visible when it happens.
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
+        t.create(cmyk, '*sRGB', eIntent.relative);
+
+        expect(t.kernelInfo().name).toBe('kernel4D');
+        expect(t.kernel.wasmTetra4D).not.toBeNull();
+        expect(t.kernel.wasmTetra3D).not.toBeNull();   // ← phase 7 changes this
+    });
+});
