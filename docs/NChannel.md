@@ -123,9 +123,38 @@ needs to be checked against, only an outside opinion.
 **The oracle is Little CMS**, as it is for every other channel count in
 [`bench/lcms_compat/`](../bench/lcms_compat/). What is missing is input.
 
-**Synthesise the profiles.** An n-channel device→PCS mapping plausible enough
-to exercise the code paths does not need to be a real press. Build one from a
-colour wheel:
+#### The CLUT contents do not need to be plausible
+
+The instinct is to synthesise a *believable* profile first. For validating
+interpolation that is wasted effort: both engines walk the same table, and
+whether that table describes a printable press or nonsense makes no difference
+to whether they agree about walking it. **Fill it with noise or channel sweeps.**
+
+The two are complementary, and both are worth running:
+
+| fill | what it is good for |
+|---|---|
+| **Noise** — every cell independent | **Detection.** Any index error lands on an unrelated cell and shows up immediately as a wildly wrong value. A smooth table hides exactly this, because the neighbouring cell holds nearly the right answer and the output stays plausible. |
+| **Channel sweeps** — one axis ramping per channel | **Diagnosis.** When something fails, a per-axis ramp says *which* axis and *which* channel is wrong, because the output is a readable function of the input. Noise tells you there is a bug; a sweep tells you where. |
+
+This is the same reasoning `__tests__/interp_reference.tests.js` already uses
+for the 3-D and 4-D comparisons, which fill their test CLUTs with random values
+for precisely this reason. Nothing about it is n-channel-specific — it just
+removes the profile problem entirely.
+
+**It may not need an ICC profile at all.** lcms can build a pipeline from a CLUT
+directly (`cmsPipelineAlloc` + `cmsStageAllocCLut16bitGranular`), so the native
+harness in [`bench/lcms_c/`](../bench/lcms_c/) could hand both engines the same
+generated table without anyone writing a profile encoder. Worth checking before
+building one: it would reduce this task to a harness and a fill function.
+
+#### A believable profile is a different test, and still worth having
+
+The colour-wheel construction below answers a different question — not "do the
+engines agree" but "does an n-channel separation behave like a separation". It
+is what ΔE tolerances, black-generation checks and documentation illustrations
+need, and it is committable for the same reason the noise fill is: arithmetic,
+not a measurement of anyone's press.
 
 1. Take HSB around 0–360°, and place the n colourants at their hue angles.
    Black sits at the origin, `0,0,0`.
@@ -134,23 +163,20 @@ colour wheel:
 3. **Above L\*50**, blend toward zero ink — lighter means less of everything,
    converging on paper white.
 4. **At or below L\*50**, blend toward a synthetically derived black: each
-   chromatic channel at `1/(n-1)` of full, plus black. That gives a
-   GCR-ish under-colour behaviour rather than a flat ramp, so the black
-   generation logic actually gets exercised.
+   chromatic channel at `1/(n-1)` of full, plus black. That gives GCR-ish
+   under-colour behaviour rather than a flat ramp, so the black generation
+   logic actually gets exercised rather than bypassed.
 
-Bake that into a CLUT, write it as an ICC profile, and it is committable —
-it is arithmetic, not a measurement of anyone's press.
+#### Then test both engines
 
-**Then test both engines against it.** Same stimuli through lcms and through
-jsColorEngine, same comparison the existing `lcms_compat` harness already
-does for 1–4 channels. Neither engine is trusted a priori; agreement is the
-signal, and disagreement is the interesting case — it would be the first
-n-channel divergence either of us has looked at.
+Same stimuli through lcms and through jsColorEngine, same comparison the
+existing `lcms_compat` harness already does for 1–4 channels. Neither engine
+is trusted a priori; agreement is the signal, and disagreement is the
+interesting case — it would be the first n-channel divergence either of us has
+looked at.
 
-Two things fall out that are worth having regardless: a committable n-channel
-profile set for the test suite, and the first real coverage of the generic
-channel loop past 4 outputs, which today has no oracle at all (see
-`__tests__/interp_reference.tests.js`).
+Order of work, cheapest first: noise fill and sweeps to get an oracle running
+at all, then the colour wheel when appearance-level assertions are wanted.
 
 ## CLUT memory reference (why N-channel input LUTs are declined)
 
