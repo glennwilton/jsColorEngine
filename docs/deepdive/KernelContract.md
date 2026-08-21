@@ -1,7 +1,9 @@
 # The kernel contract
 
-> **Status: phases 1-6 and 8 landed 2026-08-21. Phase 7 (per-dimension WASM)
-> is not built.**
+> **Status: all phases landed 2026-08-21.**
+>
+> Remaining work is no longer contract shape, it is coverage: there is no
+> oracle above 4 channels. See [The N-channel oracle](#the-n-channel-oracle).
 > This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
 > [KernelModules.md](./KernelModules.md), which this supersedes in part; when
 > this lands, the two are folded into one as-built document.
@@ -706,7 +708,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 | ~~4e~~ | ~~`arrayFor()` returns `{big, small, threshold}`~~ **LANDED 2026-08-21, AND SUPERSEDED** — the shared `WASM_DISPATCH_MIN_PIXELS` retired into `dispatchThreshold.js`, but returning a threshold to the caller still made batch size Transform's business. Replaced by [`arrayFn`](#arrayfn) in phase 8 | After the loops move, this is the last thing Transform knows about dispatch |
 | ~~5~~ | ~~`init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire~~ **LANDED 2026-08-21** — no claim registry at all in the end: Kernel3D reads the pipeline and yields to the matrix shaper itself, and Transform never learns a choice was made. The 42-row dispatch table became a `resolve()` switch in each kernel file, verified against a 560-decision oracle; the u16 wide-output gap it hid (CMYK→5CLR threw at 16 bits) is fixed | Needs 3 and 4 landed first |
 | ~~6~~ | ~~`wantsLut()` merges `provideLut` + `displacesLut`~~ **LANDED 2026-08-21** — kept the name `provideLut`, since `displacesLut` was the narrower of the two and its whole answer space already fitted. Moving the call to where the temporary pipeline exists is what made the merge possible, and it took a descriptor-vs-instance bug with it | Smallest surface, last |
-| 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
+| ~~7~~ | ~~Per-dimension WASM loading~~ **LANDED 2026-08-21** — no host probe needed in the end: each kernel declares a `wasmLadder` in its own file and the lead module's failure is the probe. 4 modules and 256 KB per transform became 2 and 128 KB, and the half that went was unreachable. The tripwire fired as designed | Independent of the rest; re-express the loadout test first |
 | ~~8~~ | ~~`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business~~ **LANDED 2026-08-21**, and it took `transformArrayFn` with it: identity became `kernels[0]`, so the last closure Transform had a reason to bind stopped being a special case. See [What Transform actually does](#the-principle) |
 
 ---
@@ -1106,6 +1108,75 @@ Two things to get right if this is built:
 
 Worth having. Not needed yet, because the one wrapper that exists is in a test
 and captures explicitly.
+
+<a id="the-n-channel-oracle"></a>
+
+## The N-channel oracle
+
+Every kernel above 4 channels, and every one below 3, could only ever be
+checked **against itself**. `accuracy.js` compares jsColorEngine to Little CMS
+for RGB and CMYK because those are the profiles this repo can legally ship, and
+there was nothing to hand lcms for anything else.
+
+That is not a small gap. A suite that only agrees with itself is precisely how
+a dropped clamp survived in **four** interpolators at once: the reference suite
+ran every specialised variant against `_Master`, at the one input scale where
+the bug was invisible, and the block that used the revealing scale only ever
+ran the variant that was already correct.
+
+### The way out is to write profiles, not find them
+
+Real ICC profiles are licensed. **A profile the engine wrote is not** — it is
+ours, so it can go in git, and both engines can be pointed at the same file.
+
+- `src/encodeICC.js` — the writer, the mirror of `decodeICC.js`
+- `Profile.toICC()` / `Profile.createGrayICC()`
+- `scripts/make_test_profiles.js` — writes them to `__tests__/profiles/` **once**,
+  deterministically. They are ordinary ICC files: open them in an inspector.
+- `bench/lcms-comparison/accuracy_gray.js` — hands them to lcms and compares
+
+**Built and passing for gray.** Four profiles (γ1.0, γ1.8, γ2.2, and a
+256-entry sampled TRC, which is a different code path in every reader),
+gray → sRGB across all 256 input steps: **100% within 1 LSB**, γ1.8 exact.
+That is the first independent check `Kernel1D` has ever had.
+
+### What the unit tests cannot prove
+
+`__tests__/encodeICC.tests.js` proves the bytes are well-formed and that our
+decoder reads back what our encoder wrote — including a byte-identical
+decode→encode round trip. **A writer can be self-consistently wrong.** Only the
+second CMS closes that, which is why the lcms comparison is the point and the
+unit tests are the scaffolding.
+
+### Scope for the rest
+
+The remaining piece is `mft2`/`mAB` encoding, which is what 2CLR through 15CLR
+need. The two directions have very different cost, and the plan splits on it:
+
+| | grid | cells | to |
+|---|---|---|---|
+| **PCS → Device** (`B2A`) | 3-D input, N-channel output | 33³ × 15 = 538 K | **15 channels** |
+| **Device → PCS** (`A2B`) | N-D input, 3 output | `points^N × 3` | **10 channels** |
+
+`B2A` is cheap at any width: the grid stays 3-D and only the output stride
+grows. `A2B` is where `points^N` bites, and the grid has to shrink as
+dimensions rise:
+
+| dims | points | cells × 3 |
+|---|---|---|
+| 4 | 33 | 3.5 M |
+| 6 | 9 | 1.6 M |
+| 8 | 5 | 1.2 M |
+| 10 | 4 | 3.1 M |
+| 12 | 3 | 1.6 M |
+| 15 | 3 | **43 M** — no |
+| 15 | 2 | 98 K — legal, and too coarse to mean anything |
+
+**Ten channels is the honest ceiling for the device→PCS direction.** A 15-D
+A2B is only encodable at 2 points per axis, which is a table with no interior:
+it would exercise the plumbing and tell you nothing about the interpolation.
+Real 15-channel profiles are almost always PCS→Device for the same reason.
+That is why the table above stops A2B at 10 and takes B2A all the way.
 
 ## Open questions
 
