@@ -108,14 +108,21 @@ module.exports = {
         }
         if(!this._impl) return null;
 
-        // Default the pixel count from the buffer, as the table path does.
-        // transformArray() lets its `pixelCount` parameter stay undefined when
-        // the caller omits it and passes it straight through to here, so before
-        // v1.6 a three-argument transformArray() on a matrix-shaper pair
-        // computed `undefined * 3`, allocated a zero-length output and returned
-        // an empty array. Shipped behaviour, and quiet about it.
+        // THE PREAMBLE IS THE KERNEL'S, and here it cannot come from the LUT:
+        // `lut` is null on this path, which is the whole reason this kernel
+        // took the transform. Three channels, always -- a matrix shaper is a
+        // 3-channel idea.
+        //
+        // Both defaults used to be applied by whichever caller reached the
+        // kernel first, and NOT AT ALL by a third: before v1.6 a
+        // three-argument transformArray() on a matrix-shaper pair computed
+        // `undefined * 3`, allocated a zero-length output and returned an
+        // empty array. Shipped behaviour, and quiet about it.
         if(pixelCount === undefined || pixelCount === null){
             pixelCount = Math.floor(inputArray.length / (inAlpha ? 4 : 3));
+        }
+        if(preserve === undefined){
+            preserve = outAlpha && inAlpha;
         }
         var need = pixelCount * (outAlpha ? 4 : 3);
         var out  = outputArray;

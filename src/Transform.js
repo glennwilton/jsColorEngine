@@ -4249,14 +4249,13 @@
                 throw 'No LUT loaded';
             }
 
-            // Preamble — only what the kernel cannot compute itself.
-            if(preserveAlpha === undefined){
-                preserveAlpha = outputHasAlpha && inputHasAlpha;
-            }
-            var inputBytesPerPixel = (inputHasAlpha) ? lut.inputChannels + 1 : lut.inputChannels;
-            if(pixelCount === undefined){
-                pixelCount = Math.floor(inputArray.length / inputBytesPerPixel);
-            }
+            // NO PREAMBLE. pixelCount and preserveAlpha used to be defaulted
+            // here, and again by whichever other caller reached the kernel --
+            // and NOT AT ALL by a third, which is how
+            // transformArray(input, false, false) on a matrix-shaper pair once
+            // returned [] : pixelCount arrived undefined and sized the output
+            // as undefined * 3. They are the kernel's, defaulted once at the
+            // top of its array(), and undefined travels there untouched.
 
             // v1.7 kernel modules — the kernel instance (set at create() time
             // by setKernel()) owns output allocation/validation and variant

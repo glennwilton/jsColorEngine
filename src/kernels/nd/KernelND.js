@@ -58,6 +58,15 @@ module.exports = {
         const inCh  = transform.inputChannels;
         const outCh = transform.outputChannels;
         const outBPP = outCh + (outAlpha ? 1 : 0);
+
+        // THE PREAMBLE IS THE KERNEL'S. See Kernel3D.array().
+        if(pixelCount === undefined){
+            pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inAlpha ? 1 : 0)));
+        }
+        if(preserve === undefined){
+            preserve = outAlpha && inAlpha;
+        }
+
         if (!outputArray) outputArray = new Uint8ClampedArray(pixelCount * outBPP);
 
         var inputPos = 0, outputPos = 0;

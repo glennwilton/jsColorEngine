@@ -116,6 +116,15 @@ module.exports = {
 
     array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve){
         var transform = this.transform;
+
+        // THE PREAMBLE IS THE KERNEL'S. See Kernel3D.array().
+        if(pixelCount === undefined){
+            pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inAlpha ? 1 : 0)));
+        }
+        if(preserve === undefined){
+            preserve = outAlpha && inAlpha;
+        }
+
         outputArray = kernelUtils.ensureOutputArray(transform, lut, pixelCount, outAlpha, outputArray);
         loops.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inAlpha, outAlpha, preserve);
         return outputArray;
