@@ -1,6 +1,6 @@
 # The kernel contract
 
-> **Status: DESIGN — phase 1 landed 2026-08-21, phases 2-7 not built.**
+> **Status: phases 1 and 2 landed 2026-08-21; phases 3-7 not built.**
 > This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
 > [KernelModules.md](./KernelModules.md), which this supersedes in part; when
 > this lands, the two are folded into one as-built document.
@@ -666,7 +666,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 | Phase | Content | Why here |
 |---|---|---|
 | ~~1~~ | ~~Dense 1–15 registry; `setKernel` becomes an array index; `registerKernel` accepts a range~~ **LANDED 2026-08-21** — descriptors gained `name`, `KernelND` registers `[5, 15]`, `MAX_KERNEL_DIMENSIONS = 15`. New suite `__tests__/kernel_registry.tests.js` (17 tests) | Mechanical, no behaviour change, unblocks test injection |
-| 2 | `floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups | No WASM in the way. **And it closes `TODO (B3)`** — both loops currently call their single-colour interpolator *per pixel*, allocating a wrapper array and an output array each iteration. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
+| ~~2~~ | ~~`floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups~~ **LANDED 2026-08-21**, and it closed `TODO (B3)` with it — see [Phase 2 as built](#phase-2-as-built) | No WASM in the way. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
 | 3 | `floatFor` on KernelND, then Kernel3D, then Kernel4D | Ascending risk. 3D and 4D one at a time |
 | 4 | Loops and WASM state move onto the kernel; the 22 `run_` thunks in `lutKernelTable.js` collapse | They exist only to rename `t.method` — they do not move, they cease to exist |
 | 5 | `init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire | Needs 3 and 4 landed first |
@@ -674,6 +674,54 @@ speedup", one level down: quote the measurement that controls its conditions.
 | 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
 
 ---
+
+<a id="phase-2-as-built"></a>
+
+## Phase 2 as built
+
+Kernel1D and Kernel2D own their single-colour function and their array loop.
+`addStageLUT` cases 1 and 2 are registry lookups; `linearInterp1D_NCh` and
+`bilinearInterp2D_NCh` moved out of `src/interp.js` into the kernel modules.
+
+**The ownership change and `TODO (B3)` turned out to be one change seen from
+either end.** B3 said the 1-D and 2-D array loops should be inlined like the
+3-D ones. The contract said the float and array families must never share
+bodies. Those are the same statement: the loops shared a body *because* nobody
+owned the pair, and giving the kernel both surfaces is what made the
+duplication deliberate rather than accidental.
+
+Measured, 1M px, float lutMode, best of 5, three consecutive runs agreeing to
+0.3%:
+
+| workflow | before | after | change |
+|---|---:|---:|---:|
+| gray → RGB | 72.6 | **93.8** | +29% |
+| gray → CMYK | 63.6 | **81.4** | +28% |
+| gray → 6CLR | 49.7 | **64.9** | +31% |
+| duotone → RGB | 50.7 | **61.5** | +21% |
+| duotone → CMYK | 44.7 | **51.3** | +15% |
+| duotone → 6CLR | 35.7 | **41.0** | +15% |
+
+Gray gains more than duotone because bilinear does four CLUT reads and more
+arithmetic per output channel, so the per-pixel allocation was a smaller share
+of its total.
+
+**A third, not a multiple, and the reason is worth keeping.** The prediction
+before measuring was larger — ~2M allocations per megapixel sounds
+catastrophic. It is not, because V8 allocates short-lived small objects by
+bumping a pointer in the nursery and collects them almost free when they die
+immediately, which these did. The allocation was real cost but never the
+dominant one. Estimating allocation pressure from the allocation *count* rather
+than from its lifetime overstates it.
+
+Correctness was checked by comparing the loop against the kernel's own
+`floatFor` function across 159,744 values and 9 LUT shapes per dimension —
+through the same `Uint8ClampedArray` container, because it rounds half-to-even
+where `Math.round` rounds half-up, and comparing through different rounding
+shows a 1 LSB "failure" that is not one.
+
+The isolated `solo` bench moved at most **+0.30%** across six 3D/4D cells,
+confirming the kernels this phase did not touch were also not disturbed.
 
 ## Open questions
 

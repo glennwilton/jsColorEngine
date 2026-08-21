@@ -9,6 +9,44 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed — gray and duotone kernels own their maths, and got faster
+
+Phase 2 of [the kernel contract](docs/deepdive/KernelContract.md).
+`addStageLUT` no longer picks the single-colour interpolator itself for 1-
+and 2-channel LUTs; it asks the kernel registered for that dimension via
+`floatFor(lut, hints)`, which returns both the function and the stage name.
+`linearInterp1D_NCh` and `bilinearInterp2D_NCh` moved from `src/interp.js`
+into `Kernel1D` and `Kernel2D`.
+
+This closes a real hole: `registerKernel()` replaced the batch path only, so
+a third-party Kernel1D changed `transformArray()` while `transform(colour)`
+kept running Transform's own code. One object now owns both surfaces.
+
+Both array loops are also inlined now, which was `TODO (B3)`, open since the
+v1.5 kernel migration. They had been calling their single-colour
+interpolator once per pixel — roughly 2M allocations per megapixel, and one
+function serving two very different call patterns.
+
+| workflow | before | after |
+|---|---:|---:|
+| gray → RGB | 72.6 | **93.8 MPx/s** |
+| gray → CMYK | 63.6 | **81.4** |
+| gray → 6CLR | 49.7 | **64.9** |
+| duotone → RGB | 50.7 | **61.5** |
+| duotone → CMYK | 44.7 | **51.3** |
+| duotone → 6CLR | 35.7 | **41.0** |
+
+Verified bit-identical to the single-colour reference across 159,744 values
+and 9 LUT shapes per dimension. 3D and 4D were untouched and the isolated
+bench confirms it: at most +0.30% across six cells.
+
+### Added — throughput coverage for 1- and 2-channel kernels
+
+`bench/small_dim/` and the `smalldim` phase of `bench/reproduce.js`. Every
+other bench measured 3- and 4-channel input, so these two kernels had no
+coverage at all. Synthetic LUTs, so no gray or duotone profile is needed —
+those are vendor artefacts that cannot be committed.
+
 ### Changed — the kernel registry is a dense 1..15 array
 
 Phase 1 of [the kernel contract](docs/deepdive/KernelContract.md).
