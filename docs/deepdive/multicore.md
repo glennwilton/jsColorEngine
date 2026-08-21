@@ -1,22 +1,99 @@
 # Multicore — design notes
 
-> **Status: measured, not implemented.** The design below was written
-> first as a brainstorm; the experiment has since been run
-> (`bench/multicore_poc/`, public API only, no engine changes) and the
-> results are in "MEASURED" near the end. Read that first — it rules out
-> the more invasive half of this document. Nothing has been built into
-> the engine. Multicore is still an empty cell in the
-> [LcmsComparison](../LcmsComparison.md) "not comparable" table; the
-> numbers here are from a proof of concept, not a shipped feature.
+> **Status: built.** `Transform.transformImages()` runs the multicore
+> path, output byte-identical to sequential.
 >
-> Headline: **5.46x peak**, byte-identical, and the copies that Model B
-> exists to eliminate cost only **4-7%** — so Model B is probably never
-> worth building.
+> **This page runs in the order the work happened**: the brainstorm and the
+> two candidate models first, then the POC that ruled out the more invasive
+> half of the document before any of it was implemented, then what was built,
+> and finally the shipped pool measured across content, workers and kernels.
+> If you only want numbers, jump to
+> [the shipped pool](#measured--the-shipped-pool-across-content-workers-and-kernels)
+> and [what it costs](#we-support-multicore-but-it-is-not-free).
 >
-> **The one thing to take away if you read nothing else:** a LUT
-> transform is *not* fixed-cost per pixel — content changes throughput by
-> up to 2.7x — so splitting an image evenly across N threads is the wrong
-> fit and measured 30-48% off. Over-decompose instead.
+> Headline: **6.2x peak** (noise/int), **787 MPx/s** peak throughput
+> (solid/wasm-simd), byte-identical in all 72 cells. Current tables are
+> generated into [BenchResults](../BenchResults.md#table-pool-peak); the
+> analysis below is written against the 2026-08-19 run, whose numbers sit
+> within run-to-run spread of these.
+>
+> **Two things to take away if you read nothing else.**
+>
+> 1. A LUT transform is *not* fixed-cost per pixel — content changes
+>    throughput by up to 2.7x — so splitting an image evenly across N
+>    threads is the wrong fit and measured 30-48% off. Over-decompose
+>    instead.
+> 2. **This is a different model from lcms, not a port of it.** lcms
+>    splits one buffer evenly across N threads and joins; we fragment
+>    images into a shared queue that a persistent pool pulls from, out of
+>    order, across many images and many transforms. More flexible — and
+>    it costs memory, because every worker holds its own copy of the LUT
+>    rather than sharing one. Both sections below.
+
+## A different model from lcms, not a port of it
+
+It is easy to read "multicore" and assume both engines do the same thing in
+different languages. They do not, and the difference is the reason for both our
+advantages and our costs.
+
+**lcms `threaded`** splits one buffer evenly across N threads
+(`_cmsThrCountSlices` — an even division capped at the CPU count, with a 128 KB
+per-thread floor), spawns the threads for that call, and joins. One image, N
+threads, static split, done. Threads share the address space, so the CLUT is
+one copy.
+
+**Here**, an image is broken into **fragments** — around ten per worker — which
+go into a shared queue that a persistent pool of workers pulls from. Fragments
+complete out of order and are reassembled by position. The pool is a
+process-level singleton that many Transforms share, each holding a lease; every
+task carries its own transform signature, so a worker switches between
+transforms task by task.
+
+| | lcms `threaded` | jsColorEngine |
+|---|---|---|
+| unit of work | one buffer, divided evenly N ways | fragments, ~10 per worker |
+| threads | spawned per call, joined | persistent pool, leased |
+| scheduling | static, fixed before any work runs | pull queue, out of order |
+| scope | one conversion | many images, many transforms |
+| ordering | n/a | priority and grouping are expressible |
+| completion | all-or-nothing at the join | per-image, as each lands |
+| CLUT | one shared copy | one copy per worker |
+
+### Why the difference is deliberate
+
+An even static split is only optimal if pixels cost the same. **They do not** —
+content moves throughput by up to 2.7×, because how much of the CLUT the pixels
+touch decides cache behaviour (measured; see the shipped-pool results). So
+equal-sized slices take
+unequal time, and every thread waits on the slowest one: 30–48% off on uniform
+hardware, 2.6× off when cores are uneven.
+
+A static split *cannot* fix this, because the division is decided before any
+work has run and nothing has measured which regions are expensive. Fragmenting
+and pulling from a queue fixes it without predicting anything: a worker that
+draws a cheap fragment simply comes back sooner.
+
+That mattered more here than it would in C, for a reason specific to JS: worker
+start-up is material, so spawning per call is not viable and a persistent pool
+is forced on us. Having been forced into a pool, over-decomposition becomes
+nearly free — and turns out to be worth 30–48%.
+
+### What it buys, and what it costs
+
+Buys: work from **many images and many transforms** can coexist; results can be
+delivered **per image as they finish** rather than at a join; scheduling can
+express **priority** and **grouping**; and uneven cores, thermal throttling,
+SMT contention and content variance are all absorbed by the same mechanism
+without detecting any of them.
+
+Costs: **memory**. A persistent pool of isolated workers means the CLUT is
+resident once per worker rather than once per process — see "We support
+multicore, but it is not free". That is not a JS tax we failed to avoid; it is
+the price of the model, and the model is what makes the rest of it possible.
+
+Both halves belong in any honest comparison. lcms's approach is simpler and
+cheaper in memory. Ours is more flexible and does not assume something we
+measured to be false.
 
 ## The assumption to discard first: pixels are not fixed-cost
 
@@ -362,6 +439,113 @@ Option 1 is almost free to implement and is the obvious starting point.
 That the portable-LUT work already exists is a genuine piece of luck
 here.
 
+## Roadmap — a shared work queue, and why it needs counters rather than markers
+
+Not built. Recorded here with the measurement that motivates it, because the
+design question turned out to have a non-obvious answer.
+
+### The cost of serialising batches
+
+Batches run one at a time. `_runBatch` re-installs each worker's message
+handler with a closure over that batch's state, so two live batches would
+clobber each other — the second wipes the first's handler and the first waits
+forever for replies nobody is listening for. Serialising is correct and costs
+nothing in throughput, because both batches want the same N workers on the same
+N cores.
+
+It costs latency, and more than expected. A 0.4 MP preview issued behind a
+20 MP export on this machine:
+
+| | |
+|---|---|
+| small alone | 7 ms |
+| big alone | 92 ms |
+| **small behind big** | **84 ms — a 12× penalty** |
+| both, total | 84 ms (throughput unaffected) |
+
+For an editor showing a preview while an export runs, that is the difference
+between instant and visibly stalled.
+
+### What does not fix it
+
+**A barrier or flush marker in the queue.** A marker saying "nobody starts B
+until A drains" enforces exactly the ordering serialisation already enforces.
+Same semantics, more machinery, same 12×.
+
+**Appending a new batch to the tail with a flush marker.** Preserves ordering,
+so the small job still waits behind every task of the big one. This is worth
+stating because it is the intuitive design and it does not help with latency —
+though it does remove the batch-boundary stall, so work streams continuously.
+
+### What does fix it
+
+One shared queue, persistent per-worker message handlers, and tasks routed by
+id to their own batch's output and counter.
+
+**The worker side already does this.** Every `run` message carries its own
+`signature`, and the worker looks up `registry[msg.signature]` per task. A
+worker can already switch transform between consecutive tasks; it has been able
+to all along. What is batch-scoped is only the pool's bookkeeping: `signature`
+and `payload` are `_runBatch` parameters, and the completion handler closes over
+one batch's `tasks`/`images`/`outputs`/`done`.
+
+So the change is to move `{signature, payload}` onto the task and route
+completions by id.
+
+### Ordering: sort by (priority, signature group, length descending)
+
+Grouping by signature keeps a transform's CLUT hot for a whole group, so
+workers cross a transform boundary only at group edges — roughly N−1
+transitions rather than switching at random. Without it, interleaving different
+transforms would have workers alternating between tables, and CLUT locality
+moves throughput by up to 2.7× (see the content findings). The straddle
+window at a boundary is about one task per worker.
+
+Priority insertion places a group at the head rather than the tail. It cannot
+preempt a task already running, but over-decomposition has already made that
+cheap: a task is about a tenth of a worker's share, so the worst-case wait is
+single-digit milliseconds instead of the 84 ms measured above.
+
+Merging a new batch into an existing group of the same signature costs fewer
+transitions but can starve: a caller repeatedly submitting the same transform
+would keep an early group alive and later groups would never start. Merge only
+into groups that have not begun, or cap growth after creation.
+
+### Counters, not markers
+
+The instinct is to express "tell me when this batch is done" and "drop this
+transform once its work drains" as control items flowing through the queue.
+That is the wrong mechanism, and the reason is specific: **priority insertion
+and merging reorder the queue**, so a positional marker can be overtaken by
+work that jumped ahead of it and will fire early. It is a load-dependent bug of
+the worst kind — correct under test, wrong under load.
+
+Counting is order-independent:
+
+| need | mechanism |
+|---|---|
+| batch completion | per-batch refcount; resolve at zero |
+| per-image completion | per-image refcount — **already built**, see `onImage` |
+| fenced forget | per-signature refcount; forget at zero |
+| cancellation | batch flag, drop queued tasks, decrement as they go |
+
+The per-batch counter already exists as `done` inside `_runBatch`'s closure;
+generalising it means moving it into a batch record keyed by id — the same
+change that lets batches coexist.
+
+**The per-image case is already shipped and demonstrates the principle.** With
+tasks sorted longest-first and pulled by whichever worker frees up, a five-image
+batch completed in the order 0, 2, 3, 1, 4. Anything positional would have
+fired at the wrong time; the refcount did not care.
+
+### Before building
+
+Measure the cache cost with two *different* transforms in flight. The 84 ms
+figure above is one transform, so every worker had the same CLUT hot.
+Interleaving may buy 12× latency and hand back throughput — which is exactly
+the trade the grouped sort is meant to bound, and exactly the kind of
+assumption that has been wrong before in this document.
+
 ## Scope
 
 **In:** the WASM scalar and SIMD kernels, **and the JS int kernels** —
@@ -384,14 +568,10 @@ off the SIMD kernels even when they are running in workers.
 Ryzen 7700X (8C/16T), Node 24, sRGB→GRACoL, `lutMode: 'int'`, 8 MP,
 output byte-identical to single-threaded in every row.
 
-| workers | MPx/s | speedup | efficiency | copy overhead |
-|---:|---:|---:|---:|---:|
-| 1 | 41.8 | 0.95× | 95 % | 6.9 ms |
-| 2 | 76.3 | 1.73× | 86 % | 7.1 ms |
-| 4 | 130.5 | 2.96× | 74 % | 11.8 ms |
-| 8 | 189.6 | 4.30× | 54 % | 7.3 ms |
-| 12 | 237.3 | 5.38× | 45 % | 12.9 ms |
-| 16 | 240.8 | 5.46× | 34 % | 8.4 ms |
+It scaled to **4.30× at 8 workers and 5.46× at 16**, with efficiency falling
+from 95 % to 34 % — close enough to the shipped pool's shape (measured at the
+top of this page, and the numbers to quote) that the design questions below
+could be settled on it.
 
 **Model B is probably not worth building.** The copies cost **4–7 %** of
 a pass (7–13 ms against 181 ms). That is the whole prize
@@ -1035,7 +1215,7 @@ a reason to prefer it over an ad-hoc pool-per-Transform shortcut.
 Worth reading the reference implementation before claiming a design is
 better. lcms's `threaded` plugin is vendored under
 `bench/lcms_c/lcms2-2.18/plugins/threaded/`, and it makes two choices
-that differ from everything measured above.
+that differ from everything measured here.
 
 **It splits evenly, one slice per thread** (`threaded_split.c`):
 
@@ -1776,63 +1956,649 @@ for some workload. The remaining questions are: browser behaviour
 kernels scale the same way, and where the one-shot (unpooled) threshold
 sits once worker spin-up is counted.
 
-## Open questions — measure before building
+## MEASURED — the shipped pool, across content, workers and kernels
 
-1. **How much does Model A's copying actually cost?** The estimate is
-   ~8 % of the compute it parallelises. If that holds, Model B may never
-   be worth its invasiveness.
-2. How much of the win is just deleting the in/out WASM copy? Measure
-   that single-threaded first; it may be most of it.
-3. Where is the image-size crossover below which splitting loses?
-4. Does near-linear scaling hold at 4, 8, 16 workers, or does something
-   unexpected bind first?
-5. Do the JS int kernels scale as well as the WASM ones? 4 × 73 MPx/s
-   would put pure JS level with single-threaded WASM SIMD, which would
-   be a genuinely interesting result on its own.
-6. ~~What is the per-task overhead?~~ **ANSWERED: ~33 µs serialised,
-   ~7–8 µs once overlapped** (`task_overhead.js`) — the second figure is
-   the one that matters, and the gap is parallelism hiding the cost. It
-   also showed the current planner's one-slice-per-worker cap is the
-   worst measured configuration, 30–48 % off, and that the win from
-   over-decomposition is **scheduling, not caching**: with a single
-   worker, smaller tasks are never faster. See MEASURED above.
-7. **Does fixed-slot allocation actually reduce jitter?** The whole
-   argument for it is smoothness rather than throughput, so it has to be
-   judged on p95/p99 task latency, GC pause count and peak RSS — not on
-   mean MPx/s, which may show no difference at all.
-8. **How stable is a calibration across machines?** The two constants
-   are machine properties, so `autoTune()` should be run on a spread of
-   hardware — a laptop on battery, a 3D V-Cache desktop, a many-core
-   server, a phone — to check that the *rule* transfers even though the
-   *numbers* do not. If the derived `tasksPerWorker` lands outside 4–16
-   anywhere, the model is missing a term.
-9. ~~Should Mode 2 replace Mode 1?~~ **ANSWERED: no, they are
-   complementary.** create() without a LUT costs 0.08 ms and a cloned
-   Profile needs no re-parse, so Mode 2 is cheap -- but four options are
-   FUNCTIONS (gamutDeFn, lutInputHook, lutOutputHook, custom stages) and
-   structuredClone throws on them. Mode 1 carries those for free because
-   they are baked into the LUT; Mode 2 would silently drop them. Mode 1
-   also serves a Transform restored from a portable LUT, which has no
-   profiles at all. Selection rule is in AS BUILT above.
-10. **How much do heterogeneous cores widen the variance, and does SIMD
-   suffer more?** Every measurement here is from a homogeneous Zen 4
-   part. On an Intel P/E or Apple Silicon machine the prediction is that
-   core-type variance is *larger for the SIMD kernel* than the JS one,
-   because E-cores have narrower vector ports — which would mean SIMD
-   needs deeper over-decomposition on hybrid hardware, the reverse of
-   what was measured here. Run `task_overhead.js` and `autotune.js` on a
-   hybrid part; a calibration that lands mostly on E-cores is also the
-   most likely way for `autoTune` to derive a wrong constant.
-6. Browser vs Node: how much worse is the browser path in practice,
-   given slower worker spin-up (and COOP/COEP if Model B).
-7. Does the imported-memory change cost anything single-threaded?
-   (Model B only.)
+> **The live numbers are generated**, from the same bench, into
+> [`pool.peak`](../BenchResults.md#table-pool-peak) and
+> [`pool.scaling`](../BenchResults.md#table-pool-scaling). The tables in this
+> section are the run the analysis was written against. Two things changed
+> after it: the sequential baseline now reuses its output buffer (it was
+> allocating a multi-megabyte array per iteration, which left a 25 % run-to-run
+> spread in the denominator of every speedup here), and the peak now reads
+> ~6.2x rather than 6.53x. **The absolute MPx/s barely moved** — which is the
+> lesson: quote the throughput, not the ratio.
 
-## First experiment — done
+`bench/multicore_matrix/run.js`, 4 MPx sRGB→GRACoL2006, int8, median of 5,
+**one process per cell** (`--isolate`). Ryzen 7 7700X, 8 physical / 16 logical,
+Node 24. Raw rows in `bench/results/multicore_matrix.json`.
 
-Run, and written up under MEASURED above. `bench/multicore_poc/` is the
-harness; it needed no engine changes and uses the public API only.
+Three axes, because each has been wrong before: content (a LUT transform is not
+fixed-cost per pixel), worker count including odd values (the pull queue is
+supposed not to care), and kernel (a faster kernel makes each fragment cheaper,
+which raises the relative cost of per-task overhead).
 
-Outcome in one line: **5.46x peak, byte-identical, and Model B is
-probably never worth building** because the copies it would eliminate
-cost only 4-7%.
+**The baseline is the same Transform running sequentially through
+`transformArray()`, not the 1-worker pool.** One worker still pays copy and
+message costs — it measures 0.76–0.88× of sequential — so calling it "1×" would
+flatter every other column.
+
+### Results
+
+Median of 5 isolated runs, after the scratch-buffer change described in "Where
+the variance actually lives". Peaks rose 13-67% against the same harness before
+that change, so any figure quoted from an earlier draft of this document is low.
+
+| content / kernel | sequential | peak | speedup | @ workers |
+|---|---:|---:|---:|---:|
+| solid / int | 56.7 | 340.9 | **6.01x** | 8 |
+| noise / int | 45.3 | 295.4 | **6.53x** | 8 |
+| photo / int | 48.8 | 305.3 | **6.26x** | 8 |
+| solid / int-wasm-scalar | 83.0 | 455.6 | **5.49x** | 8 |
+| noise / int-wasm-scalar | 60.5 | 330.8 | **5.47x** | 8 |
+| photo / int-wasm-scalar | 67.4 | 383.1 | **5.68x** | 8 |
+| solid / int-wasm-simd | 179.4 | 819.1 | **4.57x** | 8 |
+| noise / int-wasm-simd | 100.2 | 564.5 | **5.63x** | 8 |
+| photo / int-wasm-simd | 117.8 | 624.5 | **5.30x** | 8 |
+
+MPx/s. **Every one of the 72 cells was byte-identical to sequential output** —
+a speedup that does not produce identical bytes is not a speedup, so the
+harness checks rather than assumes.
+
+### Scaling from 1 to 8 workers
+
+Median of 5 isolated matrix runs, each itself a median of 5.
+
+| cell | seq | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | peak |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| solid/int | 56.7 | 0.93 | 1.84 | 2.66 | 3.49 | 4.22 | 4.89 | 5.15 | **6.01** | 6.01x @8 |
+| noise/int | 45.3 | 0.97 | 1.86 | 2.73 | 4.04 | 4.82 | 5.43 | 5.86 | **6.53** | 6.53x @8 |
+| photo/int | 48.8 | 0.96 | 1.86 | 2.97 | 3.87 | 4.97 | 5.68 | 6.16 | **6.26** | 6.26x @8 |
+| solid/wasm-scalar | 83.0 | 0.94 | 1.84 | 2.62 | 3.52 | 4.08 | 4.62 | 4.64 | **5.49** | 5.49x @8 |
+| noise/wasm-scalar | 60.5 | 0.95 | 1.87 | 2.69 | 3.56 | 4.28 | 4.85 | 5.41 | **5.47** | 5.47x @8 |
+| photo/wasm-scalar | 67.4 | 0.95 | 1.83 | 2.61 | 3.42 | 4.14 | 4.84 | 5.40 | **5.68** | 5.68x @8 |
+| solid/wasm-simd | 179.4 | 0.91 | 1.76 | 2.50 | 3.25 | 3.75 | 4.23 | 4.52 | **4.57** | 4.57x @8 |
+| noise/wasm-simd | 100.2 | 0.95 | 1.85 | 2.67 | 3.47 | 4.18 | 4.69 | 5.21 | **5.63** | 5.63x @8 |
+| photo/wasm-simd | 117.8 | 0.93 | 1.80 | 2.57 | 3.37 | 4.01 | 4.50 | 4.79 | **5.30** | 5.30x @8 |
+
+**One worker is always SLOWER than sequential** — 0.75× to 0.92×. That is the
+cost of copying a fragment out and the result back, with none of the benefit,
+and it is worst on the fastest kernel (SIMD, 0.75×) because the copy is a
+larger share of a cheaper conversion. It is also why the baseline for every
+figure here is sequential rather than the 1-worker pool: calling that "1.0x"
+would silently credit the pool with recovering its own overhead.
+
+**Efficiency falls as workers are added, and falls fastest on the fastest
+kernel.** At 8 workers it ranges from 71% (noise/int) down to 32%
+(solid/wasm-simd). Same cause: a faster kernel makes each fragment cheaper, so
+the fixed per-fragment cost is a larger share of it, and the shared memory
+bandwidth is reached sooner.
+
+### A ceiling that turned out to be the feed, not the bus
+
+The first run of this measurement had every SIMD row peaking at 6 or 7 workers
+and falling back at 8, which reads as memory bandwidth saturating before the
+cores do. One cell was statistically significant (solid/wasm-simd, -6.8%,
+CI [-10.9, -2.7]) and all three pointed the same way.
+
+**It was orchestration, not bandwidth.** Once per-fragment allocation came out
+(next section), every cell peaks at 8 workers and solid/wasm-simd moved from
+2.75x @6 to 4.57x @8. The main thread could not feed eight workers while
+allocating two buffers per fragment; the eighth worker made the feed worse
+faster than it added compute.
+
+What survives is smaller and real: per-worker throughput still declines as
+workers are added, measured after the fix on int-wasm-simd —
+
+| workers | per-worker MPx/s |
+|---:|---|
+| 2 | 100, 102 |
+| 4 | 96, 97, 99, 100 |
+| 6 | 92, 94, 95, 95, 96, 97 |
+| 8 | 79, 80, 80, 81, 82, 82, 83, 84 |
+
+— about 20% from 2 workers to 8, evenly across all of them, which is a shared
+resource (L3 and memory bandwidth) rather than uneven scheduling. But it no
+longer outweighs the extra core, so 8 is the right default on this part.
+
+Worth carrying forward: **a plausible mechanism and a significant p-value are
+not the same as a cause.** Bandwidth explained the data perfectly well, and
+what settled it was fixing something else entirely and watching the effect
+disappear.
+
+### The finding that matters: speedup is inverse to kernel speed
+
+| kernel | sequential | speedup range |
+|---|---:|---|
+| int (JS) | 45–57 | **5.33–5.97×** |
+| int-wasm-scalar | 60–83 | 4.58–5.09× |
+| int-wasm-simd | 100–178 | **3.13–4.31×** |
+
+The slowest kernel scales best and the fastest scales worst, which is exactly
+what over-decomposition predicts: a faster kernel makes each fragment cheaper,
+so the fixed per-task cost — slicing, transfer, reassembly — is a larger share
+of it.
+
+**Do not read that as an argument for the slower kernel.** At 8 workers:
+
+| content | int | wasm-scalar | wasm-simd |
+|---|---:|---:|---:|
+| solid | 304 | 381 | **556** |
+| noise | 270 | 307 | **429** |
+| photo | 279 | 318 | **495** |
+
+SIMD scales worst and wins outright, every time. Scaling efficiency is a
+property of the ratio, not of the throughput, and only the throughput is what
+anyone converts images with.
+
+### Parallelism partly flattens the content effect
+
+Sequentially, content moves SIMD throughput by 1.77× (solid 177.6 vs noise
+100.5). At 8 workers the same gap is 1.30× (556 vs 429). The int kernel
+compresses too, 1.26× → 1.13×.
+
+Content acts through CLUT cache behaviour, and once eight workers are competing
+for shared cache and memory bandwidth, that shared bottleneck matters more than
+whether any one worker's access pattern is friendly. It does not vanish — solid
+is still fastest everywhere — but parallel figures understate how much content
+matters single-threaded. A benchmark that only ever reports parallel numbers
+would hide a 2.7× effect.
+
+### Odd worker counts cost nothing — the pull queue holds
+
+lcms divides one buffer evenly across N threads, so a count that does not
+divide the work leaves a ragged tail. We fragment into ~10 tasks per worker and
+pull from a queue, so nothing should care. Testing it needs care:
+
+**The obvious test is confounded.** Comparing mean efficiency at {3,5,7}
+against {4,6,8} makes odd look ~4 points better on any machine, penalty or not,
+because efficiency falls as workers are added and the odd set has the lower
+mean count. (This bench shipped with that mistake first and had to be
+re-analysed — hence `--out=`, so raw rows survive the analysis.)
+
+The local test is whether an odd point sits below the line joining its
+neighbours:
+
+| cell | w3 | w5 | w7 | mean |
+|---|---:|---:|---:|---:|
+| solid / int | +4.5% | −6.5% | −1.1% | −1.0% |
+| noise / int | −3.9% | −8.7% | −3.6% | **−5.4%** |
+| photo / int | −0.2% | −2.5% | −8.7% | −3.8% |
+| solid / wasm-scalar | +2.1% | +5.5% | −3.4% | +1.4% |
+| noise / wasm-scalar | +1.5% | +1.0% | −2.9% | −0.1% |
+| photo / wasm-scalar | −0.2% | +0.1% | +5.1% | +1.6% |
+| solid / wasm-simd | +2.4% | −2.3% | −4.5% | −1.4% |
+| noise / wasm-simd | −0.2% | +0.1% | +5.5% | +1.8% |
+| photo / wasm-simd | +0.6% | −9.7% | +4.4% | −1.6% |
+
+Signs are mixed and magnitudes sit inside the 5–10% run-to-run spread on
+parallel figures, so there is no ragged-tail penalty to find. **One exception
+worth naming rather than averaging away:** noise/int is negative at all three
+odd counts (mean −5.4%). One cell out of nine, and the only one with a
+consistent sign — not enough to claim a real effect, and enough that a future
+run should look at it again rather than treat the question as closed.
+
+### Where the variance actually lives — and it is not core placement
+
+The obvious suspect for 20%+ run-to-run spread on an SMT part is the OS putting
+two workers on the two logical threads of one physical core while another core
+idles. It is a good hypothesis and it is wrong here, which took two
+measurements to establish.
+
+**Within a run, placement is even.** `pool.workerStats()` reports each worker's
+own throughput (its pixels over its own reported compute time). Because
+fragments are PULLED rather than pre-assigned, a worker sharing a core would
+take fewer of them and run at roughly half rate — an obvious bimodal split.
+Across ten independent pool spin-ups at 8 workers:
+
+```
+worst within-run fastest/slowest ratio : 1.10x   (placement even in every run)
+total throughput spread across runs    : 23%
+```
+
+Never above 1.10×, when core-sharing would show 1.8–2.0×. What does happen is
+that **all eight workers speed up and slow down together** (one run 70–75
+MPx/s each, another 81–87) — machine-wide boost and thermal state, not
+placement.
+
+**Workers slow down together as the count rises**, which is the real scaling
+limit:
+
+| workers | per-worker MPx/s (int-wasm-simd) |
+|---:|---|
+| 2 | 95, 96 |
+| 4 | 87, 88, 89, 90 |
+| 6 | 81, 82, 83, 84, 85, 88 |
+| 8 | 74, 76, 76, 77, 78, 78, 79, 80 |
+
+Equal shares of a shrinking pie — the signature of a saturating shared
+resource, i.e. memory bandwidth, not of uneven scheduling.
+
+**But the variance is not in the conversion at all.** Splitting wall time into
+worker compute and everything else, over ten runs:
+
+```
+worker compute spread : 6%    <- the conversion itself, stable
+orchestration spread  : 53%   <- copy in, copy out, reassembly
+orchestration         : 25-37% of wall time at 8 workers
+```
+
+The conversion is the reliable part. The noise — and a quarter to a third of
+the wall clock — is **main-thread orchestration**: each fragment allocates a
+fresh `Uint8ClampedArray` and copies the source into it, and each result is
+copied back into the output. The main thread touches every pixel twice while
+the workers do the real work, and being allocation-heavy it moves with GC
+state, which is where the run-to-run spread comes from.
+
+That also explains two things noted separately above: why the fastest kernel
+scales worst (compute shrinks, orchestration does not), and why efficiency
+falls as workers are added.
+
+**The optimisation this points at is not more workers, it is fewer
+allocations.** That change has since been made and it is the largest single
+win in this document.
+
+#### The fix: one scratch pair per worker, reused for the whole batch
+
+Transfer DETACHES a buffer, so the main thread cannot simply keep one and send
+it again — which is why the original code allocated per fragment. The fix is to
+have the worker hand both buffers BACK on its reply: the pool keeps
+`scratchIn[i]` and `scratchOut[i]` per worker, sized once from the batch plan,
+and the worker converts into the supplied output array
+(`transformArray(..., outputArray)`) rather than allocating its own. Steady
+state allocates nothing at all, so GC has no reason to run until the batch is
+over.
+
+Peak throughput, same harness, medians before and after:
+
+| cell | before | after | change |
+|---|---:|---:|---:|
+| solid / int | 264.4 | 340.9 | +28.9% |
+| noise / int | 256.6 | 295.4 | +15.1% |
+| photo / int | 270.8 | 305.3 | +12.7% |
+| solid / wasm-scalar | 354.5 | 455.6 | +28.5% |
+| noise / wasm-scalar | 277.1 | 330.8 | +19.4% |
+| photo / wasm-scalar | 321.6 | 383.1 | +19.1% |
+| solid / wasm-simd | 489.9 | **819.1** | **+67.2%** |
+| noise / wasm-simd | 428.1 | 564.5 | +31.9% |
+| photo / wasm-simd | 423.1 | 624.5 | +47.6% |
+
+Mean +30%, output byte-identical in every cell. Orchestration fell from 25-37%
+of wall time to 17-26%, and the workers themselves got faster (aggregate 635 to
+740 MPx/s) because they were no longer competing with their own garbage
+collector. The largest gains land on the fastest kernels, which is the expected
+shape: the less time a fragment spends converting, the more the overhead around
+it matters.
+
+#### What is left: four copies per pixel
+
+Allocation is gone; copying is not. On the `int-wasm-simd` path every pixel is
+still copied four times:
+
+| # | copy | where |
+|---|---|---|
+| 1 | caller's image into the main-thread scratch | `slice.set(...)` in pool.js |
+| 2 | scratch into WASM linear memory | `memU8.set(input, inputPtr)` |
+| 3 | WASM linear memory back into a JS array | `output.set(outView, ...)` |
+| 4 | scratch into the caller's output array | `outputs[i].set(chunk, ...)` |
+
+Transfers between threads are free — they move ownership, not bytes — so all
+four are memory traffic that buys nothing.
+
+**A `SharedArrayBuffer` cannot be handed to WASM directly**: a kernel can only
+address its own linear memory. But the linear memory can BE shared —
+`new WebAssembly.Memory({initial, maximum, shared: true})` has a
+`SharedArrayBuffer` for its `.buffer`. Import that instead of letting the module
+define its own (today: `new WebAssembly.Instance(mod, {})`, with
+`exports.memory`), and the main thread can hold a view of a worker's actual
+WASM memory and write the fragment straight into the input region.
+
+That collapses four copies to two — the caller's data in, the results out — and
+even those go if the caller allocates images inside the shared memory. It also
+removes the scratch buffers and the transfers entirely.
+
+Requirements, none of them free: the WASM rebuilt with imported memory, a
+declared `maximum` (shared memories cannot grow freely), and cross-origin
+isolation in browsers, though not in Node. Synchronisation needs no atomics for
+the pixel data — worker *i* only ever touches region *i*, and dispatch/reply is
+already the handoff.
+
+This is the same "WASM memory must be imported, not internal" item listed under
+"What actually has to change" above, and it is worth revisiting: the 4-7% that
+made Model B look not worth building measured transfer-versus-copy in the POC
+and never counted copies 2 and 3.
+
+#### Which copies actually matter — and why this is a multicore fix only
+
+Copies 2 and 3 happen inside the worker, so they already parallelise: eight
+workers do eight of them at once. Only copies 1 and 4 sit on the main thread,
+one after another, for every fragment. **They are Amdahl's serial fraction.**
+
+Measured single-threaded on the same 4 MPx conversion (12 MB in, 16 MB out),
+timing the same `.set()` primitive the bridge uses:
+
+| kernel | call | equivalent copies | share |
+|---|---:|---:|---:|
+| int-wasm-simd | 38.2 ms | 1.1 ms | 3% |
+| int-wasm-scalar | 64.3 ms | 0.9 ms | 1% |
+| int | 86.8 ms | 1.1 ms | 1% |
+
+**Single-threaded there is nothing to win here.** 28 MB moves in about a
+millisecond — roughly 25 GB/s — against a conversion that takes 38 to 87 ms.
+Anyone tempted to optimise the WASM bridge for the single-core path should stop
+at this table.
+
+The multicore case is the same absolute cost against a much smaller wall clock.
+At 8 workers the conversion falls to about 4.8 ms while the copies stay at
+1.1 ms, so 1.1 / (4.8 + 1.1) is about 19% — which is where the independently
+measured 17-26% orchestration comes from. The copies did not get more
+expensive; everything else got cheaper.
+
+#### FUTURE WORK: shared memory — but not where it first appears
+
+Two changes are available and they are NOT the same size. Working out which
+copies each one removes is what separates them.
+
+**A. Imported shared `WebAssembly.Memory` — needs a recompile, worth ~3%.**
+
+Every kernel today declares its memory internally:
+
+```wat
+(memory (export "memory") 1)          ;; src/kernels/3d/tetra3d_simd.wat:65 and 7 others
+```
+
+and the loader instantiates with an empty import object
+(`new WebAssembly.Instance(mod, {})`), reading `exports.memory`. Whether memory
+is imported or module-defined is part of the module's binary structure, so
+**this cannot be done from the loader** — all eight `.wat` files must change to
+
+```wat
+(import "env" "memory" (memory 1 <max> shared))
+```
+
+and be rebuilt (`wabt` is already a devDependency). The loader then creates
+`new WebAssembly.Memory({initial, maximum, shared: true})` and passes
+`{env: {memory}}`. Hosts without cross-origin isolation cannot use shared
+memory at all, so both builds have to ship and be chosen at runtime.
+
+What it removes is copies **2 and 3** — JS array into linear memory and back.
+Those run INSIDE the worker, so they already parallelise, and single-threaded
+they measure about 3% of the call. Removing them takes ~3% off worker compute,
+which at 8 workers is ~2-3% end to end. Real, but small, for a toolchain
+change and a doubled build matrix.
+
+**B. Caller-supplied `SharedArrayBuffer` images — no recompile, worth ~19%.**
+
+The expensive copies are **1 and 4**, because they are the SERIAL ones: the
+main thread copies the caller's pixels into scratch, and copies results back
+out, once per fragment, while the workers wait. That is the ~19% derived above.
+
+If the caller's image and output live in a `SharedArrayBuffer`, both disappear
+— not by being made faster but by MOVING INTO THE WORKERS. Each worker takes a
+view at its fragment's offset, reads straight from the shared image, and writes
+its result straight into the shared output. The copies that remain are the ones
+already inside the worker, and they run eight at a time.
+
+**This needs no WASM change at all.** It is an API addition — accept SAB-backed
+image buffers — plus offset bookkeeping in the pool, which already knows every
+fragment's start and length.
+
+**Order of work, therefore: B before A.** The intuition that a WASM bridge is
+the thing to optimise gets this backwards; the bridge copies were never the
+expensive ones, because they were already parallel. It is also why the 4-7% POC
+figure misled — it was measured before the serial fraction dominated, and
+against the copies that scale rather than the ones that do not.
+
+### Repeatability, and how to compare two builds
+
+Sequential baselines reproduce to about 1% (solid/simd: 180.3, 179.3, 177.6).
+**Parallel peaks do not.** The same cell (solid/int-wasm-simd, 8 workers,
+isolated, median of 5) has produced 556, 487, 442, 489, 495 and 510 MPx/s
+across sessions — a spread of about 25%, and even a 5-repetition median moves
+3% between sessions.
+
+So a single parallel figure cannot resolve anything smaller than ~10%, and
+comparing two builds by running one then the other is worse than useless:
+
+> A blocked A/B (all of build A, then all of build B) confounds the build with
+> TIME. In one 6-pair run here, the first two pairs were low for *both* arms
+> and the last four high for *both* — roughly 10% of warm-up and thermal drift
+> across the session. Run blocked, all of that lands on whichever arm went
+> first. That is exactly how a 6% "regression" was once reported here that did
+> not exist.
+
+**Interleave and pair instead.** Alternate A, B, A, B…, take the difference
+within each pair, and report the mean with a confidence interval. Each pair
+experiences the same machine state, so the drift cancels. Measuring the cost of
+the pause check, in-flight accounting and per-dispatch cancellation check this
+way gave:
+
+```
+paired mean difference: -1.08%   (sd 5.63, n = 6)
+95% CI: -5.58% to +3.42%   ->   spans zero, no detectable cost
+```
+
+Blocked, the same comparison had suggested a 6% loss.
+
+## We support multicore, but it is not free
+
+In C you spin up threads. They share one address space, so a LUT is **one
+copy** no matter how many threads read it, and adding a thread costs a stack.
+
+JavaScript has no such thing by default. A worker is closer to a process than a
+thread: nothing is shared, and everything a worker needs has to be *copied in*.
+So the same LUT ends up resident once **per worker**, and the cost of going
+parallel is paid in memory as well as in scheduling.
+
+That is the single largest architectural difference between this engine and
+lcms on this axis, and it is invisible unless you go looking — which is why
+`pool.memoryReport()` exists.
+
+### The number
+
+A 33-point CMYK LUT is about **1.4 MB**, because the int path keeps two tables:
+
+| table | type | size |
+|---|---|---|
+| `lut.CLUT` | `Float64Array`, 33³ × 4 | 1,149,984 B |
+| `lut.intLut.CLUT` | `Uint16Array`, the same grid | 287,496 B |
+| | **per worker** | **~1.4 MB** |
+
+Multiply by the pool. On an 8-core machine one transform is **~11.5 MB**
+resident across the workers, for a table that lcms would hold once:
+
+```
+pool 8: 8 workers (6 holding), 1 transform(s), 6 copies, 8.2 MB resident
+        — 1.4 MB per worker that holds them all
+```
+
+("6 holding" is not a bug. Workers pull from a queue, so a small batch may
+never reach the last few, and a worker is only sent a transform when it is
+handed a task that needs it.)
+
+On the WASM kernels there is a **third** copy: `wasm_loader.js` does
+`memU16.set(intLut.CLUT, lutPtr >> 1)`, uploading the u16 table into that
+worker's linear memory. So `int-wasm-simd` — the default for `int8` +
+`buildLut` — costs roughly 1.7 MB per worker, and only two thirds of that is
+visible to `memoryReport()`.
+
+### What follows from it
+
+**Reuse Transforms; do not rebuild them.** Worker cache keys are *assigned*,
+not derived from content, so two Transforms built from the same profiles are
+two entries and two copies. That is deliberate — a content hash has to cover
+every input that changes what the worker builds, forever, and getting that list
+wrong silently serves one Transform another one's pipeline, which is a much
+worse failure than using more memory. The cost is now yours to manage, and
+managing it means keeping one Transform per conversion rather than making a
+fresh one per image.
+
+**The per-worker cache is bounded.** Each worker keeps `transformsPerWorker`
+(default 8) transforms, evicted least-recently-used, so a long-running process
+cannot accumulate them without limit. Raising it trades memory for not
+re-shipping a transform that comes back around — 8 workers × 8 transforms ×
+1.4 MB is ~92 MB, so raise it deliberately.
+
+**Release what you have finished with.** `transform.forgetWorkers()` drops one
+Transform from every worker without disturbing the pool that other Transforms
+are using; `transform.releaseWorkers()` tears the pool down entirely. In an app
+holding the pool open (`idleTimeoutMs: 0`), LRU alone will not reclaim a
+finished transform until eight more push it out.
+
+**Nothing is lost if a copy disappears.** The worker's copy is a *cache* and
+the Transform is its source of truth, so eviction, an explicit forget, an idle
+timeout or a worker dying all just mean the next call re-registers. The only
+consequence is time.
+
+### Where `SharedArrayBuffer` would and would not help
+
+The LUT is read-only after it is built, which makes it a textbook candidate for
+`SharedArrayBuffer`: a worker does `new Uint16Array(sab)` and reads it exactly
+like any typed array, the view costs a few dozen bytes, and read-only means no
+`Atomics`. That removes the JS-side copies outright.
+
+It does **not** remove the WASM copy. Each worker instantiates its own module
+with its own linear memory, so `int-wasm-simd` would still upload the table per
+worker. Sharing that needs `WebAssembly.Memory({shared: true})` with
+per-worker scratch regions partitioned inside one shared memory — a real
+project, not a flag.
+
+Worth checking first, and possibly worth more: on the wasm path the f64 CLUT
+may be dead weight in the worker once `intLut` exists. Dropping it there would
+be about 80% off the resident figure — larger than SAB would deliver on that
+path — for much less work.
+
+**And the bigger SAB prize is the image, not the LUT.** Removing per-fragment
+allocation alone bought a mean +30% and up to +67%; what remains is four copies
+per pixel, two of which are into and out of WASM linear memory. Sharing the LUT
+saves memory; sharing the IMAGE — by importing a shared `WebAssembly.Memory`
+rather than letting each module define its own — would save time, and attacks
+the term that now limits scaling. See "What is left: four copies per pixel".
+
+**How much time, measured — and then measured again, differently.** Fitting
+`T(w) = S + P/w` to pooled runs gives a serial term of **0.31 ms/MPx for the
+matrix-shaper kernel and 0.56 for the CLUT**, capping the pool at low single-
+figure GPx/s. About half of `S` is the same order as main-thread `memcpy` at
+32 GB/s, and the first version of this paragraph concluded that deleting the
+copies would buy **+30% at 8 workers**.
+
+**A spike says +5–13%.** See below — the copies turn out to be largely
+interleaved with worker execution, so removing them frees time that was already
+hidden. Full working, plus a fragment-size sweep showing the current default is
+already at the optimum, is in
+[MatrixShaperKernel.md](./MatrixShaperKernel.md#what-the-overhead-actually-is).
+
+### MEASURED, AND NOT BUILT: SharedArrayBuffer is worth ~5–13%, not ~30%
+
+`bench/sab_spike/` reimplements the pool's dispatch loop in the crudest way
+that is still fair — a pull queue, real workers, the real matrix-shaper kernel,
+output checked byte-for-byte — so the delivery model could be measured before
+SAB was threaded through cancellation, eviction, scratch reuse and the worker
+protocol. That was the point of building it: **if the answer was small, the work
+would not get done.** The answer was small.
+
+Four models, 4.2 MPx photo, 8 workers, `*prophoto → *sRGB`, paired so that
+drift hits both arms:
+
+| model | int8 | int16 |
+|---|---:|---:|
+| **transfer** (today) | baseline | baseline |
+| **shared** — both buffers already SAB | 1.09–1.19× | — |
+| **half-shared** — per-fragment copy in, shared out | **1.05, 1.13, 1.13×** | **1.05, 1.00×** |
+| **shared + bulk copy-in** — plain-array caller | 0.83–0.91× | — |
+
+Three findings, none of them what was predicted:
+
+**1. The gain is 5–13% at int8 and nil at int16.** The projection in this
+document was +30% at int8 and +50% at int16, derived from the fitted serial
+term `S`. That derivation does not survive contact with its own inputs: for int16 the measured copy floor (0.646 ms/MPx) is
+*larger* than the fitted `S` (0.429), which cannot be true of a genuinely
+serial cost. **The main-thread copies are mostly interleaved with worker
+execution** — the main thread copies fragment N+1 while the workers are still
+chewing on fragment N — so removing them frees time that was already hidden.
+`S` is contention and per-task cost, not memcpy.
+
+**2. int16 gains less, not more, despite moving twice the bytes.** Same
+mechanism, seen from the other side: at int16 each fragment is more work, so
+the main thread has *more* idle time to hide its copies in. The copies grow, the
+place to hide them grows faster.
+
+**3. The naive design is a regression.** A caller with a plain
+`Uint8ClampedArray` — canvas `ImageData`, every image decoder — cannot have
+their buffer adopted into a SAB after the fact. Copying the image in up front
+measures **0.83–0.91×**, i.e. 9–17% SLOWER than today, precisely because that
+bulk copy is serial and not interleaved. Only the output side is ours to
+allocate, hence "half-shared", which is where the 5–13% comes from.
+
+### Why it was not built
+
+The measured upside is 5–13% on one bit depth, and the spike's transfer
+baseline is already faster than the real pool (it has none of the cancellation,
+stats or promise machinery), so against the real pool the same absolute saving —
+0.03 to 0.09 ms/MPx — is a smaller fraction still.
+
+Against that:
+
+- **Two delivery paths, forever.** `SharedArrayBuffer` is not always available,
+  so the transfer path cannot be deleted. Both would need testing on every
+  change to the pool.
+- **A deployment blocker on the web.** Cross-origin isolation (COOP/COEP)
+  breaks third-party embeds, and is not something a library can ask for.
+- **Invasive where it is riskiest.** The worker protocol, scratch lifecycle and
+  cancellation all assume transfer semantics.
+- **Imported shared WASM memory** — needed to remove the *second* copy pair,
+  inside the worker — additionally requires disabling `compactIfNeeded`, since
+  a shared memory cannot be re-instantiated out from under the workers holding
+  it. That is the item 2/3 work above, for a copy pair measured at 7–9% of the
+  kernel call and divided by the worker count.
+
+**What would change the answer:** more cores. At 8 workers the kernel's serial
+and parallel terms are near enough equal; at 16 or 32 the serial fraction
+dominates and the copies stop being hidden. The spike is kept so the question
+can be re-asked on that hardware rather than re-argued.
+
+
+
+### Measuring it
+
+```js
+const pool = require('jscolorengine/src/pool');
+
+pool.memorySummary();   // one line per pool, human-readable
+pool.memoryReport();    // structured: workers, transforms, residencies, bytes
+```
+
+`memoryReport()` counts what the workers reported holding after registration,
+so it covers LUTs. It excludes each worker's own heap, WASM linear memory, and
+slices in flight — it is a floor, not a total. Pass `multicore: {debug: true}`
+to log every ship, eviction and teardown as it happens.
+
+## Still open
+
+The questions the design stage raised that the measurements above did not
+settle. The ones they did settle — per-task overhead, whether Mode 2 replaces
+Mode 1, the copy cost that Model B would have removed — are answered in place
+above.
+
+1. **Do the JS int kernels scale as well as the WASM ones?** 4 × 73 MPx/s
+   would put pure JS level with single-threaded WASM SIMD, which would be an
+   interesting result on its own.
+2. **Does fixed-slot allocation actually reduce jitter?** The argument for it
+   is smoothness rather than throughput, so it has to be judged on p95/p99 task
+   latency, GC pause count and peak RSS — not on mean MPx/s, which may show no
+   difference at all.
+3. **How stable is a calibration across machines?** Both constants are machine
+   properties, so `autoTune()` wants running on a spread of hardware — a laptop
+   on battery, a 3D V-Cache desktop, a many-core server, a phone — to check the
+   *rule* transfers even where the *numbers* do not. If the derived
+   `tasksPerWorker` lands outside 4–16 anywhere, the model is missing a term.
+4. **How much do heterogeneous cores widen the variance, and does SIMD suffer
+   more?** Everything here is from a homogeneous Zen 4 part. On an Intel P/E or
+   Apple Silicon machine the prediction is that core-type variance is *larger*
+   for the SIMD kernel than the JS one, because E-cores have narrower vector
+   ports — which would mean SIMD needs deeper over-decomposition on hybrid
+   hardware, the reverse of what was measured here. A calibration that lands
+   mostly on E-cores is also the likeliest way for `autoTune` to derive a wrong
+   constant.
+5. **Browser versus Node**, once the worker bundle exists: worker spin-up is
+   slower, and a tab's memory ceiling is lower than a server's, which matters
+   most for the pool's dominant cost — a LUT copy per worker.

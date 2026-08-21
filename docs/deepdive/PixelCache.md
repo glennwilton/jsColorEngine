@@ -29,537 +29,10 @@ plus copy with no interpolation at all.
 must be opt-in, and it must never quietly change the numbers we
 publish.
 
-Which content classes win was, until measured, assumed — wrongly. See
-"Measured" immediately below.
-
-## Measured — accuracy path, 2026-08-17
-
-`node bench/pixel_cache/cache_bench.js` — sRGB → AdobeRGB,
-`buildLut: false`. Hit rate is the transferable figure; the MPx/s
-columns describe this path only.
-
-### Synthetic content, 250k pixels
-
-| content | cache off | slots=1 | slots=32 |
-|---|---:|---:|---:|
-| noise | 7.75 | 0.0 % · 0.82x | 0.0 % · 0.82x |
-| gradient | 9.01 | 75.0 % · 1.85x | 75.0 % · 1.78x |
-| checkerboard | 9.06 | 0.1 % · 0.76x | 100 % · 3.25x |
-| palette8 | 9.10 | 12.5 % · 0.86x | 87.5 % · 1.94x |
-| solid | 8.83 | 100 % · 3.39x | 100 % · 3.25x |
-| near-miss (1 LSB apart) | — | 0 % | 83 % |
-
-### Real images — whole frame, full resolution
-
-Unsplash photographs and one Library of Congress poster, 7.6–19.4 MP,
-every pixel converted:
-
-| image | pixels | cache off | slots=1 | slots=32 |
-|---|---:|---:|---:|---:|
-| beach | 11.9 M | 4.92 | 1.0 % · 0.82x | 3.2 % · 0.84x |
-| sunflower | 7.6 M | 8.38 | 10.8 % · 0.85x | 19.4 % · 0.87x |
-| strawberries | 10.8 M | 8.74 | 25.4 % · 0.93x | 36.9 % · 0.99x |
-| photo of text page | 18.7 M | 4.46 | 13.0 % · 0.94x | 41.5 % · 1.05x |
-| poster illustration | 19.4 M | 4.60 | 31.3 % · 1.01x | 67.4 % · 1.22x |
-
-**Conclusion: the original hypothesis was right.** Photographs run
-3–41 % and land between break-even and a 16 % loss. The one clear win
-is the flat-colour illustration at 67 % and 1.22x. The cache is a
-content-class feature that pays on graphic and synthetic content and
-costs on photographic content, exactly as the design notes argued.
-
-### Two measurement errors that briefly said otherwise
-
-Recorded because both were convincing while they lasted.
-
-**1. The bundled sample images are not photographs.** A first pass over
-`samples/images/` (`face`, `fruit`, `skin`) showed 59–83 % hit rates
-and 1.2–1.9x, and this document briefly claimed the photograph
-assumption had been "overturned" — that a keyed table catches
-*recurrence* rather than adjacency and therefore wins on photos too.
-Those three are AI-generated/adjusted images with large flat
-backgrounds and unnaturally smooth gradients. On real camera output the
-effect largely disappears. The recurrence-vs-adjacency mechanism is
-real (the `near-miss` row above shows 0 % → 83 %); what was wrong was
-the claim that natural photographs supply enough of it.
-
-**2. Capping pixels crops rather than samples.** `--pixels` takes the
-first *n* pixels, which on a 19 MP frame is the top 1–3 % — usually
-sky or background, and nothing like the whole image. The beach photo
-reads **27.8 %** resized-to-small, **7.5 %** as a 250k top crop, and
-**3.2 %** over the full frame. Striding would sample evenly but destroy
-adjacency, which is precisely what the `slots=1` column measures, so
-the bench now warns when it crops and the answer is to raise
-`--pixels`, not to stride.
-
-**Still not a corpus.** Five images. Missing: screenshots and UI
-captures, halftone/dithered content, and scanned or print-origin
-material — the classes most likely to *favour* the cache. And note the
-uncached column is itself content-sensitive (4.46–8.74 MPx/s), so the
-pipeline was never truly content-neutral either.
-
-### Miss-path cost, and why table size is free
-
-Noise never hits, so its throughput is the tax on its own:
-
-| | MPx/s | vs off | key memory |
-|---|---:|---:|---:|
-| cache off | 7.91 | — | — |
-| slots=1 | 6.46 | −18.4 % | — |
-| slots=32 | 6.17 | −21.9 % | 1 KB |
-| slots=256 | 5.93 | −25.1 % | 6 KB |
-| slots=1024 | 5.98 | −24.3 % | 24 KB |
-| slots=4096 | 6.05 | −23.4 % | 96 KB |
-
-**The cost is the check, not the table.** Going from 32 to 4096 slots —
-a 96× larger working set — changes nothing measurable; the numbers past
-256 sit inside run-to-run noise. What costs is doing a lookup at all:
-the extra stage call, the hash, and the compare. Single-entry is
-cheaper (−18 %) only because it skips the hash and indexing.
-
-The L1-pressure worry in the design notes above does not apply here,
-and the reason is structural rather than a matter of degree: this is a
-full JS pipeline that allocates several arrays per pixel and dispatches
-every stage through `.call()`. Memory traffic and allocation already
-dominate, so a few KB of table is invisible. A hot kernel is the
-opposite regime — tight integer loops streaming a large CLUT with
-nothing to hide behind — and there the same table genuinely would
-compete. The argument was imported from the wrong path, not merely
-overstated.
-
-### Where the tax actually goes (and it is not the hash)
-
-~18 % looks steep for "a hash and a lookup", so it was decomposed by
-adding plain pass-through stages to the same pipeline:
-
-| | MPx/s | vs baseline |
-|---|---:|---:|
-| baseline, 7 stages | 7.80 | — |
-| + 1 no-op stage | 7.56 | −3.1 % |
-| + 2 no-op stages | 7.29 | −6.5 % |
-| cache slots=1 (no hash at all) | 6.44 | −17.4 % |
-| cache slots=32 (hashed) | 6.29 | −19.4 % |
-
-Roughly: **6.5 points is bare stage dispatch**, ~8 points is
-bookkeeping (counters, key writes, `stage.step` writes, copying the
-value), and **the hash is about 3 points** — the gap between slots=1,
-which does no hashing whatsoever, and slots=32.
-
-So the hash is the cheapest part, and the dominant cost is structural:
-in this architecture every stage is a dynamic `.call()` passing arrays
-around, so *adding two stages costs 6.5 % before they do anything*.
-That is the price of the plugin shape — the cache can be declined,
-switched off at zero cost, and deleted without trace, precisely because
-it is ordinary stages rather than something welded into the walk.
-
-One fix came out of this: the store stage originally did
-`colour.slice()`, allocating on every miss — the common case for
-photographic content. Reusing the slot's array took slots=1 from
-−17.4 % to −14.8 % and slots=32 from −19.4 % to −17.5 %. Worth having,
-but it confirms there is no single large win hiding here; the cost is
-spread thin.
-
-Further reduction would mean a build-time variant with the counters
-compiled out, or folding the check into the walk instead of using
-stages — trading the properties above for a couple of points.
-
-The hash itself was timed in isolation at **1.35 ns/pixel** for three
-channels. Restructuring it as three independent multiplies combined at
-the end — on the theory that the chained form is latency-bound — came
-out *slower* (1.50 ns). It is not a dependent-chain problem, and there
-is nothing to win there. Recorded so nobody tries it twice.
-
-### What this implies for a kernel port
-
-This changes the earlier conclusion, which was too pessimistic. An
-unrolled kernel loop has no stage dispatch at all, so the 6.5 points
-that dominate here simply do not exist, and most of the bookkeeping
-(the `stage.step` writes, the separate store stage, the counters) goes
-with it. The check reduces to: build the key from bytes already loaded
-for interpolation, hash, compare, branch — roughly 4–5 ns.
-
-Against that, the per-pixel budget shrinks: the int 3D kernel runs at
-~73 MPx/s (13.7 ns/pixel) and the 4D at ~48 MPx/s (20.8 ns), versus
-~125 ns here. A rough model — *estimates from decomposition, not
-measurements*:
-
-| | miss cost | hit cost | break-even | ceiling |
-|---|---:|---:|---:|---:|
-| accuracy path (measured) | 1.21× | 0.31× | ~38 % | 3.2× |
-| 3D int kernel (modelled) | ~1.33× | ~0.52× | ~41 % | ~1.9× |
-| 4D int kernel (modelled) | ~1.22× | ~0.34× | ~25 % | ~2.9× |
-
-So the kernel port is *not* obviously a loser: break-even lands in
-much the same place, and the **4D/CMYK kernel is the most attractive
-target of all** — the heavier the per-pixel work, the better the cache
-looks, exactly as the pipeline-weight measurements show on the
-accuracy path.
-
-Two caveats before anyone builds it. These are models, not
-measurements — the honest next step is a POC on one kernel rather than
-more arithmetic. And register pressure is unmodelled: the cache state
-must stay live across the interpolation cascade, where
-[JitInspection.md](./JitInspection.md) already found pressure binding,
-which is exactly what the run-scan restructure earlier in this document
-exists to address.
-
-### POC result — the kernel cache is much better than this path
-
-Built and measured: `bench/pixel_cache_kernel_poc/`, a DeviceLink
-CMYK→CMYK against `tetrahedralInterp4DArray_4Ch_intLut_loop`, with the
-cached variant produced by source-transforming the real kernel so the
-cascade is identical to production.
-
-| content | plain | cached (64 slots) | change | hit rate |
-|---|---:|---:|---:|---:|
-| cmyk noise | 26.9 | 24.6 | −8 % | 0 % |
-| photo → CMYK | 31.8 | 46.6 | +47 % | 57 % |
-| photo → CMYK | 27.8 | 41.5 | +49 % | 53 % |
-| poster → CMYK | 33.0 | 59.6 | +81 % | 73 % |
-| cmyk gradient | 32.7 | 72.2 | +121 % | 75 % |
-| cmyk solid | 32.3 | 151.4 | +368 % | 100 % |
-
-Byte-identical output in every case. **Break-even is ~10 %**, against
-~38–40 % on the accuracy path — so the modelled ~25 % was pessimistic
-and the earlier "the kernel port is questionable" conclusion was wrong.
-
-Why it is so much better:
-
-1. **No stage dispatch** — the largest single component of the
-   accuracy-path tax does not exist in an unrolled loop. Miss tax 8 %.
-2. **The key is one int32.** 4 × u8 packs exactly, so the check is a
-   single `===` and the hash a single `imul`, against three float
-   compares and three chained imuls.
-3. **A hit skips proportionally more** — the tetrahedral cascade is the
-   bulk of the per-pixel cost.
-
-**The most important finding is about the data, not the code.** The same
-photographs that hit 3–41 % as RGB hit **43–70 % once separated to
-CMYK**, because the RGB→CMYK LUT quantises many source colours onto the
-same output. So CMYK wins twice over: heavier per-pixel work *and*
-inherently more repetitive data. That is the strongest argument yet for
-scoping the cache to CMYK/4D.
-
-**Table size matters here, unlike on the accuracy path**, because the
-kernel streams a large CLUT and competes for L1: 16–256 slots all cost
-−7 to −8 %, but 1024 (12 KB) drops to −17 %. Use 64–256. The
-L1-pressure reasoning from the design notes was right for kernels all
-along — it was only wrong when applied to the allocation-heavy accuracy
-path.
-
-Caveats: 8-bit only (the 32-bit key does not generalise to u16 or
-float), no alpha exercised, one kernel on one machine. A POC, not a
-feature.
-
-### How lcms2 does it, and what we took from it
-
-Worth reading the reference implementation once the design was settled,
-to see where two independent attempts agreed. `CachedXFORM` in
-`cmsxform.c`:
-
-```c
-typedef struct {
-    cmsUInt16Number CacheIn [cmsMAXCHANNELS];   // 16 ch x u16 = 32 bytes
-    cmsUInt16Number CacheOut[cmsMAXCHANNELS];   // 32 bytes -> 64 total
-} _cmsCACHE;
-
-accum = p->FromInput(p, wIn, accum, ...);              // unpack to u16
-if (memcmp(wIn, Cache.CacheIn, sizeof(Cache.CacheIn)) == 0)
-     memcpy(wOut, Cache.CacheOut, sizeof(Cache.CacheOut));
-else { p->Lut->Eval16Fn(wIn, wOut, p->Lut->Data);
-       memcpy(Cache.CacheIn,  wIn,  sizeof(Cache.CacheIn));
-       memcpy(Cache.CacheOut, wOut, sizeof(Cache.CacheOut)); }
-output = p->ToOutput(p, wOut, output, ...);            // pack
-```
-
-**Where we agreed, independently:**
-
-- The cache sits between unpack and pack — on the *unpacked* pixel,
-  with format conversion still running every pixel. That is exactly the
-  device-boundary position argued for above.
-- Variants are selected at transform creation, not tested in the loop:
-  lcms swaps between `PrecalculatedXFORM`, `CachedXFORM` and the two
-  gamut-check equivalents via a function pointer.
-- Float transforms get no cache at all (`dwFlags |= cmsFLAGS_NOCACHE`).
-
-**Where we differ:**
-
-- **lcms caches one entry only.** No table, no hash. Our measurements
-  say that is the weak form — single-entry managed 1–31 % on
-  photographs where a keyed table reached 43–70 % in CMYK — so the
-  table is a genuine step past the reference, not a re-implementation
-  of it.
-- **Fixed-size `memcmp` over all 16 channels**, which is why `wIn` is
-  zeroed first: unused channels are zero on both sides, so one
-  constant-size compare (two SIMD ops) serves any channel count with no
-  loop and no branch. We specialise per channel count instead.
-- **The cache is stack-local per call** (`memcpy(&Cache, &p->Cache, …)`,
-  never written back), making it thread-safe by construction. Ours
-  persists on the Transform — better across many small calls,
-  irrelevant for one whole-image call.
-
-**What we took: seeding.** lcms initialises its entry at transform
-creation by evaluating the all-zero pixel, so the cache always holds a
-real `(key, value)` pair and has no empty state at all. Adopted here,
-and it earns more than tidiness:
-
-- The `slotValid` array is gone — one load removed from every lookup.
-- The single-entry `hasPrevious` flag is gone. Measured: `slots=1`
-  improved on every content class (skin.png 1.03× → 1.25×, fruit 1.20×
-  → 1.24×, noise 0.82× → 0.87×).
-- In the **kernel** it removes a real problem. With a packed 4×8-bit
-  CMYK key there is no impossible int32 sentinel — CMYK(255,255,255,255)
-  is exactly `-1` — so the first POC had to keep keys in a
-  `Float64Array` initialised to `NaN`. Seeded, keys go back to
-  `Int32Array`: a quarter of the memory (256 slots: 1 KB vs 4 KB) and
-  an integer compare instead of a double one.
-
-Filling *every* slot of a table with the same seed pair is safe, not
-just the slot it hashes to: a given key only ever probes one slot, so
-duplicates elsewhere are unreachable by the seed key, and any other key
-landing there compares unequal and misses. The copies are simply
-overwritten as real entries arrive.
-
-The cost is one extra key write per miss. With no validity flag a
-half-written entry is indistinguishable from a good one, so the key can
-no longer be written by the check and the value by the store — a stage
-throwing between the two would leave a new key beside a stale value and
-silently corrupt every later hit on it. Both halves are now written
-together in the store stage, which costs about 1 point on the pure-miss
-path and is worth it.
-
-### Profiling mode — measure hit rate without doing the maths
-
-`setPixelCacheProfiling(true)` answers "is this worth enabling for *my*
-content?" without the caller needing to know anything about the
-internals.
-
-The implementation is a single number. A miss normally sets
-`stage.step = 1` and walks on into the maths; in profiling mode it sets
-`endStep - 1`, jumping straight to the STORE stage. No NOP stage, no
-splice, no second pipeline — the pipeline is untouched and the mode is
-a **runtime toggle**.
-
-**Hit accounting stays bit-identical**, and the reason is structural:
-the key depends only on the stages *before* the check, and those still
-run. Only the value-producing stages are skipped. Measured on palette
-content, normal and profiling report the same hits and lookups to the
-integer.
-
-Speed-up is inversely proportional to hit rate, which is the useful way
-round:
-
-| content | hit rate | normal | profiling | speed-up |
-|---|---:|---:|---:|---:|
-| noise | 0 % | 6.2 | 18.8 | **3.0×** |
-| gradient | 75 % | 14.2 | 24.8 | 1.8× |
-| solid | 100 % | 26.9 | 27.5 | 1.0× |
-
-Profiling is fastest exactly when the content is worst for the cache —
-i.e. when the answer is "don't bother" and you want it quickly. When it
-is slow, the normal run was already fast and you have your answer
-anyway.
-
-**The output is meaningless while it is on.** The cached values are
-whatever was in flight, not converted colour, so the cache is flushed on
-every mode change in *both* directions. Without that, profiling and then
-transforming for real would silently return garbage from every hit —
-which is why the toggle owns the flush rather than leaving it to the
-caller.
-
-### Scope decision (2026-08-19): four loops, nothing else
-
-**Targeted RGB/CMYK caching on the common 8-bit path — not a generic
-cache.** JavaScript performance is won by narrowing, not by generality,
-so the cache goes only where it demonstrably pays and the affected
-surface stays as small as possible:
-
-| in scope | file |
-|---|---|
-| `tetrahedralInterp3DArray_3Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:269` |
-| `tetrahedralInterp3DArray_4Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:665` |
-| `tetrahedralInterp4DArray_3Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:900` |
-| `tetrahedralInterp4DArray_4Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:1149` |
-
-Four loops. Everything else is explicitly **out**: 1D and 2D (their
-input space is enumerable — precompute instead, see below), ND (float,
-proof-oriented, and the key does not pack), all float variants, every
-WASM and SIMD variant (a scalar check serialises what f32x4
-vectorises), and the matrix-shaper path (headed for ~4 ns/pixel, where
-a 4–5 ns check would double the cost).
-
-These four are chosen because they are the **real-world common paths** —
-8-bit RGB and CMYK image conversion — and because 8 bits × 3 or 4
-channels packs into a single int32, which is what makes the check one
-`===` and one `imul`. That property is the whole reason this is cheap;
-it does not survive to u16 or float, and neither should the feature.
-
-**Still to measure: the 3D case.** Only 4D has a POC
-(break-even ~10 %, +47 % to +169 % on real content). 3D was modelled at
-~41 % break-even and never measured, and RGB content hit rates are more
-variable than CMYK — beach photo 3 %, text page 41 % at 32 slots. The
-same POC should be run on `tetrahedralInterp3DArray_4Ch_intLut_loop`
-(RGB → CMYK, a heavily used soft-proof and print-prep path with
-4-channel output) before 3D ships alongside 4D.
-
-### Which kernels are even candidates
-
-Not all of them, and the rule is sharper than "the heavy ones":
-
-> **A cache is only interesting where the input space is too large to
-> precompute *and* the per-pixel work is high.**
-
-At 8 bits per channel the whole input space is enumerable for small
-dimensions, and a complete table beats any cache:
-
-| input | distinct inputs | verdict |
-|---|---:|---|
-| 1D (Gray) | 256 | **Never cache.** Precompute all 256 outputs — that is just a LUT, and cheaper than one hash. |
-| 2D (Duotone) | 65,536 | **Never cache.** A complete table is 64 K entries; precompute it. |
-| 3D (RGB) | 16.7 M | Marginal. Too big to enumerate (this is the 2²⁴ joke above), but per-pixel work is only moderate — modelled break-even ~41 %. |
-| 4D (CMYK) | 4.3 G | **The target.** Cannot be enumerated, heaviest interpolation, modelled break-even ~25 %. |
-| ND (5–15 ch) | astronomical | Also attractive — `KernelND` runs the per-pixel interpolator with an allocation per pixel, so it is the slowest path in the engine. |
-
-Output channel count pushes the same way: 4 output channels is more
-interpolation per pixel than 3, so CMYK and N-channel *destinations*
-improve the ratio too. A DeviceLink CMYK→CMYK is the ideal case —
-4D in, 4 out, and print workflows are exactly where flat graphic
-content lives.
-
-**RGB matrix-shaper needs no cache, now or later.** That path is headed
-for the fused WASM kernel at 250–257 MPx/s
-([MatrixShaperKernel.md](./MatrixShaperKernel.md)) — about 4 ns per
-pixel. A 4–5 ns check would more than double the cost of the thing it
-was meant to accelerate.
-
-Which is the general warning: **the better a kernel gets, the worse the
-cache looks on it.** The two efforts pull against each other, so the
-cache belongs only on paths that are expensive for irreducible reasons
-— high-dimensional interpolation — not on paths that are merely
-unoptimised yet.
-
-Scoping to 4D/ND does *not* remove the case for codegen, as first
-thought. Even two dimensions still multiply out across data type (u8 /
-u16 / float), channel count and slot size — and crucially the
-**injection point and key method differ per data type**, which cannot
-be a runtime test without taxing the loop. See
-"Validated by the POC" under Codegen below.
-
-### Hit rate vs table size — whole frames
-
-| image | 1 | 16 | 32 | 64 | 128 | 256 | 1024 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| text page | 13.0 % | 35.2 % | 41.5 % | 47.7 % | 56.0 % | 63.7 % | 79.6 % |
-| strawberries | 25.4 % | 35.3 % | 36.9 % | 38.7 % | 40.4 % | 41.8 % | 48.7 % |
-| poster | 31.3 % | 62.3 % | 67.4 % | 70.5 % | 73.5 % | 76.9 % | 83.6 % |
-| sunflower | 10.8 % | 17.5 % | 19.4 % | 21.3 % | 22.9 % | 24.6 % | 33.8 % |
-| beach | 1.0 % | 2.4 % | 3.2 % | 4.4 % | 6.0 % | 8.0 % | 13.0 % |
-
-**Hit rate never plateaus.** It is still climbing at 1024 slots on every
-image — these are 8–19 MP frames, so even 1024 entries is a tiny window
-over the colours present. Since the cost is flat, **a bigger table is
-strictly better**, bounded only by memory you care about.
-
-### The headroom nobody is using
-
-Counting distinct colours per image explains why the numbers above are
-so modest — and it is not because photographs lack repetition:
-
-| image | pixels | unique colours | perfect-cache ceiling | actual @32 | @1024 |
-|---|---:|---:|---:|---:|---:|
-| text page | 18.7 M | 0.02 M | 99.9 % | 41.5 % | 79.6 % |
-| poster | 19.4 M | 0.18 M | 99.1 % | 67.4 % | 83.6 % |
-| strawberries | 10.8 M | 0.47 M | 95.6 % | 36.9 % | 48.7 % |
-| sunflower | 7.6 M | 0.31 M | 96.0 % | 19.4 % | 33.8 % |
-| beach | 11.9 M | 0.88 M | 92.6 % | 3.2 % | 13.0 % |
-
-**Every image could hit 92–99.9 %.** Even the beach photo repeats
-itself constantly — 11.9 M pixels drawn from 0.88 M colours. What the
-cache actually delivers is 3–67 %, so the losses are almost entirely
-*conflict misses* in a small direct-mapped table, not a shortage of
-repetition in the data. Associativity or a much larger table would
-recover far more than tuning anything else here.
-
-Verified independently: a standalone direct-mapped simulation, sharing
-no code with the engine, reproduces the engine's hit rate to the digit
-on every image at both 32 and 1024 slots.
-
-**Which makes the limit case obvious.** Hit rate never plateauing does
-suggest an easy fix: just use 16,777,216 slots and cover every possible
-8-bit RGB colour. 100 % hits after first touch, problem solved. 🎉
-
-That is, of course, a lazily-populated 256³ CLUT — which is
-`buildLut: true`, built eagerly, packed as u16, and with a decade of
-kernel work behind it. Congratulations, you have reinvented the LUT,
-slower and one pixel at a time.
-
-Which is the real framing for this whole feature: **the pixel cache is
-a partial, lazy LUT for the path where a full one is not wanted.** Grow
-it far enough and it becomes the thing the engine already does better.
-That also bounds how much effort it deserves — anyone needing high hit
-rates on bulk data should be using `buildLut`, not a bigger cache.
-
-### Pipeline weight changes the answer
-
-All the figures above use `sRGB → AdobeRGB`, which at 7 stages (two
-gammas and a matrix) is the *cheapest* pipeline in the engine — so the
-fixed cost of a cache check is at its most visible. Heavier pipelines
-dilute the tax and amplify the win:
-
-| pipeline | noise (pure tax) | poster @32 | poster @1024 |
-|---|---:|---:|---:|
-| sRGB → AdobeRGB (7 stages) | −19 % | +112 % (85 %) | +191 % (99 %) |
-| sRGB → GRACoL (10 stages, 3D CLUT) | −15 % | +156 % (85 %) | +269 % (99 %) |
-
-So on a CMYK destination with graphic content the cache is worth
-**3.7×**, against 2.9× for the same content on the cheap RGB pipeline.
-Break-even moves down accordingly. Anyone measuring this on their own
-content should measure it on *their* pipeline — an RGB→RGB result is
-the pessimistic end of the range.
-
-(A 4-channel *input* also makes the check itself dearer — four values
-to hash and compare instead of three — which is why `GRACoL → sRGB`
-shows −19 % rather than following the dilution trend.)
-
-### Break-even
-
-A hit runs at roughly 0.3× the cost of an uncached pixel and a miss at
-roughly 1.25×, which puts break-even near **38–40 % hit rate**. The
-measurements land exactly there: strawberries at 36.9 % gives 0.99×,
-text page at 41.5 % gives 1.05×.
-
-So the decision is **on or off, not what size**: pick the largest table
-you are willing to pay memory for, then ask whether the content clears
-~40 %. Single-entry has a lower break-even (~24 %) but a ceiling so low
-that it only wins on near-solid content.
-
-**Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
-cached against uncached output byte for byte — every content type
-above, four transform shapes (3- and 4-channel output, int8 and int16),
-all cache modes: 108 whole-image comparisons, every byte identical,
-FNV-1a hashes matching. A reduced version runs in the test suite. This
-matters because colour-level unit tests cannot generate the evictions,
-collisions and hit/miss interleavings that only appear at image scale.
-
-**Worst case is worse than estimated.** Pure noise costs 0.82x — about
-a 20 % tax, against the 8–12 % predicted from op counts. And note the
-uncached column is itself content-sensitive (7.75 on noise vs 10.73 on
-`fruit.png`), so the pipeline was never truly content-neutral either.
-
-**What it means for the next step.** The keyed table is the design to
-carry — single-entry loses on most content and wins big only on
-near-solid fills. Content selection matters more than any tuning:
-photographs do not clear break-even, graphic and flat content clears it
-comfortably. And the heavier the pipeline, the better the cache looks,
-which makes **CMYK destinations the recommendation and RGB→RGB the
-worst case**.
-
-For the kernel port, see "What this implies for a kernel port" above —
-the dispatch cost that dominates here vanishes in an unrolled loop, so
-the port is more attractive than this document first concluded,
-especially for the 4D/CMYK kernel. A POC on one kernel would settle it;
-a corpus of screenshots, halftones and print-origin scans would settle
-whether real workloads clear break-even.
+Which content classes actually win is not what we assumed going in — the
+design notes come first here, then
+[what the measurements said](#measured--accuracy-path-2026-08-17), then
+[what shipped](#as-built-2026-08-17).
 
 ## Decisions taken (2026-08-16)
 
@@ -570,7 +43,7 @@ Still unmeasured — these set the build order, not the outcome.
 | Pipeline / accuracy path | **YES — first** | Biggest payoff: a hit skips the entire stage walk. See below. |
 | 8-bit kernels | **YES — test** | The typical speed path. Test 1, 2, 16 and 32 slots against real data. |
 | int16 | **NO** | Accuracy-oriented path where the cache suits least, and it doubles the live-register count. Revisit only if the 8-bit data is compelling. |
-| SIMD kernels | **NO** | A scalar check serialises what the f32x4 path vectorises. |
+| SIMD kernels | NO → **YES** | Reversed once measured: the lanes are channels, not pixels, so there is nothing per-pixel to serialise. 3.07× on flats — see below. |
 
 ### Pipeline path — design notes
 
@@ -994,8 +467,74 @@ This inverts the usual instinct to optimise the hottest loop, and it
 is cheap to check — so check it before building anything for the
 kernels.
 
-**Never in the SIMD kernels.** A scalar last-pixel check serialises
-what the f32x4 path vectorises. This is a scalar-path idea only.
+**Never in the SIMD kernels — reversed below.** The exclusion held only while
+the lanes were assumed to be pixels.
+
+### SIMD here is parallel interpolation, not parallel pixels
+
+Three statements above rule the cache out of the SIMD kernels on the grounds
+that "a scalar check serialises what the f32x4 path vectorises". That is a
+correct statement about a pixel-parallel kernel, and `tetra3d_simd` is not one.
+
+**The lanes are the four u16 channels at a CLUT corner**, picked up by a single
+`v128.load64_zero` + `i32x4.extend_low_i16x8_u`. One loop iteration is ONE
+PIXEL. Pixel-parallel was in fact tried first and lost — 0.89×, because each
+lane needed its own LUT gather — which is exactly why the axis was flipped, and
+[WasmKernels.md](./WasmKernels.md#wasm-simd-3d--channel-parallel-was-the-wrong-axis-once)
+records it. So there is no pixel-level vectorisation for a per-pixel check to
+serialise. The cache drops into the SIMD kernel as easily as into the scalar
+one, on the path that actually ships.
+
+The pull is easy to keep feeling: "SIMD" primes you for four pixels
+at a time, and here it means four channels of one pixel.
+
+**Measured**, paired exports against the shipped `tetra3d_simd`, all outputs
+byte-identical:
+
+| content | cached ÷ shipped |
+|---|---:|
+| solid | **3.07×** |
+| logo, 5% mark on white | **2.40×** |
+| logo, 30% mark on white | **2.57×** |
+| ILLUSTRAT | 1.04× |
+| photographs | 0.93–0.96× |
+| noise | 0.99× |
+
+**Alpha is not in the key, and must not be.** `tetra3d` reads three bytes,
+advances `inputPos` by three, and handles alpha in a tail; the cache brackets
+only the colour work, so the tail runs on a hit as well as a miss. A solid RGB
+under a per-pixel alpha gradient therefore hits every pixel — measured at
+**2.80x**, byte-identical, alpha preserved exactly. Keying on the whole RGBA
+register would have scored that image at 0%.
+
+**And it is the single-entry cache that wins, not a hash table.** Not "have I
+seen this colour before" — *"did the same bits arrive as last time, so the same
+bits can leave"*. The previous key is an i32 local and the previous output is
+the v128 the kernel was about to store anyway, so a hit is one compare and one
+store, with no memory touched and no parameters added. It never interprets the
+pixel, which is why one insertion covers int8, int16, RGB and RGBA, and why the
+scalar and SIMD versions are the same twenty lines.
+
+A 4096-entry hash table was measured beside it and is worse everywhere except
+photographs, where it needs 32 KB to reach 0.95–2.5× — and photographs are the
+content this whole feature is not for.
+
+**Two design conclusions that only measurement produced:**
+
+- **Not a runtime mode.** Behind a `$cacheMode` parameter the UNCACHED path
+  measured 15–22% slower, and got worse when a third mode was added — the cost
+  is the code behind the guard, not the guard. A single mode compare was worth
+  ~10% on its own: swapping which mode was tested first swapped which one won.
+- **Paired exports instead.** One module, two functions,
+  `interp_tetra3d_simd` and `interp_tetra3d_simd_cached`, the uncached one
+  copied in verbatim. It measures 0.985–1.008× against the shipped binary — a
+  tie, as it must be, since there is no cache code in it to pay for. Enabling
+  the cache is swapping a function reference; the signature is identical.
+
+POC: `bench/pixel_cache_wasm/` — `hitrate.js`, `build_paired.js`,
+`run_paired.js`. Scheduled for **1.6, beta, off by default**: 4–7% on
+photographs is a real cost, and the caller is the only one who knows whether
+their work is flat.
 
 ## Codegen — specialised interpolators via `new Function()`
 
@@ -1104,6 +643,542 @@ One prior observation worth re-checking: our 4D kernel measured ~20 %
 *slower* on uniform content than on noise, so the flat-art win starts
 from a slightly worse baseline than the noise numbers suggest.
 
+## Measured — accuracy path, 2026-08-17
+
+`node bench/pixel_cache/cache_bench.js` — sRGB → AdobeRGB,
+`buildLut: false`. Hit rate is the transferable figure; the MPx/s
+columns describe this path only.
+
+### Synthetic content, 250k pixels
+
+| content | cache off | slots=1 | slots=32 |
+|---|---:|---:|---:|
+| noise | 7.75 | 0.0 % · 0.82x | 0.0 % · 0.82x |
+| gradient | 9.01 | 75.0 % · 1.85x | 75.0 % · 1.78x |
+| checkerboard | 9.06 | 0.1 % · 0.76x | 100 % · 3.25x |
+| palette8 | 9.10 | 12.5 % · 0.86x | 87.5 % · 1.94x |
+| solid | 8.83 | 100 % · 3.39x | 100 % · 3.25x |
+| near-miss (1 LSB apart) | — | 0 % | 83 % |
+
+### Real images — whole frame, full resolution
+
+Unsplash photographs and one Library of Congress poster, 7.6–19.4 MP,
+every pixel converted:
+
+| image | pixels | cache off | slots=1 | slots=32 |
+|---|---:|---:|---:|---:|
+| beach | 11.9 M | 4.92 | 1.0 % · 0.82x | 3.2 % · 0.84x |
+| sunflower | 7.6 M | 8.38 | 10.8 % · 0.85x | 19.4 % · 0.87x |
+| strawberries | 10.8 M | 8.74 | 25.4 % · 0.93x | 36.9 % · 0.99x |
+| photo of text page | 18.7 M | 4.46 | 13.0 % · 0.94x | 41.5 % · 1.05x |
+| poster illustration | 19.4 M | 4.60 | 31.3 % · 1.01x | 67.4 % · 1.22x |
+
+**Conclusion: the original hypothesis was right.** Photographs run
+3–41 % and land between break-even and a 16 % loss. The one clear win
+is the flat-colour illustration at 67 % and 1.22x. The cache is a
+content-class feature that pays on graphic and synthetic content and
+costs on photographic content, exactly as the design notes argued.
+
+### Two measurement errors that briefly said otherwise
+
+Recorded because both were convincing while they lasted.
+
+**1. The bundled sample images are not photographs.** A first pass over
+`samples/images/` (`face`, `fruit`, `skin`) showed 59–83 % hit rates
+and 1.2–1.9x, and this document briefly claimed the photograph
+assumption had been "overturned" — that a keyed table catches
+*recurrence* rather than adjacency and therefore wins on photos too.
+Those three are AI-generated/adjusted images with large flat
+backgrounds and unnaturally smooth gradients. On real camera output the
+effect largely disappears. The recurrence-vs-adjacency mechanism is
+real (the `near-miss` row above shows 0 % → 83 %); what was wrong was
+the claim that natural photographs supply enough of it.
+
+**2. Capping pixels crops rather than samples.** `--pixels` takes the
+first *n* pixels, which on a 19 MP frame is the top 1–3 % — usually
+sky or background, and nothing like the whole image. The beach photo
+reads **27.8 %** resized-to-small, **7.5 %** as a 250k top crop, and
+**3.2 %** over the full frame. Striding would sample evenly but destroy
+adjacency, which is precisely what the `slots=1` column measures, so
+the bench now warns when it crops and the answer is to raise
+`--pixels`, not to stride.
+
+**Still not a corpus.** Five images. Missing: screenshots and UI
+captures, halftone/dithered content, and scanned or print-origin
+material — the classes most likely to *favour* the cache. And note the
+uncached column is itself content-sensitive (4.46–8.74 MPx/s), so the
+pipeline was never truly content-neutral either.
+
+### Miss-path cost, and why table size is free
+
+Noise never hits, so its throughput is the tax on its own:
+
+| | MPx/s | vs off | key memory |
+|---|---:|---:|---:|
+| cache off | 7.91 | — | — |
+| slots=1 | 6.46 | −18.4 % | — |
+| slots=32 | 6.17 | −21.9 % | 1 KB |
+| slots=256 | 5.93 | −25.1 % | 6 KB |
+| slots=1024 | 5.98 | −24.3 % | 24 KB |
+| slots=4096 | 6.05 | −23.4 % | 96 KB |
+
+**The cost is the check, not the table.** Going from 32 to 4096 slots —
+a 96× larger working set — changes nothing measurable; the numbers past
+256 sit inside run-to-run noise. What costs is doing a lookup at all:
+the extra stage call, the hash, and the compare. Single-entry is
+cheaper (−18 %) only because it skips the hash and indexing.
+
+The L1-pressure worry in the design notes above does not apply here,
+and the reason is structural rather than a matter of degree: this is a
+full JS pipeline that allocates several arrays per pixel and dispatches
+every stage through `.call()`. Memory traffic and allocation already
+dominate, so a few KB of table is invisible. A hot kernel is the
+opposite regime — tight integer loops streaming a large CLUT with
+nothing to hide behind — and there the same table genuinely would
+compete. The argument was imported from the wrong path, not merely
+overstated.
+
+### Where the tax actually goes (and it is not the hash)
+
+~18 % looks steep for "a hash and a lookup", so it was decomposed by
+adding plain pass-through stages to the same pipeline:
+
+| | MPx/s | vs baseline |
+|---|---:|---:|
+| baseline, 7 stages | 7.80 | — |
+| + 1 no-op stage | 7.56 | −3.1 % |
+| + 2 no-op stages | 7.29 | −6.5 % |
+| cache slots=1 (no hash at all) | 6.44 | −17.4 % |
+| cache slots=32 (hashed) | 6.29 | −19.4 % |
+
+Roughly: **6.5 points is bare stage dispatch**, ~8 points is
+bookkeeping (counters, key writes, `stage.step` writes, copying the
+value), and **the hash is about 3 points** — the gap between slots=1,
+which does no hashing whatsoever, and slots=32.
+
+So the hash is the cheapest part, and the dominant cost is structural:
+in this architecture every stage is a dynamic `.call()` passing arrays
+around, so *adding two stages costs 6.5 % before they do anything*.
+That is the price of the plugin shape — the cache can be declined,
+switched off at zero cost, and deleted without trace, precisely because
+it is ordinary stages rather than something welded into the walk.
+
+One fix came out of this: the store stage originally did
+`colour.slice()`, allocating on every miss — the common case for
+photographic content. Reusing the slot's array took slots=1 from
+−17.4 % to −14.8 % and slots=32 from −19.4 % to −17.5 %. Worth having,
+but it confirms there is no single large win hiding here; the cost is
+spread thin.
+
+Further reduction would mean a build-time variant with the counters
+compiled out, or folding the check into the walk instead of using
+stages — trading the properties above for a couple of points.
+
+The hash itself was timed in isolation at **1.35 ns/pixel** for three
+channels. Restructuring it as three independent multiplies combined at
+the end — on the theory that the chained form is latency-bound — came
+out *slower* (1.50 ns). It is not a dependent-chain problem, and there
+is nothing to win there. Recorded so nobody tries it twice.
+
+### What this implies for a kernel port
+
+This changes the earlier conclusion, which was too pessimistic. An
+unrolled kernel loop has no stage dispatch at all, so the 6.5 points
+that dominate here simply do not exist, and most of the bookkeeping
+(the `stage.step` writes, the separate store stage, the counters) goes
+with it. The check reduces to: build the key from bytes already loaded
+for interpolation, hash, compare, branch — roughly 4–5 ns.
+
+Against that, the per-pixel budget shrinks: the int 3D kernel runs at
+~73 MPx/s (13.7 ns/pixel) and the 4D at ~48 MPx/s (20.8 ns), versus
+~125 ns here. A rough model — *estimates from decomposition, not
+measurements*:
+
+| | miss cost | hit cost | break-even | ceiling |
+|---|---:|---:|---:|---:|
+| accuracy path (measured) | 1.21× | 0.31× | ~38 % | 3.2× |
+| 3D int kernel (modelled) | ~1.33× | ~0.52× | ~41 % | ~1.9× |
+| 4D int kernel (modelled) | ~1.22× | ~0.34× | ~25 % | ~2.9× |
+
+So the kernel port is *not* obviously a loser: break-even lands in
+much the same place, and the **4D/CMYK kernel is the most attractive
+target of all** — the heavier the per-pixel work, the better the cache
+looks, exactly as the pipeline-weight measurements show on the
+accuracy path.
+
+Two caveats before anyone builds it. These are models, not
+measurements — the honest next step is a POC on one kernel rather than
+more arithmetic. And register pressure is unmodelled: the cache state
+must stay live across the interpolation cascade, where
+[JitInspection.md](./JitInspection.md) already found pressure binding,
+which is exactly what the run-scan restructure earlier in this document
+exists to address.
+
+### POC result — the kernel cache is much better than this path
+
+Built and measured: `bench/pixel_cache_kernel_poc/`, a DeviceLink
+CMYK→CMYK against `tetrahedralInterp4DArray_4Ch_intLut_loop`, with the
+cached variant produced by source-transforming the real kernel so the
+cascade is identical to production.
+
+| content | plain | cached (64 slots) | change | hit rate |
+|---|---:|---:|---:|---:|
+| cmyk noise | 26.9 | 24.6 | −8 % | 0 % |
+| photo → CMYK | 31.8 | 46.6 | +47 % | 57 % |
+| photo → CMYK | 27.8 | 41.5 | +49 % | 53 % |
+| poster → CMYK | 33.0 | 59.6 | +81 % | 73 % |
+| cmyk gradient | 32.7 | 72.2 | +121 % | 75 % |
+| cmyk solid | 32.3 | 151.4 | +368 % | 100 % |
+
+Byte-identical output in every case. **Break-even is ~10 %**, against
+~38–40 % on the accuracy path — so the modelled ~25 % was pessimistic, and
+the kernel port it made look questionable is comfortably worth doing.
+
+Why it is so much better:
+
+1. **No stage dispatch** — the largest single component of the
+   accuracy-path tax does not exist in an unrolled loop. Miss tax 8 %.
+2. **The key is one int32.** 4 × u8 packs exactly, so the check is a
+   single `===` and the hash a single `imul`, against three float
+   compares and three chained imuls.
+3. **A hit skips proportionally more** — the tetrahedral cascade is the
+   bulk of the per-pixel cost.
+
+**The most important finding is about the data, not the code.** The same
+photographs that hit 3–41 % as RGB hit **43–70 % once separated to
+CMYK**, because the RGB→CMYK LUT quantises many source colours onto the
+same output. So CMYK wins twice over: heavier per-pixel work *and*
+inherently more repetitive data. That is the strongest argument yet for
+scoping the cache to CMYK/4D.
+
+**Table size matters here, unlike on the accuracy path**, because the
+kernel streams a large CLUT and competes for L1: 16–256 slots all cost
+−7 to −8 %, but 1024 (12 KB) drops to −17 %. Use 64–256. The
+L1-pressure reasoning from the design notes holds here; what it does not
+carry to is the allocation-heavy accuracy path, where a few KB of table is
+invisible.
+
+Caveats: 8-bit only (the 32-bit key does not generalise to u16 or
+float), no alpha exercised, one kernel on one machine. A POC, not a
+feature.
+
+### How lcms2 does it, and what we took from it
+
+Worth reading the reference implementation once the design was settled,
+to see where two independent attempts agreed. `CachedXFORM` in
+`cmsxform.c`:
+
+```c
+typedef struct {
+    cmsUInt16Number CacheIn [cmsMAXCHANNELS];   // 16 ch x u16 = 32 bytes
+    cmsUInt16Number CacheOut[cmsMAXCHANNELS];   // 32 bytes -> 64 total
+} _cmsCACHE;
+
+accum = p->FromInput(p, wIn, accum, ...);              // unpack to u16
+if (memcmp(wIn, Cache.CacheIn, sizeof(Cache.CacheIn)) == 0)
+     memcpy(wOut, Cache.CacheOut, sizeof(Cache.CacheOut));
+else { p->Lut->Eval16Fn(wIn, wOut, p->Lut->Data);
+       memcpy(Cache.CacheIn,  wIn,  sizeof(Cache.CacheIn));
+       memcpy(Cache.CacheOut, wOut, sizeof(Cache.CacheOut)); }
+output = p->ToOutput(p, wOut, output, ...);            // pack
+```
+
+**Where we agreed, independently:**
+
+- The cache sits between unpack and pack — on the *unpacked* pixel,
+  with format conversion still running every pixel. That is exactly the
+  device-boundary position argued for above.
+- Variants are selected at transform creation, not tested in the loop:
+  lcms swaps between `PrecalculatedXFORM`, `CachedXFORM` and the two
+  gamut-check equivalents via a function pointer.
+- Float transforms get no cache at all (`dwFlags |= cmsFLAGS_NOCACHE`).
+
+**Where we differ:**
+
+- **lcms caches one entry only.** No table, no hash. Our measurements
+  say that is the weak form — single-entry managed 1–31 % on
+  photographs where a keyed table reached 43–70 % in CMYK — so the
+  table is a genuine step past the reference, not a re-implementation
+  of it.
+- **Fixed-size `memcmp` over all 16 channels**, which is why `wIn` is
+  zeroed first: unused channels are zero on both sides, so one
+  constant-size compare (two SIMD ops) serves any channel count with no
+  loop and no branch. We specialise per channel count instead.
+- **The cache is stack-local per call** (`memcpy(&Cache, &p->Cache, …)`,
+  never written back), making it thread-safe by construction. Ours
+  persists on the Transform — better across many small calls,
+  irrelevant for one whole-image call.
+
+**What we took: seeding.** lcms initialises its entry at transform
+creation by evaluating the all-zero pixel, so the cache always holds a
+real `(key, value)` pair and has no empty state at all. Adopted here,
+and it earns more than tidiness:
+
+- The `slotValid` array is gone — one load removed from every lookup.
+- The single-entry `hasPrevious` flag is gone. Measured: `slots=1`
+  improved on every content class (skin.png 1.03× → 1.25×, fruit 1.20×
+  → 1.24×, noise 0.82× → 0.87×).
+- In the **kernel** it removes a real problem. With a packed 4×8-bit
+  CMYK key there is no impossible int32 sentinel — CMYK(255,255,255,255)
+  is exactly `-1` — so the first POC had to keep keys in a
+  `Float64Array` initialised to `NaN`. Seeded, keys go back to
+  `Int32Array`: a quarter of the memory (256 slots: 1 KB vs 4 KB) and
+  an integer compare instead of a double one.
+
+Filling *every* slot of a table with the same seed pair is safe, not
+just the slot it hashes to: a given key only ever probes one slot, so
+duplicates elsewhere are unreachable by the seed key, and any other key
+landing there compares unequal and misses. The copies are simply
+overwritten as real entries arrive.
+
+The cost is one extra key write per miss. With no validity flag a
+half-written entry is indistinguishable from a good one, so the key can
+no longer be written by the check and the value by the store — a stage
+throwing between the two would leave a new key beside a stale value and
+silently corrupt every later hit on it. Both halves are now written
+together in the store stage, which costs about 1 point on the pure-miss
+path and is worth it.
+
+### Profiling mode — measure hit rate without doing the maths
+
+`setPixelCacheProfiling(true)` answers "is this worth enabling for *my*
+content?" without the caller needing to know anything about the
+internals.
+
+The implementation is a single number. A miss normally sets
+`stage.step = 1` and walks on into the maths; in profiling mode it sets
+`endStep - 1`, jumping straight to the STORE stage. No NOP stage, no
+splice, no second pipeline — the pipeline is untouched and the mode is
+a **runtime toggle**.
+
+**Hit accounting stays bit-identical**, and the reason is structural:
+the key depends only on the stages *before* the check, and those still
+run. Only the value-producing stages are skipped. Measured on palette
+content, normal and profiling report the same hits and lookups to the
+integer.
+
+Speed-up is inversely proportional to hit rate, which is the useful way
+round:
+
+| content | hit rate | normal | profiling | speed-up |
+|---|---:|---:|---:|---:|
+| noise | 0 % | 6.2 | 18.8 | **3.0×** |
+| gradient | 75 % | 14.2 | 24.8 | 1.8× |
+| solid | 100 % | 26.9 | 27.5 | 1.0× |
+
+Profiling is fastest exactly when the content is worst for the cache —
+i.e. when the answer is "don't bother" and you want it quickly. When it
+is slow, the normal run was already fast and you have your answer
+anyway.
+
+**The output is meaningless while it is on.** The cached values are
+whatever was in flight, not converted colour, so the cache is flushed on
+every mode change in *both* directions. Without that, profiling and then
+transforming for real would silently return garbage from every hit —
+which is why the toggle owns the flush rather than leaving it to the
+caller.
+
+### Scope decision (2026-08-19): four loops, nothing else
+
+**Targeted RGB/CMYK caching on the common 8-bit path — not a generic
+cache.** JavaScript performance is won by narrowing, not by generality,
+so the cache goes only where it demonstrably pays and the affected
+surface stays as small as possible:
+
+| in scope | file |
+|---|---|
+| `tetrahedralInterp3DArray_3Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:269` |
+| `tetrahedralInterp3DArray_4Ch_intLut_loop` | `src/kernels/3d/kernel3D_loops.js:665` |
+| `tetrahedralInterp4DArray_3Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:900` |
+| `tetrahedralInterp4DArray_4Ch_intLut_loop` | `src/kernels/4d/kernel4D_loops.js:1149` |
+
+Four loops. Everything else is explicitly **out**: 1D and 2D (their
+input space is enumerable — precompute instead, see below), ND (float,
+proof-oriented, and the key does not pack), all float variants, every
+WASM and SIMD variant (a scalar check serialises what f32x4
+vectorises), and the matrix-shaper path (headed for ~4 ns/pixel, where
+a 4–5 ns check would double the cost).
+
+> **The SIMD exclusion did not survive measurement.** It rests on the lanes
+> being pixels; in `tetra3d_simd` they are channels, so there is nothing
+> per-pixel to serialise — 3.07× on flats. Worked through in
+> [SIMD here is parallel interpolation, not parallel
+> pixels](#simd-here-is-parallel-interpolation-not-parallel-pixels).
+> The matrix-shaper exclusion does stand, now measured at 3.0 ns/pixel.
+
+These four are chosen because they are the **real-world common paths** —
+8-bit RGB and CMYK image conversion — and because 8 bits × 3 or 4
+channels packs into a single int32, which is what makes the check one
+`===` and one `imul`. That property is the whole reason this is cheap;
+it does not survive to u16 or float, and neither should the feature.
+
+**Still to measure: the 3D case.** Only 4D has a POC
+(break-even ~10 %, +47 % to +169 % on real content). 3D was modelled at
+~41 % break-even and never measured, and RGB content hit rates are more
+variable than CMYK — beach photo 3 %, text page 41 % at 32 slots. The
+same POC should be run on `tetrahedralInterp3DArray_4Ch_intLut_loop`
+(RGB → CMYK, a heavily used soft-proof and print-prep path with
+4-channel output) before 3D ships alongside 4D.
+
+### Which kernels are even candidates
+
+Not all of them, and the rule is sharper than "the heavy ones":
+
+> **A cache is only interesting where the input space is too large to
+> precompute *and* the per-pixel work is high.**
+
+At 8 bits per channel the whole input space is enumerable for small
+dimensions, and a complete table beats any cache:
+
+| input | distinct inputs | verdict |
+|---|---:|---|
+| 1D (Gray) | 256 | **Never cache.** Precompute all 256 outputs — that is just a LUT, and cheaper than one hash. |
+| 2D (Duotone) | 65,536 | **Never cache.** A complete table is 64 K entries; precompute it. |
+| 3D (RGB) | 16.7 M | Marginal. Too big to enumerate (this is the 2²⁴ joke above), but per-pixel work is only moderate — modelled break-even ~41 %. |
+| 4D (CMYK) | 4.3 G | **The target.** Cannot be enumerated, heaviest interpolation, modelled break-even ~25 %. |
+| ND (5–15 ch) | astronomical | Also attractive — `KernelND` runs the per-pixel interpolator with an allocation per pixel, so it is the slowest path in the engine. |
+
+Output channel count pushes the same way: 4 output channels is more
+interpolation per pixel than 3, so CMYK and N-channel *destinations*
+improve the ratio too. A DeviceLink CMYK→CMYK is the ideal case —
+4D in, 4 out, and print workflows are exactly where flat graphic
+content lives.
+
+**RGB matrix-shaper needs no cache, now or later.** That path is headed
+for the fused WASM kernel at 250–257 MPx/s
+([MatrixShaperKernel.md](./MatrixShaperKernel.md)) — about 4 ns per
+pixel. A 4–5 ns check would more than double the cost of the thing it
+was meant to accelerate.
+
+Which is the general warning: **the better a kernel gets, the worse the
+cache looks on it.** The two efforts pull against each other, so the
+cache belongs only on paths that are expensive for irreducible reasons
+— high-dimensional interpolation — not on paths that are merely
+unoptimised yet.
+
+Scoping to 4D/ND does *not* remove the case for codegen, as first
+thought. Even two dimensions still multiply out across data type (u8 /
+u16 / float), channel count and slot size — and crucially the
+**injection point and key method differ per data type**, which cannot
+be a runtime test without taxing the loop. See
+"Validated by the POC" under Codegen above.
+
+### Hit rate vs table size — whole frames
+
+| image | 1 | 16 | 32 | 64 | 128 | 256 | 1024 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| text page | 13.0 % | 35.2 % | 41.5 % | 47.7 % | 56.0 % | 63.7 % | 79.6 % |
+| strawberries | 25.4 % | 35.3 % | 36.9 % | 38.7 % | 40.4 % | 41.8 % | 48.7 % |
+| poster | 31.3 % | 62.3 % | 67.4 % | 70.5 % | 73.5 % | 76.9 % | 83.6 % |
+| sunflower | 10.8 % | 17.5 % | 19.4 % | 21.3 % | 22.9 % | 24.6 % | 33.8 % |
+| beach | 1.0 % | 2.4 % | 3.2 % | 4.4 % | 6.0 % | 8.0 % | 13.0 % |
+
+**Hit rate never plateaus.** It is still climbing at 1024 slots on every
+image — these are 8–19 MP frames, so even 1024 entries is a tiny window
+over the colours present. Since the cost is flat, **a bigger table is
+strictly better**, bounded only by memory you care about.
+
+### The headroom nobody is using
+
+Counting distinct colours per image explains why the numbers above are
+so modest — and it is not because photographs lack repetition:
+
+| image | pixels | unique colours | perfect-cache ceiling | actual @32 | @1024 |
+|---|---:|---:|---:|---:|---:|
+| text page | 18.7 M | 0.02 M | 99.9 % | 41.5 % | 79.6 % |
+| poster | 19.4 M | 0.18 M | 99.1 % | 67.4 % | 83.6 % |
+| strawberries | 10.8 M | 0.47 M | 95.6 % | 36.9 % | 48.7 % |
+| sunflower | 7.6 M | 0.31 M | 96.0 % | 19.4 % | 33.8 % |
+| beach | 11.9 M | 0.88 M | 92.6 % | 3.2 % | 13.0 % |
+
+**Every image could hit 92–99.9 %.** Even the beach photo repeats
+itself constantly — 11.9 M pixels drawn from 0.88 M colours. What the
+cache actually delivers is 3–67 %, so the losses are almost entirely
+*conflict misses* in a small direct-mapped table, not a shortage of
+repetition in the data. Associativity or a much larger table would
+recover far more than tuning anything else here.
+
+Verified independently: a standalone direct-mapped simulation, sharing
+no code with the engine, reproduces the engine's hit rate to the digit
+on every image at both 32 and 1024 slots.
+
+**Which makes the limit case obvious.** Hit rate never plateauing does
+suggest an easy fix: just use 16,777,216 slots and cover every possible
+8-bit RGB colour. 100 % hits after first touch, problem solved. 🎉
+
+That is, of course, a lazily-populated 256³ CLUT — which is
+`buildLut: true`, built eagerly, packed as u16, and with a decade of
+kernel work behind it. Congratulations, you have reinvented the LUT,
+slower and one pixel at a time.
+
+Which is the real framing for this whole feature: **the pixel cache is
+a partial, lazy LUT for the path where a full one is not wanted.** Grow
+it far enough and it becomes the thing the engine already does better.
+That also bounds how much effort it deserves — anyone needing high hit
+rates on bulk data should be using `buildLut`, not a bigger cache.
+
+### Pipeline weight changes the answer
+
+All the figures above use `sRGB → AdobeRGB`, which at 7 stages (two
+gammas and a matrix) is the *cheapest* pipeline in the engine — so the
+fixed cost of a cache check is at its most visible. Heavier pipelines
+dilute the tax and amplify the win:
+
+| pipeline | noise (pure tax) | poster @32 | poster @1024 |
+|---|---:|---:|---:|
+| sRGB → AdobeRGB (7 stages) | −19 % | +112 % (85 %) | +191 % (99 %) |
+| sRGB → GRACoL (10 stages, 3D CLUT) | −15 % | +156 % (85 %) | +269 % (99 %) |
+
+So on a CMYK destination with graphic content the cache is worth
+**3.7×**, against 2.9× for the same content on the cheap RGB pipeline.
+Break-even moves down accordingly. Anyone measuring this on their own
+content should measure it on *their* pipeline — an RGB→RGB result is
+the pessimistic end of the range.
+
+(A 4-channel *input* also makes the check itself dearer — four values
+to hash and compare instead of three — which is why `GRACoL → sRGB`
+shows −19 % rather than following the dilution trend.)
+
+### Break-even
+
+A hit runs at roughly 0.3× the cost of an uncached pixel and a miss at
+roughly 1.25×, which puts break-even near **38–40 % hit rate**. The
+measurements land exactly there: strawberries at 36.9 % gives 0.99×,
+text page at 41.5 % gives 1.05×.
+
+So the decision is **on or off, not what size**: pick the largest table
+you are willing to pay memory for, then ask whether the content clears
+~40 %. Single-entry has a lower break-even (~24 %) but a ceiling so low
+that it only wins on near-solid content.
+
+**Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
+cached against uncached output byte for byte — every content type
+above, four transform shapes (3- and 4-channel output, int8 and int16),
+all cache modes: 108 whole-image comparisons, every byte identical,
+FNV-1a hashes matching. A reduced version runs in the test suite. This
+matters because colour-level unit tests cannot generate the evictions,
+collisions and hit/miss interleavings that only appear at image scale.
+
+**Worst case is worse than estimated.** Pure noise costs 0.82x — about
+a 20 % tax, against the 8–12 % predicted from op counts. And note the
+uncached column is itself content-sensitive (7.75 on noise vs 10.73 on
+`fruit.png`), so the pipeline was never truly content-neutral either.
+
+**What it means for the next step.** The keyed table is the design to
+carry — single-entry loses on most content and wins big only on
+near-solid fills. Content selection matters more than any tuning:
+photographs do not clear break-even, graphic and flat content clears it
+comfortably. And the heavier the pipeline, the better the cache looks,
+which makes **CMYK destinations the recommendation and RGB→RGB the
+worst case**.
+
+For the kernel port, see "What this implies for a kernel port" above —
+the dispatch cost that dominates here vanishes in an unrolled loop, so
+the port is more attractive than this document first concluded,
+especially for the 4D/CMYK kernel. A POC on one kernel would settle it;
+a corpus of screenshots, halftones and print-origin scans would settle
+whether real workloads clear break-even.
+
 ## As built (2026-08-17)
 
 `src/cache.js`, attached to `Transform.prototype` like `stages.js` and
@@ -1117,7 +1192,7 @@ Two stages are injected after `optimisePipeline()` and before the
 pipeline-validity check. The walk in `transform()` gained a third arm
 (`if pipelineDebug … else if cache … else …`) that reads `stage.step`.
 
-**Three things the design notes got wrong, found by building it:**
+**Three things building it changed about the design notes:**
 
 1. **The boundary can't be located from encodings or options.** First
    attempt scanned encodings — but `stage_device_to_int` labels its
@@ -1166,13 +1241,6 @@ correctness: `pipelineDebug` on (a jump would fabricate a history that
 never ran), custom stages present (a hit would skip their side
 effects), no numeric-array position before the output conversion, or
 the output marker lost to the optimiser.
-
-**Unrelated regression caught on the way.** `pipelineDebug` had been
-broken since the v1.5.5 stages split: `addDebugHistory` moved to
-`stages.js` while the module-scope `data2String` it calls stayed in
-`Transform.js`. All 488 tests passed regardless, because none of them
-switched debug on. Fixed by moving the helper, and
-`__tests__/pipeline_debug.tests.js` now covers that path.
 
 ## Open questions
 

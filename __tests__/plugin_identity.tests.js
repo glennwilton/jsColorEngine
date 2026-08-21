@@ -292,8 +292,11 @@ describe('plugin: use() installs hooks per instance, no double-up on forced rebu
         expect(hookCallCount).toBeGreaterThan(0);   // hook fired during build
         const countFirst = hookCallCount;
 
-        // Force a rebuild — use() was not called again, so hook is still there once
-        t.lut = false;
+        // Force a rebuild — use() was not called again, so hook is still there
+        // once. clear() is the supported reset: it drops the LUT, pipeline,
+        // WASM state and pool registration, but keeps hooks and options, which
+        // is exactly what this test is about.
+        t.clear();
         hookCallCount = 0;
         t.create('*sRGB', '*sRGB', eIntent.relative);
 
@@ -310,7 +313,7 @@ describe('plugin: use() installs hooks per instance, no double-up on forced rebu
         const countFirst = userCallCount;
         expect(countFirst).toBeGreaterThan(0);
 
-        t.lut = false;
+        t.clear();
         userCallCount = 0;
         t.create('*sRGB', '*sRGB', eIntent.relative);
 

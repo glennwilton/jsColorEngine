@@ -43,41 +43,157 @@
 var workerThreads = require('worker_threads');
 var parentPort = workerThreads.parentPort;
 var Transform = require('./Transform.js');
+var Profile   = require('./Profile.js');
 
-// signature -> ready Transform. Small by construction: one entry per distinct
-// LUT the caller actually uses.
+// signature -> ready Transform. One entry per distinct transform the caller
+// actually uses, which is what lets ONE pool serve MANY Transforms: every
+// message carries its signature, and the worker looks up the matching
+// Transform rather than assuming it only ever has one.
+//
+// Bounded, so a long-lived pool cannot accumulate transforms without limit,
+// and evicted LEAST-RECENTLY-USED rather than first-in: a set of transforms in
+// active rotation would otherwise evict each other in turn and re-ship on
+// every batch.
+//
+// Eviction is REPORTED BACK to the pool. The pool keeps its own per-worker
+// record of what it has shipped, and if the two disagree it will dispatch a
+// task for a signature this worker has dropped — which fails. Whoever evicts
+// has to say so.
 var registry = Object.create(null);
 var registryOrder = [];
-var MAX_LUTS = 8;
+var MAX_LUTS = 8;                       // pool.transformsPerWorker overrides
+
+/**
+ * Bytes this worker is holding for one transform.
+ *
+ * The f64 CLUT and its u16 twin both stay resident on the int path, so the
+ * honest figure is their sum. Excludes WASM linear memory, which holds a THIRD
+ * copy of the u16 table on the wasm kernels — see docs/deepdive/multicore.md.
+ */
+function residentBytes(t){
+    var n = 0;
+    if(t && t.lut){
+        if(t.lut.CLUT) n += t.lut.CLUT.byteLength;
+        if(t.lut.intLut && t.lut.intLut.CLUT) n += t.lut.intLut.CLUT.byteLength;
+    }
+    return n;
+}
+
+function touch(signature){
+    var i = registryOrder.indexOf(signature);
+    if(i >= 0) registryOrder.splice(i, 1);
+    registryOrder.push(signature);
+}
+
+function admit(signature, transform){
+    registry[signature] = transform;
+    touch(signature);
+
+    var evicted = [];
+    while(registryOrder.length > MAX_LUTS){
+        var victim = registryOrder.shift();
+        if(victim === signature) continue;
+        delete registry[victim];
+        evicted.push(victim);
+    }
+    return evicted;
+}
 
 function register(signature, lut, lutMode){
-    if(registry[signature]) return;
+    if(registry[signature]){ touch(signature); return []; }
 
     // setLut with the cloned object, NOT fromJSON with serialised text -- the
     // portable format quantises and would cost 1 LSB on some pixels.
     var t = new Transform({dataFormat: 'int8', lutMode: lutMode, buildLut: true});
     t.setLut(lut);
-    registry[signature] = t;
-    registryOrder.push(signature);
+    return admit(signature, t);
+}
 
-    // Bounded, so a long-lived pool cannot accumulate LUTs without limit.
-    while(registryOrder.length > MAX_LUTS){
-        var evict = registryOrder.shift();
-        if(evict !== signature) delete registry[evict];
-    }
+/**
+ * MODE 2 — rebuild from the chain rather than from a LUT.
+ *
+ * Used where a LUT cannot serve: the LUT-free accuracy path (there is no LUT
+ * to send) and N-channel output (a LUT-only rebuild diverges). The chain
+ * arrives as cloned Profile objects and intents; structured clone drops
+ * prototypes, so each profile has to be re-attached before `createMultiStage`
+ * will accept it.
+ *
+ * Deterministic by construction: the worker runs the same create() on the same
+ * profiles and gets the same Transform, so unlike Mode 1 there is nothing to
+ * probe.
+ */
+function registerChain(signature, chain, options){
+    if(registry[signature]){ touch(signature); return []; }
+
+    var rebuilt = chain.map(function(slot, i){
+        if(i % 2) return slot;                       // intent, a plain number
+        if(typeof slot === 'string') return slot;    // virtual profile: '*sRGB'
+        // A cloned Profile is plain data until its prototype is restored.
+        return Object.setPrototypeOf(slot, Profile.prototype);
+    });
+
+    var t = new Transform(options);
+    t.createMultiStage(rebuilt);
+    return admit(signature, t);
 }
 
 parentPort.on('message', function(msg){
+
+    // The pool owns this bound; it rides along on registration rather than
+    // being fixed at spawn so it stays one number in one place (DEFAULTS).
+    if(msg && msg.maxTransforms > 0) MAX_LUTS = msg.maxTransforms;
 
     if(msg.type === 'exit'){
         process.exit(0);
         return;
     }
 
+    // Drop one transform on request. LRU eviction already bounds the registry,
+    // but it only reclaims memory when something ELSE needs the slot — so an
+    // app holding the pool open (idleTimeoutMs: 0) would keep a finished
+    // transform's LUT resident in every worker until eight more pushed it out.
+    // This is the caller saying "done with that one" and getting the memory
+    // back now.
+    if(msg.type === 'forget'){
+        var at = registryOrder.indexOf(msg.signature);
+        if(at >= 0) registryOrder.splice(at, 1);
+        delete registry[msg.signature];
+        parentPort.postMessage({type: 'forgot', signature: msg.signature});
+        return;
+    }
+
+    // What did this worker ACTUALLY build? Compared against the master's
+    // getInfo() so a rebuild that diverged shows up as a named field rather
+    // than as subtly wrong pixels.
+    if(msg.type === 'info'){
+        var known = registry[msg.signature];
+        parentPort.postMessage({
+            type: 'info',
+            signature: msg.signature,
+            info: known ? known.getInfo() : null
+        });
+        return;
+    }
+
+    if(msg.type === 'chain'){
+        try {
+            var evictedChain = registerChain(msg.signature, msg.chain, msg.options);
+            parentPort.postMessage({type: 'lutOk', signature: msg.signature,
+                                    evicted: evictedChain,
+                                    bytes: residentBytes(registry[msg.signature])});
+        } catch(e){
+            parentPort.postMessage({type: 'error', signature: msg.signature,
+                message: String(e && e.message || e)});
+        }
+        return;
+    }
+
     if(msg.type === 'lut'){
         try {
-            register(msg.signature, msg.lut, msg.lutMode);
-            parentPort.postMessage({type: 'lutOk', signature: msg.signature});
+            var evictedLut = register(msg.signature, msg.lut, msg.lutMode);
+            parentPort.postMessage({type: 'lutOk', signature: msg.signature,
+                                    evicted: evictedLut,
+                                    bytes: residentBytes(registry[msg.signature])});
         } catch(e){
             parentPort.postMessage({type: 'error', signature: msg.signature, message: String(e && e.message || e)});
         }
@@ -88,40 +204,61 @@ parentPort.on('message', function(msg){
 
     try {
         var transform = registry[msg.signature];
+        if(transform) touch(msg.signature);
         if(!transform){
-            // The pool ships the LUT before any task referencing it, so this
-            // means a protocol bug rather than a race — fail loudly.
-            parentPort.postMessage({type: 'error', id: msg.id,
-                message: 'poolWorker: unknown LUT signature ' + msg.signature});
+            // Distinct from a generic error so the pool can RECOVER rather
+            // than fail the batch: it clears its record for this worker,
+            // re-registers and re-sends the one task. Should not happen —
+            // evictions are reported back so both sides stay in step — but a
+            // task that never completes hangs the batch, which is too
+            // expensive a way to find out we were wrong.
+            parentPort.postMessage({type: 'unknownSignature', id: msg.id,
+                                    signature: msg.signature});
             return;
         }
 
-        // The buffer arrived by transfer; this worker owns it outright.
-        var input = new Uint8ClampedArray(msg.buffer);
+        // BOTH BUFFERS ARE THE POOL'S REUSED SCRATCH, on loan by transfer.
+        // They go back on the reply, so the next fragment on this worker
+        // allocates nothing. Allocating here instead would put the allocator
+        // back in the hot path, which is what this design exists to avoid.
+        var inLen = (msg.byteLength !== undefined) ? msg.byteLength : msg.buffer.byteLength;
+        var input = new Uint8ClampedArray(msg.buffer, 0, inLen);
+
+        var outBuffer = msg.outBuffer;
+        var target = null;
+        if(outBuffer && msg.outByteLength !== undefined &&
+           outBuffer.byteLength >= msg.outByteLength){
+            // Exact-length view: transformArray checks the length it is given.
+            target = new Uint8ClampedArray(outBuffer, 0, msg.outByteLength);
+        }
 
         var t0 = process.hrtime.bigint();
         var out = transform.transformArray(input, msg.inputHasAlpha, msg.outputHasAlpha,
-                                           msg.preserveAlpha, msg.pixelCount);
+                                           msg.preserveAlpha, msg.pixelCount,
+                                           undefined, target || undefined);
         var computeMs = Number(process.hrtime.bigint() - t0) / 1e6;
 
-        // transformArray may hand back a view whose buffer is larger than the
-        // data; transfer needs an exact buffer.
-        var outBuffer;
-        if(out.byteOffset === 0 && out.byteLength === out.buffer.byteLength){
-            outBuffer = out.buffer;
-        } else {
-            var exact = new Uint8ClampedArray(out.length);
-            exact.set(out);
-            outBuffer = exact.buffer;
+        // If the transform did not write into the supplied array — no array was
+        // usable, or a kernel returned its own — copy into the scratch anyway,
+        // so the pool always gets a buffer back in the shape it expects.
+        if(!target || out !== target){
+            if(!outBuffer || outBuffer.byteLength < out.length){
+                outBuffer = new ArrayBuffer(out.length);
+            }
+            new Uint8ClampedArray(outBuffer, 0, out.length).set(out);
         }
+
+        var transfers = [outBuffer];
+        if(msg.buffer) transfers.push(msg.buffer);
 
         parentPort.postMessage({
             type: 'done',
             id: msg.id,
             buffer: outBuffer,
+            inBuffer: msg.buffer,          // handed back for reuse
             pixelCount: msg.pixelCount,
             computeMs: computeMs
-        }, [outBuffer]);
+        }, transfers);
 
     } catch(e){
         parentPort.postMessage({type: 'error', id: msg.id,
