@@ -9,6 +9,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed — every kernel now chooses its own interpolator
+
+Phase 3 of [the kernel contract](docs/deepdive/KernelContract.md).
+`addStageLUT` was a 133-line switch that picked the single-colour
+interpolator itself; it is now 34 lines, one registry lookup and a hints
+object. `Kernel3D`, `Kernel4D` and `KernelND` gained `floatFor(lut, hints)`
+and own the decisions that used to be made for them.
+
+The clearest sign the boundary was in the wrong place: the PCS-input
+trilinear rule existed only in the 3-channel branch — lcms 2.0 found
+tetrahedral disagreed with 1.19, SampleICC and Photoshop on Lab-indexed
+LUTs — while the 4-D branch had no equivalent. One function was carrying
+one dimension's rule on behalf of all of them.
+
+`src/interp.js` is now the built-in float implementations rather than the
+policy; a third-party kernel can ignore it.
+
+No behaviour change, and that was checked rather than assumed: the previous
+commit was extracted to a scratch tree and the same 15-case probe run
+against both copies, comparing stage names **and** accuracy-path colour
+output across every interpolation option. Byte-identical throughout.
+Throughput median +0.21% across 132 cells; accuracy identical.
+
 ### Changed — gray and duotone kernels own their maths, and got faster
 
 Phase 2 of [the kernel contract](docs/deepdive/KernelContract.md).

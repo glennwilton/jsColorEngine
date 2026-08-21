@@ -1,6 +1,6 @@
 # The kernel contract
 
-> **Status: phases 1 and 2 landed 2026-08-21; phases 3-7 not built.**
+> **Status: phases 1-3 landed 2026-08-21; phases 4-7 not built.**
 > This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
 > [KernelModules.md](./KernelModules.md), which this supersedes in part; when
 > this lands, the two are folded into one as-built document.
@@ -667,7 +667,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 |---|---|---|
 | ~~1~~ | ~~Dense 1–15 registry; `setKernel` becomes an array index; `registerKernel` accepts a range~~ **LANDED 2026-08-21** — descriptors gained `name`, `KernelND` registers `[5, 15]`, `MAX_KERNEL_DIMENSIONS = 15`. New suite `__tests__/kernel_registry.tests.js` (17 tests) | Mechanical, no behaviour change, unblocks test injection |
 | ~~2~~ | ~~`floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups~~ **LANDED 2026-08-21**, and it closed `TODO (B3)` with it — see [Phase 2 as built](#phase-2-as-built) | No WASM in the way. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
-| 3 | `floatFor` on KernelND, then Kernel3D, then Kernel4D | Ascending risk. 3D and 4D one at a time |
+| ~~3~~ | ~~`floatFor` on KernelND, then Kernel3D, then Kernel4D~~ **LANDED 2026-08-21** — `addStageLUT` went from 133 lines to 34. See [Phase 3 as built](#phase-3-as-built) | Ascending risk. 3D and 4D one at a time |
 | 4 | Loops and WASM state move onto the kernel; the 22 `run_` thunks in `lutKernelTable.js` collapse | They exist only to rename `t.method` — they do not move, they cease to exist |
 | 5 | `init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire | Needs 3 and 4 landed first |
 | 6 | `wantsLut()` merges `provideLut` + `displacesLut` | Smallest surface, last |
@@ -723,6 +723,74 @@ shows a 1 LSB "failure" that is not one.
 The isolated `solo` bench moved at most **+0.30%** across six 3D/4D cells,
 confirming the kernels this phase did not touch were also not disturbed.
 
+<a id="phase-3-as-built"></a>
+
+## Phase 3 as built
+
+`addStageLUT` went from **133 lines to 34**. All the selection logic — by
+`lut.inputChannels`, then `interpolation3D`/`interpolation4D`, then
+`interpolationFast`, then `lut.outputChannels` — is now inside the kernels that
+own those dimensions. What is left is a registry lookup and a hints object.
+
+`src/interp.js` becomes the built-in float *implementations*; the kernels are
+the *policy*. A third-party kernel can ignore the file entirely.
+
+### Proving a pure refactor is pure
+
+The risk here was not that tests would fail. It was that a subtly different
+interpolator would be installed for some combination nobody tests directly, and
+everything would still pass while the numbers quietly moved.
+
+So `HEAD` was extracted to a scratch tree and the same probe run against both
+copies — stage names **and** accuracy-path colour output, for RGB→RGB, RGB→Lab,
+RGB→CMYK, CMYK→RGB, CMYK→CMYK and CMYK→Lab, each also with
+`interpolationFast:false`, `interpolation3D:'trilinear'`,
+`interpolation4D:'trilinear'`, `useTrilinearFor3ChInput:false` and
+`buildLut:true`. **Byte-identical across all fifteen cases.** That comparison
+was worth more than any number of new assertions, and it is cheap: `git archive
+HEAD | tar -x -C <scratch>` and run the same script twice.
+
+It also settled something that looked like a regression. A typo in
+`interpolation3D` does **not** throw for a PCS-input LUT, because the trilinear
+override resolves the method before the bad value is ever examined. The probe
+showed the old switch did exactly the same thing. With device input, it throws.
+Without the side-by-side, that would have been a plausible-looking bug to chase
+or, worse, to "fix".
+
+### The rule that proves the boundary was wrong
+
+The PCS-input trilinear override existed **only** in the 3-channel branch —
+lcms 2.0 moved to tetrahedral and found it disagreed with 1.19, SampleICC and
+Photoshop on Lab-indexed LUTs, because L sits on one axis and the space is
+uncentred. The 4-D branch had no equivalent.
+
+One function was carrying one dimension's rule for all dimensions. It now lives
+in Kernel3D, and **its absence from Kernel4D is the point.**
+
+### A fragility worth knowing about
+
+`src/interp.js` is still attached to `Transform.prototype`, and that is
+load-bearing rather than vestigial. The 4-D reference variants evaluate two 3-D
+interpolations at the bracketing K planes and reach their siblings through
+`this`:
+
+```js
+var output1 = this.tetrahedralInterp3D_Master(cmyInput, lut, K0);
+```
+
+Stages are invoked as `stage.funct.call(transform, …)`, so `this` is the
+Transform and the sibling resolves off the prototype. Calling
+`interp.tetrahedralInterp4D_3or4Ch(…)` as a bare function throws. **Anything
+that changes how stages are invoked must keep a receiver carrying these
+methods** — which is a live constraint on phase 4, when the loops and WASM state
+move onto the kernels.
+
+### Measured
+
+Throughput unchanged, as a create-time-only change should be: jsCE **median
++0.21%** across 132 cells, isolated `solo` bench **worst −0.61%**, accuracy
+identical. Phase 2's gray and duotone gains held.
+
 ## Open questions
 
 - **Does `createLut()`'s bake walk an optimised pipeline?** It affects whether
@@ -731,9 +799,11 @@ confirming the kernels this phase did not touch were also not disturbed.
 - **What hint authorises a lossy representation?** A new option, an accuracy
   budget passed in `hints`, or an extension of the `lutMode` family — but not
   `interpolationFast`. See the representation section above.
-- **Should `floatFor` be allowed to return `null`?** `array()` may already
-  decline after the fact. A stage has no equivalent fallback, so the answer is
-  probably no — but it should be written down either way.
+- ~~**Should `floatFor` be allowed to return `null`?**~~ **Answered by phase 3:
+  no.** A stage has no fallback to fall through to, and the kernels that had a
+  real choice to make (3D, 4D) all resolve to something or throw. Returning
+  `null` would mean a pipeline with a hole in it, discovered at transform time
+  rather than build time. `floatFor` returns a binding or raises.
 - **Per-channel TRCs and the sub-registry.** Matrix-shaper's JS variant exists
   partly to carry three curves where WASM carries one. Whether that is a second
   entry in Kernel3D's list or a variant inside one entry is a v1.6 question.
