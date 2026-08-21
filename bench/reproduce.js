@@ -27,6 +27,8 @@
  *   flags          sweep lcms CFLAGS, so lcms gets its best build      [slow, opt-in]
  *   native         lcms native C: content matrix at -O2 and -O3, then a size sweep
  *   js             jsCE + lcms-wasm: content matrix, size sweep, per-image
+ *   matrix         the fused matrix-shaper kernel: throughput by content, and accuracy
+ *   pool           the worker pool: the content x kernel x worker-count matrix   [slow]
  *   pixelcache     the beta accuracy-path cache, against its own baseline
  *   solo           the minimal control bench (one image, one engine, one process)
  *
@@ -41,6 +43,12 @@
  *   node bench/reproduce.js --only js,solo
  *   node bench/reproduce.js --with-flags          # include the CFLAGS sweep
  *   node bench/reproduce.js --skip-native         # no WSL/gcc available
+ *
+ * ON WINDOWS, START WSL2 FIRST. Open a WSL terminal (or run `wsl.exe -d
+ * Ubuntu -- true`) before running this. A cold WSL is not started on demand
+ * reliably enough for a `wsl.exe -- gcc --version` probe, so the native phase
+ * reports "no gcc" and skips when the real problem is that the distro was
+ * never running.
  *   node bench/reproduce.js --wsl-distro Ubuntu
  */
 'use strict';
@@ -70,7 +78,8 @@ const SKIP_NATIVE = has('skip-native');
 const WSL_DISTRO  = arg('wsl-distro', 'Ubuntu');
 const ONLY        = arg('only', null);
 
-const ALL_PHASES = ['corpus', 'accuracy', 'flags', 'native', 'js', 'pixelcache', 'solo'];
+const ALL_PHASES = ['corpus', 'accuracy', 'flags', 'native', 'js', 'matrix', 'pool',
+                    'pixelcache', 'solo'];
 const phases = ONLY
     ? ONLY.split(',').map(s => s.trim()).filter(p => ALL_PHASES.includes(p))
     : ALL_PHASES.filter(p => p !== 'flags' || WITH_FLAGS);
@@ -81,6 +90,11 @@ const phases = ONLY
 const CONTENT_SIZE = 1048576;
 const SIZE_SWEEP   = QUICK ? '65536,1048576' : '16384,65536,1048576,10485760';
 const SOLO_REPEAT  = QUICK ? 3 : 5;
+// The pool matrix is the slowest phase — 3 contents x 3 kernels x 8 worker
+// counts, each in its own process. Quick mode halves the image and the
+// repeats; the SHAPE survives that, the absolute numbers do not.
+const POOL_PX      = QUICK ? 2097152 : 4194304;
+const POOL_RUNS    = QUICK ? 3 : 5;
 
 // ---- output folder -----------------------------------------------------
 
@@ -92,9 +106,20 @@ function write(name, text) { fs.writeFileSync(path.join(OUT_DIR, name), text); }
 
 // ---- running things ----------------------------------------------------
 
-function node(args, cwd) {
+/**
+ * Run a bench in its own process.
+ *
+ * `jsonName` names a file under `<results>/json/`; the child writes its own
+ * structured rows there through `bench/lib/emit.cjs` (a no-op when the variable
+ * is absent, so the bench still runs normally by hand). That is what stops a
+ * published table being a hand transcription of console output.
+ */
+function node(args, cwd, jsonName) {
+    const env = Object.assign({}, process.env);
+    if (jsonName) env.JSCE_BENCH_JSON = path.join(OUT_DIR, 'json', jsonName + '.json');
+    else delete env.JSCE_BENCH_JSON;
     return execFileSync(process.execPath, args, {
-        cwd: cwd || ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+        cwd: cwd || ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env,
     });
 }
 
@@ -218,7 +243,11 @@ phase('flags', () => {
 phase('native', () => {
     if (SKIP_NATIVE) throw new Error('--skip-native given');
     gccVersion = nativeAvailable();
-    if (!gccVersion) throw new Error('no gcc — use --skip-native, or install build-essential in WSL');
+    if (!gccVersion) throw new Error(
+        'no gcc. ON WINDOWS, START WSL2 FIRST: open a WSL terminal, or run ' +
+        '`wsl.exe -d ' + WSL_DISTRO + ' -- true`, then re-run — a distro that is ' +
+        'not running probes the same as a missing compiler. Otherwise install ' +
+        'build-essential in WSL, or pass --skip-native.');
 
     process.stdout.write('building lcms2 at -O2 and -O3 (a few minutes)...\n');
     bashInLcmsDir(
@@ -243,13 +272,15 @@ phase('native', () => {
 
 phase('js', () => {
     process.stdout.write('js content matrix (one process per cell)...\n');
-    const content = node([path.join(MATRIX, 'run.js'), '--isolate', '--sizes', String(CONTENT_SIZE)], MATRIX);
+    const content = node([path.join(MATRIX, 'run.js'), '--isolate', '--sizes', String(CONTENT_SIZE)],
+        MATRIX, 'js-content');
     write('js-content.txt', content);
     process.stdout.write(content);
 
     process.stdout.write('js size sweep...\n');
     write('js-sizes.txt',
-        node([path.join(MATRIX, 'run.js'), '--isolate', '--sizes', SIZE_SWEEP, '--content', 'noise'], MATRIX));
+        node([path.join(MATRIX, 'run.js'), '--isolate', '--sizes', SIZE_SWEEP, '--content', 'noise'],
+            MATRIX, 'js-sizes'));
 
     // Per-image rows: the claim that throughput tracks distinct-colour count
     // rather than adjacency is only checkable image by image.
@@ -262,12 +293,52 @@ phase('js', () => {
         process.stdout.write('js per-image...\n');
         write('js-per-image.txt',
             node([path.join(MATRIX, 'run.js'), '--isolate', '--sizes', String(CONTENT_SIZE),
-                  '--content', stems.join(',')], MATRIX));
+                  '--content', stems.join(',')], MATRIX, 'js-per-image'));
     }
 });
 
+phase('matrix', () => {
+    // The matrix-shaper kernel owns its own numbers: it displaces the CLUT
+    // rather than sitting in the lutMode ladder, so the release matrix above
+    // never measures it.
+    process.stdout.write('matrix-shaper throughput (int8 and int16, three content classes)...\n');
+    const out = node([path.join(__dirname, 'matrix_shaper_kernel', 'throughput.js')],
+        ROOT, 'matrix-throughput');
+    write('matrix-throughput.txt', out);
+    process.stdout.write(out);
+
+    // Both depths: int16 is where the quartic output-table index earns its
+    // keep, so running only int8 misses half the accuracy case.
+    for (const bits of ['8', '16']) {
+        process.stdout.write('matrix-shaper accuracy vs the exact pipeline, int' + bits + '...\n');
+        write('matrix-accuracy-int' + bits + '.txt',
+            node([path.join(__dirname, 'matrix_shaper_kernel', 'accuracy.js'), bits],
+                ROOT, 'matrix-accuracy-int' + bits));
+    }
+});
+
+phase('pool', () => {
+    // One process per cell: a shared process has been measured to move these
+    // by 27%. Slow, and the only honest way to run it.
+    process.stdout.write('worker pool matrix (process per cell — this is the slow one)...\n');
+    // This bench takes --name=value, not --name value. Passing them apart
+    // silently measures the defaults instead of what was asked for.
+    const out = node([path.join(__dirname, 'multicore_matrix', 'run.js'), '--isolate',
+                      '--px=' + POOL_PX, '--runs=' + POOL_RUNS,
+                      '--out=' + path.join(OUT_DIR, 'pool-raw.json')],
+        ROOT, 'pool-matrix');
+    write('pool-matrix.txt', out);
+    process.stdout.write(out);
+
+    process.stdout.write('matrix-shaper kernel in the pool (the faster kernel scales worse)...\n');
+    write('pool-matrix-shaper.txt',
+        node([path.join(__dirname, 'matrix_shaper_kernel', 'multicore.js')],
+            ROOT, 'pool-matrix-shaper'));
+});
+
 phase('pixelcache', () => {
-    const out = node([path.join(MATRIX, 'run.js'), '--pixelcache', '--sizes', '262144'], MATRIX);
+    const out = node([path.join(MATRIX, 'run.js'), '--pixelcache', '--sizes', '262144'],
+        MATRIX, 'pixelcache');
     write('pixelcache.txt', out);
     process.stdout.write(out);
 });
@@ -275,7 +346,7 @@ phase('pixelcache', () => {
 phase('solo', () => {
     for (const workflow of ['rgb2lab', 'rgb2cmyk']) {
         const out = node([path.join(__dirname, 'solo_photo', 'solo.js'),
-            '--repeat', String(SOLO_REPEAT), '--workflow', workflow]);
+            '--repeat', String(SOLO_REPEAT), '--workflow', workflow], ROOT, 'solo-' + workflow);
         write(`solo-${workflow}.txt`, out);
         process.stdout.write(out);
     }

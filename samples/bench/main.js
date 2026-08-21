@@ -24,9 +24,13 @@
 
 import { loadLcms, buildProfiles, freeProfiles, makeLcmsRunner, probeLcmsBuild } from './lcms-runner.js';
 
-// CMYK profile: same GRACoL print standard as tests, but the on-disk name
-// in samples/profiles/ is CoatedGRACoL2006.icc (see other sample pages).
+// CMYK input profile: US coated sheet standard.
 const PROFILE_URL       = '../profiles/CoatedGRACoL2006.icc';
+
+// CMYK output profile for CMYK→CMYK: ECI ISO Coated v2 (European press standard).
+// Must be a DIFFERENT binary from the input so the engine builds a real 4D LUT
+// rather than hitting the identity fast-path (same binaryHash → _kernelCopy).
+const ISO_COATED_URL    = '../profiles/ISOcoated_v2_eci.icc';
 
 // RGB->RGB MUST be sRGB -> AdobeRGB (NOT sRGB -> sRGB). If both endpoints
 // are sRGB, lcms's pipeline optimiser collapses the transform to an identity
@@ -39,16 +43,18 @@ const ADOBE_RGB_URL     = '../profiles/AdobeRGB1998.icc';
 // ============================================================ STATE
 
 const state = {
-    jsce:           null,    // window.jsColorEngine reference
-    jsGracol:       null,    // jsColorEngine Profile instance
-    profileBytes:   null,    // raw bytes (for lcms)
-    lcms:           null,    // instantiated lcms-wasm runtime
-    lcmsConsts:     null,    // named exports (TYPE_*, INTENT_*, cmsFLAGS_*)
-    lcmsProfiles:   null,    // { srgb, adobe, cmyk, lab, cmykName, adobeName }
-    lcmsAvailable:  false,
-    simdSupported:  null,    // tri-state until detected
-    initOnce:       null,    // memoised init() promise
-    activeRunner:   null,    // {abort: () => void} for the in-flight bench
+    jsce:               null,    // window.jsColorEngine reference
+    jsGracol:           null,    // jsColorEngine Profile — GRACoL (CMYK input)
+    jsIsoCoated:        null,    // jsColorEngine Profile — ISO Coated v2 (CMYK output)
+    profileBytes:       null,    // raw GRACoL bytes (for lcms)
+    isoCoatedBytes:     null,    // raw ISOcoated bytes (for lcms)
+    lcms:               null,    // instantiated lcms-wasm runtime
+    lcmsConsts:         null,    // named exports (TYPE_*, INTENT_*, cmsFLAGS_*)
+    lcmsProfiles:       null,    // { srgb, adobe, cmyk, cmyk2, lab, cmykName, cmyk2Name, adobeName }
+    lcmsAvailable:      false,
+    simdSupported:      null,    // tri-state until detected
+    initOnce:           null,    // memoised init() promise
+    activeRunner:       null,    // {abort: () => void} for the in-flight bench
 };
 
 // ============================================================ TINY UTILS
@@ -248,7 +254,7 @@ async function detectWasmSimd() {
  *           the workflow object lazily once lcms is loaded.
  *   - shortLabel : table cell label
  */
-function directionConfigs(jsGracol) {
+function directionConfigs(jsGracol, jsIsoCoated) {
     // Each direction carries BOTH 8-bit and 16-bit lcms format names. The
     // 16-bit ones (fIn16/fOut16) are what we feed when the bench mode is
     // a TYPE_*_16 lcms variant - same profile handles, different format
@@ -282,9 +288,9 @@ function directionConfigs(jsGracol) {
         {
             id: 'cmyk-cmyk',
             shortLabel: 'CMYK &rarr; CMYK',
-            longLabel:  'CMYK to CMYK (GRACoL to GRACoL)',
-            js:   { src: jsGracol,    dst: jsGracol,        inCh: 4, outCh: 4 },
-            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', fIn16: 'TYPE_CMYK_16', pOut: 'cmyk', fOut: 'TYPE_CMYK_8', fOut16: 'TYPE_CMYK_16', inCh: 4, outCh: 4 },
+            longLabel:  'CMYK to CMYK (GRACoL &rarr; ISO Coated v2)',
+            js:   { src: jsGracol,    dst: jsIsoCoated,     inCh: 4, outCh: 4 },
+            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', fIn16: 'TYPE_CMYK_16', pOut: 'cmyk2', fOut: 'TYPE_CMYK_8', fOut16: 'TYPE_CMYK_16', inCh: 4, outCh: 4 },
         },
     ];
 }
@@ -374,14 +380,11 @@ async function init() {
             );
         }
         state.jsce = window.jsColorEngine;
-        $('#info-jsce').textContent = 'loaded (window.jsColorEngine)';
+        const jscVer = state.jsce.version || '?';
+        $('#info-jsce').textContent = 'loaded (window.jsColorEngine) v' + jscVer;
         $('#info-jsce').classList.add('is-ok');
 
-        // version - parse from the UMD bundle if available, else "?"
-        // The package.json version is what we care about; the engine doesn't
-        // expose it as a runtime constant (yet), so we mark it as "see footer"
-        // and the user can cross-check against package.json.
-        $('#info-version').textContent = '1.3 (target)';
+        $('#info-version').textContent = jscVer;
 
         // ---- 2. host capabilities ----
         $('#info-wasm').textContent = (typeof WebAssembly !== 'undefined') ? 'available' : 'NOT AVAILABLE';
@@ -405,9 +408,10 @@ async function init() {
         //            lcms-wasm doesn't expose cmsCreateRGBProfile() so we load
         //            a 560-byte reference profile from disk instead.
         const t0 = nowMs();
-        const [respGracol, respAdobe] = await Promise.all([
+        const [respGracol, respAdobe, respIso] = await Promise.all([
             fetch(PROFILE_URL),
             fetch(ADOBE_RGB_URL),
+            fetch(ISO_COATED_URL),
         ]);
         if (!respGracol.ok) {
             throw new Error('Failed to fetch ' + PROFILE_URL + ' (' + respGracol.status + ')');
@@ -415,21 +419,37 @@ async function init() {
         if (!respAdobe.ok) {
             throw new Error('Failed to fetch ' + ADOBE_RGB_URL + ' (' + respAdobe.status + ')');
         }
-        const [bufGracolAb, bufAdobeAb] = await Promise.all([
+        if (!respIso.ok) {
+            throw new Error('Failed to fetch ' + ISO_COATED_URL + ' (' + respIso.status + ')');
+        }
+        const [bufGracolAb, bufAdobeAb, bufIsoAb] = await Promise.all([
             respGracol.arrayBuffer(),
             respAdobe.arrayBuffer(),
+            respIso.arrayBuffer(),
         ]);
-        const buf      = new Uint8Array(bufGracolAb);
-        const bufAdobe = new Uint8Array(bufAdobeAb);
+        const buf        = new Uint8Array(bufGracolAb);
+        const bufAdobe   = new Uint8Array(bufAdobeAb);
+        const bufIso     = new Uint8Array(bufIsoAb);
         state.profileBytes      = buf;
         state.adobeProfileBytes = bufAdobe;
+        state.isoCoatedBytes    = bufIso;
 
-        // jsce GRACoL profile - decode in-memory (sync after we hand it the bytes)
+        // jsce GRACoL profile — CMYK input (US press standard)
         state.jsGracol = new state.jsce.Profile();
         state.jsGracol.loadBinary(buf);
         if (!state.jsGracol.loaded) {
             throw new Error('jsColorEngine: failed to decode CoatedGRACoL2006.icc');
         }
+
+        // jsce ISO Coated v2 — CMYK output for CMYK→CMYK (European press standard)
+        // Using a different profile from the input ensures a real 4D LUT is built
+        // instead of hitting the identity fast-path (same binaryHash = _kernelCopy).
+        state.jsIsoCoated = new state.jsce.Profile();
+        state.jsIsoCoated.loadBinary(bufIso);
+        if (!state.jsIsoCoated.loaded) {
+            throw new Error('jsColorEngine: failed to decode ISOcoated_v2_eci.icc');
+        }
+
         // jsce side of RGB->RGB uses the built-in '*adobergb' profile
         // (same matrix primaries + gamma 2.2 as the AdobeRGB ICC bytes we
         // feed to lcms). We're not loading the ICC into jsce because the
@@ -439,6 +459,7 @@ async function init() {
         const profileMs = nowMs() - t0;
         $('#info-profile').textContent =
             'CoatedGRACoL2006.icc (' + (buf.byteLength / 1024).toFixed(0) + ' KB) + ' +
+            'ISOcoated_v2_eci.icc (' + (bufIso.byteLength / 1024).toFixed(0) + ' KB) + ' +
             'AdobeRGB1998.icc (' + (bufAdobe.byteLength / 1024).toFixed(1) + ' KB), ' +
             'fetched + decoded in ' + profileMs.toFixed(0) + ' ms';
         $('#info-profile').classList.add('is-ok');
@@ -448,7 +469,7 @@ async function init() {
             const { lcms, consts } = await loadLcms();
             state.lcms = lcms;
             state.lcmsConsts = consts;
-            state.lcmsProfiles = buildProfiles(lcms, buf, bufAdobe);
+            state.lcmsProfiles = buildProfiles(lcms, buf, bufAdobe, bufIso);
             state.lcmsAvailable = true;
 
             // Inspect lcms.wasm to surface its build characteristics. This
@@ -534,7 +555,9 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
     const t0 = nowMs();
     let opts;
     if (isNoLut) {
-        opts = { dataFormat: 'int8', buildLut: false };
+        // useCurveLut:true replaces Math.pow with a 4096-entry LUT lookup per pixel.
+        // Error is ≤ 0.03 LSB at u8 output — imperceptible for image work.
+        opts = { dataFormat: 'int8', buildLut: false, useCurveLut: true };
     } else if (modeId === 'int16') {
         // dataFormat: 'int16' + buildLut: true with no explicit lutMode lets
         // the auto-resolver pick the best int16-family kernel for the host
@@ -709,7 +732,7 @@ async function runFullComparison() {
     const hotPerBatch  = parseInt($('#hot-full').value,     10);
     const inclLcms     = $('#incl-lcms-full').checked && state.lcmsAvailable;
 
-    const directions = directionConfigs(state.jsGracol);
+    const directions = directionConfigs(state.jsGracol, state.jsIsoCoated);
 
     // Build the full config matrix
     const configs = [];
@@ -1059,7 +1082,7 @@ function copyFullMarkdown() {
     lines.push('');
 
     // ---- Summary cards ----
-    const directions = directionConfigs(state.jsGracol);
+    const directions = directionConfigs(state.jsGracol, state.jsIsoCoated);
     const cats = [
         { id: 'jsce-accuracy', title: 'Accuracy &middot; jsColorEngine', key: (x) => x.kind === 'jsce' && !x.isLut },
         { id: 'lcms-accuracy', title: 'Accuracy &middot; lcms-wasm',     key: (x) => x.kind === 'lcms' && !x.isLut },
@@ -1532,7 +1555,7 @@ async function runWarmupCurve() {
     const pixelCount = parseInt($('#pixels-warmup').value, 10);
     const iters      = parseInt($('#iters-warmup').value,  10);
 
-    const dir = directionConfigs(state.jsGracol).find((d) => d.id === dirId);
+    const dir = directionConfigs(state.jsGracol, state.jsIsoCoated).find((d) => d.id === dirId);
     if (!dir) return;
 
     setProgress('warmup', 0, 'Building runner...', 'busy');
@@ -1699,7 +1722,7 @@ async function runPixelSweep() {
     const modeId     = $('#mode-sweep').value;
     const hotPerBatch = parseInt($('#hot-sweep').value, 10);
 
-    const dir = directionConfigs(state.jsGracol).find((d) => d.id === dirId);
+    const dir = directionConfigs(state.jsGracol, state.jsIsoCoated).find((d) => d.id === dirId);
     if (!dir) return;
 
     const sizes = [

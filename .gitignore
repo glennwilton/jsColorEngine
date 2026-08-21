@@ -47,7 +47,16 @@ CLAUDE.md
 
 # Private work-in-progress — not ready for public repo
 /_wip/
+/__wip/
+.cursor/
+
+# Old browser bundles, pulled by `npm run archive` — build artefacts, not source.
 bench/archive/
+
+# Superseded one-off benches and the large ephemeral asm dumps. Kept locally
+# because they are occasionally worth re-reading, out of the repo because
+# nothing references them and two of them are 16 MB of generated text.
+bench/_archive/
 
 # Decoded photo corpus — ~27 MB of derived .rgb.bin/.cmyk.bin planes.
 # The SOURCE images in bench/release_matrix/images/ ARE committed (Unsplash
@@ -60,3 +69,16 @@ bench/release_matrix/node_modules/
 # Reproduction runs from bench/reproduce.js — raw timing output, machine-specific.
 # Curated result summaries (e.g. bench/results/v1.5.0-dev.md) stay tracked.
 bench/results/[0-9]*/
+
+# Bench runs (bench/results/<timestamp>/) stay ignored — raw, machine-specific,
+# and superseded by the next run. Two things are NOT ignored and must stay
+# tracked, because a control that lives on one disk is not a control:
+#
+#   bench/baseline/<machine>/   the pinned reference every refactor is gated
+#                              against (scripts/bench_compare.js). Per machine:
+#                              a Ryzen pin is not a control for an M2.
+#   bench/history/<version>/<machine>/
+#                              frozen per-release measurements, so a figure
+#                              published in 1.5.5 can still be re-derived in 1.9.
+#
+# ~120 KB each. See bench/baseline/README.md.

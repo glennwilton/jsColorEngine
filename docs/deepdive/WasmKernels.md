@@ -229,7 +229,8 @@ its own LUT gather — the lane juggling exceeded the parallelism win
 (0.89×, POC finding #2). The resulting plan kept SIMD for matrix-shaper
 work only and declared LUT kernels scalar-only under WASM.
 
-**That conclusion was wrong, because the axis was wrong.**
+**The conclusion was sound; the axis it was measured on was not the only
+one.**
 
 The breakthrough (Apr 2026): the n channels at any given CLUT grid
 corner are stored **contiguously** in memory — layout `[X][Y][Z][ch]`

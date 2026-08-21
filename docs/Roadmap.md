@@ -58,6 +58,7 @@ future-facing only.
     - [One-pixel memo cache — performance experiment](#one-pixel-memo-cache-for-the-lut-kernels--performance-experiment)
 - [v1.6 — QC infrastructure + automated bench history](#v16--qc-infrastructure--automated-bench-history)
     - [Automated bench recording — `npm run benchRecord`](#automated-bench-recording--npm-run-benchrecord)
+    - [One home for the numbers — `docs/BenchResults.md`, generated](#one-home-for-the-numbers--docsbenchresultsmd-generated)
     - [Browser bundle archive — `bench/results/bundles/`](#browser-bundle-archive--benchresultsbundles)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
@@ -1320,64 +1321,57 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 
 ## v1.5.5 — matrix-shaper kernel + pixel cache in the image kernels
 
-> **Status.** Two performance items, both with groundwork done.
-> **Matrix-shaper fast path**: started — the matrix fuse and
-> `useCurveLut` shipped in v1.5.0, and the WASM SIMD kernel exists as
-> a validated five-generation POC at **250–257 MPx/s in Chrome**
-> (`bench/matrix_shaper_poc/`, design history in
-> [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md));
-> remaining work is packaging the POC as a registered kernel
-> descriptor and wiring matrix-shaper detection into `create()`.
-> **One-pixel cache**: an lcms-style memo cache to bench on real
-> images — experiment below.
+> **Status (2026-08-20): three of four shipped.**
 >
-> ✅ **SHIPPED IN v1.5.0: Transform.js file split.** The
-> ~100 `stage_*` functions (+ their compile emitters and colour/matrix
-> helpers) moved verbatim to `src/stages.js`, and the single-colour
-> ACCURACY PATH interpolators to `src/interp.js` — both re-attached to
-> `Transform.prototype` exactly like the kernel loops, so no call site,
-> binding or behaviour changed (488 tests green, `mpx_summary` and
-> bake-time parity confirmed). Transform.js drops 12,690 → ~8,000 lines
-> and is now the pipeline builder + public API, which is the shape the
-> matrix-shaper kernel work (below) and the future v1.7 `stage2code`
-> emitter module plug into.
+> | item | status |
+> |---|---|
+> | 1. Matrix-shaper WASM kernel | **shipped** |
+> | 2. Pixel cache in the image kernels | **moved to v1.6** — prototyped, measured, see below |
+> | 3. Multicore | **shipped** |
+> | 4. Browser sample bench on real-image content | **not started** — see below |
+>
+> **1. Matrix-shaper kernel — shipped, and larger than scoped.** The
+> POC was to be "packaged as a kernel descriptor and wired into
+> `create()`". What shipped is that plus int16, a bit-identical scalar
+> fallback, five alpha entry points, and a new **claiming kernel**
+> registration path — because selection by input channel count cannot
+> express "is this pair a matrix shaper", and only the built pipeline
+> can. 331 MPx/s at int8 on photographic content against ~123 for the
+> CLUT, and within 1 LSB of the exact pipeline where that CLUT reaches
+> 25. Alpha turned out to matter more than speed: canvas `ImageData` is
+> RGBA and was falling to 8 MPx/s, a 40× cliff.
+> [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md)
+>
+> **3. Multicore — shipped.** 6.2× peak, 787 MPx/s, byte-identical to
+> single-threaded in every measured cell, with cancellation,
+> backpressure and interrupt.
+> [deepdive/multicore.md](./deepdive/multicore.md)
+>
+> **Measured and dropped: `SharedArrayBuffer` delivery.** Projected
+> +30%, spiked at +5–13% at int8 and nil at int16, with the plain-array
+> caller case measuring *slower* than today. Not worth two delivery
+> paths and a COOP/COEP blocker. `bench/sab_spike/` is kept so the
+> question can be re-asked on higher core counts rather than re-argued.
 
-> **Scope note (2026-08-19).** Two of the three things once queued here
-> shipped in **v1.5.0** instead: the `Transform.js` split, and the pixel
-> cache on the accuracy path (as a **beta** option — see the CHANGELOG).
->
-> **The v1.5 release comparison set the order for what remains.** It
-> found exactly two gaps against LittleCMS, and items 1 and 2 below are
-> their remedies — so those are the next two pieces of work, in that
-> order:
->
-> 1. **Fused matrix-shaper WASM kernel** — closes the only workflow
->    where native C leads (RGB→RGB at 0.72×). It is also the one path
->    where lcms has SIMD (`fast_float`'s SSE2, 8-bit matrix-shaper only)
->    and we do not.
-> 2. **Multicore** — closes the only axis where lcms has an option
->    (`threaded` plugin) and we have none.
->
-> Both are prototyped and measured; both land in the next, more detailed
-> comparison. Full detail:
-> [LcmsComparison § In progress](./LcmsComparison.md#in-progress).
->
-> What remains in v1.5.5 is the work that is genuinely not done:
->
-> 1. **Matrix-shaper kernel** — the POC runs at 250–257 MPx/s but is not
->    packaged as a kernel descriptor or wired into `create()`.
-> 2. **Pixel cache in the image kernels** — scoped to four int-LUT loops
->    (3D/4D × 3ch/4ch), 8-bit only, scalar only, never SIMD. The 4D POC
->    measured break-even ~10 % and up to +169 % on real content; the 3D
->    case has been modelled but never measured.
-> 3. **Multicore** — measured at 5.46× in a POC
->    (`bench/multicore_poc/`), design in
->    [deepdive/multicore.md](./deepdive/multicore.md). Nothing in the
->    engine yet.
-> 4. **Rebuild the browser sample bench on real-image content** — see
->    below.
+### 2. ~~Pixel cache in the image kernels~~ — MOVED TO v1.6
 
-### Browser sample bench — retune on real-image content
+Prototyped and measured during 1.5.5, and moved out rather than rushed in: it
+wants a dispatcher change and eight regenerated binaries, which is 1.6 work.
+See [v1.6](#v16--qc-infrastructure--automated-bench-history).
+
+The measurement changed the design twice, so the POC is worth keeping:
+
+- **It goes in the SIMD kernels after all.** The original scoping said "scalar
+  only, never SIMD — a scalar check serialises what f32x4 vectorises". That is
+  true of a pixel-parallel kernel and `tetra3d_simd` is not one: its lanes are
+  the four channels at a CLUT corner, one iteration is one pixel. Ruling out
+  the default path was ruling out everybody.
+- **The winner is a single entry, not a hash table.** "Did the same bits arrive
+  as last time" — one i32 compare, the previous output kept in the v128 the
+  kernel was about to store. A 4096-entry hash needs 32 KB to beat it, and only
+  on photographs, which is the content this is not for.
+
+### 4. Browser sample bench — retune on real-image content
 
 **Why.** The v1.5 release measurement campaign found that synthetic
 content had been quietly deciding our numbers, and the browser bench
@@ -1627,10 +1621,10 @@ full-resolution photographs the cache hits 3–41 % and runs between
 0.84× and 1.05× — break-even at best. The clear win is graphic
 content: a flat-colour poster hit 67 % at 1.22×, and synthetic solid
 / checkerboard content reaches 3.2×. Pure noise is the floor at 0.82×.
-(An earlier reading of 59–83 % on photographs was wrong twice over —
-the bundled sample images are AI-adjusted rather than shot, and
-capping the pixel count crops the top of the frame instead of sampling
-it. Both are written up in
+(An earlier reading of 59–83 % on photographs came from two properties
+of the test set rather than of photographs: the bundled samples are
+AI-adjusted rather than shot, and capping the pixel count crops the top
+of the frame instead of sampling it. Both are written up in
 [deepdive/PixelCache.md](./deepdive/PixelCache.md).)
 
 **Where the cost goes.** Decomposing the ~18 % miss tax: ~6.5 points is
@@ -1677,173 +1671,244 @@ required.
 > snapshot — regressions become visible before they reach users.
 > (DeviceLink and N-channel support, originally filed here, shipped
 > early — see [v1.5](#v15--polish-validation-and-fast-paths--shipped-in-v150).)
+>
+> **Also carried in from 1.5.5: the in-kernel pixel cache**, prototyped and
+> measured but not shipped — it needs a dispatcher change and eight
+> regenerated binaries, and 1.6 is where breaking changes and different
+> optimisations belong.
 
-### Automated bench recording — `npm run benchRecord`
+### One home for the numbers — `docs/BenchResults.md`, generated ✅ built
 
-**Problem.** Bench results are only captured when the developer remembers
-to run the browser bench and save the markdown.  Regressions can slip
-through unnoticed between releases.
+Throughput figures are currently quoted in the README, `Performance.md`,
+`LcmsComparison.md`, `pool.md`, the CHANGELOG and four deepdives. Nothing links
+them, so a re-measurement means finding every copy by hand — which is how a
+page ends up carrying two vintages of the same number at once.
 
-**Solution.** Hook `npm version` to automatically record a Node bench
-snapshot before every version bump:
+The shape to build, alongside the bench-recording work above:
 
-```bash
-# package.json
-"preversion":    "npm run benchRecord",
-"benchRecord":   "node bench/mpx_summary.js | node scripts/bench-record.js",
-"benchHistory":  "node scripts/bench-history.js"
+1. **The benches emit data, not prose.** Each writes JSON to
+   `bench/results/`, which several already do (`multicore_matrix.json`).
+2. **One generated page** — `docs/BenchResults.md` — renders those into tables,
+   each with a stable id, the machine, the date and the harness that produced
+   it. Generated, never hand-edited, regenerated by one command.
+3. **Every other page links to a table rather than restating it.** Prose keeps
+   the *finding* ("the kernel scales worse than the CLUT, necessarily"); the
+   page owns the *figures*.
+4. **A reference index at the foot of the generated page** listing which
+   documents cite which table, built by scanning for the ids. That is what
+   makes a re-measurement finite: regenerate, then walk the index for the
+   handful of places carrying a headline number in prose.
+
+Images (SVG/PNG) were considered for this and rejected: a reader cannot copy a
+number out of a picture, and a diff cannot show what moved.
+
+**Built on 2026-08-20**, ahead of the rebuild for exactly that reason: the
+rebuild is the event that invalidates every quoted figure at once. `emit.cjs`
+is wired into the release matrix, the pixel cache, the matrix-shaper benches,
+the pool matrix and the solo control; `bench/reproduce.js` runs all of them and
+each writes its own JSON. Still to wire: the native C harness (its numbers are
+parsed from text) and the one-off POC benches, which are history rather than
+published figures.
+
+### Web Worker pool for browsers
+
+`transformImages()` is Node-only today: it requires `worker_threads`, and the
+browser build stubs that out (`"browser": {"worker_threads": false}`), so a
+browser gets the sequential path — correct, same bytes, same callbacks, one
+thread.
+
+**The blocker is packaging, not threading.** The fragment queue, the
+out-of-order reassembly, cancellation, backpressure and `interrupt()` are all
+platform-neutral, and `postMessage` with transferables behaves the same in a
+browser. What is missing:
+
+1. **A second bundle.** `browser/jsColorEngineWorker.js` — the worker entry is
+   the whole engine plus the `poolWorker` protocol, so it cannot share the IIFE
+   the main build produces.
+2. **A URL to load it from.** A library cannot reliably know its own URL;
+   `new URL('./poolWorker.js', import.meta.url)` needs ESM plus bundler
+   cooperation and the package ships UMD. The honest answer is to let the APP
+   say where it put the file — `globalThis.JSCE_WORKER_URL` — which
+   `src/settings.js` already supports reading.
+3. **A browser branch in `Pool.start()`**, choosing `new Worker(url)` over
+   `worker_threads`.
+4. **Nothing for CSP.** A blocked worker construction already falls back to
+   sequential, like every other failure path.
+
+Worth measuring separately once it exists: a browser tab's memory ceiling is
+lower than a server's, and per-worker LUT copies are the pool's dominant cost —
+16 workers at 1.4 MB per transform is a different proposition in a tab.
+
+### In-kernel pixel cache — BETA, OFF BY DEFAULT
+
+A single-entry cache inside the CLUT kernels: *"did the same bits arrive as
+last time, so the same bits can leave"*. Not "have I seen this colour" — it
+never interprets the pixel, which is why one insertion covers int8, int16, RGB
+and RGBA, and why the scalar and SIMD versions are the same twenty lines.
+
+**Measured** on `tetra3d_simd`, paired exports, all outputs byte-identical to
+the shipped kernel:
+
+| content | cached ÷ shipped |
+|---|---:|
+| solid | **3.07×** |
+| logo, 5% mark on white | **2.40×** |
+| logo, 30% mark on white | **2.57×** |
+| ILLUSTRAT | 1.04× |
+| photographs | 0.93–0.96× |
+| noise | 0.99× |
+
+**Off by default.** 4–7% on photographs is a real cost, and only the caller
+knows whether their work is flat. The rule is simple enough to document in a
+sentence — *design work, logos and gradients on solid grounds: on; photographic
+pipelines: off* — which is the most a set-and-forget default can honestly ask.
+
+**Shipping shape — paired exports, not a runtime mode.** Behind a `$cacheMode`
+parameter the *uncached* path measured 15–22% slower, and got worse when a
+third mode was added: the cost is the code behind the guard, not the guard
+itself. A single mode compare was worth ~10% on its own. So the cache is a
+second function in the same module, with an identical signature:
+
+```
+interp_tetra3d_simd          the shipped kernel, verbatim
+interp_tetra3d_simd_cached   the same, plus two locals
 ```
 
-`bench-record.js`:
-- Reads the MPx/s lines from `mpx_summary.js` output
-- Reads `package.json` for the version
-- Writes `bench/results/node_v{version}_{YYYY-MM-DD}.md`
-- Appends one row to `bench/results/HISTORY.md` (the running table)
+The uncached export measures 0.985–1.008× against the shipped binary — a tie,
+because there is no cache code in it to pay for. Enabling the cache is swapping
+a function reference; the call site does not change.
 
-`bench-history.js`:
-- Re-reads all `bench/results/node_*.md` files
-- Regenerates `bench/results/HISTORY.md` from scratch (idempotent)
-- ASCII table + optional SVG sparkline for embedding in README
+**Work remaining:**
 
-**Browser bench results** (WASM SIMD — highest numbers) are saved manually
-to `bench/results/` using the bench page's markdown copy button.  The
-version now appears in every result file so the history is self-labelling.
+1. Extend the generator (`bench/pixel_cache_wasm/build_paired.js`) to the
+   remaining kernels — 3D and 4D, scalar and SIMD, int8 and int16. Each needs a
+   five-anchor recipe; the 4D key packs four input bytes instead of three. The
+   uncached function is copied in verbatim, so the shipped path cannot drift.
+2. Dispatcher: select the export from a `pixelCacheKernel` flag, alongside the
+   existing `lutMode` resolution.
+3. **Load one WASM family instead of both.** Currently 3D and 4D both load on
+   every `create()` (test-asserted). It matters more once each module carries
+   two functions — and it is now decidable, since the kernel is claimed during
+   `create()`.
+4. Decide whether the accuracy-path `pixelCache` option and this one share a
+   name. Two knobs called the same thing with different risk profiles would be
+   worse than having one.
 
-**Regression detection.** Running `npm run benchHistory` in CI (or as a
-`postversion` hook) can diff the latest two rows and warn if any
-direction drops by more than a threshold (e.g. 5%).  No external
-benchmarking service needed — the history file IS the record.
+POC: `bench/pixel_cache_wasm/` (`hitrate.js`, `build_paired.js`,
+`run_paired.js`). Design notes, and how the "never in SIMD" exclusion came apart:
+[deepdive/PixelCache.md](./deepdive/PixelCache.md#simd-here-is-parallel-interpolation-not-parallel-pixels).
 
-**What Node covers.** `mpx_summary.js` measures `float`, `int`, and
-`no-lut` paths.  WASM kernels are not available in Node without
-`--experimental-wasm-simd` flags, so the Node record captures JS kernel
-baselines only.  The browser bench records the full WASM SIMD numbers
-manually.  Both sets live in `bench/results/` and are versioned together.
+### Matrix shaper — per-channel TRCs, and a hot JS path
 
-### Browser bundle archive — `bench/results/bundles/`
+Two separate items that got conflated once and should not be again.
 
-Each version's browser build is archived alongside the bench results:
+#### 1. Per-channel TRCs in the WASM kernel
 
-```
-bench/results/
-  bundles/
-    jsColorEngineWeb_v1.4.4.js
-    jsColorEngineWeb_v1.5.0.js
-    ...
-```
+The kernel keeps ONE input table and ONE output table, shared across R/G/B, so
+it declines a profile whose `rTRC`, `gTRC` and `bTRC` genuinely differ. Note
+this is a NO-LUT problem only: `createLut()` walks the grid through the gamma
+stages, so a CLUT has per-channel curves baked into its samples and needs no
+guard — which is exactly why the WASM LUT kernels can be pure interpolators.
+Confirmed by the built pipeline, which for `buildLut: true` is two stages,
+`tetrahedralInterp3D` then `stage_device3_to_int`, with no curve stage at all.
 
-`preversion` hook copies `browser/jsColorEngineWeb.js` to
-`bench/results/bundles/jsColorEngineWeb_v{version}.js` before the
-version number changes.
+**Nearly free at runtime.** The generator already emits R, G and B as separate
+code, so a per-channel table is a change to a compile-time constant offset —
+no branch, no extra instruction. The cost is memory and build time.
 
-**Use case — exact A/B regression check:**
-1. Open `samples/bench/index.html?bundle=v1.4.4` → loads archived build
-2. Run bench, save results
-3. Open without `?bundle` param → loads current build
-4. Run bench, save results
-5. Compare — same machine, same browser, same profiles, different code
+**At int8, just always carry three.** One binary, one code path, no `inspect()`
+branch to get wrong, and one fewer reason to decline:
 
-The `?bundle=` URL parameter selects which file from `bench/results/bundles/`
-the bench page loads.  No server-side logic needed — just a JS check at
-startup that swaps the script src before the engine initialises.
+| | today | with 3 curves | where it lives |
+|---|---:|---:|---|
+| int8 | 1 KB + 64 KB = 65 KB | 3 KB + 192 KB = **195 KB** | L2 either way |
+| int16 | 256 KB + 256 KB = 512 KB | 768 KB + 768 KB = **1.5 MB** | L2 → past it |
 
-Removes all "was it the machine / did I have DevTools open?" uncertainty
-from cross-version comparisons.
+65 KB already overflows L1, so both int8 sizes sit in L2 and the marginal cost
+should be small. **At int16 it is not "light on memory"** — 1.5 MB is past L2
+on many parts, and it triples a table build that already costs ~8 ms. Measure
+that one before committing; two binaries remain the fallback if it bites.
 
-**Node.js smoke-test against archived bundles.**  For CI regression checks
-without a browser, load the archived IIFE bundle in Node by faking `window`:
+The path that would feel a bigger table is the SCALAR one, not SIMD: the int8
+scalar kernel measures 209 MPx/s on solid against **72 on noise**, a 66% swing
+caused entirely by random access into the 64 KB output table. SIMD moves 4%
+(346 vs 333) because twelve independent gathers hide the latency.
 
-```js
-global.window = {};
-require('./bench/archive/jsColorEngineWeb_v1.4.2.js');
-const jsce = global.window.jsColorEngine;
-// run mpx_summary logic — JS kernels work, WASM SIMD unreliable in Node
-```
+**But no profile in the testbed trips it.** Probing every RGB profile in
+`testbed/profiles/rgb/`, the guard fired zero times. Three declined for an
+unrelated and already-documented reason — `sRGB2014.icc`, `sRGB Color Space
+Profile.icm` and `sRGB_v4_ICC_preference.icc` are LUT-BASED profiles, so the
+pipeline is not a matrix shaper at all. The remaining five were all claimed.
 
-Reliable for JS kernel (`float`, `int`, `no-lut`) baselines — catches most
-regressions automatically.  WASM SIMD numbers need the `?v=` browser path
-for accurate comparison.
+So this is coverage insurance, not a measured win. The workload that would
+justify it is a **calibrated display profile**, where distinct R/G/B curves are
+plausible — and there is not one in the testbed. **Get one and measure before
+building**; if real monitor profiles do carry differing curves, this stops a
+soft-proof at default settings falling to ~9 MPx/s, which would make it the
+same shape of cliff as RGBA was.
 
-### `lcms_patch/` extraction (v1.3 follow-up)
+#### 2. ~~A hot JS matrix-shaper path~~ — SHIPPED in 1.5.5
 
-The lcms-compat harness shipped as part of v1.3 (see
-[Accuracy.md](./deepdive/Accuracy.md) — `bench/lcms_compat/run.js`
-+ `probe-pixel.js`, both live and frozen against a 150-file
-reference oracle). The one piece left open is **distilling the
-instrumented lcms 2.16 tree** at `bench/lcms_exposed/` into a
-regen-able patch:
+Same fused 3×3 and the same curves off `stage_matrix_rgb.stageData`, in plain
+JS — and unlike the WASM kernel it can carry three curves without thinking
+about it, because JS has no table-size pressure.
 
-1. `bench/lcms_compat/lcms_patch/01-stage-prints.patch` against
-   stock lcms 2.16 (the per-stage `EvaluateCurves` /
-   `EvaluateMatrix` / `EvaluateCLUT` / `EvaluateXYZ2Lab` printfs
-   that `probe-pixel.js` consumes).
-2. `bench/lcms_compat/lcms_patch/02-transicc4batch.patch` for the
-   batch-mode `.it8` I/O variant of `transicc` used to regenerate
-   the reference oracle.
-3. `fetch-lcms2-instrumented.sh` / `.ps1` that downloads stock
-   lcms from the GitHub release and applies the patches (same
-   pattern as `bench/lcms_c/`).
-4. Delete the `bench/lcms_exposed/` vendored tree once the patches
-   round-trip byte-identically.
+`bench/js_matrix_shaper/run.js`, 1 MPx noise, `*prophoto → *sRGB`:
 
-Pure janitorial work — the harness already passes against the
-patched binary that's vendored in the repo. The patch extraction
-just removes the "you need our vendored lcms tree on disk" step
-for contributors who want to regenerate the oracle from scratch
-against a future lcms release.
+| variant | int8 | int16 | max LSB (8 / 16) |
+|---|---:|---:|---:|
+| stage pipeline | 8.2 | 8.1 | — |
+| exact, linear output index | 61.3 | 58.5 | 1 / **7** ✗ |
+| **exact, quartic output index** | **62.3** | **56.3** | **1 / 1** ✓ |
+| flat multiply, device-indexed curve | 47.2 | 46.6 | 2 / **360** ✗ |
+| WASM kernel, for scale | 329.3 | 219.8 | 1 / 1 |
 
-### Automated profile oracle — bulk ICC compatibility testing
+**7.5× the pipeline, ≤ 1 LSB, one function for both depths.** The shape:
 
-Drop ICC profiles into a folder, run a single command, get a
-pass/warning/fail results table for every profile. Catches decoder
-crashes, load failures, and accuracy regressions against
-lcms-generated ground truth — without manual test authoring.
+- **Input: a table indexed by the raw code.** Exact — one entry per possible
+  input — and already generic, because `iT[px[p]]` is the same source at both
+  depths; only the table length changes (256 vs 65536), which is data.
+- **Output: the quartic index**, same as the WASM kernel. A linear index gives
+  7 LSB at int16 with 70,625 samples over 1, for the reason set out in
+  `build_matrix_shaper_wasm.js`. Two `Math.sqrt` per channel cost nothing —
+  at int8 the quartic variant is the FASTEST of the lot, because the loop is
+  bound on table-lookup latency and `sqrtsd` disappears into its shadow.
+- **Rejected: normalising with a flat `1/255` or `1/65535` multiply** and
+  indexing a 4096-entry device-indexed curve. It buys the same genericity the
+  code-indexed table already gives, and costs 22% and the accuracy budget.
 
-**How it works:**
+**Three V8 lessons that did NOT transfer from the tetrahedral kernels:**
 
-1. **Profile corpus.** A folder tree (e.g. `test-profiles/`) of ICC
-   files collected from any source — vendor downloads, customer
-   submissions, ICC profile registry, random PDFs, colour-managed
-   TIFFs. Organised into subfolders by source or category for
-   triage. Committed to the repo or `.gitignore`d with a download
-   script — depends on licensing.
+- *"No intermediate variables"* does not apply. Adding three more locals for
+  the output values measured 61.1 against 61.3 — free. The documented spill
+  problem is a GPR problem, and these are doubles: nine coefficients plus six
+  values sit in the 16-register XMM file and never compete with the pointers.
+  The 4D kernel spills because it wants 13-15 GPR values; this wants three.
+  Taken literally the rule is a 7% LOSS — recomputing to avoid naming means
+  nine input lookups per pixel instead of three.
+- *Manual unrolling* is worth 3% here (60.5 vs 58.7 rolled), not the
+  load-bearing lever it is in the tetrahedral kernels. V8's threshold is about
+  large functions; a three-iteration channel loop over a small body is not one.
+- *Address arithmetic does not matter either.* `p, p+1, p+2` against
+  `p++, p++, p` against a running pointer with no multiply: 62.3 / 63.0 / 62.5
+  at int8, 56.6 / 57.5 / 57.6 at int16. All within noise.
 
-2. **Oracle generation (Node + lcms `transicc`).** A script scans the
-   corpus, and for each profile runs lcms's `transicc` (or the
-   patched batch-mode variant from `lcms_patch/`) to generate
-   reference `.it8` target files. Outputs are sorted into matching
-   subfolders alongside the source profiles. This is the ground
-   truth — lcms is the industry-standard reference implementation.
-   Run once (or on CI when profiles change); results are cached.
+**Why every micro-choice measured flat.** The loop is bound on a dependent
+load chain — `px[p]` → `iT[…]` → arithmetic → `qT[idxQ(…)]` — two dependent
+table lookups per channel, the second a scattered access into 128 KB. The
+multiplies, the extra locals, the square roots and the address maths all hide
+underneath it. If this ever needs to be faster, the lookups are the target,
+not the code shape around them.
 
-3. **Automated test runner.** A Jest (or standalone Node) harness
-   walks the corpus:
-   - **Load test** — can jsColorEngine load the profile without
-     throwing? Result: pass or fail + error message.
-   - **Transform test** — build a transform (e.g. profile → Lab),
-     run the same input values as the `.it8` oracle, compare output.
-     Result: pass (within tolerance), warning (within loose
-     tolerance), or fail (outside tolerance or crash).
-   - **Results table** — summary output (console + markdown) with
-     one row per profile: filename, colour space, status, max ΔE
-     vs oracle, notes. Easy to scan for regressions.
+- *Not a small-batch arm.* The CLUT paths have
+  `WASM_DISPATCH_MIN_PIXELS = 256` because a 214 KB upload cannot pay on a
+  short call. The WASM matrix shaper's fixed cost is ~0.15 µs and it beats the
+  pipeline **from four pixels up** — 2.3× at 4, 10× at 16, 35× at 64 K. It
+  loses only at one pixel, which is the accuracy path's job.
 
-4. **Incremental growth.** Adding a new profile to the corpus is just
-   dropping a file in the folder and re-running. No test code to
-   write. The oracle script and test runner handle everything.
-
-**What this catches:** profiles that crash the decoder, profiles that
-produce wrong colours, regressions after engine changes, and edge
-cases we'd never think to write manual tests for (weird vendor
-profiles, unusual colour spaces, oversized CLUTs, non-standard tags).
-
-**Why this belongs in v1.6.** The `lcms_patch/` extraction above
-gives us the tooling; this item puts it to work. Together they form
-a QC feedback loop: bulk-test → find issues → patch the engine →
-re-test. Any core issues surfaced here drive v1.6.x patch releases
-before we move on to the heavier v1.7 work.
-
----
+**Shipped** as `src/kernels/matrixShaper/matrixShaperJS.js`, chosen by
+`build()` whenever there is no WASM variant to use — which is exactly the two
+cases above. `useVariant('js')` pins it for tests and benchmarks.
 
 ## v1.7 — Compiled non-LUT pipeline + `toModule()`
 
@@ -2526,58 +2591,25 @@ we're on.
 
 ## Historical record — original v1.3 / v1.5 analysis (1D WASM POC)
 
-The two analyses below drove the original v1.3 / v1.5 split. Both
-have since been superseded — v1.3 (WASM scalar) landed in v1.2, and
-v1.5's matrix-shaper-only plan was subsumed by the v1.5 code-
-generation target above. The numbers and findings are preserved
-because they still inform design decisions (especially the SIMD
-ceiling number for v1.5 emission, and the "LUT gather ≠ vectorise
-across pixels" rule that's easy to forget).
+The 1D WASM POC drove the original v1.3 / v1.5 split. Both plans have since
+been overtaken — v1.3 (WASM scalar) landed in v1.2, and v1.5's
+matrix-shaper-only plan was subsumed by the code-generation target above —
+but four of its findings still shape decisions here:
 
-**Where the WASM scalar win actually came from** (1D POC, v1.3
-analysis): our JS integer kernels are ~37 % data moves, ~20 %
-safety machinery (including ~8 % `jo` overflow guards we don't
-need and ~7 % bounds-check pairs), and only 25-47 % arithmetic.
-WASM removes both classes of safety machinery for free — `i32`
-math wraps by spec (no `jo` needed) and linear memory uses guard
-pages for bounds safety (no `cmp`/`jae` pairs needed). Prediction
-was 1.4-1.6× over `'int'`; measured 1.40× on the production 3D
-tetrahedral kernel (Performance.md § 2.3).
+1. **WASM scalar beat JS by 1.84×** on a gather-heavy kernel, from removing
+   bounds checks and overflow guards rather than from better arithmetic.
+   Shipped as `'int-wasm-scalar'`.
+2. **SIMD gathering across *pixels* was slower than scalar** (0.89×), because
+   WASM has no gather instruction. That ruled SIMD out for LUT kernels until
+   the axis was flipped to channels, which measured 3.25×.
+3. **SIMD on no-gather maths ran 67.7× JS**, which is the ceiling any emitted
+   non-LUT pipeline is aiming at.
+4. **`Math.imul` is no longer a speed optimisation** in modern V8 — plain `*`
+   emits the same code. Still useful against accidental float promotion.
 
-**Original 1D POC results (Node 20, 1 Mi pixels per pass):**
-
-| Kernel | MPx/s | vs JS plain |
-|---|---|---|
-| JS plain | 372 | 1.00× |
-| JS `Math.imul` | 376 | 1.01× |
-| **WASM scalar** | **684** | **1.84×** |
-| WASM SIMD (with LUT gather) | 606 | 1.63× |
-| WASM SIMD (no LUT, pure math) | 25 180 | **67.7×** |
-
-All four kernels were bit-exact against each other across 1 Mi
-pixels. See `bench/wasm_poc/README.md` for the full analysis.
-
-**Four findings that still drive the roadmap:**
-
-1. **WASM scalar beats JS by 1.84×** for gather-heavy kernels. V8
-   is excellent at integer JS, but WASM wins via no bounds checks,
-   no de-opt risk, and tighter machine code. Drove v1.3 → now
-   shipped as `'int-wasm-scalar'`.
-2. **WASM SIMD with across-pixel LUT gather is *slower* than WASM
-   scalar** (0.89×). WASM SIMD has no native gather instruction;
-   each lane lookup is a scalar `i32.load16_u` + `replace_lane`
-   round-trip. Original conclusion: "3D/4D LUT kernels will
-   perform worse under SIMD." **Correct for across-pixel; wrong
-   for across-channel** — see Performance.md § 2.4 for the
-   inversion that hit 3.25×. The "we ruled SIMD out for LUTs"
-   story is § 3.3.
-3. **WASM SIMD pure math IS 67.7× faster** on no-gather math.
-   This is the ceiling for emitted non-LUT pipelines — drives
-   v1.5 code-generation target. Matrix-shaper, gamma polynomial,
-   RGB↔YUV, channel reordering all live here.
-4. **`Math.imul` is no longer worth using as a perf optimisation**
-   in modern V8. Still useful as insurance against accidental
-   float promotion, but plain `*` produces identical machine code.
+The full analysis, with the POC table and the instruction-mix breakdown, is in
+[Performance § 5](./Performance.md#historical-record-original-v13--v15-analysis-1d-wasm-poc);
+raw results in `bench/wasm_poc/README.md`. It is not repeated here.
 
 ---
 

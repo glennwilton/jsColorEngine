@@ -415,10 +415,11 @@ the same compiled `jsColorEngine` (`window.jsColorEngine` v1.5.0-dev). The
 math is provably identical. So the gap must be in **measurement methodology**,
 not arithmetic.
 
-This was initially a bit embarrassing and a shock — we had a new 'perfect' benchmark that was supposed 
-to be better, but it reported a much worse number. We had to ask ourselves: is the engine
-actually slower, or is the new benchmark lying? We had to go back to the drawing board 
-and figure out what was going on.
+That put the question the wrong way round from the one we expected to be
+asking. The new harness was the careful one, and it reported the worse
+number — so either the engine was slower than we thought, or the new bench
+was measuring something the old one wasn't. Both were worth ruling out
+before either number could be quoted.
 
 
 ### 16.2 Theories we tried and discarded
@@ -1356,7 +1357,7 @@ Sometimes the failed experiment publishes the best result.
 
 ---
 
-## 20. Two more ways the input lied (2026-08-19)
+## 20b. Two more ways the input lied (2026-08-19)
 
 The v1.5 release comparison found that §19's lesson generalises beyond
 call sites: **the harness can distort what it measures through the

@@ -129,7 +129,7 @@ export async function loadLcms() {
  * Returns { srgb, adobe, cmyk, lab, cmykName, adobeName } with pointers
  * you must free via freeProfiles().
  */
-export function buildProfiles(lcms, gracolBytes, adobeBytes) {
+export function buildProfiles(lcms, gracolBytes, adobeBytes, isoCoatedBytes) {
     const cmyk = lcms.cmsOpenProfileFromMem(gracolBytes, gracolBytes.byteLength);
     if (!cmyk) throw new Error('lcms-wasm: cmsOpenProfileFromMem(GRACoL) failed');
     const srgb = lcms.cmsCreate_sRGBProfile();
@@ -142,6 +142,13 @@ export function buildProfiles(lcms, gracolBytes, adobeBytes) {
     const adobe = lcms.cmsOpenProfileFromMem(adobeBytes, adobeBytes.byteLength);
     if (!adobe) throw new Error('lcms-wasm: cmsOpenProfileFromMem(AdobeRGB) failed');
 
+    // ISO Coated v2 — CMYK output profile for CMYK→CMYK (different from GRACoL input)
+    if (!isoCoatedBytes || !isoCoatedBytes.byteLength) {
+        throw new Error('lcms-wasm: buildProfiles requires ISOcoated bytes (for a real CMYK→CMYK, not identity)');
+    }
+    const cmyk2 = lcms.cmsOpenProfileFromMem(isoCoatedBytes, isoCoatedBytes.byteLength);
+    if (!cmyk2) throw new Error('lcms-wasm: cmsOpenProfileFromMem(ISOcoated) failed');
+
     // Grab friendly profile descriptions for the engine-info panel. Not all
     // builds expose cmsGetProfileInfoASCII the same way - guard it.
     const readName = (p, fallback) => {
@@ -153,10 +160,11 @@ export function buildProfiles(lcms, gracolBytes, adobeBytes) {
         } catch (_) { /* fall through */ }
         return fallback;
     };
-    const cmykName  = readName(cmyk,  'GRACoL2006');
-    const adobeName = readName(adobe, 'AdobeRGB (1998)');
+    const cmykName   = readName(cmyk,  'GRACoL2006');
+    const cmyk2Name  = readName(cmyk2, 'ISO Coated v2');
+    const adobeName  = readName(adobe, 'AdobeRGB (1998)');
 
-    return { srgb, adobe, cmyk, lab, cmykName, adobeName };
+    return { srgb, adobe, cmyk, cmyk2, lab, cmykName, cmyk2Name, adobeName };
 }
 
 export function freeProfiles(lcms, profiles) {
@@ -164,6 +172,7 @@ export function freeProfiles(lcms, profiles) {
     if (profiles.srgb)  lcms.cmsCloseProfile(profiles.srgb);
     if (profiles.adobe) lcms.cmsCloseProfile(profiles.adobe);
     if (profiles.cmyk)  lcms.cmsCloseProfile(profiles.cmyk);
+    if (profiles.cmyk2) lcms.cmsCloseProfile(profiles.cmyk2);
     if (profiles.lab)   lcms.cmsCloseProfile(profiles.lab);
 }
 

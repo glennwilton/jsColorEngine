@@ -36,6 +36,10 @@ colours / pixels as you like.
 * [Gamut warning modes](#gamut-warning-modes)
 * [Methods](#methods)
   * [Pipeline validation — `validatePipeline`](#transformvalidatepipelineformatoverride)
+  * [Batches and the worker pool — `transformImages`](#transformtransformimagesimages-options)
+  * [Pool control — `enablePool` / `disablePool` / `restartPool`](#pool-control--enablepool--disablepool--restartpool)
+  * [Which kernel took it — `kernelInfo`](#transformkernelinfo)
+* [Pinning older defaults — `Transform.compatibility()`](#pinning-older-defaults--transformcompatibility)
 * [Properties](#properties)
 * [LUT build hooks](#lut-build-hooks)
 * [Portable LUT JSON — `toJSON` / `fromJSON` / signatures](#portable-lut-json--tojson--fromjson--signatures)
@@ -52,7 +56,8 @@ one matters more than any other choice you'll make:
 | Use case | Method | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calcs, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` with `{ buildLut: true, dataFormat: 'int8' }` | 45–70 Mpx/s | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, any pixel-bulk |
+| **Image / array processing** | `transform.transformArray(typedArray, ...)` with `{ buildLut: true, dataFormat: 'int8' }` | ~120 MPx/s on photographs (WASM SIMD, one core); ~330 where the matrix-shaper kernel takes over | Slightly less accurate (LUT is finite resolution) — except on the matrix-shaper kernel, which has no interpolation error | Soft-proofing, image conversion, video, any pixel-bulk |
+| **Batches of images** | `await transform.transformImages(images, {multicore: true, onImage})` | 6.2× peak, 787 MPx/s across 8 workers | Byte-identical to the sequential path | Whole folders, servers, RIPs — see [docs/pool.md](./pool.md) |
 
 The library is deliberately split this way so single-colour conversion
 is exact and image conversion is fast — the optimisations needed for
@@ -265,6 +270,8 @@ new Transform(options)
 | `clipRGBinPipeline` | Boolean | `false` | Clip RGB values to 0..1 inside the pipeline (useful for extreme abstract profiles). |
 | `validateOnCreate` | Boolean | `true` | Run a single-pixel smoke test through the pipeline at the end of `create()`. If the test colour produces `NaN`, `undefined`, or the wrong output type the call throws immediately with a clear message. Adds ~1 µs to `create()` time — negligible. Set `false` to disable (e.g. when loading a pre-validated profile that you already trust). Has no effect when a cached LUT is loaded via `setLut()` / `fromJSON()` — validation is skipped for pre-built LUTs. |
 | `pixelCache` | Number | `0` | **BETA — semantics may change.** Memoise the accuracy path: `0`/`false` off, `1` a single entry, or a table size (rounded down to a power of two). **Off by default and worth measuring before enabling** — break-even is around a 40 % hit rate, which flat graphic content clears easily and photographs generally do not (a landscape photo measured 3 % and 0.84×; a flat-colour poster 67 % and 1.22×). If you do enable it, **prefer a large table** — `256`–`1024` — because the cost is the lookup itself, not the table: 4096 slots measured no slower than 32, while hit rate keeps climbing. Use `getPixelCacheStats()` → `{hits, misses, lookups, hitRate}` on your own content to decide. No effect on the LUT image path. Declines silently (leaving a correct, uncached pipeline) when `pipelineDebug` is on or custom stages are present. See [deepdive/PixelCache.md](./deepdive/PixelCache.md). |
+| `wasmMatrixShaper` | Boolean \| String | `true` | Use the fused WASM matrix-shaper kernel when the built pipeline is a matrix-shaper pair (curve → 3×3 → curve). `true` takes it only when there is no LUT to displace; `'prefer'` also displaces a CLUT that would otherwise be built, which is both faster and more accurate; `false` disables it. Declines silently — and correctly — for per-channel TRCs, non-RGB spaces, and `dataFormat` values other than `'int8'` / `'int16'`. Ask `transform.kernelInfo()` what actually happened. See [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md). |
+| `multicore` | Boolean \| Object | `false` | Default for `transformImages()` when the call does not pass its own. `true` uses the pool as configured; an object carries pool options for this transform. Ignored by `transform()` and `transformArray()`, which are always single-threaded. |
 | `verbose` | Boolean | `false` | Log pipeline construction info to console. |
 | `verboseTiming` | Boolean | `false` | Log build timings to console. |
 | `lutGamutMode` | String | `'none'` | Baked gamut check during LUT build. See [Gamut warning modes](#gamut-warning-modes) below. |
@@ -432,6 +439,68 @@ persists and only grows (WASM spec limitation). Fixed-size workflows
 retain the high-water mark of the largest image unless explicitly
 reclaimed — see [WASM memory management](#wasm-memory-management)
 below.
+
+### `transform.transformImages(images, options)`
+
+Convert **1..n images**, using a worker pool when it is worth it. Returns a
+promise. Full reference — the images array, per-image alpha overrides,
+cancellation, backpressure, deployment and what the pool costs — is in
+**[docs/pool.md](./pool.md)**.
+
+```js
+await Transform.enablePool();                  // Node: no argument needed
+const { images, workersUsed } = await t.transformImages([
+    { data: rgba1, pixelCount: 1920 * 1080, id: 'hero.tif' },
+    { data: rgba2, pixelCount: 4000 * 3000, id: 'back.tif' },
+], {
+    multicore: true,
+    inputHasAlpha: true, outputHasAlpha: true, preserveAlpha: true,
+    onImage: (index, data, info) => save(data, info.id),
+});
+```
+
+- **Always callable.** With no `worker_threads`, a restrictive CSP, `cores: 1`,
+  or too little work to be worth splitting, it runs the images sequentially
+  through `transformArray()` and returns the identical bytes. `onImage` fires
+  either way, so a caller never feature-detects. `workersUsed` is what was
+  actually used — `0` means it ran on the calling thread.
+- **Images finish out of order.** Slices are dispatched longest-first and
+  pulled by whichever worker frees up, so `id` is the stable handle, not the
+  index. One is generated from the position if you omit it.
+- **`info`** carries `{id, index, pixelCount, outputChannels, ms, computeMs,
+  cancelled, source}`. `ms` is wall time from the start of the call — what a
+  progress bar wants; `computeMs` is summed worker time for that image and can
+  legitimately exceed `ms`, because several workers were busy at once. `source`
+  is your own descriptor, so metadata rides along.
+
+### Pool control — `enablePool` / `disablePool` / `restartPool`
+
+Static, process-wide, and separate from any one transform.
+
+| Method | Notes |
+|---|---|
+| `await Transform.enablePool(options?)` | Start the pool. Under Node no argument is needed; a browser needs the worker bundle's URL. Calling it again with the same options is a no-op ("already enabled"); with *different* options it warns rather than silently leaving two pools alive. |
+| `await Transform.restartPool(options?)` | Reconfigure a running pool — sugar for `enablePool({restart: true})`. Add `cancelQueue: true` to drop queued work instead of draining it. The reliable choice in tests, where pool state would otherwise leak between blocks. |
+| `Transform.disablePool()` | Tear the pool down. Subsequent batches run sequentially. |
+
+Sizing can also come from the environment — `JSCE_POOL_CORES`,
+`JSCE_POOL_MAX_THREADS`, `JSCE_POOL_IDLE_MS`, `JSCE_POOL_DISABLE` and friends,
+readable from `globalThis` in a browser or `process.env` under Node. Explicit
+options always win. The motivating case is a cgroup-limited container, where
+`os.availableParallelism()` reports the host's cores rather than your quota.
+**Nothing there can change a pixel** — see [docs/pool.md](./pool.md#deployment).
+
+### `transform.kernelInfo()`
+
+What actually took this transform, after `create()` has resolved everything:
+
+```js
+t.kernelInfo();
+// { name: 'matrixShaper', variant: 'simd', bits: 8, perChannel: false, … }
+```
+
+Worth calling when a `wasmMatrixShaper` transform is slower than expected — the
+kernel declines silently by design, and this is the only place that says so.
 
 ### LUT access and loading
 
@@ -671,6 +740,25 @@ Every LUT produced by `buildLut: true` carries `lut.originalSignature` (`"FNV1A:
 | `pipelineCreated` | Boolean | True after a successful `create*` call. `transform()` / `transformArray()` will throw `'No Pipeline'` if this is false. |
 | `builtLut` | Boolean | True if a LUT has been prebuilt. |
 | `lut` | Object \| `false` | The prebuilt CLUT, or `false` if none. |
+
+---
+
+## Pinning older defaults — `Transform.compatibility()`
+
+Defaults that move pixels are pinned **in code**, visibly, rather than through
+the environment — ambient state that changes output is how a bug report becomes
+unreproducible.
+
+```js
+Transform.compatibility('1.5');   // 1.5.0 output: no WASM matrix-shaper kernel
+Transform.compatibility(null);    // back to current defaults
+Transform.compatibility();        // returns the active pin
+```
+
+Call it once at startup, before constructing transforms. It applies to
+transforms built afterwards; existing ones keep whatever they resolved at
+`create()`. Use it when upgrading a pipeline whose output is regression-tested
+byte-for-byte, then remove the pin once the new baseline is accepted.
 
 ---
 

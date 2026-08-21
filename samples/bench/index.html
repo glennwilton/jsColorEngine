@@ -6,7 +6,7 @@
 <title>jsColorEngine &middot; Browser Bench</title>
 <link rel="stylesheet" href="styles.css">
 <!-- jsColorEngine UMD bundle. Built via `npm run browser` -> browser/jsColorEngineWeb.js -->
-<script src="../devtools-warn.js"></script>
+<script src="../lib/devtools-warn.js"></script>
 <script src="../browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
@@ -416,7 +416,7 @@
                 <option value="rgb-rgb">RGB &rarr; RGB  (sRGB &rarr; AdobeRGB)</option>
                 <option value="rgb-cmyk" selected>RGB &rarr; CMYK (sRGB &rarr; GRACoL)</option>
                 <option value="cmyk-rgb">CMYK &rarr; RGB (GRACoL &rarr; sRGB)</option>
-                <option value="cmyk-cmyk">CMYK &rarr; CMYK (GRACoL &rarr; GRACoL)</option>
+                <option value="cmyk-cmyk">CMYK &rarr; CMYK (GRACoL &rarr; ISO Coated v2)</option>
             </select>
         </label>
         <label>Mode
@@ -640,12 +640,14 @@
             a byte copy; <em>measured impact: roughly +80% on lcms-wasm
             RGB&rarr;RGB throughput, purely from the passthrough optimisation.</em>
             Matrix-shaper collapse is a legitimate lcms optimisation on RGB&rarr;RGB;
-            So to measure performace,  we just need it to be exercised against a
-            <em>different</em> RGB profile so it's real work. Firefox drops from
-            165 &rarr; 91&nbsp;MPx/s moving from sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB, same machine, same
-            session &mdash; that's the size of the difference. jsColorEngine doesn't have
-            an equivalent identity-elision pass fow now, so it was not apples to apples,
-            we want to test work done.
+            jsColorEngine also has identity detection as of v1.5 (same-binary-hash
+            or same virtual-name profiles resolve to a direct pixel copy — no LUT
+            built, no pipeline run). <em>All four directions in this bench use
+            different profiles on input and output, so no identity fast-path fires
+            in either engine.</em> Firefox drops from
+            165 &rarr; 91&nbsp;MPx/s on lcms moving from sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB &mdash;
+            that&apos;s the size of the passthrough boost, and exactly why this bench
+            uses distinct profiles throughout.
 
             <br>Our <code>samples/profiles/AdobeRGB1998.icc</code> is the
             560-byte reference Adobe RGB (1998) profile. lcms-wasm
@@ -661,20 +663,17 @@
         <li>
             <strong>CMYK &rarr; RGB</strong> &mdash; <code>GRACoL &rarr; sRGB</code>.
             4D tetrahedral interp on input, matrix-shaper on output.
-            Identical profile on both sides is fine here (verified: CMYK&rarr;sRGB
-            and CMYK&rarr;AdobeRGB land within 1.5% of each other on the same
-            host, so lcms isn't getting an identity shortcut this way round).
+            Input and output are different colour space types (CMYK and RGB), so
+            no identity detection can trigger in either engine.
         </li>
         <li>
-            <strong>CMYK &rarr; CMYK</strong> &mdash; <code>GRACoL &rarr; GRACoL</code>.
-            Yes, same profile. No identity collapse happens even though the
-            profiles are pointer-equal: a CMYK profile's AToB (device&rarr;PCS)
-            and BToA (PCS&rarr;device) tags aren't mathematical inverses
-            (intent, black-point compensation and quantisation all break the
-            symmetry), so the round-trip is genuinely two tetrahedral LUT
-            traversals. Verified at 18&nbsp;MPx/s on node &mdash; <em>slower</em>
-            than CMYK&rarr;sRGB, which would be impossible if a passthrough
-            were hitting.
+            <strong>CMYK &rarr; CMYK</strong> &mdash; <code>GRACoL &rarr; ISO Coated v2</code>.
+            US press standard to European press standard — a real print-space
+            conversion with different ink limits, paper white, and grey balance.
+            The engine builds a genuine 4D&nbsp;&times;&nbsp;4D tetrahedral LUT for this pair.
+            Using the same profile on both sides would trigger identity detection
+            (matching <code>binaryHash</code>) and route to a memcpy instead
+            of a colour transform, which would be a bogus benchmark.
         </li>
     </ul>
 
@@ -781,12 +780,14 @@
         <em>History note.</em> An earlier version of this doc claimed
         lcms-wasm was within 1.2&times; of jsColorEngine&apos;s SIMD kernel
         on RGB&rarr;RGB. That number was wrong &mdash; we were benchmarking
-        <code>sRGB&rarr;sRGB</code> (identity, optimised to memcpy by lcms),
-        which gave lcms a &sim;+80% boost on that row only. Switching to
-        <code>sRGB&rarr;AdobeRGB</code> (real matrix + curves) fixed it;
-        the gap is now ~2&times;, consistent with the 3D / 4D tetra directions
-        and with the general "SIMD lets us compete even where scalar
-        implementations are already decent" thesis.
+        <code>sRGB&rarr;sRGB</code> (identity, collapsed to memcpy by lcms),
+        which gave lcms a &sim;+80% boost on that row. At that point jsColorEngine
+        had no identity detection, so the comparison was not apples-to-apples.
+        Both issues are now fixed: the bench uses <code>sRGB&rarr;AdobeRGB</code>
+        throughout, and jsColorEngine v1.5 also detects same-profile pairs and
+        routes them to a direct copy &mdash; so both engines would get the same
+        "free win" on an identity pair, and this bench avoids that for all four
+        directions. The real gap is now ~2&times; in favour of jsCE WASM SIMD.
     </p>
 
     <h3>Is lcms-wasm really running at full speed?</h3>
@@ -850,7 +851,7 @@
 
 <footer class="footer">
     <span>jsColorEngine v<span id="info-version">?</span> &middot; samples/bench</span>
-    <span>Profiles: CoatedGRACoL2006.icc + AdobeRGB1998.icc (under samples/profiles/)</span>
+    <span>Profiles: CoatedGRACoL2006.icc + ISOcoated_v2_eci.icc + AdobeRGB1998.icc (under samples/profiles/)</span>
 </footer>
 
 <script type="module" src="main.js"></script>

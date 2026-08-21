@@ -39,9 +39,9 @@ profiles, same input bytes, same session.
 - [Buffer size](#buffer-size)
 - [The pixel cache](#the-pixel-cache-beta)
 - [Not comparable — the rest of the landscape](#not-comparable--the-rest-of-the-landscape)
-- [In progress](#in-progress)
+- [The two gaps, and what happened to them](#the-two-gaps-and-what-happened-to-them)
 - [Why the numbers come out this way](#why-the-numbers-come-out-this-way)
-- [Corrections on the record](#corrections-on-the-record)
+- [How these numbers moved](#how-these-numbers-moved)
 - [Reproduce it](#reproduce-it)
 
 ---
@@ -126,10 +126,15 @@ reasons the [content section](#throughput-by-content) makes plain.
 3. **With the WASM SIMD tier, jsCE runs about twice single-threaded
    native C on LUT work** — 1.8–2.3× on the photo corpus. That is width,
    not cleverness: four lanes at a time.
-4. **On matrix-shaper RGB→RGB, native C is still 1.4× ahead of us**, and
-   we say so. lcms has a fused matrix path; jsCE bakes the transform
-   into a CLUT and interpolates ⁽⁴⁾. The remedy is measured and queued —
-   see [In progress](#in-progress).
+4. **On matrix-shaper RGB→RGB, native C was 1.4× ahead of us** at the
+   time these runs were made, and we said so. lcms has a fused matrix
+   path; jsCE baked the transform into a CLUT and interpolated it ⁽⁴⁾.
+   **That remedy has since shipped** — a dedicated WASM SIMD kernel,
+   measured at 331 MPx/s against 123 for the CLUT it replaces, on the
+   same machine and on the same photo corpus. The head-to-head row above has *not* been re-run
+   through this harness, so it stays as measured; treat the kernel as a
+   change to the mechanism, not as a new ratio.
+   See [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md).
 
 Read every ratio against note ⁽⁶⁾: independent repeats of the same
 measurement vary by 1–2 %, so anything under about 1.1× is a tie. These
@@ -183,11 +188,12 @@ all — curves, a 3×3 matrix, curves. Pure arithmetic with no CLUT, which
 is why its throughput there is flat across every content type, why its
 memo cache never engages, and why it was the one row completely
 unmoved by the input-generator correction described in
-[corrections](#corrections-on-the-record) — a useful control, since a
+[how these numbers moved](#how-these-numbers-moved) — a useful control, since a
 path with no interpolation table has no working set to lose. jsCE bakes the same transform
 into a 33³ CLUT and interpolates it. This is the one workflow where that
-architectural choice costs us, and it is what the matrix-shaper kernel
-in [In progress](#in-progress) exists to fix. RGB→RGB here is
+architectural choice cost us, and it is what the matrix-shaper kernel —
+now shipped — exists to fix: same shape as lcms's fused path, curves,
+a 3×3 and curves, with no CLUT and no interpolation. RGB→RGB here is
 sRGB→AdobeRGB1998, never sRGB→sRGB: both engines detect the identity and
 collapse it, which measures nothing.
 
@@ -195,8 +201,8 @@ collapse it, which measures nothing.
 input carries fewer colours than the interpolation table has cells, so
 most of the table is never read and stays resident in L1 — the
 measurement then describes a working set no real image produces. This
-column exists because we got it wrong once; see
-[corrections](#corrections-on-the-record).
+column exists because adjacency alone missed exactly that case; see
+[how these numbers moved](#how-these-numbers-moved).
 
 **⁽⁶⁾ Run-to-run variance is 1–2 %, provided the warmup is long enough.**
 Every cell is measured in its own process with its own warmup. A
@@ -400,8 +406,8 @@ Correcting the input generator roughly halved our published throughput,
 which raises an obvious objection: **how do we know the new harness is
 not depressing the numbers the way the old one inflated them?** A
 harness that measures six workflows × five content classes × four
-engines has plenty of opportunity to disturb what it is measuring, and
-this project has been caught by exactly that before.
+engines has plenty of opportunity to disturb what it is measuring, and on
+this page one already has.
 
 So the numbers are checked against a deliberately minimal control —
 [`bench/solo_photo/`](../bench/solo_photo/solo.js): **one photograph,
@@ -596,36 +602,49 @@ Each vectorised precisely the path the other left scalar — which is also
 why the one workflow lcms wins outright is the one where it has SIMD and
 we do not.
 
-## In progress
+## The two gaps, and what happened to them
 
-Measured but **not shipped**. Nothing here is a claim about v1.5 — it is
-included so the roadmap is visible alongside the results motivating it.
+This section used to read "measured but not shipped". Both remedies have
+since landed, so it is kept as the record of what the comparison
+identified and what was done about it — **but neither has been re-run
+through the lcms harness**, so the ratios in the tables above still
+stand as measured. New mechanism, not a new head-to-head.
 
-**Both remaining gaps on this page have a named remedy, already
-prototyped, and both are the next two pieces of work:**
-
-| gap measured above | remedy | POC result |
+| gap measured above | remedy | result |
 |---|---|---|
-| matrix-shaper RGB→RGB at 0.72× native ⁽⁴⁾ — the one workflow lcms wins outright, and the one where it has SIMD and we do not | **a fused matrix-shaper WASM kernel of our own** | 250–257 MPx/s |
-| single-threaded only, where lcms has the `threaded` plugin | **our own multicore image path** | 5.46× on 16 threads |
+| matrix-shaper RGB→RGB at 0.72× native ⁽⁴⁾ — the one workflow lcms wins outright, and the one where it has SIMD and we do not | **a fused matrix-shaper WASM kernel of our own** | **shipped** — 331 MPx/s at int8, 225 at int16, on photos |
+| single-threaded only, where lcms has the `threaded` plugin | **our own multicore image path** | **shipped** — 6.2× peak, 787 MPx/s |
 
-Together those close the gap that this comparison identifies: the first
-removes the only workflow where native C leads, and the second removes
-the axis where lcms has an option and we have none. Both will be
-measured in the next, more detailed comparison rather than asserted
-here — the point of this page is that claims arrive with the harness
-that produced them.
+Together those address the gap this comparison identifies: the first
+removes the mechanism that lost the only workflow where native C leads,
+and the second removes the axis where lcms had an option and we had
+none. Whether they *close* it is for the next head-to-head to say — the
+point of this page is that claims arrive with the harness that produced
+them, and these two have not been through it yet.
 
-**Multicore (POC).** A worker-parallel image path using the public API
-only, no engine changes: **5.46× peak** on 16 workers, output
-byte-identical to single-threaded in every row.
+**Multicore (shipped).** `transformImages()` runs the parallel batch
+path: **6.2× peak**, and **787 MPx/s** peak throughput on the SIMD
+kernel — output byte-identical to single-threaded in every one of the 72
+cells measured. Medians of 5 isolated runs; a single parallel figure on
+this hardware varies by ~25%, so nothing here is a one-off reading.
 
 | workers | MPx/s | speedup | efficiency |
 |---:|---:|---:|---:|
-| 1 | 41.8 | 0.95× | 95 % |
-| 4 | 130.5 | 2.96× | 74 % |
-| 8 | 189.6 | 4.30× | 54 % |
-| 16 | 240.8 | 5.46× | 34 % |
+| 1 | 43.2 | 0.95× | 95 % |
+| 4 | 169.0 | 3.70× | 93 % |
+| 6 | 249.8 | 5.47× | 91 % |
+| 7 | 281.0 | 6.16× | 88 % |
+| 8 | 246.6 | 5.40× | 68 % |
+
+(noise content, `int` kernel, sRGB→GRACoL2006, 4 MPx — full table:
+[`pool.scaling`](./BenchResults.md#table-pool-scaling). One worker is slower
+than sequential, which is the shape to expect: it pays the copies and the
+messages and gets no parallelism back. **Quote the MPx/s rather than the
+speedup.** The absolute figure repeats to within ~3 % across runs; the
+speedup divides it by a single-threaded baseline that is itself the noisiest
+measurement in the bench, so the ratio inherits that variance on top of its
+own. The eighth worker falling back here is within that spread, not a
+ceiling — other runs put the peak at 8.)
 
 Two findings worth recording. The copies a `SharedArrayBuffer` design
 exists to eliminate cost only **4–7 %** of a pass, so the invasive model
@@ -637,9 +656,56 @@ images sequentially through `transformArray()`, so multicore stays an
 optimisation rather than a capability.
 [deepdive/multicore.md](./deepdive/multicore.md).
 
-**Matrix-shaper kernel (POC).** The remedy for the one row where native
-C is ahead ⁽⁴⁾. A dedicated WASM kernel reached 250–257 MPx/s but is not
-yet packaged as a kernel descriptor or wired into `create()`.
+**It is also not the same design as lcms's, which matters more than the
+speedup number.** lcms `threaded` divides one buffer evenly across N
+threads (`_cmsThrCountSlices`), spawns them for that call and joins —
+one image, one static split. We break images into **fragments**, around
+ten per worker, into a shared queue that a persistent pool pulls from;
+fragments complete out of order and are reassembled by position, the
+pool is shared by every Transform in the process, and each task carries
+its own transform signature so a worker switches between transforms task
+by task.
+
+That is deliberate rather than incidental. An even static split is only
+optimal if pixels cost the same, and they do not — content moves
+throughput by up to 2.7×, so equal slices take unequal time and every
+thread waits on the slowest. A split decided before any work runs cannot
+correct for that; a pull queue does, without predicting anything. It
+also means results arrive **per image as they land** rather than at a
+join, and that work from many images and many transforms can share the
+same workers.
+
+**But it is not free here the way it is in C, and the difference
+is memory.** lcms spins up threads that share one address space, so its
+CLUT is one copy however many threads read it. A JS worker is closer to
+a process than a thread: nothing is shared, so the same table is
+resident **once per worker**. A 33-point CMYK LUT is ~1.4 MB — a
+`Float64Array` CLUT plus its `Uint16Array` twin — which is ~11.5 MB
+across eight workers for a table lcms holds once, and the WASM kernels
+add a third copy inside each worker's linear memory.
+
+This is a real architectural disadvantage and it belongs in a comparison
+that claims to measure honestly. It is bounded rather than unbounded —
+each worker caches a fixed number of transforms, evicted
+least-recently-used, and `forgetWorkers()` releases one on demand — and
+`pool.memoryReport()` will tell you exactly what is resident. But a
+reader deciding between this engine and lcms on a memory-constrained
+target should know that our 5.46× costs something lcms's does not.
+Both halves belong in an honest comparison: lcms's approach is simpler
+and cheaper in memory, ours is more flexible and does not assume
+something we measured to be false. [The full accounting is in
+deepdive/multicore.md](./deepdive/multicore.md#we-support-multicore-but-it-is-not-free).
+
+**Matrix-shaper kernel (shipped).** The remedy for the one row where
+native C is ahead ⁽⁴⁾. `dataFormat: 'int8'` and `'int16'`, SIMD and
+scalar builds, on by default wherever there is no CLUT to displace and
+opt-in over one via `wasmMatrixShaper: 'prefer'`. On the photo corpus,
+**331 MPx/s** at int8 against 123 for the CLUT and **225** against 125
+at int16 — and within 1 LSB of the exact pipeline, where that CLUT
+reaches 25 LSB at int8 and thousands of codes at int16. In the worker
+pool it stays ahead at every count but scales *worse*, because a faster
+kernel makes the pool's fixed per-fragment cost a larger share of the
+job.
 [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md).
 
 **Pixel cache in the image kernels (POC).** A 4D-kernel experiment
@@ -676,13 +742,14 @@ repetitive; jsCE bets on the *kernel* being fast. On flat graphic content
 lcms's bet pays and ours does not; on photographs neither bet pays, which
 is why lcms's own cache is a net loss there and why ours ships off.
 
-## Corrections on the record
+## How these numbers moved
 
-Four errors have been found in our own measurements. All four are listed,
-because a benchmark page that only ever gains numbers is not one to
-trust — and because three of them were flattering *our* results.
+Four measurement problems surfaced while this page was being built, and
+each one moved figures already published here. They are listed because a
+benchmark page whose numbers only ever improve is not one to trust — and
+because three of the four were running in our favour.
 
-**1. The accuracy oracle used the wrong flag.**
+**1. The accuracy oracle ran on a legacy flag.**
 `cmsFLAGS_HIGHRESPRECALC` is a legacy lcms 1.x emulation path, not a
 higher-precision mode. Against lcms's real default, agreement improved to
 100 % within 1 LSB. *Effect: our accuracy result got better.*
@@ -700,8 +767,8 @@ in four lines:
   it in f64, past 2⁵³, silently losing the low bits and collapsing the
   sequence into short cycles. Measured adjacency: **21.6 %** — in the row
   whose whole purpose is to give lcms's memo cache *nothing*.
-- Taking the **low** 8 bits of a linear congruential generator is a
-  classic error: those bits have period 256. Adjacency still reads
+- Taking the **low** 8 bits of a linear congruential generator is the
+  classic trap: those bits have period 256. Adjacency still reads
   0.0 %, so the metric the harness printed looked perfect — but the
   buffer held only **256 distinct colours**. Against a 35,937-cell CLUT
   that touches a corner of the table and leaves it in L1. The row
@@ -723,7 +790,7 @@ RGB→Lab fell 24 % on the same change. That rules out a general slowdown
 or a confounded harness, and it means figures for non-CLUT paths taken
 on the old generator are still valid.
 
-**4. A shared benchmark harness measured the wrong thing.** Running
+**4. A shared benchmark harness measured the call site, not the code.** Running
 several content rows through one long-lived process gave 59.5 MPx/s where
 an isolated run of the identical workflow, content and buffer size gave
 **75.4** — a 27 % swing caused only by which rows had already passed

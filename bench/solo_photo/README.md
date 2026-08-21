@@ -7,7 +7,7 @@ things in sequence, and this project has twice been caught by a harness
 distorting what it measures:
 
 - the old benches reported ~210 MPx/s on an input that contained
-  [256 distinct colours](../../docs/deepdive/benchmark.md#20-two-more-ways-the-input-lied-2026-08-19);
+  [256 distinct colours](../../docs/deepdive/benchmark.md#20b-two-more-ways-the-input-lied-2026-08-19);
 - a shared process was shown to cost 27 % on an identical workload
   ([Schrödinger's Bench](../../docs/deepdive/benchmark.md#19-schrödingers-bench---a-new-law-of-benchmarking-in-v8)).
 

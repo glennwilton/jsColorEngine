@@ -17,8 +17,8 @@
 > same isolated harness shows why: jsCE's SIMD tier lost **39–54 %** on
 > a correct input, `lcms-wasm` only **3–26 %**. The tiny CLUT stayed in
 > L1, and jsCE's SIMD kernel is the most memory-bound of the three, so
-> **the defect flattered us about twice as much as it flattered lcms**.
-> Published ratios were therefore overstated by **24–52 %**, not just
+> **the input flattered us about twice as much as it flattered lcms**.
+> The ratios on this page are therefore high by **24–52 %**, not just
 > the MPx/s. Paths with no CLUT (matrix-shaper) are unaffected and
 > remain valid.
 >
@@ -28,7 +28,7 @@
 > page over this one where they disagree. This page will be updated with
 > the full re-measurement — including the browser and Apple Silicon
 > figures — in the next release. Methodology detail:
-> [deepdive/benchmark.md § 20](./deepdive/benchmark.md#20-two-more-ways-the-input-lied-2026-08-19).
+> [deepdive/benchmark.md § 20b](./deepdive/benchmark.md#20b-two-more-ways-the-input-lied-2026-08-19).
 >
 > ### The figures here are real, but narrow
 >
@@ -686,12 +686,11 @@ no native gather (four scalar loads + `replace_lane` per pixel).
 Conclusion at the time: "LUT kernels will run worse under SIMD.
 Correct for across-pixel. Wrong for across-channel."
 
-That conclusion was wrong *because the axis was wrong*. The 3D SIMD
-win in §2.4 came from vectorising across *channels* instead, using
-the contiguous `[ch]` storage at each grid corner to turn four
-corner reads into one 64-bit load each. Three months of roadmap
-based on "SIMD doesn't work for LUTs" evaporated in one weekend's
-POC.
+That held for the axis it was measured on. The 3D SIMD win in §2.4
+came from vectorising across *channels* instead, using the contiguous
+`[ch]` storage at each grid corner to turn four corner reads into one
+64-bit load each. Three months of roadmap built on "SIMD doesn't work
+for LUTs" came back in one weekend's POC.
 
 **Lesson:** when a POC says something doesn't work, note *what shape
 of working* it ruled out. "SIMD with across-pixel gather is slow" is
@@ -1122,10 +1121,10 @@ widening first.
 The comparison table above listed fast_float as *estimated* at
 `≈ 150–500 MPx/s (vanilla × 3–8)`, taken from the maintainer's
 documentation. We built `make fastfloat` in `bench/lcms_c/` to
-replace that estimate with actual measurements — and in doing so,
-found a problem in our own C bench along the way.
+replace that estimate with actual measurements — and the build turned
+up something more useful than the measurement.
 
-**What we got wrong in the original bench.** Workflow 1 in the C bench
+**The two benches were not running the same workflow.** Workflow 1 in the C bench
 was *RGB → Lab* (sRGB → LabD50). The JS bench (`bench/mpx_summary.js`)
 tests *RGB → RGB* (sRGB → AdobeRGB1998). These hit different code paths
 in lcms2: AdobeRGB is a matrix-shaper profile, so the transform goes

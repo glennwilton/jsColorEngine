@@ -47,6 +47,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Transform, eIntent } = require('../../src/main');
 const Profile = require('../../src/Profile');
+const emit = require('../lib/emit.cjs');   // no-op unless JSCE_BENCH_JSON is set
 
 const CORPUS_DIR  = path.join(__dirname, '..', 'release_matrix', 'corpus');
 const GRACOL_PATH = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_Coated1v2.icc');
@@ -152,6 +153,8 @@ function runParent() {
     console.log(' engine    best of each process (MPx/s)                              median    spread');
     console.log(' --------  ------------------------------------------------------  --------  --------');
 
+    const emitRows = [];
+    let pixelsSeen = 0;
     for (const engine of Object.keys(ENGINES)) {
         const runs = [];
         let pixels = 0;
@@ -162,12 +165,32 @@ function runParent() {
             ], { encoding: 'utf8' }).trim().split(/\s+/);
             runs.push(Number(out[0]));
             pixels = Number(out[1]);
+            pixelsSeen = pixels;
         }
         const s = stats(runs);
         console.log(' ' + engine.padEnd(9) +
             runs.map(v => v.toFixed(1).padStart(7)).join('').padEnd(56) +
             s.median.toFixed(1).padStart(8) + '  ' + s.spread.toFixed(1).padStart(6) + '%');
+
+        // Spread is part of the row, not a footnote: this bench exists to say
+        // whether a number is real, and a median without its spread cannot.
+        emitRows.push({
+            engine:    engine,
+            medianMpxs: +s.median.toFixed(1),
+            spreadPct:  +s.spread.toFixed(1),
+            processes:  REPEAT,
+        });
     }
+
+    emit.table({
+        id:      'solo.' + WORKFLOW,
+        title:   'Solo control bench — one image, one engine, one process (' + WORKFLOW + ')',
+        units:   'MPx/s',
+        meta:    { image: IMAGE, workflow: WORKFLOW, pixels: pixelsSeen,
+                   warmupMs: WARMUP_MS, samples: SAMPLES },
+        columns: ['engine', 'medianMpxs', 'spreadPct', 'processes'],
+        rows:    emitRows,
+    });
 
     console.log('');
     console.log(' Spread is max-min across processes. If it is small, the number is real;');

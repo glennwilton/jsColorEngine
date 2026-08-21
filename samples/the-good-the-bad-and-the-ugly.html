@@ -1,0 +1,449 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited
+  Released under the MIT License (see ./LICENSE).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; The Good, The Bad and The Ugly</title>
+<link rel="stylesheet" href="styles/styles.css">
+<style>
+    .hero {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+        align-items: stretch;
+    }
+    @media (max-width: 880px) { .hero { grid-template-columns: 1fr; } }
+
+    .headline {
+        font-size: clamp(32px, 6vw, 72px);
+        line-height: 0.95;
+        letter-spacing: -0.06em;
+        margin: 0 0 16px;
+    }
+    .headline span {
+        display: block;
+    }
+    .headline .good { color: var(--accent-2); }
+    .headline .bad { color: var(--warn); }
+    .headline .ugly { color: var(--error); }
+
+    .subheadline {
+        font-family: var(--mono);
+        font-size: clamp(14px, 2.2vw, 20px);
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+        margin: 4px 0 18px;
+        font-style: italic;
+    }
+
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+    }
+    .metric {
+        background: var(--bg-card-2);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 12px 14px;
+    }
+    .metric .lbl {
+        color: var(--text-muted);
+        display: block;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+    .metric .val {
+        color: var(--text);
+        display: block;
+        font-family: var(--mono);
+        font-size: 13px;
+        margin-top: 4px;
+        word-break: break-word;
+    }
+
+    .story-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    @media (max-width: 980px) { .story-grid { grid-template-columns: 1fr; } }
+
+    .story-card {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    .story-card::before {
+        content: "";
+        display: block;
+        height: 4px;
+        left: 0;
+        position: absolute;
+        right: 0;
+        top: 0;
+    }
+    .story-card.good::before { background: var(--accent-2); }
+    .story-card.bad::before { background: var(--warn); }
+    .story-card.ugly::before { background: var(--error); }
+
+    .tagline {
+        color: var(--text-dim);
+        margin: 0;
+    }
+    .target {
+        color: var(--text-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+        margin: -4px 0 0;
+    }
+    pre.shape {
+        background: #090d12;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        color: #d8e4ef;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        margin: 0;
+        overflow: auto;
+        padding: 14px;
+    }
+    pre.shape code {
+        background: none;
+        border: 0;
+        color: inherit;
+        padding: 0;
+    }
+    .result {
+        background: var(--bg-card-2);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        margin-top: auto;
+        padding: 12px 14px;
+    }
+    .result-main {
+        color: var(--accent);
+        display: block;
+        font-family: var(--mono);
+        font-size: 20px;
+        font-weight: 700;
+    }
+    .result-sub {
+        color: var(--text-muted);
+        display: block;
+        font-family: var(--mono);
+        font-size: 11px;
+        margin-top: 4px;
+    }
+    .bench-table {
+        border-collapse: collapse;
+        font-size: 13px;
+        width: 100%;
+    }
+    .bench-table th,
+    .bench-table td {
+        border-bottom: 1px solid var(--border-soft);
+        padding: 8px 10px;
+        text-align: left;
+    }
+    .bench-table th {
+        color: var(--text-muted);
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+    .bench-table td:nth-child(2),
+    .bench-table td:nth-child(3),
+    .bench-table td:nth-child(4) {
+        font-family: var(--mono);
+        text-align: right;
+        white-space: nowrap;
+    }
+    .speedbar {
+        background: var(--bg);
+        border-radius: 999px;
+        height: 10px;
+        min-width: 120px;
+        overflow: hidden;
+    }
+    .speedbar span {
+        background: var(--accent);
+        border-radius: inherit;
+        display: block;
+        height: 100%;
+    }
+    #status {
+        color: var(--text-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+        margin-left: 8px;
+    }
+</style>
+<script src="lib/devtools-warn.js"></script>
+<script src="browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">performance shape demo</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="index.html">Home</a>
+            <a href="samples.html" class="is-active">Samples</a>
+            <a href="bench/">Bench</a>
+        </nav>
+    </div>
+    <nav class="nav nav--secondary" aria-label="Sample demos">
+        <a href="samples.html">Samples</a>
+        <a href="the-good-the-bad-and-the-ugly.html" class="is-active">Good / Bad / Ugly</a>
+        <a href="benchmark/bench.html">Benchmark</a>
+    </nav>
+</header>
+
+<main>
+
+<section class="card hero">
+    <div>
+        <h1 class="headline">
+            <span class="good">The Good</span>
+            <span class="bad">The Bad</span>
+            <span class="ugly">and The Ugly</span>
+        </h1>
+        <p class="subheadline">A good failed experiment</p>
+        <p class="lead">
+            Same engine. Same transform. Same pixels. Three different call
+            shapes. We expected to see roughly 100 / 175 / 200 MPx/s — the same
+            split the registered framework in
+            <a href="benchmark/bench.html">samples/benchmark/</a> actually shows.
+        </p>
+        <p class="lead">
+            <strong>Spoiler:</strong> we couldn't reproduce it. V8 keeps
+            inlining all three. This page is the failed experiment — and the
+            failure itself is the real lesson about
+            <em>Schrödinger's Bench</em>.
+            See the writeup at the bottom for what that means.
+        </p>
+        <p class="lead">
+            The hidden benchmark code does deterministic input, Transform
+            setup, warmup, event-loop yields, five timed batches, and median
+            timing. The snippets below show only the shape of the hot call.
+        </p>
+        <div class="controls">
+            <button class="btn-primary" id="run-all" data-run>Run all three</button>
+            <span id="status">Ready.</span>
+        </div>
+    </div>
+    <div class="metric-grid">
+        <div class="metric"><span class="lbl">jsColorEngine</span><span class="val" id="info-jsce">loading...</span></div>
+        <div class="metric"><span class="lbl">Pixels / iteration</span><span class="val" id="info-pixels">-</span></div>
+        <div class="metric"><span class="lbl">Timing pattern</span><span class="val" id="info-runs">-</span></div>
+        <div class="metric"><span class="lbl">Goal</span><span class="val">Call shape changes throughput</span></div>
+    </div>
+</section>
+
+<section class="story-grid" aria-label="Benchmark cases">
+    <article class="card story-card good">
+        <h2>The Good</h2>
+        <p class="tagline">
+            Filter pipeline with pluggable strategies. Many filters share one
+            dispatch site. The IC at <code>this.current.run(input, output)</code>
+            has seen many distinct callees and is forced megamorphic.
+        </p>
+        <p class="target">Question: can a polluted strategy IC actually slow down a real WASM kernel?</p>
+        <pre class="shape"><code>class FilterPipeline {
+    process(input, output) {
+        return this.current.run(input, output);
+        //          ^^^^^^^^^^^^^
+        //   one bytecode site, many plugin shapes
+    }
+}
+
+// 7 filter plugins (identity, invert, gamma, ...)
+// + 1 jsce wasm-simd plugin all share that site.</code></pre>
+        <button class="btn-primary" id="run-good" data-run>Run The Good</button>
+        <div class="result" id="result-good">
+            <span class="result-main">not run yet</span>
+            <span class="result-sub">Plugin pipeline, polluted dispatch IC at run().</span>
+        </div>
+    </article>
+
+    <article class="card story-card bad">
+        <h2>The Bad</h2>
+        <p class="tagline">
+            A lighter wrapper: choose one route once, then call that route directly.
+            Less flexible, less pretty, but the hot call site has fewer possible
+            shapes.
+        </p>
+        <p class="target">Question: is one small wrapper still cheap enough?</p>
+        <pre class="shape"><code>class FixedRoute {
+    convert(input, output) {
+        return this.transform.transformArray(
+            input, false, false, false,
+            this.pixelCount, undefined, output
+        );
+    }
+}</code></pre>
+        <button class="btn-primary" id="run-bad" data-run>Run The Bad</button>
+        <div class="result" id="result-bad">
+            <span class="result-main">not run yet</span>
+            <span class="result-sub">Single fixed route wrapper around one Transform.</span>
+        </div>
+    </article>
+
+    <article class="card story-card ugly">
+        <h2>The Ugly</h2>
+        <p class="tagline">
+            1990s-looking code in its own module. Flags are hard-wired, the loop is
+            boring, and the call site is isolated. V8 loves boring.
+        </p>
+        <p class="target">Expected ballpark: the scenario-file result, about 200 MPx/s.</p>
+        <pre class="shape"><code>for (i = 0; i &lt; 50; i = i + 1) {
+    xf.transformArray(
+        src, false, false, false,
+        65536, undefined, dst
+    );
+}</code></pre>
+        <button class="btn-primary" id="run-ugly" data-run>Run The Ugly</button>
+        <div class="result" id="result-ugly">
+            <span class="result-main">not run yet</span>
+            <span class="result-sub">Hard-wired loop in its own module.</span>
+        </div>
+    </article>
+</section>
+
+<section class="card">
+    <h2>Comparison</h2>
+    <p class="lead">
+        The table fills in as each case runs. The important number is the spread:
+        choosing how you wrap and call <code>transformArray</code> can be the
+        difference between benchmark-panic and headline throughput. If there is no
+        spread, that is also a result: V8 rescued these production-shaped wrappers.
+    </p>
+    <div style="overflow-x:auto">
+        <table class="bench-table">
+            <thead>
+                <tr>
+                    <th>Shape</th>
+                    <th>MPx/s</th>
+                    <th>ms / iter</th>
+                    <th>vs ugly</th>
+                    <th>relative</th>
+                </tr>
+            </thead>
+            <tbody id="comparison-body"></tbody>
+        </table>
+    </div>
+    <p class="muted" style="margin-top:12px">
+        Method: RGB to AdobeRGB, <code>int-wasm-simd</code>, 65,536 pixels,
+        200 warmup iterations, 5 batches of 50 timed iterations, median reported.
+    </p>
+</section>
+
+<section class="card">
+    <h2>Schrödinger's Bench bites back</h2>
+    <p class="lead">
+        This page is a <strong>failed experiment</strong>, and that is the lesson.
+        We deliberately built three call shapes — a polluted strategy IC, a tidy
+        wrapper, and a bare isolated module — expecting roughly the 100 / 175 / 200
+        MPx/s split that the registered framework in <code>samples/benchmark/</code>
+        actually shows. The standalone page refuses to play along. V8 inlines
+        everything anyway.
+    </p>
+    <p class="lead">
+        Why? The original 100 MPx/s collapse needs a very specific recipe:
+        a shared benchmark harness that registers <em>N</em> different transform
+        functions and dispatches them through one bytecode location across
+        repeated <code>benchSingle()</code> invocations, until that IC accumulates
+        enough distinct callees to go megamorphic. Hand-rolling that pattern in a
+        single, focused page is hard. There are too few neighbouring functions
+        for compilation-unit interference, and modern V8 speculatively
+        re-monomorphizes call sites that go quiet.
+    </p>
+    <p class="lead">
+        So the practical takeaway flips: <strong>your production code is probably
+        fine.</strong> A polymorphic wrapper, a route registry, a plugin pipeline —
+        all routinely run at full kernel throughput because V8 can see the hot
+        callee. The numbers in <a href="docs/deepdive/benchmark.md"><code>benchmark.md</code></a>
+        still stand: 104 vs 175 vs 203 MPx/s is real, measured, and reproducible
+        inside the actual framework. But it is mostly an
+        <em>observing-machinery</em> problem, not a production-code problem.
+    </p>
+    <p class="lead">
+        If you can't reproduce Schrödinger's Bench in a small demo,
+        <strong>that is the result</strong>. The bench harness in
+        <code>samples/benchmark/</code> is one of the few real-world places where
+        the call site stays megamorphic long enough to actually hurt.
+    </p>
+    <h3 style="margin-top:18px">The accidental headline</h3>
+    <p class="lead">
+        Here is the irony, and it is the nicest accident of this page:
+        the experiment failed precisely <em>because</em> all three call shapes —
+        a polluted plugin pipeline, a tidy class wrapper, and a bare-bones isolated
+        module — clear 200+ MPx/s on the same hardware. Three different
+        abstractions, all hitting the kernel ceiling. The page set out to make
+        <em>jsColorEngine</em> look slow under abstraction and ended up
+        demonstrating the opposite: <strong>the engine is fast enough that the
+        wrapper shape barely matters.</strong> The 100 MPx/s framework number
+        is a measurement artifact; the 200 MPx/s number is what your code can
+        actually see.
+    </p>
+    <h3 style="margin-top:18px">When you <em>should</em> still worry</h3>
+    <p class="lead">
+        A large, long-lived app can drift into the pathology if all three of
+        these are true at once:
+    </p>
+    <ul class="lead" style="padding-left:22px; margin-top:0">
+        <li>One shared dispatch point — a <code>pipeline.run()</code>,
+            <code>effect.apply()</code>, or <code>strategy.execute()</code> call
+            that every operation flows through.</li>
+        <li>Genuinely diverse callees behind it — many different
+            <code>Transform</code> instances, plug-ins, or filter classes whose
+            <code>run()</code> bodies have different shapes.</li>
+        <li>A tight outer loop where dispatch overhead matters — per-pixel
+            transforms, per-frame video, per-tile batch processing.</li>
+    </ul>
+    <p class="lead">
+        Examples worth profiling: photo editors with 30+ effects sharing one
+        <code>apply()</code> path, server pipelines that cycle through many ICC
+        recipes through a generic dispatcher, frame-by-frame video filters
+        registered with a central engine. If a profile shows time inside the
+        dispatch wrapper rather than the kernel, this is the smell.
+    </p>
+    <p class="lead">
+        The mitigation is the same as the bench framework's: keep the hot path
+        monomorphic per route. Bind one Transform per route object, give each
+        route its own narrow loop, or use <code>Transform.compile()</code> to
+        generate a fresh function for that route. See
+        <a href="docs/deepdive/benchmark.md">benchmark.md §19</a> for the full
+        escape-hatch hierarchy.
+    </p>
+    <p class="muted" id="info-ua">-</p>
+</section>
+
+</main>
+
+<footer class="footer">
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>
+        <a href="samples.html">Samples</a>
+        &middot;
+        <a href="benchmark/bench.html">Benchmark</a>
+    </span>
+</footer>
+
+<script type="module" src="the-good-the-bad-and-the-ugly.js"></script>
+</body>
+</html>

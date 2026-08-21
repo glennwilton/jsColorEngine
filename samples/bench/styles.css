@@ -371,10 +371,20 @@ table.results {
 
 table.results th,
 table.results td {
-    padding: 8px 14px;
+    padding: 6px 10px;
     text-align: left;
     border-bottom: 1px solid var(--border-soft);
     white-space: nowrap;
+}
+
+/* LUT column: allow wrapping so long values like "33×33×33 u16 (u16 I/O)"
+   don't force the table wider than the viewport */
+table.results td.lut-cell {
+    white-space: normal;
+    min-width: 100px;
+    max-width: 160px;
+    font-size: 11px;
+    color: var(--text-muted);
 }
 table.results th {
     background: var(--bg-card);

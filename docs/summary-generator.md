@@ -38,9 +38,9 @@ Update the "Last regenerated" date each run.
     - **Next to-dos / open items** (if any)
 3. At the top of the summary, write a short **Project Overview** paragraph that explains the overall system in plain language.
 4. Keep the entire summary under ~400–600 words if possible. Prefer clarity over completeness.
-5. Write the result to `project-summary.md` (create it if it doesn’t exist, overwrite if it does).
+5. Write the result to `docs/README.md` (create it if it doesn’t exist, overwrite if it does).
 
-## Required structure for project-summary.md
+## Required structure for docs/README.md
 
 ```markdown
 # Project Summary

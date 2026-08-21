@@ -4,7 +4,7 @@
 > in this repo cold: what the project is, and a per-document summary of
 > where every piece of context and reasoning lives. Regenerate per
 > [`summary-generator.md`](./summary-generator.md).
-> Last regenerated: **2026-08-19** (v1.5.0).
+> Last regenerated: **2026-08-20** (v1.5.5).
 
 ## Project Overview
 
@@ -15,7 +15,9 @@ ones); `Transform` builds a stage pipeline between profiles, optionally
 bakes it into a LUT, and dispatches per-dimension tuned kernels
 (`src/kernels/{1d,2d,3d,4d,nd}/`) — `transform()` for single colours at
 full f64 accuracy, `transformArray()` for images at ~80–120 MPx/s on
-photographs and ~180 on flat artwork, one thread. Positioning: the fastest ICC colour
+photographs through a LUT and ~330 where the fused matrix-shaper kernel
+takes over, one thread; `transformImages()` spreads a batch across a
+worker pool (6.2× peak, 787 MPx/s). Positioning: the fastest ICC colour
 engine in JavaScript — 3.2–3.6× `lcms-wasm` on every LUT workflow, with
 pure JS landing within 0.78–1.08× of single-threaded native C —
 accuracy-validated against LittleCMS oracles (100 % within 1 LSB on the
@@ -23,18 +25,28 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-08-19):** v1.5.0 — kernel modules, DeviceLink,
-N-channel, the `Transform.js` split into `stages.js` + `interp.js`, and
-an opt-in **beta** pixel cache (`pixelCache`, accuracy path only). 518
-tests, audit clean.
+**Current state (2026-08-20):** v1.5.5 — the **matrix-shaper WASM
+kernel** (four binaries, int8 + int16, five alpha entry points,
+registered as a *claiming* kernel selected by pipeline shape rather than
+channel count) and **multicore** (`transformImages()`, a fragment queue
+across a persistent worker pool, with per-image callbacks, cancellation
+and backpressure). Both shipped. Also: `Transform.compatibility()` for
+pinning older defaults, `src/settings.js` for host-level configuration,
+`src/alpha.js` for premultiply/flatten. 794 tests, audit clean.
+
+Carried into v1.6: the **in-kernel pixel cache** (prototyped, measured,
+paired exports built — needs a dispatcher change and regenerated
+binaries), a **Web Worker pool for browsers** (the blocker is packaging,
+not threading), and a **full benchmark rebuild** — at which point every
+throughput figure in these docs is re-measured together.
 
 The LittleCMS comparison has been **fully re-measured** and is complete
 in `docs/LcmsComparison.md`: corrected inputs, one process per
 measurement, lcms given its best compiler flags per workflow, and CLUT
 coverage reported beside adjacency on every row. Reproduce the whole
-thing with `node bench/reproduce.js`. Four corrections to our own
-earlier figures are on the record there — three of which had been
-flattering us.
+thing with `node bench/reproduce.js`. Four measurement problems that moved
+figures on that page are documented there, three of which had been
+running in our favour.
 
 The measurement work also produced findings that change how the engine
 should be *measured* rather than anything about the engine itself —
@@ -42,10 +54,11 @@ coverage vs access ordering, and noise as the great equaliser. Those are
 `deepdive/benchmark.md` §§20–21, and they are the brief for the browser
 bench rebuild.
 
-Measured but not shipped, in priority order: the **fused matrix-shaper
-WASM kernel** (POC 250–257 MPx/s — closes the one workflow where native
-C leads) and **multicore** (POC 5.46×, design in
-`deepdive/multicore.md`). Both are v1.5.5.
+**Measured and deliberately not built:** `SharedArrayBuffer` delivery to
+the workers. Projected at +30 %, a spike measured 5–13 % — the pool's
+copies are largely interleaved with worker execution, so removing them
+frees time that was already hidden. Written up in
+`deepdive/multicore.md` rather than shipped.
 
 ## Documentation index — `docs/`
 
@@ -105,8 +118,10 @@ names, environment backends.
 
 ### Roadmap.md
 Single source of truth for future work, ordered by leverage: v1.5.5
-(matrix-shaper fast path + pixel-cache experiment), v1.6 (QC/profile
-oracle), v1.7 (compiled pipeline / `toModule()`), v2 (package split);
+(shipped — matrix-shaper kernel + multicore), v1.6 (QC/profile oracle,
+browser worker pool, in-kernel pixel cache, and a generated home for
+benchmark numbers), v1.7 (compiled pipeline / `toModule()`), v2
+(package split);
 plus shipped-so-far summaries and explicitly-dropped ideas with
 reasons.
 
@@ -119,10 +134,28 @@ Instructions for regenerating this index file — output path, structure,
 and the per-repo adaptations.
 
 ### Transform.md
-`Transform` class API: constructor options, `create` /
-`createMultiStage`, DeviceLink + N-channel usage, custom stages, gamut
-warning modes, `lutMode` kernel selector, WASM memory management,
-portable LUT JSON, and contributor notes for the hot loops.
+`Transform` class API: constructor options (including `wasmMatrixShaper`
+and `multicore`), `create` / `createMultiStage`, DeviceLink + N-channel
+usage, custom stages, gamut warning modes, `lutMode` kernel selector,
+`transformImages()` and pool control, `kernelInfo()`,
+`Transform.compatibility()`, WASM memory management, portable LUT JSON,
+and contributor notes for the hot loops.
+
+### BenchResults.md
+**Generated, never hand-edited.** Every benchmark table the project quotes,
+written by the bench that measured it and rendered by
+`scripts/build_bench_results.js`: conditions, the engine version each table was
+measured against (so a stale one says so), and a citation index of which
+document links to which table. Refresh with `node bench/reproduce.js` then
+`node scripts/build_bench_results.js`.
+
+### pool.md
+The batch and worker-pool reference for `transformImages()`: the images
+array and what may be hung on it, the `onImage` callback shape, alpha
+handling (including per-image overrides), cancellation, byte-based
+backpressure, environment-driven sizing, the sequential-fallback
+contract, and what the pool costs. Useful without a pool at all — the
+same API is the batch converter.
 
 ## Deep dives — `docs/deepdive/`
 
@@ -192,28 +225,35 @@ signatures, lcms-emulation bakes, the TIFF visual-editing architecture,
 and the design reasoning behind CMS-agnostic LUT capture.
 
 ### deepdive/MatrixShaperKernel.md
-The matrix-shaper WASM kernel POC: five design generations from 52 to
-257 MPx/s, the final bytes-as-indices f32x4 design, and why it beats
-the CLUT kernel on RGB→RGB. Integration pending (v1.5.5).
+The matrix-shaper WASM kernel, shipped in v1.5.5: what the optimiser
+already folds and why the kernel only has to run it, four binaries with
+five alpha entry points each, the quartic output-table index that makes
+int16 viable, and the accuracy case — 331 MPx/s on photographs against
+~123 for the CLUT, *and* within 1 LSB where that CLUT reaches 25. Also
+how it scales in the pool, where the faster kernel necessarily scales
+worse.
 
 ### deepdive/PixelCache.md
 The pixel cache: design space, as-built notes for the accuracy-path
 implementation (`src/cache.js`, opt-in via `pixelCache`), and measured
 hit rates by content class — photographs 3–41 % (break-even at best),
-flat graphic content 67 %+ (1.2–3.2×). Also records the three things
-building it proved wrong (boundary detection, hash scaling,
-transformArray) and, as a methodology warning, two measurement errors
-that briefly reversed the conclusion: the bundled sample images are
-AI-adjusted rather than shot, and capping pixel count crops the top of
-a frame instead of sampling it.
+flat graphic content 67 %+ (1.2–3.2×). Records the three things building
+it changed about the design (boundary detection, hash scaling,
+`transformArray`), why the SIMD exclusion did not survive measurement —
+the lanes are channels, not pixels — and two properties of a test set
+that briefly reversed the conclusion: the bundled samples are
+AI-adjusted rather than shot, and capping pixel count crops the top of a
+frame instead of sampling it. The in-kernel version is built and
+measured behind paired exports, carried to v1.6.
 
 ### deepdive/multicore.md
-Brainstorm for a worker-parallel image path (nothing implemented): the
-two models — transfer vs SharedArrayBuffer — and why the transfer one
-comes first, what the kernel split already gives for free (the loops
-are slice-shaped, no mutable scratch), the alignment rules, the
-COOP/COEP deployment blocker, and a first experiment that needs no
-engine changes.
+The worker pool, in the order the work happened: the two candidate
+models, the POC that ruled out `SharedArrayBuffer` before any of it was
+built, what shipped in v1.5.5 (a fragment queue a persistent pool pulls
+from, out of order, across many images), and the shipped pool measured
+across content, workers and kernels — 6.2× peak, 787 MPx/s,
+byte-identical in all 72 cells. Also what it costs: per-worker LUT
+copies, and efficiency that falls as the kernel gets faster.
 
 ### deepdive/multiProcessElements.md
 Why `mpet` / `DToB`/`BToD` tags are not decoded: spec-mandated fallback

@@ -1,0 +1,217 @@
+/* bench.css — styles for samples/benchmark/bench.html
+   Extends samples/styles/styles.css with bench-specific components.
+   Palette variables are defined in the shared stylesheet. */
+
+:root {
+    --row-alt:      #19202a;
+    --row-hover:    #232c38;
+    --bar-bg:       #1a212b;
+    --bar-simd:     #4ade80;
+    --bar-scalar:   #38bdf8;
+    --bar-js:       #c084fc;
+    --bar-mem:      #a3e635;
+    --bar-cpu:      #fb923c;
+}
+
+/* ---- Info grid ---------------------------------------------------------- */
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px 16px;
+}
+.info-cell {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-soft);
+}
+.lbl { color: var(--text-dim); font-size: 12px; }
+.val { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.val.ok   { color: var(--accent-2); }
+.val.warn { color: var(--warn); }
+.val.err  { color: var(--error); }
+
+/* ---- Controls ----------------------------------------------------------- */
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: flex-end;
+    margin-bottom: 14px;
+}
+.controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+.controls label.check {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 5px;
+}
+.controls select {
+    background: var(--bg-card-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.btn-primary {
+    background: var(--accent);
+    color: #0f1419;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 20px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.12s;
+}
+.btn-primary:hover   { opacity: 0.88; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-secondary {
+    background: var(--bg-card-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 16px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- Progress ----------------------------------------------------------- */
+
+.progress { margin: 0 0 12px; }
+.progress-bar {
+    height: 3px;
+    background: var(--bg-card-2);
+    border-radius: 2px;
+    margin-bottom: 6px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.25s ease;
+    border-radius: 2px;
+}
+.progress-text {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    min-height: 1.4em;
+}
+
+/* ---- Hardware summary cards --------------------------------------------- */
+
+.hw-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.hw-card {
+    background: var(--bg-card-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 10px 14px;
+}
+.hw-card-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+.hw-card-value { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--accent); }
+.hw-card-unit  { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+
+/* ---- Results table ------------------------------------------------------ */
+
+.results-wrap { overflow-x: auto; margin-top: 10px; }
+
+.results {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.results th {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+.results td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.results tr:hover td { background: var(--row-hover); }
+.results tr.dir-sep td { border-top: 2px solid var(--border); }
+
+.num { text-align: right; font-family: var(--mono); }
+.bar-col { width: 120px; }
+
+/* ---- Mode badges -------------------------------------------------------- */
+
+.mode-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--mono);
+}
+.b-simd   { background: #14532d; color: var(--accent); }
+.b-scalar { background: #1e3a5f; color: #38bdf8; }
+.b-js     { background: #3b1f58; color: #c084fc; }
+.b-mem    { background: #1a2a1a; color: var(--accent-2); }
+.b-cpu    { background: #2a1a1a; color: #fb923c; }
+.b-noop   { background: #1f1f1f; color: var(--text-muted); }
+
+/* ---- Speed bar ---------------------------------------------------------- */
+
+.bar-wrap {
+    height: 10px;
+    background: var(--bar-bg);
+    border-radius: 5px;
+    overflow: hidden;
+    min-width: 80px;
+}
+.bar-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.3s ease;
+}
+
+/* ---- Thermal chip ------------------------------------------------------- */
+
+.thermal-ok   { color: var(--accent-2); }
+.thermal-warn { color: var(--warn); }
+.thermal-bad  { color: var(--error); }
+
+/* ---- Error banner ------------------------------------------------------- */
+
+.error-banner {
+    background: #3b1111;
+    border: 1px solid var(--error);
+    border-radius: 6px;
+    padding: 10px 14px;
+    color: var(--error);
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-bottom: 12px;
+}

@@ -54,6 +54,7 @@ const require   = createRequire(import.meta.url);
 
 const { Transform, eIntent } = require('../../src/main');
 const Profile                = require('../../src/Profile');
+const emit                   = require('../lib/emit.cjs');   // no-op unless JSCE_BENCH_JSON is set
 
 const GRACOL_PATH = path.join(__dirname, '..', '..', '__tests__', 'GRACoL2006_Coated1v2.icc');
 const ADOBE_PATH  = path.join(__dirname, '..', '..', 'samples', 'profiles', 'AdobeRGB1998.icc');
@@ -510,6 +511,7 @@ function runIsolated() {
             console.log('   content    adj%    distinct   cover     jsCE int   jsCE simd   lcms-wasm   lcms-wasm NOCACHE   jsCE-simd/lcms');
             console.log('   --------  ------  ---------  ------    ---------  ----------  ----------  ------------------  --------------');
 
+            const emitRows = [];
             for (const kind of contents) {
                 const values = {};
                 let adj = 0, distinct = 0;
@@ -532,9 +534,51 @@ function runIsolated() {
                     values.int.toFixed(1).padStart(9) + '  ' + values.simd.toFixed(1).padStart(10) + '  ' +
                     values.lcms.toFixed(1).padStart(10) + '  ' + values.lcmsnc.toFixed(1).padStart(18) + '  ' +
                     (values.simd / values.lcms).toFixed(2).padStart(13) + 'x');
+
+                emitRows.push({
+                    content:         kind,
+                    adjPct:          +adj.toFixed(1),
+                    distinct:        distinct,
+                    coverX:          shape ? +cover.toFixed(2) : null,
+                    jsceInt:         +values.int.toFixed(1),
+                    jsceSimd:        +values.simd.toFixed(1),
+                    lcmsWasm:        +values.lcms.toFixed(1),
+                    lcmsWasmNoCache: +values.lcmsnc.toFixed(1),
+                    ratioVsLcms:     +(values.simd / values.lcms).toFixed(2),
+                });
             }
+
+            // One table per workflow. `cover` travels with the rows because a
+            // throughput figure without it can describe a working set no real
+            // image produces — that is not hypothetical here.
+            // The size and the mode belong IN the id. Without them the size
+            // sweep and the per-image run emit the same handle six times over,
+            // and a doc citing it lands on whichever rendered first.
+            const perImage = contents.length > 0 && contents.every(c => String(c).startsWith('image:'));
+            // Three runs share this code path and one of the sweep's sizes is
+            // also the content matrix's size, so the MODE has to be in the id
+            // too — otherwise two different measurements claim one handle.
+            const mode = perImage ? 'perimage' : (contents.length === 1 ? 'sweep' : 'content');
+            emit.table({
+                id:      'js.' + mode + '.' + slugify(WORKFLOWS[w].name) + '.' +
+                         (npx / 1024).toFixed(0) + 'k',
+                title:   WORKFLOWS[w].name + ' — jsCE vs lcms-wasm, ' +
+                         (npx / 1024).toFixed(0) + 'K px' +
+                         (perImage ? ', per image' : (mode === 'sweep' ? ', size sweep' : '')),
+                units:   'MPx/s',
+                meta:    Object.assign({ pixels: npx, medianOf: TIMED_BATCHES },
+                            shape ? { clut: shape.grid.join('x'), clutCells: shape.cells } : {}),
+                columns: ['content', 'adjPct', 'distinct', 'coverX', 'jsceInt', 'jsceSimd',
+                          'lcmsWasm', 'lcmsWasmNoCache', 'ratioVsLcms'],
+                rows:    emitRows,
+            });
         }
     }
+}
+
+/** Stable table ids: the docs cite these, so they must not drift with prose. */
+function slugify(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
 // ---- main table --------------------------------------------------------
@@ -605,6 +649,7 @@ function runPixelCacheTable() {
         console.log('   content    adj%    no cache   1 slot   32 slots   hit%(32)   32-slot gain');
         console.log('   --------  ------  ---------  -------  ---------  ---------  ------------');
 
+        const cacheRows = [];
         for (const kind of contents) {
             const input = buildContent(kind, npx, wf.inCh);
             const adj   = adjacency(input, npx, wf.inCh);
@@ -630,7 +675,31 @@ function runPixelCacheTable() {
                 speeds[0].toFixed(2).padStart(9) + '  ' + speeds[1].toFixed(2).padStart(7) + '  ' +
                 speeds[2].toFixed(2).padStart(9) + '  ' + hitPct.toFixed(1).padStart(8) + '%  ' +
                 ((speeds[2] / speeds[0] - 1) * 100).toFixed(0).padStart(10) + '%');
+
+            cacheRows.push({
+                content:     kind,
+                adjPct:      +adj.toFixed(1),
+                noCacheMpxs: +speeds[0].toFixed(2),
+                oneSlotMpxs: +speeds[1].toFixed(2),
+                slots32Mpxs: +speeds[2].toFixed(2),
+                hitPct32:    +hitPct.toFixed(1),
+                gain32Pct:   +((speeds[2] / speeds[0] - 1) * 100).toFixed(0),
+            });
         }
+
+        // Against its OWN uncached baseline, never against the LUT kernels —
+        // this is the accuracy path, which is an order of magnitude slower and
+        // a different question.
+        emit.table({
+            id:      'pixelCache.accuracyPath.' + slugify(wf.name),
+            title:   'Pixel cache (BETA), accuracy path — ' + wf.name,
+            units:   'MPx/s',
+            meta:    { pixels: npx, buildLut: false, baseline: 'its own uncached run' },
+            columns: ['content', 'adjPct', 'noCacheMpxs', 'oneSlotMpxs', 'slots32Mpxs',
+                      'hitPct32', 'gain32Pct'],
+            rows:    cacheRows,
+        });
+
         console.log('');
     }
 }

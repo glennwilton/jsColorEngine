@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jsColorEngine &middot; Benchmark</title>
+<link rel="stylesheet" href="../styles/styles.css">
+<link rel="stylesheet" href="bench.css">
+<script src="../lib/devtools-warn.js"></script>
+<script src="../browser/jsColorEngineWeb.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-head">
+        <div class="brand">
+            <span class="brand-mark">jsColorEngine</span>
+            <span class="brand-tag">benchmark</span>
+        </div>
+        <nav class="nav" aria-label="Site">
+            <a href="../">Home</a>
+            <a href="../samples.html">Samples</a>
+            <a href="./bench.html" class="is-active">Benchmark</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+
+<!-- ENGINE INFO ============================================================ -->
+<section class="card">
+    <h2>Engine info</h2>
+    <div class="info-grid">
+        <div class="info-cell"><span class="lbl">jsColorEngine</span><span class="val" id="info-jsce">loading&hellip;</span></div>
+        <div class="info-cell"><span class="lbl">Bench build</span> <span class="val ok" id="info-bench-build">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">WebAssembly</span>  <span class="val" id="info-wasm">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">WASM SIMD</span>    <span class="val" id="info-simd">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Profiles</span>     <span class="val" id="info-profile">loaded on Run</span></div>
+        <div class="info-cell"><span class="lbl">CPU cores</span>    <span class="val" id="info-cores">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Context</span>      <span class="val" id="info-secure">&mdash;</span></div>
+        <div class="info-cell" style="grid-column: 1 / -1"><span class="lbl">User agent</span><span class="val" id="info-ua" style="font-size:10px">&mdash;</span></div>
+    </div>
+</section>
+
+<!-- CONTROLS =============================================================== -->
+<section class="card">
+    <h2>Run benchmark</h2>
+    <p class="lead" style="margin-bottom:12px">
+        Runs hardware baselines (memory bandwidth, CPU speed) then all four
+        colour-space directions &times; three jsColorEngine LUT modes.
+        Results appear as each benchmark completes.
+    </p>
+
+    <div class="controls">
+        <label>Pixels per iteration
+            <select id="pixel-size">
+                <option value="32768">32 K px &mdash; cache-resident (fast)</option>
+                <option value="65536" selected>64 K px &mdash; reference size</option>
+                <option value="1000000">1 M px &mdash; L3 / main memory</option>
+            </select>
+        </label>
+        <label>Warmup iterations
+            <select id="warmup-runs">
+                <option value="10" selected>10 &mdash; quick (dev)</option>
+                <option value="50">50</option>
+                <option value="200">200 &mdash; recommended</option>
+            </select>
+        </label>
+        <label>Iters per batch
+            <select id="timed-runs">
+                <option value="20">20</option>
+                <option value="50" selected>50 &mdash; recommended</option>
+                <option value="200">200 &mdash; high precision</option>
+            </select>
+        </label>
+        <label>Batches
+            <select id="timed-batches">
+                <option value="3">3</option>
+                <option value="5" selected>5</option>
+                <option value="10">10</option>
+            </select>
+        </label>
+        <label class="check">
+            <input type="checkbox" id="skip-warmup">
+            Skip 5 s CPU preheat
+        </label>
+        <button class="btn-primary" id="run-btn">Run benchmark</button>
+        <button class="btn-secondary" id="copy-btn" disabled>Copy markdown</button>
+    </div>
+
+    <div class="progress" id="progress">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-text" id="progress-text">Press &ldquo;Run benchmark&rdquo; to start.</div>
+    </div>
+
+    <div id="error-banner" class="error-banner" hidden></div>
+    <div id="thermal-live" style="font-size:11px; font-family:var(--mono); margin-top:4px; min-height:1.4em"></div>
+</section>
+
+<!-- DIRECT KERNEL REFERENCE ================================================ -->
+<section class="card">
+    <h2>Direct kernel reference</h2>
+    <p class="lead" style="margin-bottom:10px">
+        Bypasses the entire bench framework. Calls <code>xform.transformArray(input)</code>
+        in a raw tight loop — no <code>transform()</code> wrapper, no <code>ctx</code>
+        property accesses, no batch indirection. If this matches the framework's number,
+        the framework adds zero overhead. If it's faster, the framework is the source
+        of the gap vs. the old bench.
+    </p>
+    <div class="controls">
+        <button class="btn-primary" id="direct-btn">Run direct kernel test</button>
+        <button class="btn-secondary" id="scenario-btn">Run self-contained scenario</button>
+        <span id="direct-status" style="font-size:11px; color:var(--text-muted); font-family:var(--mono)"></span>
+    </div>
+    <div id="direct-result" style="font-family:var(--mono); font-size:13px; margin-top:8px; min-height:1.6em"></div>
+    <div id="scenario-result" style="font-family:var(--mono); font-size:13px; margin-top:8px; min-height:1.6em"></div>
+    <p class="muted" style="margin-top:10px">
+        <strong>Direct kernel</strong>: minimal inline loop, no framework abstractions.
+        Reads what the kernel can do with zero overhead around it.
+        <br>
+        <strong>Self-contained scenario</strong>: one function file that owns its own setup,
+        warmup, hot loop and timing — the &ldquo;production code shape&rdquo; pattern.
+        V8 sees it as one independent compilation unit, so the call site to
+        <code>xform.transformArray</code> stays monomorphic and inlineable.
+        <br>
+        If both these match but the registered <code>wasm-simd</code> benchmark above is
+        slower, the registered framework&rsquo;s shared call site is the source of the gap.
+    </p>
+</section>
+
+<!-- HARDWARE BASELINE ====================================================== -->
+<section class="card" id="hw-section" hidden>
+    <h2>Hardware baseline</h2>
+    <p class="muted" style="margin:4px 0 12px">Measured on this machine — used to normalise the &ldquo;% of peak&rdquo; column below.</p>
+    <div class="hw-cards">
+        <div class="hw-card">
+            <div class="hw-card-label">JS copy peak (TypedArray.set)</div>
+            <div class="hw-card-value" id="hw-js-mpx">—</div>
+            <div class="hw-card-unit">MPx/s &nbsp;·&nbsp; <span id="hw-js-mbps">—</span> MB/s</div>
+        </div>
+        <div class="hw-card">
+            <div class="hw-card-label">WASM memcpy round-trip</div>
+            <div class="hw-card-value" id="hw-wasm-mpx">—</div>
+            <div class="hw-card-unit">MPx/s &nbsp;·&nbsp; <span id="hw-wasm-mbps">—</span> MB/s</div>
+        </div>
+        <div class="hw-card">
+            <div class="hw-card-label">CPU primes (sieve 100 K)</div>
+            <div class="hw-card-value" id="hw-cpu-ops">—</div>
+            <div class="hw-card-unit">ops/s &nbsp;·&nbsp; <span id="hw-cpu-ms">—</span> ms/op</div>
+        </div>
+    </div>
+</section>
+
+<!-- RESULTS ================================================================ -->
+<section class="card" id="results-section" hidden>
+    <h2>Results</h2>
+
+    <!-- Baseline benchmarks -->
+    <h3>Memory &amp; CPU baselines</h3>
+    <div class="results-wrap">
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Benchmark</th>
+                    <th class="num">Hot ms</th>
+                    <th class="num">Throughput</th>
+                    <th class="num">Bandwidth</th>
+                    <th class="bar-col">relative</th>
+                </tr>
+            </thead>
+            <tbody id="baseline-tbody"></tbody>
+        </table>
+    </div>
+
+    <!-- Transform benchmarks -->
+    <h3 style="margin-top:24px">Transform benchmarks (jsColorEngine)</h3>
+    <p class="muted" style="margin:4px 0 10px">
+        LUT build = Transform.create() time. Cold 1st = first untimed call (JIT + cache cold).
+        Hot = median of timed runs. % of peak = relative to WASM memcpy peak on this machine.
+        Bar normalised to fastest within each direction.
+    </p>
+    <div class="results-wrap">
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th class="num" title="Transform.create() time">LUT build</th>
+                    <th class="num" title="First transform call — JIT + cache cold">Cold 1st</th>
+                    <th class="num" title="Median of timed runs">Hot ms</th>
+                    <th class="num">MPx/s</th>
+                    <th class="num">MB/s</th>
+                    <th class="num" title="% of WASM memcpy peak on this machine">% of peak</th>
+                    <th class="bar-col">relative</th>
+                </tr>
+            </thead>
+            <tbody id="transform-tbody"></tbody>
+        </table>
+    </div>
+</section>
+
+<!-- THERMAL VALIDATION ===================================================== -->
+<section class="card" id="thermal-section" hidden>
+    <h2>Thermal validation</h2>
+    <p class="muted" style="margin:4px 0 10px">
+        Baseline benchmarks re-run after all transforms. Degradation &gt; 10% indicates CPU thermal throttling.
+    </p>
+    <div class="results-wrap">
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Benchmark</th>
+                    <th class="num">Degradation</th>
+                    <th class="num">Retest ms</th>
+                </tr>
+            </thead>
+            <tbody id="thermal-tbody"></tbody>
+        </table>
+    </div>
+</section>
+
+</main>
+
+<footer class="footer" style="text-align:center; padding:16px; color:var(--text-muted); font-size:11px; border-top:1px solid var(--border-soft)">
+    jsColorEngine v<span id="info-version">?</span>
+    &middot; samples/benchmark/bench.html
+    &middot; Profiles from samples/profiles/
+</footer>
+
+<script type="module" src="bench.bundle.js"></script>
+</body>
+</html>
