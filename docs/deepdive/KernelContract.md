@@ -1,6 +1,7 @@
 # The kernel contract
 
-> **Status: phases 1-3 landed 2026-08-21; phases 4-7 not built.**
+> **Status: phases 1-5 landed 2026-08-21. Phase 6 (`wantsLut`), phase 7
+> (per-dimension WASM) and the simplification below are not built.**
 > This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
 > [KernelModules.md](./KernelModules.md), which this supersedes in part; when
 > this lands, the two are folded into one as-built document.
@@ -28,6 +29,25 @@ conversion needs and in what order, optimises them, and validates them. It
 does not decide how a colour is interpolated, at any batch size, in any
 numeric format. That is the kernel's, and it is the kernel's for both the
 single-colour path and the image path.
+
+### What Transform actually does
+
+Three things, and the list is the specification:
+
+1. **Select a kernel by input channel count.** `Transform.kernels[inputChannels]`.
+2. **Initialise it** — offer it the LUT decision, then the built pipeline.
+3. **Hand it work.** *Here is a colour, or here is an array. You work it out.*
+
+Nothing else. Not which variant runs, not whether a batch is big enough to be
+worth a WASM call, not how a fallback ladder degrades. **Batch size is not
+Transform's concern** — a kernel that has a fast path for large arrays and a
+different one for small holds both and picks, and Transform never learns a
+choice was made.
+
+That last point is where several earlier drafts leaked. Returning
+`{big, small, threshold}` for the caller to compare still tells the caller
+there is a threshold. There is not, as far as it is concerned: there is a
+function that converts an array.
 
 ### Everything Transform offers a kernel is optional
 
@@ -149,11 +169,11 @@ var descriptor = Transform.kernels[inChannels];
 | `name` | yes | stable identity; re-registering the same name replaces in place |
 | `supports` | no | declarative variant capability map — diagnostics only |
 | **`floatFor(lut, hints)`** | **yes** | **NEW** — returns `{funct, stageName}` for a single-colour pipeline stage |
-| **`arrayFor(lut, hints)`** | no | **PROPOSED** — returns `{big, small, threshold, bigName, smallName}` for the image path, resolved once at create. See [arrayFor](#arrayfor) |
+| **`arrayFn(in, out, px, inAlpha, outAlpha, preserve)`** | yes | **TARGET** — converts an array. Any variant choice, including batch size, happens inside. See [arrayFn](#arrayfn) |
 | **`wantsLut(pipeline, opts)`** | no | **NEW** — replaces `provideLut` + `displacesLut` |
 | **`init(pipeline, opts)`** | no | **NEW** — replaces `claims`; returns `{pipeline, kernel}` |
 | `create(lutMode)` | yes | settle WASM state, demote lutMode if the host can't run the request; returns the settled mode |
-| `resolveRuns()` | yes | resolve BIG/SMALL run refs onto the instance |
+| ~~`resolveRuns()`~~ | — | **TO BE REMOVED** — see [why it exists](#resolveruns) |
 | `array(in, out, px, lut, inAlpha, outAlpha, preserve)` | yes | image batch — owns output allocation/validation and dispatch |
 | `release()` | yes | free WASM state |
 | `emitKernel(opts)` | no | reserved for `compile()` integration — see [CompiledPipeline.md](./CompiledPipeline.md) |
@@ -418,7 +438,7 @@ want, and check what Transform has to learn.**
 | A fast-preview mode on a small 8-bit grid | a kernel that returns a 9³ or 17³ u8 table when a preview option is set | nothing |
 | A tuned 7-channel press kernel, leaving 5, 6, 8–15 generic | `Transform.kernels[7] = Kernel7D` | nothing |
 | A probe that records every dispatch, for a test | `Transform.kernels[9] = probe` | nothing |
-| A JS → WASM → GPU kernel: three tiers, two thresholds orders of magnitude apart, and a decision that depends on device availability | the kernel's own dispatcher returned in both slots with `threshold: 0` | nothing — though a GPU tier raises an async question for the *public API*, see [arrayFor](#arrayfor) |
+| A JS → WASM → GPU kernel: three tiers, two thresholds orders of magnitude apart, and a decision that depends on device availability | the kernel's own `arrayFn`, dispatching over three tiers internally | nothing — though a GPU tier raises an async question for the *public API*, see [arrayFn](#arrayfn) |
 
 Every row is a kernel decision expressed through hooks that already exist in
 this document. None of them is a case in a switch in `Transform.js`, which is
@@ -695,11 +715,12 @@ speedup", one level down: quote the measurement that controls its conditions.
 | ~~1~~ | ~~Dense 1–15 registry; `setKernel` becomes an array index; `registerKernel` accepts a range~~ **LANDED 2026-08-21** — descriptors gained `name`, `KernelND` registers `[5, 15]`, `MAX_KERNEL_DIMENSIONS = 15`. New suite `__tests__/kernel_registry.tests.js` (17 tests) | Mechanical, no behaviour change, unblocks test injection |
 | ~~2~~ | ~~`floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups~~ **LANDED 2026-08-21**, and it closed `TODO (B3)` with it — see [Phase 2 as built](#phase-2-as-built) | No WASM in the way. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
 | ~~3~~ | ~~`floatFor` on KernelND, then Kernel3D, then Kernel4D~~ **LANDED 2026-08-21** — `addStageLUT` went from 133 lines to 34. See [Phase 3 as built](#phase-3-as-built) | Ascending risk. 3D and 4D one at a time |
-| 4 | Loops and WASM state move onto the kernel; the 22 `run_` adapters in `lutKernelTable.js` follow the loops they call | ~~They exist only to rename `t.method`~~ **Corrected:** they are real adapters — they insert the `0, 0` position arguments, and the WASM ones do a `bind` + `run` pair with computed bytes-per-pixel. They relocate; they do not vanish |
-| 4e | [`arrayFor()`](#arrayfor) returns `{big, small, threshold}`; the shared `WASM_DISPATCH_MIN_PIXELS` constant retires into the kernels that own each break-even | After the loops and adapters move — it is the binding layer over them, so it has nothing to bind until then. **Not a throughput change**; measure `bindTransformArrayFn` first and expect nothing |
-| 5 | `init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire | Needs 3 and 4 landed first |
+| ~~4~~ | ~~Loops and WASM state move onto the kernel; the 22 `run_` adapters in `lutKernelTable.js` follow the loops they call~~ **LANDED 2026-08-21** across 4/4b/4c/4d | ~~They exist only to rename `t.method`~~ **Corrected**: they are the family boundary that keeps float and int bodies from sharing a call site and poisoning the JIT |
+| ~~4e~~ | ~~`arrayFor()` returns `{big, small, threshold}`~~ **LANDED 2026-08-21, AND SUPERSEDED** — the shared `WASM_DISPATCH_MIN_PIXELS` retired into `dispatchThreshold.js`, but returning a threshold to the caller still made batch size Transform's business. Replaced by [`arrayFn`](#arrayfn) in phase 8 | After the loops move, this is the last thing Transform knows about dispatch |
+| ~~5~~ | ~~`init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire~~ **LANDED 2026-08-21** — no claim registry at all in the end: Kernel3D reads the pipeline and yields to the matrix shaper itself, and Transform never learns a choice was made. The 42-row dispatch table became a `resolve()` switch in each kernel file, verified against a 560-decision oracle; the u16 wide-output gap it hid (CMYK→5CLR threw at 16 bits) is fixed | Needs 3 and 4 landed first |
 | 6 | `wantsLut()` merges `provideLut` + `displacesLut` | Smallest surface, last |
 | 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
+| **8** | **`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business. See [What Transform actually does](#the-principle) |
 
 ---
 
@@ -819,289 +840,92 @@ Throughput unchanged, as a create-time-only change should be: jsCE **median
 +0.21%** across 132 cells, isolated `solo` bench **worst −0.61%**, accuracy
 identical. Phase 2's gray and duotone gains held.
 
-<a id="arrayfor"></a>
+<a id="arrayfn"></a>
 
-## `arrayFor(lut, hints)` — one bound function for the image path
+## `arrayFn` — one function, and the kernel keeps its own secrets
 
-`floatFor` gives the kernel ownership of the single-colour path. `arrayFor` is
-its counterpart: the kernel returns **one function, bound once at create()**,
-and `transformArray` calls it with no dispatch on either side.
+`floatFor` gives the kernel the single-colour path. `arrayFn` is the image
+path, and it is deliberately the plainest possible thing:
 
 ```js
-// at create()
-var bound = kernel.arrayFor(lut, hints);
-// { big, small, threshold, bigName, smallName }
-
-// per call
-var fn = (pixelCount >= bound.threshold) ? bound.big : bound.small;
-fn(input, output, pixelCount, inAlpha, outAlpha, preserve);
+kernel.arrayFn(input, output, pixelCount, inAlpha, outAlpha, preserve)
 ```
 
-**Two functions and a threshold, not one function that branches inside.** The
-kernel already resolves exactly this shape today — `_runBig`, `_runSmall`,
-`_threshold` on the instance — so returning it is a rename of something that
-exists rather than a new mechanism. Making it a return value rather than
-private state buys three things:
+Transform calls it. That is the entire interface.
 
-- **The threshold becomes data.** Inspectable, assertable, reportable by
-  `kernelInfo()`. Today it is a private field and a test has to reach for
-  `kernel._threshold` to check it.
-- **Non-WASM modes collapse to one bound function and no compare at all.**
-  When nothing in the fallback chain is WASM-eligible, `big === small` and the
-  threshold is 0 — which the current resolver already special-cases, precisely
-  to skip the per-call comparison. Measured on `*sRGB → GRACoL`:
+### What this replaced, and why the earlier shapes were wrong
 
-  | lutMode | big | small | threshold | collapsed |
-  |---|---|---|---|:-:|
-  | `float` | `fl_3_4` | `fl_3_4` | 0 | **yes** |
-  | `int` | `i_3_4` | `i_3_4` | 0 | **yes** |
-  | `int-wasm-simd` | `i8wsi_3_4` | `i_3_4` | 256 | no |
-  | `int16-wasm-simd` | `i16wsi_3_4` | `i16_3_4` | 256 | no |
+Three drafts of this exist in the history of this document, each less leaky
+than the last:
 
-  So the fully-bound "one and done" shape is real, but it is **not** the case
-  for the WASM modes — which are exactly the ones image work uses. Those keep
-  the compare. That costs one comparison per image, which is nothing, but it is
-  worth being accurate about rather than claiming a collapse that the fast path
-  does not get.
-- **A caller that knows its size can hoist the decision.** `transformImages()`
-  splits into fragments of known pixel count, so the pool can pick once for the
-  whole run instead of re-deciding per fragment.
+1. **`kernel.array(...)` reaching back through `kernelUtils.runTableKernel`**,
+   which consulted a resolver, compared a threshold and called a run closure —
+   with the kernel's own state written onto it from outside.
+2. **`arrayFor()` returning a bound function.** Better: the kernel answers once
+   and the caller holds the result.
+3. **`arrayFor()` returning `{big, small, threshold}`** so a caller could pick
+   per call, or skip the compare when they collapse.
 
-`bigName` / `smallName` carry the resolved table entry (`i8wsi_3_4`, `fl_4_n`)
-for diagnostics — the same strings `_runBigKey` / `_runSmallKey` hold now, which
-`verbose` already prints and which `kernelInfo()` should surface.
-
-Two tiers because the break-even is one decision, not a ladder: the fallback
-chain (simd → scalar → js → float) is walked once at create() and lands on
-exactly two outcomes.
-
-**And two tiers is enough forever, because the second tier is an escape hatch.**
-
-The case that makes this concrete is a **JS → WASM → GPU** kernel. Three tiers,
-and not evenly spaced: the WASM crossover is a memcpy, a few hundred pixels,
-while a GPU crossover is an upload plus a round trip and sits somewhere in the
-millions. Two thresholds, wildly different magnitudes, and the second one
-depends on things `{big, small, threshold}` knows nothing about — whether a
-device is available, whether the last upload is still resident, whether the
-caller is going to ask for the result back immediately.
-
-That shape cannot be expressed as one threshold, and it should not have to be.
-A kernel that wants it returns *its own dispatcher* in both slots:
-
-There are two shapes for this, and both are legitimate.
-
-**Resolved at bind time** — everything decidable is decided once, and the
-returned closure does one thing:
+The third still leaks. Telling the caller there is a threshold makes the batch
+size their business, and it is not — **why would Transform care how big the
+array is?** A kernel with a WASM path above some pixel count and a JS path
+below holds both and picks:
 
 ```js
-arrayFor: function(lut, hints){
-    var dispatch = makeWhateverRoutingIWant(lut, hints);   // built once
-    return { big: dispatch, small: dispatch, threshold: 0,
-             bigName: 'custom', smallName: 'custom' };
+// set up once, in create() / init()
+this.arrayFnBig = …;
+this.arrayFnSml = …;
+this.threshold  = …;      // the kernel's own number, nobody else's
+
+arrayFn: function(input, output, px, inAlpha, outAlpha, preserve){
+    var fn = (px >= this.threshold) ? this.arrayFnBig : this.arrayFnSml;
+    return fn(input, output, px, inAlpha, outAlpha, preserve);
 }
 ```
 
-**Decided per call** — the kernel keeps a real dispatcher and re-decides on
-whatever it likes: size, content, cache state, how the last call went:
+One compare, once per image, inside the kernel that owns the reason for it. A
+kernel with one implementation just assigns `arrayFn` directly and there is no
+compare at all.
 
-```js
-arrayFor: function(lut, hints){
-    var dispatch = this.multiDispatch.bind(this);          // NOTE the bind
-    return { big: dispatch, small: dispatch, threshold: 0,
-             bigName: 'multiDispatch', smallName: 'multiDispatch' };
-},
+<a id="resolveruns"></a>
 
-multiDispatch: function(input, output, px, inAlpha, outAlpha, preserve){
-    // size, content, anything — then delegate
-}
-```
+### And resolution happens in `init()`
 
-**The `.bind(this)` is not optional.** A method reference returned raw loses its
-receiver: these files are strict-mode modules, so `this` inside `multiDispatch`
-is `undefined` and the first `this.anything` throws. It fails loudly rather than
-silently, but it fails on the first array call rather than at create, which is
-the worst time to find out.
+There is no `resolveRuns()` in the target. `init()` already receives the built
+pipeline and everything the kernel is allowed to know; whatever it decides —
+which variant, which threshold, which tables — it decides there and stores on
+itself.
 
-Binding once inside `arrayFor` costs one allocation per `create()` and nothing
-per call, so there is no reason to avoid it. The alternative — having Transform
-invoke `kernel.method(...)` so the receiver comes along — reintroduces exactly
-the property lookup the bound shape exists to remove, and puts the kernel's
-internal structure back into Transform's hands.
+**`resolveRuns()` was never part of the design.** It is worth being precise
+about this, because the spec that documented it made it look deliberate. From
+the v1.5 migration history:
 
-**Per-call decisions are free here.** `arrayFor`'s result is invoked once per
-image, not once per pixel, so "check size and other stuff per call" costs
-nothing measurable. A kernel should feel free to be as dynamic as it wants.
-This is not a fast-path-versus-flexible trade; the fast path is inside the
-loop, and this is outside it.
+> **C** — BIG/SMALL run refs onto the kernel instance
+> (`_runBig`/`_runSmall`/`_threshold`), resolved by `kernel.resolveRuns()`;
+> `_lutKernelBig`/`_lutKernelSmall`/`_lutKernelThreshold` removed from
+> Transform
 
-One thing the dynamic shape gives up: `bigName` / `smallName` can only name the
-dispatcher, not the variant that actually ran. A kernel doing per-call routing
-that wants honest diagnostics should record its choice and expose it — the
-built-in kernels report `i8wsi_3_4` and friends, and a `multiDispatch` that
-reports only `'multiDispatch'` is a step backwards for anyone reading
-`verbose` output.
+Phases A and B — the modular kernel work proper — have no `resolveRuns`. It
+arrived in phase C purely as the vehicle for moving three fields off Transform,
+and every revision of the spec was written after C, which is why it reads as a
+required member of the contract rather than as the migration step it was.
 
-Threshold 0 means `big` is always chosen, Transform makes no comparison, and
-whatever happens inside `dispatch` is invisible to it. **Transform.js does not
-care what it was handed — it calls a function.**
+It is a half-step by its own description: the *fields* moved to the kernel, but
+Transform kept *sequencing* the resolve and *comparing* the threshold. It also
+brought `_resolveLutKernels()` with it, which grew a second unrelated job and
+ended up being called on the identity path, where there is no kernel at all.
 
-And the cost of being that dynamic is nil, because the dispatcher runs once per
-image. A three-way branch on device availability and pixel count, per image, is
-not a measurable thing.
+**A doc that records what was built reads exactly like a doc that records what
+was intended.** This one now says which it is.
 
-### Where a GPU tier would actually live
+### The resolution itself lives in the kernel file
 
-`transformArray()` is synchronous and a GPU round trip is not, which looks at
-first like a problem needing a new async API.
-
-It is not, because that API already exists. **`transformImages()` is already
-`await`-able**, already fragments the work, already hands each fragment to
-another execution context and reassembles the results out of order, already
-reports per-image progress through `onImage`. Today that other context is a
-worker pool. A GPU is another executor of the same shape.
-
-So the split is clean, and it is the one the library already has:
-
-| | | |
-|---|---|---|
-| `transformArray()` | synchronous, one buffer | CPU: JS and WASM. A GPU tier reached here falls back to WASM. |
-| `transformImages()` | async, fragmented, out-of-order reassembly | where a GPU backend belongs |
-
-That makes GPU support a **new pool backend rather than a new API**, which is a
-much smaller and much better understood problem — the fragment queue,
-reassembly and progress reporting are all written.
-
-**And for a single buffer, `transformArrayAsync()`.** `transformImages()` is
-the right home for a batch, but it is the wrong shape for "convert this one
-image and give it back". An async sibling to `transformArray` covers that:
-
-```js
-var out = await t.transformArrayAsync(input, ...);
-```
-
-It is well behaved in the boring case, which is what makes it worth having: with
-no device, or a batch below the crossover, it does the synchronous work and
-resolves immediately. The caller writes `await` once and gets the GPU when the
-GPU helps, without branching on availability. `transformArray()` stays exactly
-as it is — synchronous, no promise allocation, no change for anyone.
-
-That leaves three entry points with clear jobs rather than one overloaded one:
-
-| | |
-|---|---|
-| `transformArray()` | sync, one buffer, CPU |
-| `transformArrayAsync()` | one buffer, may use a device, falls back silently |
-| `transformImages()` | batch, fragmented, workers or devices, progress |
-
-One thing carried over from the pool that a GPU tier would feel more sharply:
-[multicore.md](./multicore.md) found efficiency *falls* as the kernel gets
-faster, because the fixed per-fragment cost stays put while the compute it
-overlaps shrinks. A GPU's fixed cost is an upload and a download rather than a
-`postMessage`, so its crossover sits higher again — well into the millions of
-pixels, and higher still for anything that wants its result back immediately.
-That is the number to measure first, before writing a shader.
-
-So the contract does not need to grow a third tier, and should not. `{big,
-small, threshold}` is the *convenience* shape for the one decision every
-built-in kernel actually makes; a kernel with a different idea keeps full
-control by declining to use it. That is the same property as the rest of this
-document — see [The shape test](#the-shape-test--what-a-stranger-can-do-without-touching-transform):
-name a thing a third party might want, and check what Transform has to learn.
-Here, again, nothing.
-
-Today the same journey is: `transformArrayViaLUT` preamble → `kernel.array()` →
-`ensureOutputArray` → `runTableKernel` → threshold compare → the resolved run
-ref → `_postRunWasmCheck`. Every step is cheap, but the decisions are spread
-across `Transform.js`, `kernelUtils.js` and `lutKernelTable.js`, and none of
-them can change without touching all three.
-
-### It is not a speed feature, and the evidence is already in the repo
-
-**This was built and measured.** `bindTransformArrayFn` exists, binds exactly
-these closures, and is **off by default**, with the reason recorded at
-[Transform.js:4160](../../src/Transform.js:4160):
-
-> V8 method dispatch through the kernel is equally fast for images and faster
-> for tiny batches.
-
-The arithmetic says the same thing. On a 1 M px call the dispatch is a property
-lookup, a compare and an indirect call — call it 10 ns against ~10 ms of pixel
-work. **One part in a million.** It cannot show up in a measurement, and a
-bound closure that skips it will not either.
-
-So `arrayFor` should not be sold as throughput. Anyone proposing it on those
-grounds should be shown this paragraph and the flag that already exists.
-
-### What it is actually for
-
-- **Ownership.** A third-party kernel currently controls what runs but not how
-  it is reached: allocation, the BIG/SMALL threshold and the post-run WASM check
-  all live outside it. With `arrayFor` the kernel returns the whole path.
-- **`compile()`.** This is the real payoff. The descriptor already reserves
-  `emitKernel(opts)` for feeding `Transform.compile()`, and a kernel that can
-  hand back one bound function is one step from handing back *source* for one.
-  See [CompiledPipeline.md](./CompiledPipeline.md).
-- **One place to look.** The BIG/SMALL threshold, output allocation and the
-  WASM check become one function the kernel wrote, rather than three files that
-  must agree.
-
-### The threshold belongs to the kernel, which is the point
-
-Today `WASM_DISPATCH_MIN_PIXELS = 256` is **one number shared by everything** —
-every kernel, every lutMode, every channel count — and it is written twice,
-in `Transform.js` and again in `lutKernelTable.js`, kept in step by a comment.
-
-Those break-evens are not the same number. A 3-D int8 SIMD run copies 3 bytes
-per pixel in and 4 out, against a table of a few hundred KB; a 4-D int16 run
-copies 8 in and 8 out against a much larger one; the matrix-shaper kernel has no
-CLUT to upload at all. One constant is standing in for at least three different
-crossovers.
-
-`arrayFor` returning the threshold makes it the kernel's answer rather than a
-class static every kernel inherits, and removes the duplicated constant. That
-is a better reason to build it than the dispatch saving, which is nil.
-
-### `threshold: 0` means `small` is unreachable — mirror `big`, never stub it
-
-The dispatch is `pixelCount >= threshold ? big : small`, and `pixelCount` is
-never negative, so **a threshold of 0 means `big` is always taken and `small`
-is dead**.
-
-Put the same reference in both slots, as the current resolver does when it
-collapses. Do **not** put a stub `function(){}` in `small` on the grounds that
-it can never be called:
-
-- it is a landmine if the comparison is ever written as `>` rather than `>=`,
-  where a zero-pixel call would hit the stub and silently produce nothing
-- it makes `smallName` lie, and that string is what `verbose` prints and what
-  `kernelInfo()` should report
-
-An unreachable slot holding a real function costs one reference. An unreachable
-slot holding a stub costs a debugging session.
-
-### The threshold is real, and must not be optimised away
-
-WASM has a memcpy break-even: below it, the JS variant wins. `pixelCount` is
-not known at bind time, so the decision cannot be bound away in the general
-case — returning `{big, small, threshold}` exposes it rather than hiding it,
-which is the point.
-
-Worth stating plainly so nobody removes the compare later and sends 64-pixel
-calls through a path that loses on the copy. `WASM_DISPATCH_MIN_PIXELS` is
-where that break-even lives, and it is a class static so a profiler can move it
-before `create()`.
-
-The case where it *can* be bound away is when `big === small` — no WASM-eligible
-entry anywhere in the chain — and the resolver already collapses the threshold
-to 0 there for exactly this reason.
-
-### Before building it
-
-Turn `bindTransformArrayFn` on and measure. It is the same idea already wired,
-and if it still shows nothing at image sizes — which the note above says it
-will not — then `arrayFor` is justified by the `compile()` path and by
-ownership, or not at all. Building it for speed and then finding no speed is
-the failure mode this section exists to prevent.
+Not in a table module beside it, and certainly not in a shared registry.
+**Open `Kernel3D.js` and see how 3-D dispatch resolves** — a switch on the
+lutMode, twenty readable lines, with the fallback ladder written as code
+because that is what it is. The v1.3 table existed because Transform.js
+dispatched for every dimension out of one flat structure and it had to be
+data. Nothing dispatches that way any more.
 
 ## Helpers reach the kernel through `init`, not through an export
 
@@ -1208,8 +1032,8 @@ break-even (phase 4e) would have to feed both, or the resolver would pick an
 entry the per-call compare then declines to use. One source, then helpers.
 
 **One ordering constraint.** `init()` runs during `create()`, on the instance,
-after the pipeline exists. `resolveRuns()` and `arrayFor()` come later, so a
-kernel can stash the helpers at `init` and use them there. `floatFor()` cannot:
+after the pipeline exists, so a kernel can stash the helpers there and use them
+for everything the image path needs. `floatFor()` cannot:
 it is called on the *descriptor* while the pipeline is still being built, before
 any `init`. That is fine — picking a single-colour function needs no dispatch
 machinery — but it means the helpers are for the image path only, and the
