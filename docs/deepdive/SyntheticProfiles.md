@@ -351,6 +351,104 @@ nothing has demonstrated it wrong.
 
 ---
 
+## What the profiles made measurable
+
+Once fifteen widths exist, `bench/channel_matrix/run.js` can measure all 225
+combinations. It is **not a gate** — 3- and 4-channel input is where the
+throughput work is, and where the pinned baseline lives. This is a map of the
+correctness path: how slow is it, and where are the cliffs.
+
+Mean MPx/s by input width, diagonal excluded:
+
+| in | MPx/s | ×prev | |
+|---|---|---|---|
+| 1–4 | 61 / 40 / 43 / 24 | | a CLUT is built; tuned array loops run it |
+| 5 | 2.50 | | `KernelND` declines the LUT — grid^n — so the per-pixel walk runs |
+| 6 | 1.80 | 1.4× | |
+| 8 | 0.68 | 1.6× | |
+| 10 | 0.20 | 1.9× | |
+| 12 | 0.055 | 1.9× | |
+| 15 | 0.007 | 2.0× | a 1 MP image takes 143 seconds |
+
+**The ×prev column settling at 2.0 is the interpolator, not the pipeline.** The
+Little CMS scheme is `2^(n-3)` tetrahedral evaluations, so every extra channel
+doubles the work.
+
+### Two traps this bench walked into
+
+**The diagonal is identity.** Profile *n* into profile *n* is the same profile
+twice: the chain collapses, `KernelIdentity` takes it, and it copies at memcpy
+speed. Correct behaviour, but it made every row mean read ~390 MPx/s until it
+was excluded. It stays visible in the grid — seeing identity detection fire is
+worth something — and out of the means.
+
+**A results file that does not record its conditions is worse than no file.**
+`channel-matrix.json` was committed once with *simplex* numbers while the
+engine shipped *tetrahedral*, because it had been written by the counterfactual
+run and nothing in it said which scheme it measured. The two differ by up to
+75×, so it would have read as a catastrophic regression against any later run.
+The bench now records `ndInterpolator`. This is the same lesson as the pinned
+baseline needing an `addedLater` block, twice in one day.
+
+---
+
+## The interpolator split
+
+Two schemes, opposite shapes:
+
+| | cost |
+|---|---|
+| Little CMS — tetrahedral on the last 3 axes, linear on the extras | `2^(n-3)`, doubles per channel |
+| Kuhn simplex across all n axes | `O(n)`, flat |
+
+| ch | tetrahedral | simplex | |
+|---|---|---|---|
+| 5 | **2.50** | 0.98 | tetrahedral 2.6× faster |
+| 7 | **1.11** | 0.86 | tetrahedral 1.3× |
+| 8 | 0.68 | **0.85** | crossover |
+| 10 | 0.20 | **0.69** | simplex 3.4× |
+| 15 | 0.007 | **0.53** | simplex **75×** |
+
+`KernelND` splits at **11, not at the crossover of 8**. Between 8 and 10 the
+accuracy gap is still real — mean 0.02 LSB from lcms against 0.48–1.13 — and
+paying 1.2–3.4× to stay near the reference CMS is worth it.
+
+At 11 and up the A2B grid is **2 points per axis**, and that is a ceiling
+rather than a choice: `3^15` is 43 million cells. A 2-point table has no
+interior at all, and the Lab gamut is a lobed solid that `2^n` corners cannot
+express in any case. Accuracy there is not something either scheme can deliver,
+so 6–75× is bought with nothing.
+
+### A negative result worth keeping
+
+The recursion allocates a `lo` and a `hi` array at every internal node — about
+8,000 arrays per pixel at 15 channels. That looked like the obvious bottleneck.
+Replacing them with one preallocated `Float64Array` indexed by depth made
+5-channel input **40% slower** (2.50 → 1.50) and changed 11–15 not at all.
+
+V8 handles small short-lived arrays better than a typed array with computed
+offsets, and at high *n* the cost is genuinely the `2^(n-3)` evaluations.
+Reverted. Recorded because the hypothesis was reasonable and wrong, and the
+next person will have it too.
+
+### Where the time actually goes
+
+| input | total/px | interpolator | share |
+|---|---|---|---|
+| 5ch | 0.297 µs | 0.171 µs | 57% |
+| 6ch | 0.421 µs | 0.289 µs | 69% |
+| 8ch | 1.277 µs | 1.055 µs | 83% |
+
+The other eight pipeline stages are a flat ~0.2 µs/px. So the interpolator is
+the right target if this path is ever worth optimising — and the obvious lever
+is that **A2B output is always 3 channels**, because device→PCS lands in Lab or
+XYZ. The inner loop over `outCh` could be unrolled for the only case that
+occurs. Not attempted: this is the correctness path, and the throughput that
+matters is 3- and 4-channel input, which is already tuned, WASM-backed and
+gated against a pinned baseline.
+
+---
+
 ## Why `A2B` stops at 10 channels
 
 The device→PCS table is `gridPoints ^ inputChannels` cells:
@@ -391,7 +489,8 @@ node accuracy_b2a.js         # 2-15 channels, PCS -> device, both depths
 and the coverage matrix, which is an ordinary test:
 
 ```bash
-npx jest channel_matrix
+npx jest channel_matrix                    # 225 combinations, does it work
+node bench/channel_matrix/run.js           # 225 combinations, how fast
 ```
 
 The profiles are ordinary ICC files. Open them in any inspector — a
@@ -409,5 +508,6 @@ profile*, *not for production*.
 ## See also
 
 - [KernelContract.md](./KernelContract.md) — the kernel boundary these test
+- `bench/channel_matrix/run.js` — the 225-combination throughput map
 - [LcmsComparison.md](../LcmsComparison.md) — the RGB/CMYK oracle
 - `__tests__/encodeICC.tests.js` — what the writer guarantees on its own
