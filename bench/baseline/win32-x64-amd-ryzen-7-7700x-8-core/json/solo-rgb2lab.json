@@ -1,0 +1,49 @@
+{
+  "tool": "bench/solo_photo/solo.js",
+  "generated": "2026-08-20T11:03:50.463Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.5.5"
+  },
+  "tables": [
+    {
+      "id": "solo.rgb2lab",
+      "title": "Solo control bench — one image, one engine, one process (rgb2lab)",
+      "units": "MPx/s",
+      "meta": {
+        "image": "jacek-dylag-559115_STRAWBERRIES-unsplash",
+        "workflow": "rgb2lab",
+        "pixels": 1000000,
+        "warmupMs": 3000,
+        "samples": 7
+      },
+      "columns": [
+        "engine",
+        "medianMpxs",
+        "spreadPct",
+        "processes"
+      ],
+      "rows": [
+        {
+          "engine": "int",
+          "medianMpxs": 53.5,
+          "spreadPct": 0.8,
+          "processes": 5
+        },
+        {
+          "engine": "scalar",
+          "medianMpxs": 76,
+          "spreadPct": 0.6,
+          "processes": 5
+        },
+        {
+          "engine": "simd",
+          "medianMpxs": 114.9,
+          "spreadPct": 0.9,
+          "processes": 5
+        }
+      ]
+    }
+  ]
+}

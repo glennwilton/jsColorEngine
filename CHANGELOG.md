@@ -7,6 +7,313 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Changed — the kernel registry is a dense 1..15 array
+
+Phase 1 of [the kernel contract](docs/deepdive/KernelContract.md).
+`Transform.kernels` was an object keyed `'1d'..'4d','nd'`; it is now an
+array indexed by input channel count across the full ICC range, 1 to 15
+(`FCLR` is 15 channels). `setKernel()` is one array index — no key string
+built per `create()`, and no `inputChannels > 4` special case.
+
+`KernelND` registers `[5, 15]`: one descriptor object in eleven
+independently replaceable slots. Sharing the object keeps it free — a
+single hidden class across the span — while making it possible to drop a
+tuned `Kernel7D` into slot 7, or a probe into slot 9, without forking the
+other ten. That is what makes the rest of the contract testable.
+
+- `descriptor.dimensions` accepts a channel count or an inclusive
+  `[from, to]` range. Legacy `'ND'` still works and means `[5, 15]`.
+- `Transform.MAX_KERNEL_DIMENSIONS` (15) is the registration ceiling.
+- Built-in descriptors gained a `name` (`kernel1D`..`kernel4D`,
+  `kernelND`), so `kernelInfo().name` no longer depends on a fallback.
+- New suite `__tests__/kernel_registry.tests.js` — 17 tests covering
+  shape, the `dimensions` forms, slot isolation, and `setKernel` routing.
+
+Create-time and load-time only; no pixel path was touched. Full suite
+green (811 passing) and throughput unchanged.
+
+**Migration.** `Transform.kernels['3d']` becomes `Transform.kernels[3]`.
+Kernels registered with `dimensions: 'ND'` keep working unchanged.
+
+### Added — pinned baselines and per-release measurement history
+
+Benchmark JSON lived only in gitignored `bench/results/<timestamp>/`, so
+the numbers behind a published figure could not be re-derived once the
+folder was gone, and each change was implicitly gated against whatever ran
+last — a ratchet that turns one way, where seven refactor phases at 1.5%
+each is 11% slower with every step passing its gate.
+
+Two tracked trees now, both per machine, because throughput is a property
+of the box as much as of the code:
+
+- **`bench/baseline/<machine>/`** — the pinned reference refactors are
+  gated against. `node scripts/bench_compare.js` compares the newest run
+  to it, picking the pin that matches the current machine and refusing
+  rather than reporting a different CPU as a regression. Moving a pin
+  needs `node scripts/pin_baseline.js <run> --why "..."`, and `--why` is
+  mandatory.
+- **`bench/history/<version>/<machine>/`** — frozen at release by
+  `npm run release-snapshot`: the generated page, the conditions, the raw
+  rows, and whether the suite passed. ~120 KB each.
+
+`npm run publish` now *checks* a snapshot exists for the version rather
+than running a 30-minute bench itself — a slow publish is a publish people
+bypass. `--allow-missing` overrides, visibly.
+
+`bench_compare` reads three kinds of column: jsCE throughput **gates**,
+third-party `lcmsWasm`/`native` are the **control** that sets the noise
+floor from the same run, and accuracy (`*MaxLsb`, `*MeanLsb`) is gated at
+**zero** — a refactor that quietly changes rounding never shows up as a
+throughput number.
+
+### Fixed
+
+- Matrix-shaper figures in the 1.5.5 entry below were carried from an
+  earlier run than the pool figures beside them; both now come from
+  `bench/results/2026-08-20T10-37-19` (see
+  [BenchResults](docs/BenchResults.md)).
+
+---
+
+## [1.5.5] — 2026-08-20
+
+The two gaps the v1.5 LittleCMS comparison identified, both closed:
+a fused matrix-shaper WASM kernel, and a multicore image path.
+
+### Added — matrix-shaper WASM kernel (`wasmMatrixShaper`)
+
+An RGB→RGB matrix-shaper conversion is a curve, a 3×3 and another curve.
+The optimiser has always folded it into exactly that shape; this release
+adds a WASM implementation of it, so the same arithmetic runs at **328
+MPx/s at int8 and 212 at int16** on photographic content against ~119
+for the 33³ CLUT — and, more importantly, **within 1 LSB of the exact
+pipeline where that CLUT reaches 25 LSB at int8 and thousands of codes
+at int16**. It is not a speed-for-accuracy trade; it is better at both.
+
+Named for the WASM part because the *fold* is the optimiser's and was
+already there. `matrixShaper` and `preferMatrixShaperOverLUT: true` are
+accepted spellings.
+
+| mode | `buildLut: false` | `buildLut: true` |
+|---|---|---|
+| `'auto'` *(default)* | kernel | CLUT — nothing the caller asked for changes |
+| `'prefer'` | kernel | kernel, and no CLUT is built |
+| `false` / `'off'` | JS stage pipeline | CLUT |
+
+Four prebuilt binaries — `{int8, int16} × {SIMD, scalar}` — each with
+**five entry points, one per alpha shape**. The scalar build performs
+the same f32 operations in the same order as one SIMD lane, so it is
+**bit-identical**, not merely close: a host without WASM SIMD gets the
+same pixels, slower. Tests assert exact equality rather than a
+tolerance.
+
+`'prefer'` refuses whenever something depends on the LUT existing —
+`lutInputHook`, `lutOutputHook` and gamut mapping all run *inside* the
+grid walk, so skipping it would silently stop them firing.
+
+Docs: [deepdive/MatrixShaperKernel.md](./docs/deepdive/MatrixShaperKernel.md)
+
+### Added — alpha in the matrix-shaper kernel (RGBA was a 40× cliff)
+
+`buildLut` defaults to `false` and canvas `ImageData` is RGBA, so the
+commonest input in a browser was falling all the way to the generic
+loops: **8.0 MPx/s against 331** for the identical conversion without
+alpha. Not a slope — a cliff.
+
+The module now exports one entry point per shape (3→3, 4→3, 3→4, and
+4→4 copying or filling) with the strides baked in, so **alpha costs 3%**
+and the RGB path pays nothing for the others existing. Alpha is never
+colour-managed — it is opacity, not a colorant — and the tests assert it
+comes through **exactly**, not within 1 LSB.
+
+### Changed — `pixelCount` is now optional in `transformImages()`
+
+Once the alpha flags are resolved the stride is known, so the count follows
+from `data.length` — `{data}` alone is a valid image. Pass it explicitly when
+the buffer is bigger than the image (a pooled array, or a slab of frames),
+because inference would convert the padding.
+
+Both are now **validated**: an array length that is not a whole number of
+pixels, and a `pixelCount` that would overrun the buffer, are refused with the
+image's id in the message rather than converting something plausible-looking.
+Validation **rejects** rather than throwing synchronously, so `.catch()` sees
+it as well as `try/await`.
+
+### Added — per-image alpha in `transformImages()`
+
+Any image may override `inputHasAlpha` / `outputHasAlpha` / `preserveAlpha`,
+with the batch options as the default — so a folder of mixed PNG and JPEG is
+one call instead of two, or padding every JPEG with an alpha channel nobody
+wanted. Unstated `preserveAlpha` means "preserve if both sides have one", the
+same rule `transformArray()` uses.
+
+Alpha is the only per-image variable, deliberately: it is a stride and a copy,
+never colour, so this cannot become "different conversions in one batch". The
+sequential path resolves the overrides identically, so a mixed batch converts
+the same whether or not workers were available.
+
+### Added — `Transform.enablePool()`, and multicore you can confirm
+
+```js
+await Transform.enablePool({ workers: 4 });   // then every batch is parallel
+```
+
+Starts the workers, **rejects with the reason if it cannot**, and makes the
+pool the default for later batches so no call site repeats itself.
+`Transform.disablePool()` tears it down. Accepts either vocabulary —
+`workers` / `maxWorkers` or `cores` / `maxThreads` — and a `url` for the Web
+Worker backend, which is carried but not yet used (browser pool is 1.6).
+
+Precedence is explicit-beats-ambient: the call, then the Transform, then the
+enabled pool. `{multicore: false}` still opts one batch out.
+
+**Fixed along the way:** `new Transform({multicore: true})` silently did
+nothing. `_multicoreHandoff()` had always read `this.multicore` as the
+per-call fallback, but nothing ever assigned it, so the constructor option was
+dead.
+
+**And multicore no longer fails silently.** When workers are asked for and
+unavailable, jsCE warns **once** with the reason and the fix, then runs
+sequentially — identical bytes, callbacks still firing, because multicore
+remains an optimisation and never a capability. `requireWorkers: true` turns
+that into a rejection for callers who would rather fail than quietly run on one
+thread.
+
+### Added — `Transform.compatibility()` and pool environment overrides
+
+`Transform.compatibility('1.5')` pins construction defaults to an earlier
+release, for callers who need byte-for-byte reproducibility across an upgrade.
+A named snapshot rather than a settings bag: one call, self-documenting, and
+the version table *is* the changelog of defaults that move output. An explicit
+option always beats the pin. Deliberately **not** an environment variable —
+this changes pixels, and `process.env` does not exist in a browser.
+
+Pool sizing, by contrast, **is** environment-configurable — `JSCE_POOL_CORES`,
+`JSCE_POOL_MAX_THREADS`, `JSCE_POOL_MIN_THREADS`, `JSCE_POOL_IDLE_MS`,
+`JSCE_POOL_TRANSFORMS_PER_WORKER`, `JSCE_POOL_DISABLE` — because the pool is a
+Node-only subsystem, worker counts are a property of the machine rather than
+the conversion, and nothing there can change a pixel. Explicit options win over
+the environment. The motivating case: `cores: 'auto'` asks
+`os.availableParallelism()`, which in a cgroup-limited container reports the
+host's cores rather than the quota.
+
+### Added — matrix shaper in plain JS, for what WASM cannot do
+
+`matrixShaperJS.js` runs the same fused 3×3 and the same curves with no LUT and
+no WebAssembly: **62 MPx/s at int8, 57 at int16, ≤ 1 LSB**, against 8 for the
+stage pipeline it replaces.
+
+Not a speed feature — WASM is 5× faster. It covers two cases WASM cannot:
+a profile whose `rTRC`/`gTRC`/`bTRC` genuinely differ (one table per direction
+cannot serve three curves, so those transforms previously dropped to ~8 MPx/s),
+and hosts with no WebAssembly at all. Where the curves agree, all three table
+references point at one table, so the common case allocates once.
+
+Three V8 lessons that hold for the tetrahedral kernels did **not** transfer,
+and the measurements are in `bench/js_matrix_shaper/`: naming intermediates is
+free here (doubles live in the XMM file, not the GPRs that spill); avoiding
+them literally costs 7%; unrolling is worth 3% rather than being load-bearing;
+and address arithmetic does not register. The loop is bound on a dependent load
+chain, so the arithmetic around it hides underneath.
+
+### Added — claiming kernels (`Transform.claimKernels`, `kernelInfo()`)
+
+Kernel modules were selected by input channel count, before the pipeline
+existed. That cannot express "is this pair a matrix shaper" —
+`*sRGB → *AdobeRGB`, `*sRGB → GRACoL` and `*sRGB → *sRGB` are all
+3-channel input, and only the built pipeline separates them.
+
+A descriptor may now declare `claims(transform)` and is offered the
+transform **after** `pipelineCreated`. `registerKernel()` routes on the
+presence of `claims`; a claiming kernel never occupies a dimensional
+slot, so anything it declines still gets Kernel3D. `displacesLut()` is
+the earlier, separate hook that can skip the CLUT grid walk entirely.
+
+`transform.kernelInfo()` reports which kernel holds the batch path,
+whether it claimed or was selected dimensionally, and once built, the
+variant.
+
+This revises a stated invariant: kernels were "LUT-only batch
+processors". That held while every kernel was a table walker. Docs:
+[deepdive/KernelModules.md](./docs/deepdive/KernelModules.md)
+
+### Added — `alpha` helpers (`unpremultiply` / `premultiply` / `flatten`)
+
+Nothing in a buffer says whether it is premultiplied — straight and
+associated RGBA are the same bytes — so this is deliberately **not** a
+Transform option. Converting premultiplied data directly is wrong by up
+to **69 LSB at a = 0.5**, because the transform is not linear:
+`T(a·C) ≠ a·T(C)`. Going through `unpremultiply → convert → premultiply`
+is 42× closer on the mean.
+
+`flatten()` is a different job and the two get confused: unpremultiply
+keeps the alpha channel, flatten composites against a background and
+discards it. The background is required rather than defaulted — white
+and black differ everywhere the image is not opaque.
+
+### Added — multicore image path (`transformImages`)
+
+A worker pool with priority, out-of-order completion and per-image
+callbacks: **6.2× peak and 787 MPx/s** on the SIMD kernel, output
+byte-identical to single-threaded in all 72 measured cells. Images are
+fragmented, pulled from a queue and reassembled, rather than one image
+split evenly across N threads.
+
+Also: `cancel(id)` / `cancelAll()` (cancelled images fire their
+callbacks rather than leaving handlers waiting), `onQueueFree()` /
+`onQueueBelow()` backpressure, `interrupt(fn)` to borrow the cores,
+`memoryReport()`, `workerStats()` and `forgetWorkers()`.
+
+Docs: [deepdive/multicore.md](./docs/deepdive/multicore.md)
+
+### Added — `stage_Int_to_cmsLab`
+
+Lab sources reached the array path with no int→Lab decode, so a flat
+array in was NaN out. Arrays are PCS-encoded by convention; this is the
+stage that says so.
+
+### Fixed — `clear()` did not release the kernel
+
+A Transform kept its kernel instance across `clear()`, holding its WASM
+memory — up to 512 KB of tables at int16 plus pixel buffers — and
+offering the next `create()` a kernel chosen for a conversion it no
+longer performed. Found by the claiming-kernel refactor.
+
+### Fixed — `toJSON()` error message sent callers in a circle
+
+On a `wasmMatrixShaper: 'prefer'` transform it said "construct with
+`buildLut: true`" — advice the caller had already followed. It now names
+the actual cause.
+
+### Docs — three measurements restated
+
+Kept as a trail rather than overwritten, because how each number moved is
+more instructive than the number:
+
+- **The CLUT comparator.** "2.2× the CLUT" compared the SIMD kernel
+  against `int-wasm-scalar`, which is not the default.
+- **The noise generator.** The next pass used `s % 256` from an LCG,
+  whose low bits have a period of 256 — a solid-colour test wearing a
+  noise costume, and the CLUT's best case. It understated the kernel by
+  ~2×, and the multicore bench disagreeing is what surfaced it.
+- **The serial-fraction fit.** A two-point fit for Amdahl's `S` handed
+  nearly all run-to-run noise to the result; replaced with least squares
+  over w = 2…7, reporting R².
+
+### Measured and NOT built — `SharedArrayBuffer` delivery
+
+Projected at +30%; spiked at **+5–13% at int8 and nil at int16**, with
+the naive design (bulk copy-in for a plain-array caller) measuring
+**0.83–0.91×**, i.e. slower than today. The pool's main-thread copies
+are largely *interleaved* with worker execution, so removing them frees
+time that was already hidden. Not worth two delivery paths and a
+COOP/COEP deployment blocker. Spike kept at `bench/sab_spike/` so the
+question can be re-asked on higher core counts.
+
+---
+
 ## [1.5.0] — 2026-08-19
 
 Everything since 1.4.4 in one release: the v1.5 polish arc, the

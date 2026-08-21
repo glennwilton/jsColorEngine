@@ -1,0 +1,21 @@
+{
+  "run": "2026-08-20T10-37-19",
+  "pinned": "2026-08-21",
+  "jsce": "1.5.5",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "measured": "2026-08-20",
+  "tables": 54,
+  "why": "Full 8-phase run that docs/BenchResults.md is generated from. Pinned as the reference for the v1.6 kernel contract migration (docs/deepdive/KernelContract.md) so that seven refactor phases cannot ratchet the baseline downward one passing step at a time. Valid for THIS machine only — see bench/baseline/README.md.",
+  "repin": "Only on a deliberate, reviewed re-measurement — a new machine, a new Node major, or a shipped optimisation. Never to make a failing comparison pass.",
+  "machine": {
+    "id": "win32-x64-amd-ryzen-7-7700x-8-core",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor             ",
+    "cores": 16,
+    "memoryGB": 31,
+    "release": "10.0.19045",
+    "node": "v24.16.0"
+  }
+}

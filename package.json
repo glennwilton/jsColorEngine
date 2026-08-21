@@ -1,7 +1,7 @@
 {
   "name": "jscolorengine",
-  "version": "1.5.0",
-  "description": "Fast ICC colour engine for JavaScript — WASM-SIMD LUT kernels (~210 MPx/s x86, ~270 MPx/s Apple Silicon), full f64 accuracy pipeline, portable LUT JSON, TIFF visual editing workflow. Outperforms lcms-wasm in 3 of 4 image workflows. ICC v2/v4, all intents, BPC, soft-proof, prepress, zero native deps, browser + Node.",
+  "version": "1.5.5",
+  "description": "Fast ICC colour engine for JavaScript. WASM-SIMD LUT kernels and a fused matrix-shaper kernel (~120 and ~330 MPx/s on photographs, one core), plus a worker pool for batches of images. Accurate to within 1 LSB of LittleCMS, and 3.2-3.6x faster than lcms-wasm. Full f64 accuracy pipeline, portable LUT JSON, TIFF visual editing. ICC v2/v4, all intents, BPC, soft-proof, prepress, zero native deps, browser + Node.",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "src/main.js",
   "browser": {
@@ -26,7 +26,11 @@
     "dev": "esbuild src/main.js --bundle --platform=node --format=cjs --sourcemap --outfile=dev/jsColorEngine.js",
     "watch": "esbuild src/main.js --bundle --platform=node --format=cjs --sourcemap --outfile=dev/jsColorEngine.js --watch",
     "build": "esbuild src/main.js --bundle --platform=node --format=cjs --minify --outfile=build/jsColorEngine.js",
-    "publish": "npm run browser && npm run build",
+    "prepublishOnly": "node scripts/check_release_snapshot.js",
+    "publish": "node scripts/check_release_snapshot.js && npm run browser && npm run build",
+    "release-snapshot": "node scripts/release_snapshot.js",
+    "bench-compare": "node scripts/bench_compare.js",
+    "bench-pin": "node scripts/pin_baseline.js",
     "browser": "esbuild src/main.js --bundle --platform=browser --format=iife --global-name=jsColorEngine --minify --external:http --external:https --external:fs --external:path --external:util --external:child_process --outfile=browser/jsColorEngineWeb.js && npm run copy-browser",
     "browser-watch": "esbuild src/main.js --bundle --platform=browser --format=iife --global-name=jsColorEngine --sourcemap --external:http --external:https --external:fs --external:path --external:util --external:child_process --outfile=browser-dev/jsColorEngineWeb.js --watch",
     "copy-browser": "node -e \"const fs=require('fs');fs.mkdirSync('samples/browser',{recursive:true});fs.copyFileSync('browser/jsColorEngineWeb.js','samples/browser/jsColorEngineWeb.js');console.log('copied → samples/browser/jsColorEngineWeb.js');\"",
