@@ -1,0 +1,1826 @@
+{
+ "tool": "bench/channel_matrix/run.js",
+ "generated": "2026-08-21T13:34:20.621Z",
+ "node": "v24.16.0",
+ "platform": "win32 x64",
+ "pixels": 20000,
+ "format": "int8",
+ "reps": 3,
+ "tables": [
+  {
+   "id": "channelMatrix.int8",
+   "title": "Channel matrix — MPx/s by input and output width",
+   "units": "MPx/s",
+   "columns": [
+    "inputChannels",
+    "outputChannels",
+    "mpxs",
+    "kernel",
+    "lut",
+    "lutMode"
+   ],
+   "rows": [
+    {
+     "inputChannels": 1,
+     "outputChannels": 1,
+     "mpxs": 11764.706,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 2,
+     "mpxs": 88.106,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 3,
+     "mpxs": 83.717,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 4,
+     "mpxs": 61.35,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 5,
+     "mpxs": 76.599,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 6,
+     "mpxs": 68.611,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 7,
+     "mpxs": 65.083,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 8,
+     "mpxs": 54.363,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 9,
+     "mpxs": 48.697,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 10,
+     "mpxs": 44.773,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 11,
+     "mpxs": 41.675,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 12,
+     "mpxs": 39.541,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 13,
+     "mpxs": 36.9,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 14,
+     "mpxs": 34.483,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 1,
+     "outputChannels": 15,
+     "mpxs": 32.568,
+     "kernel": "kernel1D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 1,
+     "mpxs": 68.353,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 2,
+     "mpxs": 8333.333,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 3,
+     "mpxs": 57.061,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 4,
+     "mpxs": 62.559,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 5,
+     "mpxs": 52.274,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 6,
+     "mpxs": 42.203,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 7,
+     "mpxs": 34.638,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 8,
+     "mpxs": 34.147,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 9,
+     "mpxs": 32.098,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 10,
+     "mpxs": 28.927,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 11,
+     "mpxs": 25.907,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 12,
+     "mpxs": 24.694,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 13,
+     "mpxs": 23.563,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 14,
+     "mpxs": 22.158,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 2,
+     "outputChannels": 15,
+     "mpxs": 20.825,
+     "kernel": "kernel2D",
+     "lut": true,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 1,
+     "mpxs": 67.545,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 2,
+     "mpxs": 45.589,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 3,
+     "mpxs": 5714.286,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 4,
+     "mpxs": 190.658,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 5,
+     "mpxs": 32.02,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 6,
+     "mpxs": 36.805,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 7,
+     "mpxs": 34.837,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 8,
+     "mpxs": 33.135,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 9,
+     "mpxs": 29.713,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 10,
+     "mpxs": 24.204,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 11,
+     "mpxs": 23.966,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 12,
+     "mpxs": 20.305,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 13,
+     "mpxs": 20.396,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 14,
+     "mpxs": 20.702,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 3,
+     "outputChannels": 15,
+     "mpxs": 19.359,
+     "kernel": "kernel3D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 1,
+     "mpxs": 14.804,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 2,
+     "mpxs": 14.404,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 3,
+     "mpxs": 105.374,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 4,
+     "mpxs": 1075.269,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 5,
+     "mpxs": 26.592,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 6,
+     "mpxs": 17.318,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 7,
+     "mpxs": 12.98,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 8,
+     "mpxs": 19.516,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 9,
+     "mpxs": 18.169,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 10,
+     "mpxs": 16.704,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 11,
+     "mpxs": 15.115,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 12,
+     "mpxs": 14.001,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 13,
+     "mpxs": 13.503,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 14,
+     "mpxs": 12.584,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 4,
+     "outputChannels": 15,
+     "mpxs": 11.868,
+     "kernel": "kernel4D",
+     "lut": true,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 1,
+     "mpxs": 1.097,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 2,
+     "mpxs": 1.05,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 3,
+     "mpxs": 1.049,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 4,
+     "mpxs": 0.974,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 5,
+     "mpxs": 751.88,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 6,
+     "mpxs": 0.989,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 7,
+     "mpxs": 1.037,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 8,
+     "mpxs": 1.008,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 9,
+     "mpxs": 0.978,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 10,
+     "mpxs": 0.981,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 11,
+     "mpxs": 0.991,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 12,
+     "mpxs": 0.965,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 13,
+     "mpxs": 0.788,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 14,
+     "mpxs": 0.866,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 5,
+     "outputChannels": 15,
+     "mpxs": 0.925,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 1,
+     "mpxs": 1.089,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 2,
+     "mpxs": 1.062,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 3,
+     "mpxs": 1.034,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 4,
+     "mpxs": 1.034,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 5,
+     "mpxs": 1.019,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 6,
+     "mpxs": 800,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 7,
+     "mpxs": 0.992,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 8,
+     "mpxs": 0.975,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 9,
+     "mpxs": 0.975,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 10,
+     "mpxs": 0.939,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 11,
+     "mpxs": 0.882,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 12,
+     "mpxs": 0.875,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 13,
+     "mpxs": 0.816,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 14,
+     "mpxs": 0.87,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 6,
+     "outputChannels": 15,
+     "mpxs": 0.801,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 1,
+     "mpxs": 0.94,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 2,
+     "mpxs": 0.94,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 3,
+     "mpxs": 0.882,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 4,
+     "mpxs": 0.918,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 5,
+     "mpxs": 0.94,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 6,
+     "mpxs": 0.842,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 7,
+     "mpxs": 382.409,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 8,
+     "mpxs": 0.813,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 9,
+     "mpxs": 0.856,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 10,
+     "mpxs": 0.83,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 11,
+     "mpxs": 0.853,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 12,
+     "mpxs": 0.821,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 13,
+     "mpxs": 0.802,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 14,
+     "mpxs": 0.828,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 7,
+     "outputChannels": 15,
+     "mpxs": 0.823,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 1,
+     "mpxs": 0.955,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 2,
+     "mpxs": 0.94,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 3,
+     "mpxs": 0.927,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 4,
+     "mpxs": 0.915,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 5,
+     "mpxs": 0.886,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 6,
+     "mpxs": 0.849,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 7,
+     "mpxs": 0.855,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 8,
+     "mpxs": 395.257,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 9,
+     "mpxs": 0.763,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 10,
+     "mpxs": 0.815,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 11,
+     "mpxs": 0.817,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 12,
+     "mpxs": 0.804,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 13,
+     "mpxs": 0.807,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 14,
+     "mpxs": 0.8,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 8,
+     "outputChannels": 15,
+     "mpxs": 0.796,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 1,
+     "mpxs": 0.787,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 2,
+     "mpxs": 0.834,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 3,
+     "mpxs": 0.792,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 4,
+     "mpxs": 0.803,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 5,
+     "mpxs": 0.803,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 6,
+     "mpxs": 0.796,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 7,
+     "mpxs": 0.762,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 8,
+     "mpxs": 0.739,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 9,
+     "mpxs": 524.934,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 10,
+     "mpxs": 0.748,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 11,
+     "mpxs": 0.676,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 12,
+     "mpxs": 0.728,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 13,
+     "mpxs": 0.706,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 14,
+     "mpxs": 0.662,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 9,
+     "outputChannels": 15,
+     "mpxs": 0.67,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 1,
+     "mpxs": 0.806,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 2,
+     "mpxs": 0.775,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 3,
+     "mpxs": 0.764,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 4,
+     "mpxs": 0.767,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 5,
+     "mpxs": 0.643,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 6,
+     "mpxs": 0.641,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 7,
+     "mpxs": 0.72,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 8,
+     "mpxs": 0.66,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 9,
+     "mpxs": 0.696,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 10,
+     "mpxs": 420.168,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 11,
+     "mpxs": 0.682,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 12,
+     "mpxs": 0.667,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 13,
+     "mpxs": 0.644,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 14,
+     "mpxs": 0.67,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 10,
+     "outputChannels": 15,
+     "mpxs": 0.565,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 1,
+     "mpxs": 0.713,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 2,
+     "mpxs": 0.728,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 3,
+     "mpxs": 0.722,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 4,
+     "mpxs": 0.681,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 5,
+     "mpxs": 0.697,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 6,
+     "mpxs": 0.689,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 7,
+     "mpxs": 0.672,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 8,
+     "mpxs": 0.637,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 9,
+     "mpxs": 0.637,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 10,
+     "mpxs": 0.664,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 11,
+     "mpxs": 444.444,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 12,
+     "mpxs": 0.647,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 13,
+     "mpxs": 0.612,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 14,
+     "mpxs": 0.649,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 11,
+     "outputChannels": 15,
+     "mpxs": 0.602,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 1,
+     "mpxs": 0.678,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 2,
+     "mpxs": 0.696,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 3,
+     "mpxs": 0.676,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 4,
+     "mpxs": 0.7,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 5,
+     "mpxs": 0.643,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 6,
+     "mpxs": 0.621,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 7,
+     "mpxs": 0.677,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 8,
+     "mpxs": 0.636,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 9,
+     "mpxs": 0.641,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 10,
+     "mpxs": 0.617,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 11,
+     "mpxs": 0.64,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 12,
+     "mpxs": 400,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 13,
+     "mpxs": 0.615,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 14,
+     "mpxs": 0.637,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 12,
+     "outputChannels": 15,
+     "mpxs": 0.627,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 1,
+     "mpxs": 0.654,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 2,
+     "mpxs": 0.655,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 3,
+     "mpxs": 0.66,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 4,
+     "mpxs": 0.644,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 5,
+     "mpxs": 0.643,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 6,
+     "mpxs": 0.637,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 7,
+     "mpxs": 0.626,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 8,
+     "mpxs": 0.566,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 9,
+     "mpxs": 0.599,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 10,
+     "mpxs": 0.559,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 11,
+     "mpxs": 0.579,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 12,
+     "mpxs": 0.571,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 13,
+     "mpxs": 359.712,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 14,
+     "mpxs": 0.575,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 13,
+     "outputChannels": 15,
+     "mpxs": 0.559,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 1,
+     "mpxs": 0.636,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 2,
+     "mpxs": 0.63,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 3,
+     "mpxs": 0.592,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 4,
+     "mpxs": 0.553,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 5,
+     "mpxs": 0.576,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 6,
+     "mpxs": 0.608,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 7,
+     "mpxs": 0.604,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 8,
+     "mpxs": 0.593,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 9,
+     "mpxs": 0.542,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 10,
+     "mpxs": 0.571,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 11,
+     "mpxs": 0.572,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 12,
+     "mpxs": 0.537,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 13,
+     "mpxs": 0.418,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 14,
+     "mpxs": 220.751,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    },
+    {
+     "inputChannels": 14,
+     "outputChannels": 15,
+     "mpxs": 0.545,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 1,
+     "mpxs": 0.496,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 2,
+     "mpxs": 0.57,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 3,
+     "mpxs": 0.55,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 4,
+     "mpxs": 0.555,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 5,
+     "mpxs": 0.56,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 6,
+     "mpxs": 0.545,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 7,
+     "mpxs": 0.524,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 8,
+     "mpxs": 0.528,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 9,
+     "mpxs": 0.525,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 10,
+     "mpxs": 0.489,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 11,
+     "mpxs": 0.517,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 12,
+     "mpxs": 0.518,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 13,
+     "mpxs": 0.505,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 14,
+     "mpxs": 0.508,
+     "kernel": "kernelND",
+     "lut": false,
+     "lutMode": "int"
+    },
+    {
+     "inputChannels": 15,
+     "outputChannels": 15,
+     "mpxs": 253.165,
+     "kernel": "kernelIdentity",
+     "lut": false,
+     "lutMode": "int-wasm-simd"
+    }
+   ]
+  }
+ ]
+}
