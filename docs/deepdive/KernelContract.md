@@ -1114,6 +1114,39 @@ surface. That matters more than it sounds:
   and a kernel notices at `init()` — at create time, in one place — rather than
   through a deep import that silently resolves to something different.
 
+### The built-ins should take them the same way
+
+If the built-in kernels also receive helpers rather than requiring them, then
+**Transform builds them once and every kernel gets them from one site.** That is
+worth more than the symmetry: instrumentation, a recording resolver for a test,
+or an alternate threshold become a change at that one site instead of edits
+spread across however many modules did their own `require`.
+
+It also keeps the built-ins honest. A contract where the built-in kernels take a
+private path and third parties take a public one is a contract whose public path
+nobody exercises.
+
+**What stands in the way, concretely.** The per-kernel tables are module-level
+constants: `kernel3D_table.js` reads the gates and the threshold at *load* time,
+long before any `init()` exists to hand it anything. Taking helpers means the
+tables become factories —
+
+```js
+module.exports = function makeTable(helpers){ return { 'fl_3_3': { … } }; };
+```
+
+— built once per kernel at `init` and cached. That is a real restructure, not a
+rename, and it is why this is a future extension rather than part of phase 4.
+
+**And there is a duplication to resolve first.** The break-even exists twice
+with different sourcing: `entry.minPx`, baked into the table at module load, and
+`kernel._threshold`, read at resolve time from
+`Transform.WASM_DISPATCH_MIN_PIXELS`. Both are 256 today so nothing is wrong —
+and the documented `= 0` profiling override still works, because `big` is
+resolved with an infinite pixel floor. But a kernel answering for its own
+break-even (phase 4e) would have to feed both, or the resolver would pick an
+entry the per-call compare then declines to use. One source, then helpers.
+
 **One ordering constraint.** `init()` runs during `create()`, on the instance,
 after the pipeline exists. `resolveRuns()` and `arrayFor()` come later, so a
 kernel can stash the helpers at `init` and use them there. `floatFor()` cannot:
