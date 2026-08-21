@@ -82,3 +82,16 @@ bench/results/[0-9]*/
 #                              published in 1.5.5 can still be re-derived in 1.9.
 #
 # ~120 KB each. See bench/baseline/README.md.
+
+# Licensed ICC profiles — same rule as bench/lcms_compat/profiles/ above.
+# testbed/profiles/README.md says so of itself: ICC profiles are licensed
+# artefacts and most of what ships in a real prepress workflow cannot be
+# redistributed on a public repo. Supply your own licensed copies locally.
+# The READMEs that say WHICH profiles the harness expects stay tracked.
+/testbed/profiles/*
+!/testbed/profiles/README.md
+
+# Loose reproduce/pool logs and one-off dumps beside the timestamped runs.
+/bench/results/*.log
+/bench/results/multicore_matrix*.json
+/bench/results/multicore_scaling*.json
