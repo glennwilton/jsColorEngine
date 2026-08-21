@@ -393,6 +393,7 @@ want, and check what Transform has to learn.**
 | A fast-preview mode on a small 8-bit grid | a kernel that returns a 9³ or 17³ u8 table when a preview option is set | nothing |
 | A tuned 7-channel press kernel, leaving 5, 6, 8–15 generic | `Transform.kernels[7] = Kernel7D` | nothing |
 | A probe that records every dispatch, for a test | `Transform.kernels[9] = probe` | nothing |
+| Routing the two-tier `arrayFor` shape cannot express — three tiers, a decision on content rather than size, a memo cache | the kernel's own dispatcher returned in both slots with `threshold: 0` | nothing |
 
 Every row is a kernel decision expressed through hooks that already exist in
 this document. None of them is a case in a switch in `Transform.js`, which is
@@ -846,8 +847,32 @@ for diagnostics — the same strings `_runBigKey` / `_runSmallKey` hold now, whi
 
 Two tiers because the break-even is one decision, not a ladder: the fallback
 chain (simd → scalar → js → float) is walked once at create() and lands on
-exactly two outcomes. If a third tier ever earns its place the shape can grow,
-but nothing today wants one.
+exactly two outcomes.
+
+**And two tiers is enough forever, because the second tier is an escape hatch.**
+A kernel that wants routing this shape cannot express — three tiers, a decision
+on content rather than size, a cache, anything — returns *its own dispatcher* in
+both slots:
+
+```js
+arrayFor: function(lut, hints){
+    var dispatch = makeWhateverRoutingIWant(lut, hints);
+    return { big: dispatch, small: dispatch, threshold: 0,
+             bigName: 'custom', smallName: 'custom' };
+}
+```
+
+Threshold 0 means `big` is always chosen, Transform makes no comparison, and
+whatever happens inside `dispatch` is invisible to it. **Transform.js does not
+care what it was handed — it calls a function.**
+
+So the contract does not need to grow a third tier, and should not. `{big,
+small, threshold}` is the *convenience* shape for the one decision every
+built-in kernel actually makes; a kernel with a different idea keeps full
+control by declining to use it. That is the same property as the rest of this
+document — see [The shape test](#the-shape-test--what-a-stranger-can-do-without-touching-transform):
+name a thing a third party might want, and check what Transform has to learn.
+Here, again, nothing.
 
 Today the same journey is: `transformArrayViaLUT` preamble → `kernel.array()` →
 `ensureOutputArray` → `runTableKernel` → threshold compare → the resolved run
