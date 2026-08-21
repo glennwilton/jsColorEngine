@@ -112,61 +112,33 @@ function resolveArrayRuns(kernel){
     var lut = transform.lut;
     if(!lut) return none;
 
-    var inCh = lut.inputChannels;
-
-    // Gray and duotone bypass the table — their kernels call the dedicated
-    // interp loops directly, with no fallback chain to express.
-    if(inCh !== 3 && inCh !== 4) return none;
-
-    var modeShort = lutKernelTable.LUT_MODE_SHORT[transform.lutMode];
-    if(modeShort === undefined){
-        // Not a built-in lutMode — plugin-registered kernels resolve here.
+    // Non-built-in lutMode — the plugin registry answers.
+    if(lutKernelTable.LUT_MODE_SHORT[transform.lutMode] === undefined){
         var plugin = transform.constructor._plugins[transform.lutMode];
         return plugin ? _resolvePluginRuns(kernel, plugin) : none;
     }
 
-    var startKey = lutKernelTable.makeKey(modeShort, inCh, lut.outputChannels);
-    var bigRes   = lutKernelTable.resolveLutKernel(transform, lut, startKey, Infinity);
-    var smallRes = lutKernelTable.resolveLutKernel(transform, lut, startKey, 0);
+    // THE KERNEL ANSWERS FOR ITSELF. A kernel with a `table` resolves through
+    // it; one without (1-D, 2-D, N-D) has a single implementation its array()
+    // calls directly and needs no dispatch at all.
+    if(!kernel.table || typeof kernel.table.resolve !== 'function') return none;
 
+    var picked = kernel.table.resolve(kernel, lut);
+
+    // Collapsed — BIG and SMALL are the same implementation, so there is no
+    // WASM-eligible win in this configuration and a threshold of 0 saves the
+    // per-call comparison.
     var bound = {
-        big:       bigRes.entry.run,
-        small:     smallRes.entry.run,
-        bigName:   bigRes.key,
-        smallName: smallRes.key,
-        threshold: 0,
+        big:       picked.big,
+        small:     picked.small,
+        bigName:   picked.bigName,
+        smallName: picked.smallName,
+        threshold: (picked.big === picked.small) ? 0 : resolveThreshold(kernel),
     };
-    // Threshold for choosing BIG vs SMALL at call time:
-    //   collapsed (BIG === SMALL) → 0 — no WASM-eligible win anywhere in the
-    //     chain; threshold=0 saves a per-call comparison in this common case.
-    //   distinct (BIG ≠ SMALL) → the class static, read at resolve time so
-    //     callers can override it BEFORE create() for profiling (contract
-    //     covered by transform_lutMode_wasm.tests.js).
-    // THE THRESHOLD HAS ONE SOURCE (v1.6 phase 4e). It used to be read straight
-    // off the Transform class static here, while the table rows carried their
-    // own copy in `minPx` -- two numbers for one concept. They are reconciled
-    // now: `minPx` is a MARKER in the table (the resolver only ever compares it
-    // against Infinity or 0, so its value never mattered there), and the real
-    // number comes from the kernel.
-    //
-    // Precedence, most specific first:
-    //   1. Transform.WASM_DISPATCH_MIN_PIXELS when a caller has moved it off
-    //      the default -- the documented profiling override, which must keep
-    //      winning or `= 0` stops forcing the WASM path
-    //   2. the kernel's own wasmMinPixels, for a kernel that has measured its
-    //      own break-even
-    //   3. the shared default
-    //
-    // Collapsed chains stay at 0: when BIG and SMALL resolve to the same entry
-    // there is no WASM-eligible win anywhere in the chain, and a threshold of 0
-    // saves the per-call comparison.
-    bound.threshold = (bigRes.entry === smallRes.entry) ? 0 : resolveThreshold(kernel);
 
     if(transform.verbose){
-        console.log('  lutKernelTable: ' + startKey
-            + ' → big=' + bound.bigName
-            + ' small=' + bound.smallName
-            + ' threshold=' + bound.threshold);
+        console.log('  ' + (kernel.name || 'kernel') + ': big=' + bound.bigName
+            + ' small=' + bound.smallName + ' threshold=' + bound.threshold);
     }
     return bound;
 }

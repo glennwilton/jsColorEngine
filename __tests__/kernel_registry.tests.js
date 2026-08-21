@@ -493,63 +493,36 @@ describe('the array loops are reached through their modules, not the Transform',
     });
 });
 
-describe('the dispatch table lives with its kernels', () => {
+describe('each kernel owns its dispatch', () => {
 
-    // v1.6 phase 4d. The 42 rows of the LUT dispatch table were one object in
-    // lutKernelTable.js. Every fallback chain stays inside one input dimension
-    // — i8wsi_3_3 degrades to i8ws_3_3 to i_3_3 to fl_3_3 and never leaves 3D —
-    // so it was two independent ladders sharing a file. Each kernel owns its
-    // own now; the resolver, the key format and the mode map stay shared.
+    // v1.6. The rows moved into the kernels in phase 4d and then stopped being
+    // rows at all: a kernel resolving its own dispatch does not need a keyed
+    // lookup structure, it knows its variants. What is left is a switch per
+    // kernel, reached through kernel.table.resolve().
 
-    const lutKernelTable = require('../src/lutKernelTable');
-    const table3d = require('../src/kernels/3d/kernel3D_table.js');
-    const table4d = require('../src/kernels/4d/kernel4D_table.js');
-
-    test('the merged view is exactly the two halves, and they do not overlap', () => {
-        const merged = Object.keys(lutKernelTable.KERNEL).sort();
-        const halves = Object.keys(table3d).concat(Object.keys(table4d)).sort();
-        expect(merged).toEqual(halves);
-        // No key in both — an overlap would mean one half silently winning.
-        for(const k of Object.keys(table3d)) expect(table4d[k]).toBeUndefined();
-        expect(merged.length).toBe(42);
-    });
-
-    test('each half holds only its own dimension', () => {
-        for(const k of Object.keys(table3d)) expect(k.split('_')[1]).toBe('3');
-        for(const k of Object.keys(table4d)) expect(k.split('_')[1]).toBe('4');
-    });
-
-    test('no fallback chain leaves its dimension', () => {
-        // This is the property that made the split possible. If a chain ever
-        // needs to cross — a 4D mode degrading to a 3D one — the tables cannot
-        // stay separate, and this test is where that shows up.
-        const K = lutKernelTable.KERNEL;
-        for(const start of Object.keys(K)){
-            const dim = start.split('_')[1];
-            let key = start, hops = 0;
-            while(key && hops < 20){
-                expect(key.split('_')[1]).toBe(dim);
-                key = K[key].fallback;
-                hops++;
-            }
-            expect(hops).toBeLessThan(20);        // terminates
+    test('3D and 4D expose their own resolver; nobody else needs one', () => {
+        for(const dim of [3, 4]){
+            const k = Transform.kernels[dim];
+            expect(typeof k.table).toBe('object');
+            expect(typeof k.table.resolve).toBe('function');
+        }
+        // 1D, 2D and ND have a single implementation their array() calls
+        // directly, so they have no dispatch to resolve.
+        for(const dim of [1, 2, 5, 15]){
+            expect(Transform.kernels[dim].table).toBeUndefined();
         }
     });
 
-    test('the dispatch threshold has one definition', () => {
-        // It used to be written twice — in Transform.js as the public static
-        // and in lutKernelTable.js, kept in step by a comment — and splitting
-        // the table would have made it three. Every WASM row reads the shared
-        // module, so there is nothing left to drift.
+    test('the two resolvers are separate objects, not one shared table', () => {
+        expect(Transform.kernels[3].table).not.toBe(Transform.kernels[4].table);
+    });
+
+    test('the dispatch threshold still has one definition', () => {
+        // It used to be written twice — the public static and a copy in the
+        // table module, kept in step by a comment.
         const threshold = require('../src/kernels/dispatchThreshold.js');
         expect(typeof threshold).toBe('number');
-        expect(lutKernelTable.WASM_DISPATCH_MIN_PIXELS).toBe(threshold);
         expect(Transform.WASM_DISPATCH_MIN_PIXELS).toBe(threshold);
-
-        const K = lutKernelTable.KERNEL;
-        const wasmRows = Object.keys(K).filter(k => /^i(8|16)ws/.test(k) && K[k].run !== null);
-        expect(wasmRows.length).toBeGreaterThan(0);
-        for(const k of wasmRows) expect(K[k].minPx).toBe(threshold);
     });
 });
 

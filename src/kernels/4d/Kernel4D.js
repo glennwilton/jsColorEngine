@@ -13,11 +13,16 @@
 'use strict';
 
 var kernelUtils = require('../kernelUtils.js');
+var table = require('./kernel4D_table.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
 
 module.exports = {
     name: 'kernel4D',
+
+    // This kernel's own dispatch. kernelUtils walks it; nobody else
+    // needs to know it exists.
+    table: table,
 
     dimensions: 4,
 

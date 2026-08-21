@@ -1,7 +1,7 @@
 /**
- * v1.3 LUT kernel dispatcher table — coverage + equivalence tests.
+ * Kernel dispatch — coverage + equivalence tests.
  *
- * The kernel table (src/lutKernelTable.js) is the single source of truth
+ * Each kernel owns its dispatch, in its own kernelND_table.js, and is
  * for "what kernel runs for (lutMode, inputChannels, outputChannels)?".
  * Resolution happens once at the end of Transform.create() and caches
  * BIG/SMALL run closures + a threshold on the Transform itself. Per-call
@@ -65,215 +65,150 @@ function mockTransform(opts){
 }
 
 // ============================================================================
-// 1. TABLE INTEGRITY
+// 1. DISPATCH DECISIONS — the switch that replaced the table
 // ============================================================================
 
-describe('lutKernelTable — table integrity', () => {
+describe('kernel dispatch — the switch that replaced the table', () => {
 
-    test('1a. KERNEL is exhaustive: every (mode, inCh, outBucket) cell has an entry', () => {
-        const modes  = Object.values(lutKernelTable.LUT_MODE_SHORT);
-        const inChs  = [3, 4];
-        const outBuckets = [3, 4, 'n'];
+    // Dispatch used to be a 42-row table of {run, gate, minPx, fallback} keyed
+    // by strings like 'i8wsi_3_4', walked by a generic resolver that built the
+    // key, looked up the row, called a gate closure and followed `fallback`
+    // until something answered.
+    //
+    // That was right when Transform.js dispatched for every dimension out of
+    // one flat structure: it had to be data rather than code. Once the rows
+    // moved into the kernels that own them, a kernel was reaching through two
+    // modules and building a key string to look up a table sitting in its own
+    // file. It is a switch now, one per kernel.
+    //
+    // These tests are the ones the structural suite could not be. That suite
+    // checked the table had no cycles and every cell had a fallback; this
+    // checks the DECISIONS, which is what anybody actually depends on.
 
-        const missing = [];
-        for(const mode of modes){
-            for(const inCh of inChs){
-                for(const outB of outBuckets){
-                    const key = mode + '_' + inCh + '_' + outB;
-                    if(lutKernelTable.KERNEL[key] === undefined){
-                        missing.push(key);
-                    }
+    const t3 = require('../src/kernels/3d/kernel3D_table.js');
+    const t4 = require('../src/kernels/4d/kernel4D_table.js');
+
+    const SLOTS = ['wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
+                   'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'];
+    const MODES = ['float', 'int', 'int16', 'int-wasm-scalar', 'int-wasm-simd',
+                   'int16-wasm-scalar', 'int16-wasm-simd'];
+    const DIMS  = [[3, t3], [4, t4]];
+
+    function kernelFor(mode, outputChannels, loaded){
+        const k = { transform: { lutMode: mode, outputChannels: outputChannels } };
+        for(const s of SLOTS) k[s] = (loaded === 'all' || (loaded || []).indexOf(s) !== -1) ? {} : null;
+        return k;
+    }
+    function lutFor(inCh, outCh, intLut){
+        return { inputChannels: inCh, outputChannels: outCh, intLut: intLut ? {} : null };
+    }
+
+    test('EVERY input width reaches EVERY output width, in every mode', () => {
+        // The matrix that would have caught the bug this replaced: int16 modes
+        // could not reach 5 or more output channels at all, so CMYK to 5CLR
+        // worked at 8 bits and threw at 16.
+        for(const [dim, mod] of DIMS){
+            for(const mode of MODES){
+                for(const outCh of [1, 2, 3, 4, 5, 6, 8, 12, 15]){
+                    const picked = mod.resolve(kernelFor(mode, outCh, 'all'), lutFor(dim, outCh, true));
+                    expect(typeof picked.big).toBe('function');
+                    expect(typeof picked.small).toBe('function');
                 }
             }
         }
-        expect(missing).toEqual([]);
     });
 
-    test('1b. every entry has {run, gate, minPx, fallback}', () => {
-        for(const [key, entry] of Object.entries(lutKernelTable.KERNEL)){
-            expect(entry).toHaveProperty('run');
-            expect(entry).toHaveProperty('gate');
-            expect(entry).toHaveProperty('minPx');
-            expect(entry).toHaveProperty('fallback');
-            expect(typeof entry.gate).toBe('function');
-            expect(typeof entry.minPx).toBe('number');
-            // run is either a function (real kernel) or null (passthrough)
-            expect(entry.run === null || typeof entry.run === 'function')
-                .toBe(true, 'entry "' + key + '" run must be function or null');
-            // fallback is either a string (key) or null (chain end)
-            expect(entry.fallback === null || typeof entry.fallback === 'string')
-                .toBe(true, 'entry "' + key + '" fallback must be string or null');
+    test('wide output in a u16 mode lands on float, never on a u8 kernel', () => {
+        // Float is the one legal cross-family landing point: it scales through
+        // lut.outputScale at call time, which an int16 mode has already folded
+        // to 65535. A u8 kernel writing into a Uint16Array would divide every
+        // value by about 257 and look almost right.
+        for(const [dim, mod] of DIMS){
+            for(const mode of ['int16', 'int16-wasm-scalar', 'int16-wasm-simd']){
+                const picked = mod.resolve(kernelFor(mode, 6, 'all'), lutFor(dim, 6, true));
+                expect(picked.smallName).toBe('fl_' + dim + '_n');
+                expect(picked.bigName).not.toMatch(/^i_/);
+                expect(picked.bigName).not.toMatch(/^i8/);
+            }
+        }
+    });
+
+    test('an int16 mode with no intLut throws rather than degrading quietly', () => {
+        // Misuse rather than a shape we cannot serve: the caller asked for
+        // 16-bit integer kernels and the table they read from was never built.
+        for(const [dim, mod] of DIMS){
+            for(const mode of ['int16', 'int16-wasm-scalar', 'int16-wasm-simd']){
+                expect(() => mod.resolve(kernelFor(mode, 4, 'all'), lutFor(dim, 4, false)))
+                    .toThrow(/fallback chain exhausted/);
+            }
+        }
+    });
+
+    test('float always wins, whatever the WASM state', () => {
+        for(const [dim, mod] of DIMS){
+            for(const loaded of ['all', []]){
+                for(const intLut of [true, false]){
+                    const picked = mod.resolve(kernelFor('float', 4, loaded), lutFor(dim, 4, intLut));
+                    expect(picked.bigName).toBe('fl_' + dim + '_4');
+                    expect(picked.big).toBe(picked.small);
+                }
+            }
+        }
+    });
+
+    test('without an intLut, the u8 integer modes degrade to float', () => {
+        for(const [dim, mod] of DIMS){
+            for(const mode of ['int', 'int-wasm-scalar', 'int-wasm-simd']){
+                const picked = mod.resolve(kernelFor(mode, 4, 'all'), lutFor(dim, 4, false));
+                expect(picked.bigName).toBe('fl_' + dim + '_4');
+            }
+        }
+    });
+
+    test('BIG takes WASM, SMALL stays on JS — the memcpy break-even', () => {
+        for(const [dim, mod] of DIMS){
+            const simd = mod.resolve(kernelFor('int-wasm-simd', 4, 'all'), lutFor(dim, 4, true));
+            expect(simd.bigName).toBe('i8wsi_' + dim + '_4');
+            expect(simd.smallName).toBe('i_' + dim + '_4');
+            expect(simd.big).not.toBe(simd.small);
+
+            // Nothing loaded: both collapse to the JS kernel, and a caller
+            // holding both needs no comparison at all.
+            const none = mod.resolve(kernelFor('int-wasm-simd', 4, []), lutFor(dim, 4, true));
+            expect(none.bigName).toBe('i_' + dim + '_4');
+            expect(none.big).toBe(none.small);
         }
     });
 
-    test('1c. every non-null fallback key resolves to another KERNEL entry', () => {
-        const dangling = [];
-        for(const [key, entry] of Object.entries(lutKernelTable.KERNEL)){
-            if(entry.fallback !== null && lutKernelTable.KERNEL[entry.fallback] === undefined){
-                dangling.push(key + ' → ' + entry.fallback);
+    test('SIMD covers 3 and 4 output channels only; wider takes the scalar kernel', () => {
+        for(const [dim, mod] of DIMS){
+            for(const outCh of [3, 4]){
+                expect(mod.resolve(kernelFor('int-wasm-simd', outCh, 'all'),
+                                   lutFor(dim, outCh, true)).bigName)
+                    .toBe('i8wsi_' + dim + '_' + outCh);
             }
-        }
-        expect(dangling).toEqual([]);
-    });
-
-    test('1d. every chain terminates at the right bit-depth — u8 → fl_*_*, u16 → i16_*_*', () => {
-        // Bit-depth invariant (see src/lutKernelTable.js header):
-        //   u16 chains MUST NOT cross to u8 kernels (would silently
-        //   scale outputs by ~1/257 into a Uint16Array). u16 chains
-        //   therefore terminate at the JS u16 entry; u8 chains
-        //   degrade all the way to the float entry.
-        for(const startKey of Object.keys(lutKernelTable.KERNEL)){
-            const isU16Chain = startKey.startsWith('i16');
-            let key = startKey, last = startKey, depth = 0;
-            while(key !== null){
-                if(depth++ > 16){
-                    throw new Error('chain from "' + startKey + '" exceeded depth 16');
-                }
-                last = key;
-                // Cross-bit-depth assertion at every hop.
-                if(isU16Chain){
-                    expect(key.startsWith('i16') || key === 'fl_NEVER_HAPPENS')
-                        .toBe(true, 'u16 chain "' + startKey + '" leaked into u8 kernel "' + key + '"');
-                }
-                key = lutKernelTable.KERNEL[key].fallback;
-            }
-            // Terminus check
-            if(isU16Chain){
-                expect(last.startsWith('i16_')).toBe(true);
-            } else {
-                expect(last.startsWith('fl_')).toBe(true);
-                expect(lutKernelTable.KERNEL[last].run).not.toBeNull(); // float terminus is always real
-            }
-            expect(lutKernelTable.KERNEL[last].fallback).toBeNull();
+            expect(mod.resolve(kernelFor('int-wasm-simd', 6, 'all'), lutFor(dim, 6, true)).bigName)
+                .toBe('i8ws_' + dim + '_n');
         }
     });
 
-    test('1f. bit-depth invariant: u16 misuse (no intLut) throws "fallback chain exhausted"', () => {
-        // lutMode='int16' without buildIntLut() → gate fails → no u8
-        // cross-over to silently corrupt → loud throw at resolve time.
-        const t = mockTransform({});
-        const lutNoInt = { intLut: null, inputChannels: 3, outputChannels: 3 };
-        expect(() => lutKernelTable.resolveLutKernel(t, lutNoInt, 'i16_3_3', Infinity))
-            .toThrow(/fallback chain exhausted/);
-
-        // lutMode='int16' with cMax=6 (NCh has no u16 JS kernel) on a
-        // host without WASM → also throws (instead of silently writing
-        // u8 values into a Uint16Array as the legacy dispatcher did).
-        expect(() => lutKernelTable.resolveLutKernel(t, lutNoInt, 'i16_3_n', Infinity))
-            .toThrow(/fallback chain exhausted/);
-    });
-
-    test('1e. no cycles in any fallback chain', () => {
-        for(const startKey of Object.keys(lutKernelTable.KERNEL)){
-            const visited = new Set();
-            let key = startKey;
-            while(key !== null){
-                if(visited.has(key)){
-                    throw new Error('cycle detected in chain from "' + startKey + '" at "' + key + '"');
+    test('a mode only ever degrades — it never gains a capability', () => {
+        // simd to scalar to js to float, one direction. Asserted by checking
+        // that taking a module away never improves the answer.
+        const rank = n => (n.indexOf('i8wsi') === 0 || n.indexOf('i16wsi') === 0) ? 4
+                        : (n.indexOf('i8ws') === 0 || n.indexOf('i16ws') === 0)   ? 3
+                        : (n.indexOf('i_') === 0 || n.indexOf('i16_') === 0)      ? 2 : 1;
+        for(const [dim, mod] of DIMS){
+            for(const mode of MODES){
+                for(const outCh of [3, 4, 6]){
+                    const all  = mod.resolve(kernelFor(mode, outCh, 'all'), lutFor(dim, outCh, true));
+                    const none = mod.resolve(kernelFor(mode, outCh, []),    lutFor(dim, outCh, true));
+                    expect(rank(none.bigName)).toBeLessThanOrEqual(rank(all.bigName));
                 }
-                visited.add(key);
-                key = lutKernelTable.KERNEL[key].fallback;
             }
         }
     });
 });
-
-// ============================================================================
-// 2. RESOLVER BEHAVIOUR (mocked Transform — no real WASM needed)
-// ============================================================================
-
-describe('lutKernelTable.resolveLutKernel', () => {
-
-    const fakeIntLut = { /* truthy stand-in — only presence is checked by gates */ };
-    const fakeLut = { intLut: fakeIntLut, inputChannels: 3, outputChannels: 3 };
-
-    test('2a. fl_3_3 always wins regardless of WASM state', () => {
-        const t = mockTransform({});
-        const big   = lutKernelTable.resolveLutKernel(t, fakeLut, 'fl_3_3', Infinity);
-        const small = lutKernelTable.resolveLutKernel(t, fakeLut, 'fl_3_3', 0);
-        expect(big.key).toBe('fl_3_3');
-        expect(small.key).toBe('fl_3_3');
-        expect(big.entry).toBe(small.entry);
-    });
-
-    test('2b. without intLut, integer chains degrade all the way to fl_*_*', () => {
-        const t = mockTransform({});
-        const lutNoInt = { intLut: null, inputChannels: 3, outputChannels: 4 };
-        const big = lutKernelTable.resolveLutKernel(t, lutNoInt, 'i_3_4', Infinity);
-        expect(big.key).toBe('fl_3_4');
-    });
-
-    test('2c. WASM available: BIG floor=Infinity wins WASM, SMALL floor=0 falls through to JS', () => {
-        // v1.3 — WASM int16 gate is wired (Q0.13 kernels, bit-exact
-        // with JS sibling). BIG batches route to the WASM kernel; SMALL
-        // batches still fall through to the JS u16 kernel because the
-        // i16ws entry has minPx > 0.
-        const t = mockTransform({ wasmTetra3DInt16: { /* fake state */ } });
-        const big   = lutKernelTable.resolveLutKernel(t, fakeLut, 'i16ws_3_3', Infinity);
-        const small = lutKernelTable.resolveLutKernel(t, fakeLut, 'i16ws_3_3', 0);
-        expect(big.key).toBe('i16ws_3_3');                    // WASM wins for big batches
-        expect(small.key).toBe('i16_3_3');                    // JS u16 wins for small batches
-        expect(big.entry).not.toBe(small.entry);
-    });
-
-    test('2c. WASM unavailable: BIG and SMALL both collapse to JS fallback', () => {
-        const t = mockTransform({});                          // no WASM states
-        const big   = lutKernelTable.resolveLutKernel(t, fakeLut, 'i16ws_3_3', Infinity);
-        const small = lutKernelTable.resolveLutKernel(t, fakeLut, 'i16ws_3_3', 0);
-        expect(big.key).toBe('i16_3_3');
-        expect(small.key).toBe('i16_3_3');
-        expect(big.entry).toBe(small.entry);
-    });
-
-    test('2d. SIMD on cMax=n falls through transparently to scalar WASM', () => {
-        const t = mockTransform({
-            outputChannels:  6,
-            wasmTetra3DSimd: { /* fake */ },
-            wasmTetra3D:     { /* fake */ },
-        });
-        const lut6 = { intLut: fakeIntLut, inputChannels: 3, outputChannels: 6 };
-        const big = lutKernelTable.resolveLutKernel(t, lut6, 'i8wsi_3_n', Infinity);
-        // i8wsi_3_n has gate:alwaysFalse → falls to i8ws_3_n which has scalar WASM
-        expect(big.key).toBe('i8ws_3_n');
-    });
-
-    test('2e. i16wsi (SIMD u16) wins when SIMD state is loaded; falls to i16ws when not', () => {
-        // v1.3 SIMD u16 kernels live behind a gate on
-        // wasmTetra3DInt16Simd. With the SIMD state loaded, BIG batches
-        // route to i16wsi; without it, the chain walks transparently
-        // to the scalar u16 sibling i16ws_3_3 (which itself walks to
-        // i16_3_3 if the scalar u16 state is also missing).
-        const tSimd = mockTransform({
-            wasmTetra3DInt16Simd: { /* fake */ },
-            wasmTetra3DInt16:     { /* fake */ },
-        });
-        const bigSimd = lutKernelTable.resolveLutKernel(tSimd, fakeLut, 'i16wsi_3_3', Infinity);
-        expect(bigSimd.key).toBe('i16wsi_3_3');
-
-        const tScalar = mockTransform({ wasmTetra3DInt16: { /* fake */ } });
-        const bigScalar = lutKernelTable.resolveLutKernel(tScalar, fakeLut, 'i16wsi_3_3', Infinity);
-        expect(bigScalar.key).toBe('i16ws_3_3');
-    });
-
-    test('2f. SIMD u16 on cMax=n (e.g. 6-color CMYKOG) falls through transparently to scalar u16', () => {
-        // Same gating rationale as the u8 SIMD _n cell: v128.store64_lane
-        // writes 4 u16 lanes / 8 bytes / pixel which is invalid for
-        // cMax ∉ {3, 4}. The _n cell is gate:alwaysFalse → walks to
-        // i16ws_*_n which uses the rolled scalar u16 kernel.
-        const t = mockTransform({
-            outputChannels:       6,
-            wasmTetra3DInt16Simd: { /* fake */ },
-            wasmTetra3DInt16:     { /* fake */ },
-        });
-        const lut6 = { intLut: fakeIntLut, inputChannels: 3, outputChannels: 6 };
-        const big = lutKernelTable.resolveLutKernel(t, lut6, 'i16wsi_3_n', Infinity);
-        expect(big.key).toBe('i16ws_3_n');
-    });
-});
-
-// ============================================================================
-// 3. TRANSFORM INTEGRATION
-// ============================================================================
 
 describe('Transform — _resolveLutKernels integration', () => {
 

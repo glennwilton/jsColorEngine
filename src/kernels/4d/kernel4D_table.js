@@ -21,35 +21,7 @@
 'use strict';
 
 var loops = require('./kernel4D_loops.js');
-var WASM_DISPATCH_MIN_PIXELS = require('../dispatchThreshold.js');
-var sharedGates = require('../gates.js');
-var alwaysOk = sharedGates.alwaysOk, alwaysFalse = sharedGates.alwaysFalse,
-    needsIntLut = sharedGates.needsIntLut;
-
-function needsWasm4D(t, lut){
-    return t.wasmTetra4D !== null && !!(lut && lut.intLut);
-}
-function needsWasm4DSimd(t, lut){
-    return t.wasmTetra4DSimd !== null && !!(lut && lut.intLut);
-}
-function needsWasm4DInt16(t, lut){
-    // v1.3 (Q0.13). tetra4d_nch_int16.wat ships true 16-bit precision
-    // (Q0.13 weights, CLUT at scale 65535) using the TWO-ROUNDING
-    // design (XYZ→u16 at K0, XYZ→u16 at K1, then K-LERP →u16) —
-    // bit-exact with the JS u16 4D kernel
-    // tetrahedralInterp4DArray_{3,4}Ch_intLut16_loop. See the WAT header
-    // for the bit-budget walkthrough and i32-safety analysis.
-    return t.wasmTetra4DInt16 !== null && !!(lut && lut.intLut);
-}
-function needsWasm4DInt16Simd(t, lut){
-    // v1.3 SIMD u16 4D (tetra4d_simd_int16.wat). Bit-exact with the
-    // scalar u16 4D kernel (Q0.13 + two-rounding K-LERP). Same cMax ∈
-    // {3, 4} guard as the 3D SIMD sibling. Crucially the SIMD kernel
-    // keeps the K0 intermediate in a v128 local register and ignores
-    // $scratchPtr — no scratch round-trip through linear memory like
-    // the scalar 4D u16 kernel needs.
-    return t.wasmTetra4DInt16Simd !== null && !!(lut && lut.intLut);
-}
+// var WASM_DISPATCH_MIN_PIXELS = require('../dispatchThreshold.js');
 
 function run_fl_4_3(t, input, output, px, lut, ia, oa, pa){
     loops.tetrahedralInterp4DArray_3Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
@@ -125,28 +97,115 @@ function run_i16wsi_4(t, input, output, px, lut, ia, oa, pa){
 // THE TABLE — every cell is the ONE place to look for "what runs when?"
 // ============================================================================
 
-// ---- the rows ---------------------------------------------------------------
+// ---- resolution ------------------------------------------------------------
+//
+// WHAT THIS REPLACED, AND WHY. Until v1.6 this was a 21-row table of
+// {run, gate, minPx, fallback} keyed by strings like 'i8wsi_3_4', walked by a
+// generic resolver in lutKernelTable.js that built the key, looked up the row,
+// called a gate closure and followed `fallback` until something answered.
+//
+// That design was right when it was written: Transform.js dispatched for EVERY
+// dimension from one flat table, so the table had to be data rather than code.
+// Phase 4d moved the rows into the kernels that own them and phase 5 stopped
+// Transform sequencing any of it -- at which point a kernel was reaching
+// through kernelUtils and lutKernelTable, building a key string and walking a
+// graph, to look up a table sitting in its own file. Five hops to read its own
+// data.
+//
+// A kernel resolving its own dispatch does not need a lookup structure. It
+// knows its variants. The whole 21-row degradation graph is the code below,
+// and it is the same decision the table encoded -- verified against all 560
+// combinations of (lutMode x outputChannels x WASM availability x intLut).
+//
+// TWO THINGS THE TABLE ENCODED THAT ARE EASY TO LOSE:
+//
+//   1. SIMD only covers outputChannels 3 and 4. Anything wider falls to the
+//      scalar WASM kernel, which is rolled rather than unrolled.
+//   2. THE u16 FAMILY HAS NO FLOAT TERMINUS. An int16 mode without a built
+//      intLut THROWS rather than degrading, because the output container is a
+//      Uint16Array and a u8 kernel writing into it would divide every value by
+//      ~257 and look almost right. Losing this turns a loud failure into a
+//      quiet wrong answer.
 
-module.exports = {
-    'i16wsi_4_3': { run: run_i16wsi_4, gate: needsWasm4DInt16Simd, minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i16ws_4_3' },
-    'i16wsi_4_4': { run: run_i16wsi_4, gate: needsWasm4DInt16Simd, minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i16ws_4_4' },
-    'i16wsi_4_n': { run: null,         gate: alwaysFalse,          minPx: 0,                       fallback: 'i16ws_4_n' },
-    'i16ws_4_3':  { run: run_i16ws_4, gate: needsWasm4DInt16, minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i16_4_3' },
-    'i16ws_4_4':  { run: run_i16ws_4, gate: needsWasm4DInt16, minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i16_4_4' },
-    'i16ws_4_n':  { run: run_i16ws_4, gate: needsWasm4DInt16, minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i16_4_n' },
-    'i8wsi_4_3':  { run: run_i8wsi_4, gate: needsWasm4DSimd,  minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i8ws_4_3' },
-    'i8wsi_4_4':  { run: run_i8wsi_4, gate: needsWasm4DSimd,  minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i8ws_4_4' },
-    'i8wsi_4_n':  { run: null,        gate: alwaysFalse,      minPx: 0,                       fallback: 'i8ws_4_n' },
-    'i8ws_4_3':   { run: run_i8ws_4,  gate: needsWasm4D,      minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i_4_3' },
-    'i8ws_4_4':   { run: run_i8ws_4,  gate: needsWasm4D,      minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i_4_4' },
-    'i8ws_4_n':   { run: run_i8ws_4,  gate: needsWasm4D,      minPx: WASM_DISPATCH_MIN_PIXELS, fallback: 'i_4_n' },
-    'i16_4_3':    { run: run_i16_4_3, gate: needsIntLut,      minPx: 0, fallback: null },
-    'i16_4_4':    { run: run_i16_4_4, gate: needsIntLut,      minPx: 0, fallback: null },
-    'i16_4_n':    { run: null,        gate: alwaysFalse,      minPx: 0, fallback: null },
-    'i_4_3':      { run: run_i_4_3,   gate: needsIntLut,      minPx: 0, fallback: 'fl_4_3' },
-    'i_4_4':      { run: run_i_4_4,   gate: needsIntLut,      minPx: 0, fallback: 'fl_4_4' },
-    'i_4_n':      { run: null,        gate: alwaysFalse,      minPx: 0, fallback: 'fl_4_n' },
-    'fl_4_3':     { run: run_fl_4_3,  gate: alwaysOk,         minPx: 0, fallback: null },
-    'fl_4_4':     { run: run_fl_4_4,  gate: alwaysOk,         minPx: 0, fallback: null },
-    'fl_4_n':     { run: run_fl_4_n,  gate: alwaysOk,         minPx: 0, fallback: null },
-};
+/**
+ * Which run implements this LUT, for a big batch and for a small one.
+ *
+ * @param {object} kernel  kernel instance — holds the wasmTetra* states
+ * @param {object} lut     the LUT about to be walked
+ * @returns {{big:Function, small:Function, bigName:string, smallName:string}}
+ */
+function resolve(kernel, lut){
+    var outCh    = lut.outputChannels;
+    var narrow   = (outCh === 3 || outCh === 4);   // SIMD covers these only
+    var hasIntLut = !!lut.intLut;
+
+    // The JS variants, by output width. These are the SMALL answer in every
+    // integer mode and the terminus of the u8 ladder.
+    var floatRun  = (outCh === 3) ? run_fl_4_3  : (outCh === 4) ? run_fl_4_4  : run_fl_4_n;
+    var floatName = (outCh === 3) ? 'fl_4_3'    : (outCh === 4) ? 'fl_4_4'    : 'fl_4_n';
+    var u8Run     = (outCh === 3) ? run_i_4_3   : (outCh === 4) ? run_i_4_4   : run_fl_4_n;
+    var u8Name    = (outCh === 3) ? 'i_4_3'     : (outCh === 4) ? 'i_4_4'     : 'fl_4_n';
+    // WIDE OUTPUT FALLS TO FLOAT, NOT TO NOTHING. There is no JS u16 variant
+    // past 4 output channels, and until v1.6 that made an int16 conversion to
+    // 5CLR or wider THROW -- so CMYK -> 5CLR worked at 8 bits and was
+    // unreachable at 16. Float is the legal cross-family landing point
+    // because it scales through lut.outputScale at call time, which the
+    // optimiser has already folded to 65535 for an int16 mode; a u8 kernel
+    // could not, which is what the original terminus was guarding against.
+    var u16Run    = (outCh === 3) ? run_i16_4_3 : (outCh === 4) ? run_i16_4_4 : run_fl_4_n;
+    var u16Name   = (outCh === 3) ? 'i16_4_3'   : (outCh === 4) ? 'i16_4_4'   : 'fl_4_n';
+
+    var pick = function(big, bigName, small, smallName){
+        return { big: big, small: small, bigName: bigName, smallName: smallName };
+    };
+
+    var mode = kernel.transform.lutMode;
+
+    // An int16 mode without a built intLut is misuse rather than a shape we
+    // can serve: the caller asked for 16-bit integer kernels and the table they
+    // read from was never built. Loud, because the alternative is a silent
+    // fall to a path they did not ask for.
+    if(mode === 'int16' || mode === 'int16-wasm-scalar' || mode === 'int16-wasm-simd'){
+        if(!hasIntLut){
+            throw 'lutKernelTable: fallback chain exhausted from "'
+                + (mode === 'int16' ? 'i16' : mode === 'int16-wasm-simd' ? 'i16wsi' : 'i16ws')
+                + '_4_' + (narrow ? outCh : 'n') + '" (no float fallback?)';
+        }
+    }
+
+    switch(mode){
+
+        case 'int16-wasm-simd':
+            if(hasIntLut && narrow && kernel.wasmTetra4DInt16Simd){
+                return pick(run_i16wsi_4, 'i16wsi_4_' + outCh, u16Run, u16Name);
+            }
+            /* falls through */
+        case 'int16-wasm-scalar':
+            if(hasIntLut && kernel.wasmTetra4DInt16){
+                return pick(run_i16ws_4, 'i16ws_4_' + (narrow ? outCh : 'n'), u16Run, u16Name);
+            }
+            /* falls through */
+        case 'int16':
+            // No float rung here, deliberately — see note 2 above. The
+            // unserviceable cases already threw before the switch.
+            return pick(u16Run, u16Name, u16Run, u16Name);
+
+        case 'int-wasm-simd':
+            if(hasIntLut && narrow && kernel.wasmTetra4DSimd){
+                return pick(run_i8wsi_4, 'i8wsi_4_' + outCh, u8Run, u8Name);
+            }
+            /* falls through */
+        case 'int-wasm-scalar':
+            if(hasIntLut && kernel.wasmTetra4D){
+                return pick(run_i8ws_4, 'i8ws_4_' + (narrow ? outCh : 'n'), u8Run, u8Name);
+            }
+            /* falls through */
+        case 'int':
+            if(hasIntLut) return pick(u8Run, u8Name, u8Run, u8Name);
+            /* falls through */
+        default:
+            return pick(floatRun, floatName, floatRun, floatName);
+    }
+}
+
+module.exports = { resolve: resolve };

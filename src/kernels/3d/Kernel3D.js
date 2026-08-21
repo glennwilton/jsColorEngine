@@ -13,6 +13,7 @@
 'use strict';
 
 var kernelUtils = require('../kernelUtils.js');
+var table = require('./kernel3D_table.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
 var matrixShaper = require('./matrixShaper/matrixShaperKernel.js');
@@ -21,6 +22,10 @@ var encoding = require('../../def.js').encoding;
 
 module.exports = {
     name: 'kernel3D',
+
+    // This kernel's own dispatch. kernelUtils walks it; nobody else
+    // needs to know it exists.
+    table: table,
 
     dimensions: 3,
 
