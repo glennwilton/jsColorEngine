@@ -13,30 +13,51 @@ var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
 
 // ---------------------------------------------------------------------------
-// WHICH N-CHANNEL INTERPOLATOR RUNS. A hard-coded toggle, deliberately: this
-// is not a user option, it is a switch for the next person who wants to
-// re-run the comparison rather than take the numbers on trust.
+// WHICH N-CHANNEL INTERPOLATOR RUNS, and where the line is.
 //
-//   'tetrahedral'  tetrahedral on the last three axes, linear on every extra
-//                  one -- the Little CMS scheme. THE DEFAULT.
-//   'simplex'      one Kuhn simplex across all n axes, O(n) rather than
-//                  O(2^(n-3)). The nicer algorithm, and slower or less
-//                  accurate at every channel count measured.
+// Two schemes, opposite shapes:
 //
-// Measured against lcms on smooth tables, via
-// bench/lcms-comparison/accuracy_nchannel.js:
+//   'tetrahedral'  the Little CMS scheme -- tetrahedral on the last three
+//                  axes, linear on every extra one. 2^(n-3) tetrahedral
+//                  evaluations, so the cost DOUBLES with every channel.
+//   'simplex'      one Kuhn simplex across all n axes. O(n), so the cost is
+//                  FLAT: 0.98 MPx/s at 5 channels, 0.53 at 15.
 //
-//      ch  grid   simplex             tetrahedral (default)
-//       5     9   119ms  mean 0.177   60ms   mean 0.197
-//       8     4   155ms  mean 0.479   441ms  mean 0.021
-//      10     3   180ms  mean 1.130   1746ms mean 0.008
+// Measured, mean MPx/s by input width (bench/channel_matrix/run.js), against
+// LSB from lcms (bench/lcms-comparison/accuracy_nchannel.js):
 //
-// The simplex is faster only at 8+ channels, where grid^n has already forced
-// the table to 3 or 4 points per axis. The Lab gamut is a lobed solid, not a
-// box, so at that density nothing is recovering real colour and the speed is
-// bought with nothing. Full reasoning in the JSDoc on both functions in
-// src/interp.js.
-var ND_INTERPOLATOR = 'tetrahedral';
+//    ch   tetrahedral      simplex          who wins
+//     5   2.50  m 0.197    0.98  m 0.177    tetrahedral, 2.6x faster
+//     7   1.11              0.86            tetrahedral, 1.3x faster
+//     8   0.68  m 0.021    0.85  m 0.479    crossover
+//    10   0.20  m 0.008    0.69  m 1.130    simplex 3.4x, tetrahedral 140x closer
+//    12   0.055             0.65            simplex 12x
+//    15   0.007             0.53            simplex 75x
+//
+// SPLIT AT 11, NOT AT THE CROSSOVER. The speed crossover is 8, but between 8
+// and 10 the accuracy difference is still real -- mean 0.02 against 0.48-1.13
+// LSB -- and paying 1.2x to 3.4x to stay close to the reference CMS is worth
+// it there.
+//
+// At 11 and up the A2B grid is 2 POINTS PER AXIS. That is not a density
+// choice, it is the ceiling: the table is grid^n cells, so 3^11 is already 1.6
+// million and 3^15 is 43 million. A 2-point table has no interior at all --
+// every point is a corner, there is nothing between them to describe, and the
+// Lab gamut is a lobed solid that a box of 2^n corners cannot express in any
+// case. Accuracy there is not something either scheme can deliver, so 6x to
+// 75x is bought with nothing.
+//
+// The other way round -- PCS to device, a 3-D grid with an n-channel output --
+// has none of this problem and runs on Kernel3D at full speed. That is what
+// real 12- and 15-colour profiles are built around, and why this path being
+// slow matters less than it looks.
+//
+// 'auto' is the default. 'tetrahedral' and 'simplex' force one everywhere,
+// which is how the table above was measured.
+var ND_INTERPOLATOR = 'auto';
+
+// Above this many input channels, 'auto' takes the simplex.
+var SIMPLEX_FROM = 11;
 
 module.exports = {
     name: 'kernelND',
@@ -67,13 +88,22 @@ module.exports = {
     // a trap: the two differ by up to 75x at 15 channels, and the difference
     // looks exactly like a regression to anyone comparing runs.
     ndInterpolator: ND_INTERPOLATOR,
+    simplexFrom: SIMPLEX_FROM,
+
+    /** Which scheme this many input channels gets. See the note at the top. */
+    interpolatorFor: function(channels){
+        if(ND_INTERPOLATOR === 'simplex') return 'simplex';
+        if(ND_INTERPOLATOR === 'tetrahedral') return 'tetrahedral';
+        return (channels >= SIMPLEX_FROM) ? 'simplex' : 'tetrahedral';
+    },
 
     floatFor: function(lut, hints) {
-        // The stage name does not change with the toggle: it is what
+        // The stage name does not change with the scheme: it is what
         // optimisePipeline() and the compiler match on, and both
         // implementations occupy the same slot in the pipeline.
+        const scheme = this.interpolatorFor(lut.inputChannels);
         return {
-            funct: (ND_INTERPOLATOR === 'simplex')
+            funct: (scheme === 'simplex')
                 ? interp.simplexInterpND_NCh
                 : interp.tetrahedralInterpND_NCh,
             stageName: 'tetrahedralInterpND',
