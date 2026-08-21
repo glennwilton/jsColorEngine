@@ -62,6 +62,12 @@ module.exports = {
      * MUST NOT precompute from `lut` - optimisePipeline() folds codec scales
      * into lut.inputScale / lut.outputScale after the stage is built.
      */
+    // Readable so a bench or a report can record WHICH interpolator produced
+    // its numbers. A results file that does not name the scheme it measured is
+    // a trap: the two differ by up to 75x at 15 channels, and the difference
+    // looks exactly like a regression to anyone comparing runs.
+    ndInterpolator: ND_INTERPOLATOR,
+
     floatFor: function(lut, hints) {
         // The stage name does not change with the toggle: it is what
         // optimisePipeline() and the compiler match on, and both

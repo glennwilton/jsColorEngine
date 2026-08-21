@@ -43,6 +43,7 @@ const fs   = require('fs');
 const path = require('path');
 const Profile = require('../../src/Profile');
 const { Transform, eIntent } = require('../../src/main');
+const KernelND = require('../../src/kernels/nd/KernelND.js');
 
 const arg = (name, fallback) => {
     const i = process.argv.indexOf('--' + name);
@@ -131,6 +132,8 @@ console.log(' pixels   : ' + PX.toLocaleString() + ' per measurement, best of ' 
 console.log(' format   : ' + FORMAT);
 console.log(' node     : ' + process.version + '   platform: ' + process.platform + ' ' + process.arch);
 console.log(' profiles : synthetic, both tables per file (see docs/deepdive/SyntheticProfiles.md)');
+console.log(' ND interp: ' + KernelND.ndInterpolator
+    + '   (ND_INTERPOLATOR in src/kernels/nd/KernelND.js)');
 console.log('');
 console.log(' NOT A GATE. 3- and 4-channel input is where the throughput work is; the');
 console.log(' rest is a correctness path and this measures how slow it is, not whether');
@@ -227,6 +230,12 @@ fs.writeFileSync(out, JSON.stringify({
     node: process.version,
     platform: process.platform + ' ' + process.arch,
     pixels: PX, format: FORMAT, reps: REPS,
+    // WITHOUT THIS the file is a trap. The two n-channel interpolators differ
+    // by up to 75x at 15 channels, so a run made with the non-default one
+    // reads as a catastrophic regression against a run made with the default.
+    // This file was committed once with simplex numbers while the engine
+    // shipped tetrahedral, and nothing in it said so.
+    ndInterpolator: KernelND.ndInterpolator,
     tables: [{
         id: 'channelMatrix.' + FORMAT,
         title: 'Channel matrix — MPx/s by input and output width',
