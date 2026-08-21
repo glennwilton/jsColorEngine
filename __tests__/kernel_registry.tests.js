@@ -233,3 +233,94 @@ describe('kernelInfo — names come from the descriptor', () => {
         expect(info.claimed).toBe(false);
     });
 });
+
+describe('floatFor — the kernel owns its single-colour stage function', () => {
+
+    // Phase 2 of docs/deepdive/KernelContract.md. addStageLUT used to pick the
+    // interpolator itself from a switch on lut.inputChannels; it now asks the
+    // kernel registered for that dimension. The point is that ONE object owns
+    // both surfaces, so a replacement kernel changes transform(colour) and
+    // transformArray() together instead of only the latter.
+
+    test('1D and 2D kernels return a function and a stage name', () => {
+        for(const [dim, expectedName] of [[1, 'linearInterp1D'], [2, 'bilinearInterp2D']]){
+            const bind = Transform.kernels[dim].floatFor({ outputChannels: 3 }, {});
+            expect(typeof bind.funct).toBe('function');
+            expect(bind.stageName).toBe(expectedName);
+        }
+    });
+
+    test('the stage names are exactly what the optimiser and compile() expect', () => {
+        // These strings are a coupling surface, not a label. optimisePipeline()
+        // matches its fusion patterns against them and compile() resolves
+        // emitters as emit_js_<stageName>. If one drifts, fusion stops firing
+        // silently — throughput drops and every other test still passes.
+        expect(Transform.kernels[1].floatFor({ outputChannels: 3 }, {}).stageName)
+            .toBe('linearInterp1D');
+        expect(Transform.kernels[2].floatFor({ outputChannels: 3 }, {}).stageName)
+            .toBe('bilinearInterp2D');
+    });
+
+    test('the batch loop agrees with the single-colour function, bit for bit', () => {
+        // The two are separate implementations on purpose — sharing one body
+        // between the per-colour path and the image loop deoptimises the array
+        // path 2-3x. Separate implementations of the same maths need a test
+        // that says they still agree, which is this one.
+        function grayLut(outCh, g1){
+            const CLUT = new Float64Array(g1 * outCh);
+            for(let i = 0; i < g1; i++){
+                const v = i / (g1 - 1);
+                for(let c = 0; c < outCh; c++) CLUT[i * outCh + c] = Math.min(1, v * (1 + c * 0.07));
+            }
+            return { inputChannels: 1, outputChannels: outCh, g1, gridPoints: [g1],
+                     CLUT, inputScale: 1 / 255, outputScale: 255, go0: outCh, intLut: null };
+        }
+
+        for(const outCh of [3, 4, 6]){
+            for(const g1 of [256, 33, 17]){
+                const lut = grayLut(outCh, g1);
+                const t = new Transform({ buildLut: true, lutMode: 'float', dataFormat: 'int8' });
+                t.lut = lut;
+                t.inputChannels = 1;
+                t.outputChannels = outCh;
+                t.setKernel(1);
+                t._resolveLutKernels();
+
+                const PX = 512;
+                const inp = new Uint8ClampedArray(PX);
+                for(let i = 0; i < PX; i++) inp[i] = (i * 37) & 255;
+
+                const got = t.transformArrayViaLUT(inp, false, false);
+
+                // Through the SAME container, so the rounding is identical —
+                // Uint8ClampedArray rounds half-to-even, Math.round does not.
+                const ref = Transform.kernels[1].floatFor(lut, {}).funct;
+                const exp = new Uint8ClampedArray(PX * outCh);
+                for(let p = 0, w = 0; p < PX; p++){
+                    const r = ref([inp[p]], lut);
+                    for(let c = 0; c < outCh; c++) exp[w++] = r[c];
+                }
+                expect(Array.from(got)).toEqual(Array.from(exp));
+            }
+        }
+    });
+
+    test('a gray pipeline stage is built from the registry, not a switch', () => {
+        // Swap in a kernel that names its stage differently and check the name
+        // reaches the built pipeline — proof the lookup is live rather than the
+        // old hard-coded path happening to agree.
+        const restore = snapshot(1, 1);
+        try {
+            const probe = Object.create(Transform.kernels[1]);
+            probe.name = 'kernel1D-probe';
+            probe.floatFor = () => ({ funct: () => [0, 0, 0], stageName: 'probeStage1D' });
+            Transform.kernels[1] = probe;
+
+            const t = new Transform({ buildLut: false, lutMode: 'float' });
+            t.addStageLUT(true, 0, { inputChannels: 1, outputChannels: 3, g1: 2,
+                                     gridPoints: [2], CLUT: new Float64Array(6),
+                                     inputScale: 1, outputScale: 1, go0: 3 }, 0);
+            expect(t.pipeline[t.pipeline.length - 1].stageName).toBe('probeStage1D');
+        } finally { restore(); }
+    });
+});

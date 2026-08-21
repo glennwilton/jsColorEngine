@@ -7724,13 +7724,26 @@
         addStageLUT(useTrilinearFor3ChInput, inputEncoding, lut, outputEncoding, debugFormat){
             switch (lut.inputChannels){
 
+                // v1.6 phase 2 — the kernel that owns this dimension chooses
+                // its own interpolator and names the stage. Transform asks; it
+                // does not decide. Note the registry is keyed by the LUT's OWN
+                // input channels, not the Transform's: a CMYK->RGB pipeline
+                // holds a 4-D A2B stage and a 3-D B2A stage at once.
+                // See docs/deepdive/KernelContract.md.
                 case 1:
-                    this.addStage(inputEncoding, 'linearInterp1D', this.linearInterp1D_NCh, lut, outputEncoding, debugFormat);
+                case 2: {
+                    var k1d = Transform.kernels[lut.inputChannels];
+                    if(!k1d || typeof k1d.floatFor !== 'function'){
+                        throw 'No kernel registered for ' + lut.inputChannels + '-channel LUT input';
+                    }
+                    var bind1d = k1d.floatFor(lut, {
+                        inputEncoding:           inputEncoding,
+                        useTrilinearFor3ChInput: useTrilinearFor3ChInput,
+                        fast:                    this.interpolationFast
+                    });
+                    this.addStage(inputEncoding, bind1d.stageName, bind1d.funct, lut, outputEncoding, debugFormat);
                     break;
-
-                case 2:
-                    this.addStage(inputEncoding, 'bilinearInterp2D', this.bilinearInterp2D_NCh, lut, outputEncoding, debugFormat);
-                    break;
+                }
 
                 case 3:
 

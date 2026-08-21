@@ -848,116 +848,18 @@
          * @param {object}   lut
          * @returns {number[]}      New array of length lut.outputChannels.
          */
-        linearInterp1D_NCh(input, lut){
-            var rx,px,X0,X1,input0,
-                c0,c1,o
-            var outputScale = lut.outputScale;
-            var outputChannels = lut.outputChannels;
-            var gridEnd = (lut.g1 - 1);
-            var gridPointsScale = gridEnd * lut.inputScale;
-            var CLUT = lut.CLUT;
-            var go0 = lut.go0;
+        // linearInterp1D_NCh and bilinearInterp2D_NCh MOVED in v1.6 phase 2.
+        //
+        // They now live with the kernels that own those dimensions —
+        // src/kernels/1d/Kernel1D.js and src/kernels/2d/Kernel2D.js — and are
+        // reached through kernel.floatFor(lut, hints) rather than off
+        // Transform.prototype. The pipeline builder asks the registry for the
+        // stage function instead of choosing one itself, so a replacement
+        // Kernel1D changes single-colour results and batch results together
+        // rather than only the latter.
+        //
+        // See docs/deepdive/KernelContract.md.
 
-            // Scale FIRST, then clamp in grid space. Input may be raw u8/u16
-            // (baked LUT after codec folding: inputScale = 1/255 or 1/65535)
-            // or device/PCS 0..1 (ICC LUT: inputScale = 1). Clamping the raw
-            // input to [0,1] before scaling broke the baked-integer case.
-            px = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd);
-
-            X0 = ~~px;
-            rx = (px - X0);
-            if(X0 === gridEnd){
-                X1 = X0 *= go0;
-            } else {
-                X0 *= go0;
-                X1 = X0 + go0;
-            }
-
-            var output = new Array(outputChannels);
-            for(o = 0; o < outputChannels; o++){
-                c0 = CLUT[X0++];
-                c1 = CLUT[X1++];
-                output[o] = (c0 + ((c1 - c0) * rx)) * outputScale;
-            }
-            return output;
-        };
-
-        /**
-         * 2D bilinear interpolation, 2-channel input → N-channel output. Accuracy
-         * path single-colour variant. Used for Duotone-input profiles.
-         *
-         * @param {number[]} input  [a, b] in 0..1.
-         * @param {object}   lut
-         * @returns {number[]}      New array of length lut.outputChannels.
-         */
-        bilinearInterp2D_NCh(input, lut){
-            var rx,ry;
-            var X0,X1,Y0,Y1,px,py, input0, input1
-            var base0, base1,base2,base3,
-                c0,c1,c2,c3,
-                c02, o
-
-            var outputScale = lut.outputScale;
-            var outputChannels = lut.outputChannels;
-            var gridEnd = (lut.g1 - 1);
-            var gridPointsScale = gridEnd * lut.inputScale;
-            var CLUT = lut.CLUT;
-            var go0 = lut.go0;
-            var go1 = lut.go1;
-
-            // Scale FIRST, then clamp in grid space — see linearInterp1D_NCh
-            // note (raw u8/u16 vs device 0..1 input contracts).
-            px = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd);
-            py = Math.min(Math.max(input[1] * gridPointsScale, 0), gridEnd);
-
-            X0 = ~~px;
-            rx = (px - X0);
-            if(X0 === gridEnd){
-                X1 = X0 *= go1;
-            } else {
-                X0 *= go1;
-                X1 = X0 + go1;
-            }
-
-            Y0 = ~~py;
-            ry = (py - Y0);
-            if(Y0 === gridEnd){
-                Y1 = Y0 *= go0;
-            } else {
-                Y0 *= go0;
-                Y1 = Y0 + go0;
-            }
-
-            var output = new Array(outputChannels);
-
-            // block1
-            base0 = X0 + Y0;
-            base1 = X0 + Y1;
-            base2 = X1 + Y0;
-            base3 = X1 + Y1;
-            for(o = 0; o < outputChannels; o++){
-                c0 = CLUT[base0++];
-                c1 = CLUT[base1++];
-                c2 = CLUT[base2++];
-                c3 = CLUT[base3++];
-                c02 = (c0 + ((c2 - c0) * rx))
-                output[o] = (c02 + ((  (c1 + ((c3 - c1) * rx))  - c02) * ry)) * outputScale;
-            }
-            return output;
-        };
-
-        /**
-         * 3D tetrahedral interpolation, 3-channel input → N-channel output
-         * (typically N >= 5 — n-color separations and the like). Accuracy path.
-         *
-         * For the common 3→3 (RGB→RGB, RGB→Lab) and 3→4 (RGB→CMYK) cases the
-         * unrolled tetrahedralInterp3D_3Ch / _4Ch variants below are dispatched
-         * by addStageLUT() instead.
-         *
-         * @param {number[]} input  3 channels in 0..1.
-         * @param {object}   lut
-         * @returns {number[]}      New array of length lut.outputChannels.
-         */
         tetrahedralInterp3D_NCh(input, lut){
             var rx,ry,rz;
             var X0,X1,Y0,Y1,Z0,Z1,px,py,pz, input0, input1, input2
