@@ -139,12 +139,32 @@ module.exports = {
 
         if (!outputArray) outputArray = new Uint8ClampedArray(pixelCount * outBPP);
 
+        // THE LUT DOES ITS OWN SCALING, at both ends. lut.inputScale converts
+        // whatever the caller hands over into 0..1 grid space, and
+        // lut.outputScale converts the CLUT cell back out -- both folded by
+        // optimisePipeline() and read at call time.
+        //
+        // This loop used to divide the input by 255 and multiply the result by
+        // 255 on top of that, which is only correct when both scales are 1.
+        // Against a normal LUT (1/255 in, 255 out) every colour landed near
+        // grid cell 0 and came back saturated: 187 LSB from the single-colour
+        // path on the same table. Nothing had reached it -- provideLut()
+        // declines, so Transform walks the pipeline instead and this surface is
+        // only entered through a LUT attached out of band.
+        //
+        // Scheme-aware for the same reason floatFor() is: past
+        // SIMPLEX_FROM channels the two surfaces would otherwise run different
+        // interpolators over the same table.
+        var interpFn = (this.interpolatorFor(inCh) === 'simplex')
+            ? interp.simplexInterpND_NCh
+            : interp.tetrahedralInterpND_NCh;
+
         var inputPos = 0, outputPos = 0;
         for (var i = 0; i < pixelCount; i++) {
             var pixel = new Array(inCh);
-            for (var c = 0; c < inCh; c++) pixel[c] = inputArray[inputPos++] / 255;
-            var result = transform.tetrahedralInterpND_NCh(pixel, lut);
-            for (var o = 0; o < outCh; o++) outputArray[outputPos++] = (result[o] * 255) | 0;
+            for (var c = 0; c < inCh; c++) pixel[c] = inputArray[inputPos++];
+            var result = interpFn.call(transform, pixel, lut);
+            for (var o = 0; o < outCh; o++) outputArray[outputPos++] = Math.round(result[o]);
             if (preserve)     { outputArray[outputPos++] = inputArray[inputPos++]; }
             else { if (inAlpha) inputPos++; if (outAlpha) outputArray[outputPos++] = 255; }
         }

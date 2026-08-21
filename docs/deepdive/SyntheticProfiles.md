@@ -393,6 +393,43 @@ because at ~5,000 MPx/s it would swamp them.
 
 ---
 
+### The surface Transform does not normally reach
+
+`KernelND.provideLut()` declines — an N-D CLUT bake is `grid^n` cells — so
+Transform walks the per-pixel pipeline and `KernelND.array()` is only entered
+through a LUT attached **out of band**, via `setLut()` or direct assignment.
+That is a supported route with a safety net written for it in `Transform.js`,
+and nothing had ever taken it.
+
+Taking it needed two things. The loop divided its input by 255 and multiplied
+the result by 255, on top of the LUT's own `inputScale` and `outputScale` —
+correct only when both are 1. Against a normal LUT every colour landed near
+grid cell 0 and came back saturated, **187 LSB** from the single-colour path on
+the same table. And it named `tetrahedralInterpND_NCh` directly, so past the
+split at 11 channels the two surfaces would have run different interpolators
+over the same data.
+
+Both surfaces now agree **exactly**, on both sides of the split.
+
+**And it answers whether declining the LUT costs anything**, which is the more
+useful half. A LUT-backed `array()` against the pipeline walk:
+
+| in | grid | pipeline | LUT + array() | gain | build | table |
+|---|---|---|---|---|---|---|
+| 5 | 9 | 3.23 | 4.18 | 1.3× | 20 ms | 1.4 MB |
+| 6 | 7 | 2.22 | 2.63 | 1.2× | 60 ms | 3.8 MB |
+| 7 | 5 | 1.24 | 1.43 | 1.1× | 63 ms | 1.9 MB |
+| 8 | 4 | 0.71 | 0.77 | 1.1× | 97 ms | 1.6 MB |
+
+**1.1× to 1.3×**, because both paths call the same interpolator per pixel — the
+array loop only skips the other seven pipeline stages, which is the ~0.2 µs/px
+measured [above](#where-the-time-actually-goes) arriving from the other
+direction. Break-even is 0.3–0.9 MPx, so it would pay back on a large image;
+against `grid^n` memory and a 20–97 ms build for that much, declining is the
+right answer. Now with a measurement behind it rather than an assumption.
+
+---
+
 ## The interpolator split
 
 Two schemes, opposite shapes:
@@ -433,6 +470,8 @@ than a typed array with computed offsets at these sizes — the young generation
 is doing exactly what it is for. And at high *n* the cost genuinely is the
 `2^(n-3)` evaluations, so no amount of allocation work reaches it. That is what
 sent the answer toward the split at 11 instead.
+
+<a id="where-the-time-actually-goes"></a>
 
 ### Where the time actually goes
 
