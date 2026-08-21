@@ -538,12 +538,22 @@ behind with nothing to show for it. Deriving the flag turns that into a clean
 
 ### What moved, and what did not
 
-`KernelIdentity.init()` calls `_buildIdentityPipeline()`, which stays on
-Transform along with `createPipeline_Input_to_Device` and the rest — those are
-shared with every other conversion and are not identity's to own. What moved is
-the **decision** that an identity transform gets a device-to-device copy
-between them. Register a different kernel at index 0 and that changes, with
-nothing in `Transform.js` to edit.
+Both halves moved. `_buildIdentityPipeline()` is now `KernelIdentity.init()`
+and `_kernelCopy()` is now its `array()`; neither has any other caller, and
+neither is in `Transform.js` any more.
+
+**It still calls back into Transform, and that is the point.** `addStage()`,
+`createPipeline_Input_to_Device()` and `createPipeline_Device_to_Output()` are
+shared by every conversion in the engine and are not identity's to own. What
+belongs to the kernel is the **decision** that an identity transform gets a
+device-to-device copy between them. Register a different kernel at index 0 and
+that changes, with nothing in `Transform.js` to edit.
+
+The copy loop went into `KernelIdentity` directly rather than into a
+`kernelIdentity_loops.js`, which is where the other kernels keep theirs. Those
+files exist so the single-colour and array families cannot end up sharing a
+body and poisoning the JIT; identity has no single-colour family to collide
+with, so there is nothing to keep apart.
 
 That is the same shape as Kernel3D yielding to the matrix shaper, and it is
 what the slot buys beyond symmetry: `init()` receives the pipeline, so an
