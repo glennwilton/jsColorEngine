@@ -233,6 +233,19 @@ int16 viable, and the accuracy case — 331 MPx/s on photographs against
 how it scales in the pool, where the faster kernel necessarily scales
 worse.
 
+### deepdive/SyntheticProfiles.md
+Testing what you cannot buy. Real ICC profiles are licensed, so this repo
+ships two — which left `Kernel1D`, `Kernel2D` and `KernelND` with no
+oracle at all, checkable only against themselves. A profile the engine
+WRITES has no licensing question, so `src/encodeICC.js` makes them: gray
+and 2CLR-10CLR, committed, handed to Little CMS. `Kernel2D` agrees bit
+for bit; gray lands 100% within 1 LSB. Records the three bugs the oracle
+found on its first runs (`transformArray()` returning `undefined` for
+every input above 4 channels, silently), the noise-versus-smooth mistake
+that reported max 144 LSB on a working engine, why `toICC()` REFUSES to
+write RGB, and why the n-channel interpolator changed to match lcms while
+the old one is kept behind a toggle with the numbers that retired it.
+
 ### deepdive/PixelCache.md
 The pixel cache: design space, as-built notes for the accuracy-path
 implementation (`src/cache.js`, opt-in via `pixelCache`), and measured
