@@ -1,0 +1,327 @@
+# Parallel worker pool
+
+**jsColorEngine docs:**
+[← Project README](../README.md) ·
+[Transform](./Transform.md) ·
+[Bench](./Bench.md) ·
+[Performance](./Performance.md) ·
+[Roadmap](./Roadmap.md) ·
+[Deep dive](./deepdive/) ·
+[Examples](./Examples.md)
+
+---
+
+`transformImages()` converts a batch of images, across a pool of worker
+threads when one is available and sequentially when it is not — **the same
+call, the same bytes, the same callbacks either way.**
+
+**6.53× peak and 819 MPx/s** on the CLUT path, ~1,100 MPx/s with the
+matrix-shaper kernel, byte-identical to single-threaded in every one of the 72
+cells measured.
+
+> Design notes, the measurements behind those numbers, and the things that were
+> tried and rejected (`SharedArrayBuffer`, among others) are in
+> [deepdive/multicore.md](./deepdive/multicore.md). This page is how to use it.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [What that buys you](#what-that-buys-you)
+- [The images array, and the callback](#the-images-array-and-the-callback)
+  - [Alpha: batch default, per-image override](#alpha-batch-default-per-image-override)
+  - [The callback](#the-callback)
+  - [Pacing a large batch](#pacing-a-large-batch)
+- [It is not free](#it-is-not-free)
+- [Cancellation, backpressure and borrowing the cores](#cancellation-backpressure-and-borrowing-the-cores)
+- [Multicore is an optimisation, never a capability](#multicore-is-an-optimisation-never-a-capability)
+- [Deployment](#deployment)
+
+---
+
+## Quick start
+
+```js
+const t = new Transform({ dataFormat: 'int8', buildLut: true });
+t.create('*sRGB', cmykProfile, eIntent.relative);
+
+const { images, workersUsed } = await t.transformImages([
+    { data: rgba1, pixelCount: 1920 * 1080 },
+    { data: rgba2, pixelCount: 4000 * 3000 },
+], {
+    multicore: true,                                      // opt in — see below
+    inputHasAlpha: true, outputHasAlpha: true, preserveAlpha: true,
+    onImage: (i, data, info) => saveIt(data, info.id),    // fires per image
+});
+```
+
+**Multicore is opt-in** — the batch runs sequentially until you ask for it.
+The tidiest way to ask is once, at startup:
+
+```js
+await Transform.enablePool({ workers: 4 });   // then every batch is parallel
+```
+
+`enablePool()` starts the workers, **rejects with the reason if it cannot**
+(rather than leaving you to discover months later that you never got
+parallelism), and makes it the default for later batches so no call site has to
+repeat itself. `Transform.disablePool()` tears it down again.
+
+It takes the pool options, in either vocabulary — `workers` / `maxWorkers` or
+`cores` / `maxThreads` — plus `idleTimeoutMs` and `transformsPerWorker`.
+
+Per call still wins over the default, so one batch can opt out:
+
+```js
+await t.transformImages(images, { multicore: false });    // this batch only
+await t.transformImages(images, { multicore: true });     // without enablePool
+await t.transformImages(images, { multicore: true, requireWorkers: true });
+```
+
+If workers are unavailable and you asked for them, jsCE **warns once** with the
+reason and runs sequentially — identical bytes, callbacks still firing. Pass
+`requireWorkers: true` if you would rather that were an error. `workersUsed` in
+the result always tells you what actually happened.
+
+It is **not one image split across N threads.** Every image is fragmented,
+the fragments go into one queue, and workers pull from it — so a batch of
+mixed sizes keeps every core busy instead of finishing the small images and
+idling. Fragments come back out of order and are reassembled by offset.
+
+## What that buys you
+
+- **Feed it while it runs.** Call `transformImages()` again before the first
+  batch finishes and the new work joins the queue — workers never drain and
+  restart between batches. A server handling requests as they arrive does not
+  have to wait for a batch boundary to exist.
+- **Results as they finish, not at the end.** `onImage` fires per image, so a
+  long run can write each result to disk, encode it, or post it on, instead of
+  holding every output in memory until the last one lands. It fires on the
+  sequential path too, so your code does not need to know which ran.
+- **Mixed sizes do not stall it.** Because the queue holds fragments rather
+  than images, one 60 MP scan among twenty thumbnails is spread across every
+  worker instead of pinning one worker while the rest idle.
+- **The pool is shared and it persists.** Workers are not per-call. Several
+  Transforms use the same pool, and each worker keeps the last
+  `transformsPerWorker` (default 8) it has seen, evicted least-recently-used —
+  so alternating between a few profiles does not re-ship a transform every
+  time.
+- **Idle workers give the memory back.** After `idleTimeoutMs` (default 30 s)
+  the pool tears itself down and releases the LUT copies and WASM memory. The
+  next call rebuilds it automatically — nothing to manage, and a process that
+  converts in bursts is not holding tens of MB between them. Set
+  `idleTimeoutMs: 0` to keep it alive forever where latency matters more than
+  footprint, e.g. an interactive editor.
+- **Cancel work you no longer need.** `cancel(id)` or `cancelAll()` marks
+  queued fragments skipped, and the affected images **still fire their
+  callbacks** with a cancelled result — a handler waiting on one is never left
+  waiting.
+- **Borrow the cores back.** `interrupt(fn)` drains the fragments in flight,
+  runs your function with the machine to itself, then releases. For the moment
+  you need to do something expensive on the main thread without fighting eight
+  workers for cache.
+- **Push back before the queue explodes.** `await pool.onQueueBelow(n)` or
+  `onQueueFree()` lets a producer of 10,000 images keep the queue at a sane
+  depth rather than materialising every input up front.
+- **You can see what it is doing.** `pool.memoryReport()`,
+  `pool.workerStats()` and `pool.queueDepth()` report resident bytes,
+  per-worker throughput and backlog — so "is it actually parallel, and what is
+  it costing me" is a question with an answer.
+
+## The images array, and the callback
+
+**Useful with no pool at all.** Everything below — the queue, the per-image
+callbacks, cancellation, ids — works on the sequential path too. `onImage`
+fires either way, so code written against this API does not need to know which
+one ran. Treat it as the batch API that *can* be parallel, not as the parallel
+API.
+
+`data` is the only required field:
+
+```js
+{
+    data:       Uint8ClampedArray | Uint16Array,   // required
+    pixelCount: 1920 * 1080,                       // optional — inferred if absent
+    id:         'hero.tif',                        // optional — 'image-<i>' if absent
+    inputHasAlpha:  true,                          // optional — overrides the batch
+    outputHasAlpha: true,                          //   "
+    preserveAlpha:  true,                          //   "
+}
+```
+
+- **`data`** — a flat array, `Uint8ClampedArray` for `dataFormat: 'int8'` and
+  `Uint16Array` for `'int16'`. Channels are interleaved, and alpha (if any) is
+  the last channel of each pixel.
+- **`pixelCount`** — pixels, not bytes and not array length. **Optional**: once
+  the alpha flags are resolved the stride is known, so the count follows from
+  `data.length`, and a caller who has just decoded a file need not restate what
+  the array obviously contains.
+
+  Pass it when the buffer is **bigger than the image** — a pooled or reused
+  array, or a slab holding several frames — because inference would happily
+  convert the padding. An explicit count wins, and is **checked** rather than
+  trusted: one that would overrun the buffer is refused, as is an array length
+  that is not a whole number of pixels. Both reject with the image's id in the
+  message rather than converting something plausible-looking.
+- **`id`** — anything you like, and **defaulted to `'image-<index>'`** if you
+  omit it. Worth setting: results arrive out of order, so an index alone is a
+  poor label in a log or a filename.
+
+**Anything else you hang on the object rides along untouched.** The whole
+descriptor comes back as `info.source`, so a `name`, a destination path, or a
+request handle can travel with the image rather than in a side-table you have
+to key by index.
+
+## Alpha: batch default, per-image override
+
+`inputHasAlpha` / `outputHasAlpha` / `preserveAlpha` on the options set the
+default; **any image may override any of them**, which is what makes a folder
+of mixed PNG and JPEG one call rather than two:
+
+```js
+await t.transformImages([
+    { data: png,  pixelCount: n, inputHasAlpha: true,  outputHasAlpha: true },
+    { data: jpeg, pixelCount: n, inputHasAlpha: false, outputHasAlpha: false },
+], { multicore: true });
+// -> images[0] is RGBA, images[1] is RGB, in one pass
+```
+
+`preserveAlpha` left unstated means **"preserve if both sides have one"** —
+the same rule `transformArray()` uses — so an image declaring alpha in and out
+does not have to say it a third time.
+
+**Alpha is the only thing that may vary per image**, and deliberately so: it is
+a stride and a copy, never colour. The Transform's own channel counts are
+fixed, so this cannot become "different conversions in one batch". The
+sequential path resolves the overrides identically, so a mixed batch converts
+the same whether or not workers were available.
+
+## The callback
+
+```js
+onImage: (index, data, info) => { … }
+```
+
+| | |
+|---|---|
+| `index` | position in the array you passed in |
+| `data` | the converted pixels, or **`null` if the image was cancelled** |
+| `info` | `{id, index, pixelCount, outputChannels, ms, computeMs, cancelled, source}` |
+
+- **`ms`** is wall time from the start of the call — it includes queue wait, so
+  for a batch it is *not* per-image cost.
+- **`computeMs`** is the summed worker time for that image's fragments. It is
+  the work actually done, and on a parallel run it can legitimately **exceed
+  `ms`**, because several workers were busy at once.
+- **`cancelled`** images still fire their callback, with `data: null` —
+  fragments already handed to a worker cannot be recalled, so the buffer may be
+  partly written and is not worth handing back. The point is that a handler
+  waiting on an image is never left waiting.
+- **A throwing callback does not take the batch with it.** It is caught,
+  warned once with the image's id, and the run continues.
+
+```js
+await t.transformImages(files.map(f => ({
+        data: f.pixels, pixelCount: f.w * f.h, id: f.name, dest: f.outPath
+    })), {
+    multicore: true,
+    inputHasAlpha: true, outputHasAlpha: true, preserveAlpha: true,
+    onImage: (i, data, info) => {
+        if(info.cancelled) return;
+        fs.writeFileSync(info.source.dest, encode(data));   // metadata rode along
+    }
+});
+```
+
+## Pacing a large batch
+
+Queue depth counts batches; bytes count what you actually have a budget for.
+Four thumbnails and four 60 MP scans are the same depth and three orders of
+magnitude apart:
+
+```js
+for(const file of tenThousandFiles){
+    await pool.onMemoryBelow(512 * 1024 * 1024);     // or onQueueBelow(4)
+    t.transformImages([await load(file)], { onImage: save });
+}
+```
+
+`onMemoryBelow()` counts input plus output for everything submitted and not
+yet settled. It does **not** count what the workers hold — LUT copies and WASM
+memory are a fixed cost of having a pool and do not grow with the queue;
+`pool.memoryReport()` is the tool for those.
+
+## It is not free
+
+Worth reading before switching it on, because none of this is hidden and all
+of it is measured — see
+[deepdive/multicore.md](./deepdive/multicore.md).
+
+- **Memory is per worker, not per pool.** Each worker holds its own copy of
+  the transform. A 33-point CMYK LUT is ~1.4 MB (an f64 table plus its u16
+  twin), so eight workers is ~11.5 MB for one transform — and the WASM kernels
+  add a third copy in linear memory. `pool.memoryReport()` tells you what is
+  actually resident.
+- **Efficiency falls as the kernel gets faster.** The pool's per-fragment cost
+  is fixed per pixel and does not parallelise, so a fast kernel spends
+  proportionally more of its time on it: the CLUT holds 62% efficiency at eight
+  workers where the matrix-shaper kernel holds 39%. It still finishes first.
+  Efficiency is a ratio against a moving baseline, not a score.
+- **One worker is slower than none** (0.82–0.88×). It pays the copies and the
+  messages and gets no parallelism back. `minThreads` defaults to 2 for that
+  reason.
+- **Small images should not be split.** Below `parallelFloorPx` (65,536)
+  splitting stops paying at all, and the pool runs them whole.
+- **Reuse Transforms, do not rebuild them.** Worker cache keys are *assigned*,
+  not derived from content, so two Transforms built from the same profiles are
+  two entries and two copies.
+
+## Cancellation, backpressure and borrowing the cores
+
+```js
+await pool.onQueueBelow(4);                       // by batches
+await pool.onMemoryBelow(512 * 1024 * 1024);      // or by bytes in flight
+t.cancel(imageId);                                // or t.cancelAll()
+await pool.interrupt(() => heavyMainThreadWork());
+```
+
+Cancelled images **still fire their callbacks**, with a cancelled result — so
+a handler waiting on one is never left waiting. `interrupt()` drains the
+in-flight fragments, runs your function with the cores to itself, then
+releases.
+
+## Multicore is an optimisation, never a capability
+
+If the pool cannot start — no `worker_threads`, a transform carrying hooks
+that cannot cross a thread boundary, an object `dataFormat` — the batch runs
+**sequentially and correctly**, and your `onImage` callbacks still fire. You
+never have to know which path ran.
+
+## Deployment
+
+Pool sizing is a property of the machine rather than of the conversion, so it
+can be set from the host without a code change — an **environment variable in
+Node**, or the **same name on `globalThis` in a browser**. `globalThis` wins,
+then the environment, and an explicit option in code always beats both.
+
+```js
+globalThis.JSCE_POOL_MAX_THREADS = 4;      // browser, or anywhere
+```
+
+| setting | effect |
+|---|---|
+| `JSCE_POOL_CORES` | `auto` \| `max` \| a number |
+| `JSCE_POOL_MAX_THREADS` | ceiling regardless of cores |
+| `JSCE_POOL_MIN_THREADS` | below this, run sequentially |
+| `JSCE_POOL_IDLE_MS` | `0` = never expire |
+| `JSCE_POOL_TRANSFORMS_PER_WORKER` | LRU depth per worker |
+| `JSCE_POOL_DISABLE=1` | force the sequential path |
+
+The case that motivates it: `cores: 'auto'` asks
+`os.availableParallelism()`, which inside a cgroup-limited container usually
+reports the **host's** core count rather than your quota — so a 2-CPU container
+happily spawns eight workers and thrashes.
+
+**Nothing settable this way can change a pixel.** Colour defaults are pinned
+explicitly in code with [`Transform.compatibility()`](../README.md#upgrading--pinning-an-earlier-releases-defaults)
+instead — ambient state that changes output is how a bug report becomes
+unreproducible.

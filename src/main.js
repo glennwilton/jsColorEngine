@@ -33,6 +33,11 @@ module.exports  = {
     Profile: require('./Profile.js'),
     Transform: Transform,
 
+    // Alpha preprocessing: unpremultiply / premultiply / flatten. Helpers
+    // rather than Transform options, because nothing in a buffer says whether
+    // it is premultiplied — only the caller knows. See src/alpha.js.
+    alpha: require('./alpha.js'),
+
     eColourType : defs.eColourType,
     eProfileType: defs.eProfileType,
     eIntent: defs.eIntent,

@@ -1276,6 +1276,60 @@
             throw 'stage_cmsLab_to_LabD50: input is not of type Lab';
         };
 
+        /**
+         * Array entry point for a Lab input profile.
+         *
+         * The device branch has an entry stage per dataFormat
+         * (`stage_Int_to_Device` and friends); the Lab branch only ever had the
+         * object one, so a Lab source on the LUT-free pipeline could not take
+         * an array at all — it reached `stage_cmsLab_to_LabD50` as a bare
+         * triple and threw, or reached `stage_LabD50_to_PCSv4` and produced
+         * NaN. This is the missing sibling.
+         *
+         * AN ARRAY IS ASSUMED ALREADY PCS-ENCODED FOR THIS PROFILE'S VERSION.
+         * No cross-version conversion happens here and none should: if the
+         * caller hands over 16-bit values from a Lab TIFF, they are taken as
+         * that profile's encoding, and it is the caller's job to have encoded
+         * them that way. All this stage does is scale by the dataFormat range.
+         *
+         * ONE MULTIPLIER, BUT NOT ONE DIVISOR. L and a/b do not share a scale
+         * (v2: lMul 652.8 vs abMul 256; v4: 655.35 vs 257), so normalising
+         * with a single number would be right for L and wrong for a/b on v2.
+         * `convert.int162Lab` already splits them per version, so the work here
+         * is only to reach 16-bit PCS units:
+         *
+         *     int8    x labNumerator/255   (256 on v2, 257 on v4)
+         *     int16   x 1
+         *     device  x labNumerator
+         *
+         * Objects pass through untouched, so `dataFormat: 'int8'` keeps
+         * accepting a Lab object — which validateOnCreate and the LUT builder
+         * both rely on.
+         *
+         * PASSING AN ARRAY IS THE CALLER SAYING "I HAVE HANDLED THIS". The
+         * whitePoint stamped on the result is D50 because PCS-encoded values
+         * are D50 by definition, so `labInputAdaptation: true` finds nothing
+         * to adapt and `labInputAdaptation: false` skips the question
+         * entirely — both branches return the same answer for the same array,
+         * which is the property to preserve if this is ever touched. Callers
+         * working from some other white point convert before they get here,
+         * with convert.lab2Int16 or their own encoding; an object is the input
+         * form that carries a white point for the engine to adapt FROM.
+         *
+         * @param {Array|Object} value      PCS-encoded triple, or a Lab object
+         * @param {{mul: number, enc: Object}} stageData
+         * @returns {_cmsLab}
+         */
+        stage_Int_to_cmsLab(value, stageData){
+            if(value && value.type === eColourType.Lab) return value;
+            if(!value || typeof value.length !== 'number' || value.length < 3){
+                throw 'stage_Int_to_cmsLab: expected a Lab object or a 3-value array';
+            }
+            var m = stageData.mul;
+            return convert.int162Lab(value[0] * m, value[1] * m, value[2] * m,
+                                     stageData.enc);
+        };
+
 
         /**
          *

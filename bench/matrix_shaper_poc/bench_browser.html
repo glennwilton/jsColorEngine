@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Matrix-shaper WASM bench — v5</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee; padding: 2rem; max-width: 700px; }
+  h2 { color: #7cf; margin-bottom: 0.25rem; }
+  .sub { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  button { background: #2a4; color: #fff; border: none; padding: 0.5rem 1.5rem; font-family: monospace; font-size: 1rem; cursor: pointer; border-radius: 3px; margin-right: 0.5rem; }
+  button:disabled { background: #444; cursor: default; }
+  #log  { white-space: pre; line-height: 1.6; color: #cfc; margin-top: 1.5rem; }
+  #warn { color: #fa4; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  td, th { padding: 0.3rem 1.2rem 0.3rem 0; text-align: left; }
+  th { color: #7cf; }
+  .hi { color: #ff8; font-weight: bold; }
+</style>
+</head>
+<body>
+<h2>Matrix-shaper WASM — v5 browser bench</h2>
+<div class="sub">sRGB → AdobeRGB · 4096-entry output gamma · WASM SIMD f32x4</div>
+<span id="warn"></span>
+<button id="btnRun" disabled>Run bench</button>
+<button id="btnCopy" disabled>Copy results</button>
+<div id="log">Loading…</div>
+
+<script src="../../samples/lib/devtools-warn.js"></script>
+<!--<script src="../../samples/browser/jsColorEngineWeb.js"></script>-->
+<script src="../../bench/archive/jsColorEngineWeb_v1.4.4.js"></script>
+<script src="v5_srgb_adobe.wasm.js"></script>
+<script>
+'use strict';
+
+// Match main bench: 65536 pixels / call, 200 warmup, 50 hot iters
+// Or large-image: 4_000_000 pixels / call, 10 warmup, 20 hot iters
+const PIXEL_COUNT    = 65530;
+const WARMUP         = 200;
+const RUNS           = 50;
+const GAMMA_INV_BYTE = 0;
+const GAMMA_FWD_BYTE = 1024;
+const PIXEL_BYTE     = 5120;    // after 1KB gamma_inv + 4KB gamma_fwd
+// 4M pixels × 3 channels × 2 (in+out) = 24MB + 5KB headers → 400 pages (25.6MB)
+
+const log  = document.getElementById('log');
+const warn = document.getElementById('warn');
+
+function print(s) { log.textContent += s + '\n'; }
+function clear()  { log.textContent = ''; }
+
+async function init() {
+    if (typeof wasmV5Bytes === 'undefined') {
+        log.textContent = 'ERROR: v5_srgb_adobe.wasm.js not found.\nRun:  node bench/matrix_shaper_poc/prebuild.js\nthen refresh.';
+        return;
+    }
+    if (typeof window.jsColorEngine === 'undefined') {
+        log.textContent = 'ERROR: jsColorEngine not found.\nRun:  npm run browser\nthen refresh.';
+        return;
+    }
+
+    const { Profile, Transform, eIntent } = window.jsColorEngine;
+
+    // Load profiles
+    const srgb  = new Profile();
+    const adobe = new Profile();
+    await new Promise(r => srgb.load('*sRGB',     () => r()));
+    await new Promise(r => adobe.load('*AdobeRGB', () => r()));
+
+    // Compile WASM
+    const wasmModule   = await WebAssembly.compile(wasmV5Bytes);
+    const wasmInstance = await WebAssembly.instantiate(wasmModule, {});
+    const { run_simd_v5, memory } = wasmInstance.exports;
+
+    // Gamma tables — x^2.2 / x^(1/2.2) (POC; production would use profile TRC)
+    const gammaInv = new Float32Array(memory.buffer, GAMMA_INV_BYTE, 256);
+    const gammaFwd = new Uint8Array(  memory.buffer, GAMMA_FWD_BYTE, 4096);
+    for (let i = 0; i < 256;  i++) gammaInv[i] = Math.pow(i / 255,  2.2);
+    for (let i = 0; i < 4096; i++) gammaFwd[i] = Math.round(Math.pow(i / 4095, 1 / 2.2) * 255);
+
+    // Pixel data
+    const inputView = new Uint8Array(memory.buffer, PIXEL_BYTE, PIXEL_COUNT * 3);
+    const outByte   = PIXEL_BYTE + PIXEL_COUNT * 3;
+
+    let seed = 0x12345678;
+    for (let i = 0; i < inputView.length; i++) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        inputView[i] = seed >>> 24;
+    }
+    const jsInput = new Uint8ClampedArray(inputView);
+    let wasmCache = {}
+
+    // jsCE reference transforms — u8 and u16 SIMD
+    const tSimdLut8   = new Transform({ dataFormat: 'int8',  buildLut: true, lutMode: 'int-wasm-simd', wasmCache:wasmCache });
+    tSimdLut8.create(srgb, adobe, eIntent.relative);
+
+    const tSimdLut16 = new Transform({ dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-simd', wasmCache:wasmCache });
+    tSimdLut16.create(srgb, adobe, eIntent.relative);
+
+    const tIntJs = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int', wasmCache:wasmCache });
+    tIntJs.create(srgb, adobe, eIntent.relative);
+
+
+    // Pre-allocated output buffers — reused each call, no per-call GC pressure
+    const outU8  = new Uint8ClampedArray (PIXEL_COUNT * 3);
+    const outU16 = new Uint16Array(PIXEL_COUNT * 3);
+    const jsInput16 = new Uint16Array(PIXEL_COUNT * 3);
+    for (let i = 0; i < jsInput.length; i++) jsInput16[i] = jsInput[i] << 8; // u8 → u16
+
+    clear();
+    print('Ready. WASM compiled, gamma tables written, pixel data seeded.\n');
+    print(`  Pixels:   ${PIXEL_COUNT.toLocaleString()}`);
+    print(`  Warmup:   ${WARMUP} runs`);
+    print(`  Timed:    ${RUNS} runs (median)\n`);
+
+    document.getElementById('btnRun').disabled = false;
+    const BATCH_SIZE = 10;  // Do 10 transforms per timing sample
+    function bench(label, fn) {
+        for (let i = 0; i < WARMUP; i++) fn();
+        const times = [];
+        for (let i = 0; i < RUNS; i++) {
+            const t0 = performance.now();
+            for (let j = 0; j < BATCH_SIZE; j++) {
+                fn();  // 10× transforms
+            }
+            const elapsed = performance.now() - t0;
+            times.push(elapsed / BATCH_SIZE);  // Average per call
+        }
+        times.sort((a, b) => a - b);
+        const median = times[Math.floor(times.length / 2)];
+        const mpx    = (PIXEL_COUNT / median / 1000).toFixed(1);
+        return { label, mpx: parseFloat(mpx), median: median.toFixed(2) };
+    }
+
+    let lastResults = '';
+
+
+    function benchDirect(label, transform, input, output) {
+        // Warmup
+        for (let i = 0; i < WARMUP; i++) {
+            transform.transformArray(input, false, false, false, PIXEL_COUNT, null, output);
+        }
+
+        const times = [];
+        for (let i = 0; i < RUNS; i++) {
+            const t0 = performance.now();
+            transform.transformArray(input, false, false, false, PIXEL_COUNT, null, output);  // ← INLINE
+            times.push(performance.now() - t0);
+        }
+
+        times.sort((a, b) => a - b);
+        const median = times[Math.floor(times.length / 2)];
+        const mpx = (PIXEL_COUNT / median / 1000).toFixed(1);
+        return { label, mpx: parseFloat(mpx), median: median.toFixed(2) };
+    }
+
+// Then call it:
+    console.log( benchDirect('jsCE int-wasm-simd u8', tSimdLut8, jsInput, outU8))
+
+    document.getElementById('btnRun').addEventListener('click', () => {
+        document.getElementById('btnRun').disabled = true;
+        clear();
+        print('Running…\n');
+
+        setTimeout(() => {
+            const results = [
+                bench('V5 SIMD   — matrix-shaper WASM (u8)',     () => run_simd_v5(PIXEL_BYTE, outByte, PIXEL_COUNT)),
+                bench('jsCE int-wasm-simd   u8  (pre-alloc out)', () => tSimdLut8.transformArray(  jsInput,   false, false, false, PIXEL_COUNT, null, outU8)),
+                //bench('jsCE int-wasm-simd   u8  (pre-alloc out)', () => tSimdLut8.transformArray(jsInput)),
+                bench('jsCE int16-wasm-simd u16 (pre-alloc out)', () => tSimdLut16.transformArray(jsInput16, false, false, false, PIXEL_COUNT, null, outU16)),
+                bench('jsCE int JS          u8  (pre-alloc out)', () => tIntJs.transformArray(    jsInput,   false, false, false, PIXEL_COUNT, null, outU8)),
+            ];
+
+            clear();
+            print('=== Matrix-shaper WASM v5 — browser bench ===\n');
+
+            for (const r of results) {
+                const hi = r === results[0] ? ' ◀' : '';
+                print(`  ${r.label.padEnd(34)} ${String(r.mpx).padStart(7)} MPx/s   (median ${r.median} ms)${hi}`);
+            }
+
+            const ratio = (results[0].mpx / results[1].mpx).toFixed(2);
+            print(`\n  V5 vs jsCE int-wasm-simd:  ${ratio}×`);
+            print('\n  Note: gamma is x^2.2 POC — not sRGB piecewise TRC.');
+            print('        Production TRC would be loaded from Profile.applyInverseTRC/applyTRC.\n');
+
+            lastResults = log.textContent;
+            document.getElementById('btnRun').disabled = false;
+            document.getElementById('btnCopy').disabled = false;
+        }, 50);
+    });
+
+    document.getElementById('btnCopy').addEventListener('click', () => {
+        navigator.clipboard.writeText(lastResults).then(() => {
+            document.getElementById('btnCopy').textContent = 'Copied!';
+            setTimeout(() => document.getElementById('btnCopy').textContent = 'Copy results', 1500);
+        });
+    });
+}
+
+init().catch(err => { log.textContent = 'Init error: ' + err; });
+</script>
+</body>
+</html>
