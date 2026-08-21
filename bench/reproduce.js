@@ -79,7 +79,7 @@ const WSL_DISTRO  = arg('wsl-distro', 'Ubuntu');
 const ONLY        = arg('only', null);
 
 const ALL_PHASES = ['corpus', 'accuracy', 'flags', 'native', 'js', 'matrix', 'pool',
-                    'pixelcache', 'solo'];
+                    'pixelcache', 'smalldim', 'solo'];
 const phases = ONLY
     ? ONLY.split(',').map(s => s.trim()).filter(p => ALL_PHASES.includes(p))
     : ALL_PHASES.filter(p => p !== 'flags' || WITH_FLAGS);
@@ -340,6 +340,19 @@ phase('pixelcache', () => {
     const out = node([path.join(MATRIX, 'run.js'), '--pixelcache', '--sizes', '262144'],
         MATRIX, 'pixelcache');
     write('pixelcache.txt', out);
+    process.stdout.write(out);
+});
+
+phase('smalldim', () => {
+    // The 1- and 2-channel kernels. Every other phase here measures 3 and 4
+    // channel input, which left Kernel1D and Kernel2D with no coverage at all.
+    // Synthetic LUTs, so this needs no gray or duotone profile — those are
+    // vendor artefacts that cannot be committed, and there is no virtual gray
+    // profile to fall back on.
+    process.stdout.write('gray and duotone kernels (synthetic LUTs)...\n');
+    const out = node([path.join(__dirname, 'small_dim', 'run.js'),
+                      '--px', String(CONTENT_SIZE)], ROOT, 'small-dim');
+    write('small-dim.txt', out);
     process.stdout.write(out);
 });
 
