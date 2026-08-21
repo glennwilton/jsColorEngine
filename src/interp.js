@@ -15,13 +15,37 @@
     'use strict';
 
     /**
-     * ACCURACY PATH single-colour interpolators — moved VERBATIM from
-     * src/Transform.js (v1.5.5 split). Re-attached to Transform.prototype
-     * (non-enumerable) at the bottom of Transform.js; `this` is the Transform
-     * instance exactly as before. These are the per-colour stage LUT
-     * evaluators used by transform(), the per-pixel path of transformArray(),
-     * and the LUT bake (createLut) — NOT the image *_loop kernels, which live
-     * in src/kernels/.
+     * ACCURACY PATH single-colour interpolators — the built-in float library.
+     *
+     * These are the per-colour stage LUT evaluators used by transform(), the
+     * per-pixel path of transformArray(), and the LUT bake (createLut) — NOT
+     * the image *_loop kernels, which live in src/kernels/.
+     *
+     * WHO CHOOSES BETWEEN THEM. Since v1.6 phase 3, nothing in this file and
+     * nothing in Transform.js does. Each kernel requires this module and
+     * returns the variant it wants from `floatFor(lut, hints)`:
+     * Kernel3D owns the tetrahedral/trilinear decision and the PCS-input rule,
+     * Kernel4D owns its own, KernelND has one implementation. Transform asks
+     * the registry and installs whatever it gets. This file is the built-in
+     * IMPLEMENTATIONS; the kernels are the policy. A third-party kernel can
+     * ignore this file entirely.
+     *
+     * The 1-D and 2-D interpolators are NOT here — they moved to
+     * src/kernels/1d/ and 2d/ in phase 2, because those kernels have exactly
+     * one implementation each and nothing was left to share.
+     *
+     * STILL ATTACHED TO Transform.prototype (non-enumerable, at the bottom of
+     * Transform.js) and that is load-bearing, not vestigial: the 4-D reference
+     * variants evaluate two 3-D interpolations at the bracketing K planes and
+     * reach their siblings through `this` —
+     *
+     *     var output1 = this.tetrahedralInterp3D_Master(cmyInput, lut, K0);
+     *
+     * Stage functions are invoked as `stage.funct.call(transform, ...)`, so
+     * that `this` is the Transform and the sibling resolves off the prototype.
+     * Calling `interp.tetrahedralInterp4D_3or4Ch(...)` as a bare function would
+     * throw. Anything that changes how stages are invoked has to keep a
+     * receiver carrying these methods, or the 4-D reference path breaks.
      *
      * Do NOT "clean up" or restructure these bodies — see the PERFORMANCE
      * LESSONS block in src/Transform.js and the section header below. The

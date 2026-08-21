@@ -10,6 +10,7 @@
 
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
+var interp = require('../../interp.js');
 
 module.exports = {
     name: 'kernelND',
@@ -21,6 +22,21 @@ module.exports = {
     supports: {
         float: true,
         // No int8/int16 or WASM variants — proof/measurement path only
+    },
+
+    /**
+     * The single-colour stage function for a 5+-channel LUT.
+     *
+     * One implementation, no choices: N-channel input is a proof and
+     * measurement path, so correctness beats speed and there is nothing to
+     * select between. `hints` is accepted so every kernel presents the same
+     * signature.
+     *
+     * MUST NOT precompute from `lut` - optimisePipeline() folds codec scales
+     * into lut.inputScale / lut.outputScale after the stage is built.
+     */
+    floatFor: function(lut, hints) {
+        return { funct: interp.tetrahedralInterpND_NCh, stageName: 'tetrahedralInterpND' };
     },
 
     create: function(lutMode) {

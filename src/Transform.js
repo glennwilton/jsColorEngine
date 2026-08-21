@@ -7722,137 +7722,38 @@
          */
 
         addStageLUT(useTrilinearFor3ChInput, inputEncoding, lut, outputEncoding, debugFormat){
-            switch (lut.inputChannels){
-
-                // v1.6 phase 2 — the kernel that owns this dimension chooses
-                // its own interpolator and names the stage. Transform asks; it
-                // does not decide. Note the registry is keyed by the LUT's OWN
-                // input channels, not the Transform's: a CMYK->RGB pipeline
-                // holds a 4-D A2B stage and a 3-D B2A stage at once.
-                // See docs/deepdive/KernelContract.md.
-                case 1:
-                case 2: {
-                    var k1d = Transform.kernels[lut.inputChannels];
-                    if(!k1d || typeof k1d.floatFor !== 'function'){
-                        throw 'No kernel registered for ' + lut.inputChannels + '-channel LUT input';
-                    }
-                    var bind1d = k1d.floatFor(lut, {
-                        inputEncoding:           inputEncoding,
-                        useTrilinearFor3ChInput: useTrilinearFor3ChInput,
-                        fast:                    this.interpolationFast
-                    });
-                    this.addStage(inputEncoding, bind1d.stageName, bind1d.funct, lut, outputEncoding, debugFormat);
-                    break;
-                }
-
-                case 3:
-
-                    //https://littlecms2.blogspot.com/2010/
-                    // So, after investigation, I found the reason of those differences: Tetrahedral
-                    // interpolation being used in 2.0 and Trilinear interpolation in 1.19.
-                    // Tetrahedral was patented time ago, but now the patent has expired.
-                    // In fact, I did see such issue many years ago. On LUT elements being
-                    // indexed by Lab colorspace, Tetrahedral does not work well. I suspect
-                    // that's because Luma is uncentered (L is on one axis)
-                    // First thing to discard was a code bug. So I tried Max Derhak's SampleICC.
-                    // To my astonishment, SampleICC is also using trilinear by default.
-                    // Tried to modify Max code to do the interpolation as tetrahedral and...
-                    // bingo! the same "bad" results as Little CMS. Up to four decimals.
-                    // So here we go, the "bug" is in the interpolation algorithm
-                    // . I checked PhotoShop CS4. It seems to be also using trilinear as well.
-                    //
-                    // Upshot is that we should use trilinear for PCS LUT input, does not matter for output
-
-                    // Check for 3 channel input PCS and switch to trilinear
-                    var interpolation = (useTrilinearFor3ChInput && (inputEncoding === encoding.PCSv4 || inputEncoding === encoding.PCSv2)) ? 'trilinear' : this.interpolation3D;
-
-                    switch (interpolation){
-                        case 'tetrahedral':
-
-                            if(this.interpolationFast){
-                                switch (lut.outputChannels){
-                                    case 3:
-                                        // optimized 3 channel output version
-                                        this.addStage(inputEncoding, 'tetrahedralInterp3D', this.tetrahedralInterp3D_3Ch, lut, outputEncoding, debugFormat);
-                                        break;
-                                    case 4:
-                                        // optimized 4 channel output version
-                                        this.addStage(inputEncoding, 'tetrahedralInterp3D', this.tetrahedralInterp3D_4Ch, lut, outputEncoding, debugFormat);
-                                        break;
-                                    default:
-                                        // Generic N channel output
-                                        this.addStage(inputEncoding, 'tetrahedralInterp3D', this.tetrahedralInterp3D_NCh, lut, outputEncoding, debugFormat);
-                                        break;
-                                }
-                                break;
-                            } else {
-                                // Use this to test the tetrahedralInterp3D function, this is the slowest method but we know its accurate
-                                this.addStage(inputEncoding, 'tetrahedralInterp3D', this.tetrahedralInterp3D_3or4Ch, lut, outputEncoding, debugFormat);
-                            }
-                            break;
-
-                        case 'trilinear':
-                            switch (lut.outputChannels){
-                                // case 4:
-                                //     this.addStage(inputEncoding, 'trilinearInterp3D', this.trilinearInterp3D_3or4Ch, lut, outputEncoding, debugFormat);
-                                //     break;
-                                default:
-                                    this.addStage(inputEncoding, 'trilinearInterp3D', this.trilinearInterp3D_NCh, lut, outputEncoding, debugFormat);
-                                    break;
-
-                            }
-                            break;
-                        default:
-                            throw 'Unknown 3D interpolation method "' + interpolation + '"';
-                    }
-                    break
-                case 4:
-                    switch (this.interpolation4D){
-                        case 'tetrahedral':
-
-                            if(this.interpolationFast) {
-                                switch (lut.outputChannels) {
-                                    case 3:
-                                        // optimized 3 channel output version
-                                        this.addStage(inputEncoding, 'tetrahedralInterp4D', this.tetrahedralInterp4D_3Ch, lut, outputEncoding, debugFormat);
-                                        break;
-                                    case 4:
-                                        // optimized 4 channel output version
-                                        this.addStage(inputEncoding, 'tetrahedralInterp4D', this.tetrahedralInterp4D_4Ch, lut, outputEncoding, debugFormat);
-                                        break;
-                                    default:
-                                        this.addStage(inputEncoding, 'tetrahedralInterp4D', this.tetrahedralInterp4D_NCh, lut, outputEncoding, debugFormat);
-                                }
-                            } else {
-                                // Use this to test the tetrahedralInterp4D function, this is the slowest method but we know its accurate
-                                this.addStage(inputEncoding, 'tetrahedralInterp4D', this.tetrahedralInterp4D_3or4Ch, lut, outputEncoding, debugFormat);
-                            }
-                            break;
-
-                        case 'trilinear':
-                            this.addStage(inputEncoding, 'trilinearInterp4D', this.trilinearInterp4D_3or4Ch, lut, outputEncoding, debugFormat);
-                            break;
-
-                        default:
-                            throw 'Unknown 4D interpolation method "' + this.interpolation4D + '"';
-                    }
-                    break;
-                default:
-                    // throw 'Unsupported number of input channels "' + lut.inputChannels + '"';
-
-                    // N-channel fallback — correct but not hot-path fast.
-                    // Suitable for 5CLR–15CLR press profiles and spot-colour devices.
-                    this.addStage(
-                        inputEncoding,
-                        'tetrahedralInterpND',
-                        this.tetrahedralInterpND_NCh,
-                        lut,
-                        outputEncoding,
-                        debugFormat
-                    );
-                    break;
-
+            // ASK THE KERNEL THAT OWNS THIS DIMENSION. Until v1.6 this was a
+            // ~120 line switch that picked the interpolator itself: by
+            // lut.inputChannels, then by interpolation3D/4D, then by
+            // interpolationFast, then by lut.outputChannels. Every one of those
+            // is the kernel's own business, and the switch's top level was a
+            // hand-maintained copy of the keys already in Transform.kernels.
+            //
+            // Keyed by the LUT's OWN input channels, not the Transform's. A
+            // CMYK->RGB pipeline holds a 4-D A2B stage and a 3-D B2A stage at
+            // once, so this could never have been `this.kernel`.
+            //
+            // The kernel decides; these are hints. It also returns the STAGE
+            // NAME, because that string is a coupling surface -- compile()
+            // resolves emitters as emit_js_<stageName> and optimisePipeline()
+            // matches fusion patterns against a fixed list of them -- and
+            // returning it from the kernel keeps the two from drifting apart.
+            //
+            // See docs/deepdive/KernelContract.md.
+            var descriptor = Transform.kernels[lut.inputChannels];
+            if(!descriptor || typeof descriptor.floatFor !== 'function'){
+                throw 'Unsupported number of input channels "' + lut.inputChannels + '"';
             }
+
+            var bind = descriptor.floatFor(lut, {
+                inputEncoding:           inputEncoding,
+                useTrilinearFor3ChInput: useTrilinearFor3ChInput,
+                interpolation3D:         this.interpolation3D,
+                interpolation4D:         this.interpolation4D,
+                fast:                    this.interpolationFast
+            });
+
+            this.addStage(inputEncoding, bind.stageName, bind.funct, lut, outputEncoding, debugFormat);
         };
 
         /**

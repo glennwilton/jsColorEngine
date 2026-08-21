@@ -324,3 +324,104 @@ describe('floatFor — the kernel owns its single-colour stage function', () => 
         } finally { restore(); }
     });
 });
+
+describe('floatFor — 3D, 4D and ND resolve every branch of the old switch', () => {
+
+    // Phase 3 moved ~120 lines of interpolator selection out of
+    // Transform.addStageLUT and into the kernels. These pin each branch, since
+    // the switch that used to encode them no longer exists to read.
+
+    const enc = require('../src/def').encoding;
+    const dev = { inputEncoding: enc.device, useTrilinearFor3ChInput: true };
+
+    test('Kernel3D picks by output channels, and by interpolationFast', () => {
+        const k = Transform.kernels[3];
+        const pick = (outputChannels, over) =>
+            k.floatFor({ outputChannels }, Object.assign({}, dev,
+                { interpolation3D: 'tetrahedral', fast: true }, over));
+
+        expect(pick(3).funct.name).toBe('tetrahedralInterp3D_3Ch');
+        expect(pick(4).funct.name).toBe('tetrahedralInterp3D_4Ch');
+        expect(pick(6).funct.name).toBe('tetrahedralInterp3D_NCh');
+        expect(pick(3, { fast: false }).funct.name).toBe('tetrahedralInterp3D_3or4Ch');
+        for(const outCh of [3, 4, 6]) expect(pick(outCh).stageName).toBe('tetrahedralInterp3D');
+    });
+
+    test('PCS-indexed input overrides to trilinear — a 3D-only rule', () => {
+        // lcms 2.0 moved to tetrahedral and found it disagreed with 1.19,
+        // SampleICC and Photoshop on Lab-indexed LUTs: L sits on one axis, so
+        // the space is uncentred and tetrahedral splits it badly.
+        const k = Transform.kernels[3];
+        for(const e of [enc.PCSv2, enc.PCSv4]){
+            const bind = k.floatFor({ outputChannels: 3 }, {
+                inputEncoding: e, useTrilinearFor3ChInput: true,
+                interpolation3D: 'tetrahedral', fast: true });
+            expect(bind.stageName).toBe('trilinearInterp3D');
+        }
+        // Opting out of the override leaves tetrahedral in place.
+        const off = k.floatFor({ outputChannels: 3 }, {
+            inputEncoding: enc.PCSv4, useTrilinearFor3ChInput: false,
+            interpolation3D: 'tetrahedral', fast: true });
+        expect(off.stageName).toBe('tetrahedralInterp3D');
+
+        // And 4D has no such rule — its absence there is the point.
+        const bind4 = Transform.kernels[4].floatFor({ outputChannels: 3 },
+            { inputEncoding: enc.PCSv4, useTrilinearFor3ChInput: true,
+              interpolation4D: 'tetrahedral', fast: true });
+        expect(bind4.stageName).toBe('tetrahedralInterp4D');
+    });
+
+    test('Kernel4D picks by output channels, and by interpolationFast', () => {
+        const k = Transform.kernels[4];
+        const pick = (outputChannels, over) =>
+            k.floatFor({ outputChannels },
+                Object.assign({ interpolation4D: 'tetrahedral', fast: true }, over));
+
+        expect(pick(3).funct.name).toBe('tetrahedralInterp4D_3Ch');
+        expect(pick(4).funct.name).toBe('tetrahedralInterp4D_4Ch');
+        expect(pick(6).funct.name).toBe('tetrahedralInterp4D_NCh');
+        expect(pick(3, { fast: false }).funct.name).toBe('tetrahedralInterp4D_3or4Ch');
+        expect(pick(3, { interpolation4D: 'trilinear' }).stageName).toBe('trilinearInterp4D');
+    });
+
+    test('ND has one implementation and says so', () => {
+        for(const d of [5, 9, 15]){
+            const bind = Transform.kernels[d].floatFor({ outputChannels: d }, {});
+            expect(bind.funct.name).toBe('tetrahedralInterpND_NCh');
+            expect(bind.stageName).toBe('tetrahedralInterpND');
+        }
+    });
+
+    test('an unrecognised interpolation method throws rather than defaulting', () => {
+        // interpolation3D / interpolation4D are public options. A typo must not
+        // quietly select tetrahedral — the throw is the contract, and it moved
+        // into the kernels with the rest of the selection logic.
+        expect(() => Transform.kernels[3].floatFor({ outputChannels: 3 },
+            Object.assign({}, dev, { interpolation3D: 'quadratic', fast: true })))
+            .toThrow(/Unknown 3D interpolation method/);
+        expect(() => Transform.kernels[4].floatFor({ outputChannels: 3 },
+            { interpolation4D: 'quadratic', fast: true }))
+            .toThrow(/Unknown 4D interpolation method/);
+    });
+
+    test('every stage name floatFor can return is one the optimiser knows', () => {
+        // optimisePipeline() fuses codec stages into interpolation stages by
+        // matching these strings. A name the list does not contain silently
+        // stops fusing — throughput drops and no test fails. So assert the
+        // producers agree with the consumer.
+        const known = ['linearInterp1D', 'bilinearInterp2D', 'trilinearInterp3D',
+                       'tetrahedralInterp3D', 'trilinearInterp4D', 'tetrahedralInterp4D'];
+        const produced = new Set();
+        produced.add(Transform.kernels[1].floatFor({ outputChannels: 3 }, {}).stageName);
+        produced.add(Transform.kernels[2].floatFor({ outputChannels: 3 }, {}).stageName);
+        for(const method of ['tetrahedral', 'trilinear'])
+            for(const fast of [true, false])
+                for(const outCh of [3, 4, 6]){
+                    produced.add(Transform.kernels[3].floatFor({ outputChannels: outCh },
+                        Object.assign({}, dev, { interpolation3D: method, fast })).stageName);
+                    produced.add(Transform.kernels[4].floatFor({ outputChannels: outCh },
+                        { interpolation4D: method, fast }).stageName);
+                }
+        for(const name of produced) expect(known).toContain(name);
+    });
+});

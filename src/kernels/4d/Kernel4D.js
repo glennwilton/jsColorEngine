@@ -14,6 +14,7 @@
 
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
+var interp = require('../../interp.js');
 
 module.exports = {
     name: 'kernel4D',
@@ -27,6 +28,52 @@ module.exports = {
         int16_js: true,
         int16_scalar: true,
         int16_simd: true,
+    },
+
+    /**
+     * The single-colour stage function for a 4-D LUT, and the stage name.
+     *
+     * Moved here from the switch in Transform.addStageLUT. Note what is NOT
+     * here: the PCS-input trilinear override. That rule belongs to 3-channel
+     * input alone, and its absence from this kernel is the point - each
+     * dimension now carries its own rules instead of one function carrying
+     * the rules of every dimension at once.
+     *
+     * A 4-D interpolation is two 3-D ones at the bracketing K planes, lerped
+     * together; the reference variants reach into the 3-D interpolators to do
+     * exactly that. That is the maths, not a leak.
+     *
+     * MUST NOT precompute from `lut` - optimisePipeline() folds codec scales
+     * into lut.inputScale / lut.outputScale after the stage is built.
+     */
+    floatFor: function(lut, hints){
+        hints = hints || {};
+
+        switch(hints.interpolation4D){
+            case 'tetrahedral':
+                if(hints.fast === false){
+                    return { funct: interp.tetrahedralInterp4D_3or4Ch,
+                             stageName: 'tetrahedralInterp4D' };
+                }
+                switch(lut.outputChannels){
+                    case 3:  // CMYK -> RGB / Lab
+                        return { funct: interp.tetrahedralInterp4D_3Ch,
+                                 stageName: 'tetrahedralInterp4D' };
+                    case 4:  // CMYK -> CMYK
+                        return { funct: interp.tetrahedralInterp4D_4Ch,
+                                 stageName: 'tetrahedralInterp4D' };
+                    default:
+                        return { funct: interp.tetrahedralInterp4D_NCh,
+                                 stageName: 'tetrahedralInterp4D' };
+                }
+
+            case 'trilinear':
+                return { funct: interp.trilinearInterp4D_3or4Ch,
+                         stageName: 'trilinearInterp4D' };
+
+            default:
+                throw 'Unknown 4D interpolation method "' + hints.interpolation4D + '"';
+        }
     },
 
     create: function(lutMode){
