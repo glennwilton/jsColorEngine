@@ -23,7 +23,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { Transform, eIntent } = require('../../src/main');
-const matrixShaper = require('../../src/kernels/matrixShaper/matrixShaperKernel');
+const matrixShaper = require('../../src/kernels/3d/matrixShaper/matrixShaperKernel');
 const emit         = require('../lib/emit.cjs');   // no-op unless JSCE_BENCH_JSON is set
 
 const CORPUS = path.join(__dirname, '..', 'release_matrix', 'corpus');

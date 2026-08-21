@@ -374,8 +374,14 @@ single dimensional owner, adding one would mean replacing `Transform.kernels[3]`
 wholesale, and two vendors would collide.
 
 **The list moves inside the dimension that owns it.** Kernel3D hosts its own
-ordered list of 3-channel strategies and ranks them in `init()`. Matrix-shaper
-registers with Kernel3D, not with Transform. The invariant holds at the
+ordered list of 3-channel claiming kernels and asks them in `init()`.
+Matrix-shaper registers with Kernel3D, not with Transform.
+
+Terminology note: these are **claiming kernels**, the name the codebase already
+uses — `claims()`, `claimed`, `_kernelClaim`. An earlier draft of this section
+called them "strategies", which was a synonym for something that already had a
+name and left the code holding a list called `strategies` full of things
+implementing `claims()`. One concept, one word. The invariant holds at the
 Transform level; composability survives where the domain knowledge is.
 
 This pays immediately. `KernelMatrixShaper.claims()` currently opens by
@@ -1208,6 +1214,54 @@ it is called on the *descriptor* while the pipeline is still being built, before
 any `init`. That is fine — picking a single-colour function needs no dispatch
 machinery — but it means the helpers are for the image path only, and the
 contract should say so rather than let someone discover it.
+
+## Future: a registration chain, so wrappers do not have to capture
+
+`init()` yielding to another kernel turns out to be the composition primitive.
+A wrapper checks its own condition and either takes the transform or hands back
+what it wrapped:
+
+```js
+init: function(pipeline, opts){
+    if(!opts.kernelOptions || !opts.kernelOptions.sepia){
+        return base.init.call(this, pipeline, opts);   // yield to the original
+    }
+    return { pipeline: pipeline, kernel: mySepiaKernel, meta: {...} };
+}
+```
+
+The awkward part is `base`. Today a wrapper has to capture the previous
+occupant itself — `var base = Transform.kernels[3]` at load time — and that is
+fragile: two wrappers loading in the wrong order, or one capturing after the
+other has already replaced the slot, and the chain is wrong in a way nothing
+reports.
+
+**Registration could do it.** `registerKernel` knows what it is displacing, so
+it could set `descriptor.parent` to the previous occupant, `null` at the base.
+Three kernels registered in turn would form a chain, each yielding to its
+parent until the original answers.
+
+```js
+init: function(pipeline, opts){
+    if(!thisIsForMe(opts)) return this.parent.init.call(this, pipeline, opts);
+    …
+}
+```
+
+Two things to get right if this is built:
+
+- **There is already a chain.** `Object.create(Transform.kernels[3])` — the
+  documented wrapping idiom — makes the previous occupant the *prototype*, so
+  `Object.getPrototypeOf(this)` is the parent for anything built that way. An
+  explicit `parent` is more reliable, because it does not depend on how the
+  descriptor was constructed, but two chains that usually agree and sometimes
+  do not is worse than either alone. Pick one and say so.
+- **Re-registering the same object must not make it its own parent.** A cycle
+  here is an infinite `init` recursion at create() time, which is a bad way to
+  find out.
+
+Worth having. Not needed yet, because the one wrapper that exists is in a test
+and captures explicitly.
 
 ## Open questions
 

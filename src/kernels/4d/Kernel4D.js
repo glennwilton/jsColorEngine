@@ -15,18 +15,10 @@
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
-var strategyHost = require('../strategyHost.js');
-
-var _host = strategyHost.makeStrategyHost();
 
 module.exports = {
     name: 'kernel4D',
 
-    // Strategies for this dimension — alternatives offered after the
-    // pipeline is built. See src/kernels/strategyHost.js.
-    strategies:       _host.strategies,
-    registerStrategy: _host.registerStrategy,
-    init:             _host.init,
     dimensions: 4,
 
     supports: {

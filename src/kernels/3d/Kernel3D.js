@@ -15,20 +15,70 @@
 var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
-var strategyHost = require('../strategyHost.js');
+var matrixShaper = require('./matrixShaper/matrixShaperKernel.js');
+var MatrixShaperKernel = require('./matrixShaper/KernelMatrixShaper.js');
 var encoding = require('../../def.js').encoding;
-
-var _host = strategyHost.makeStrategyHost();
 
 module.exports = {
     name: 'kernel3D',
 
-    // Strategies for this dimension — alternatives offered after the
-    // pipeline is built. See src/kernels/strategyHost.js.
-    strategies:       _host.strategies,
-    registerStrategy: _host.registerStrategy,
-    init:             _host.init,
     dimensions: 3,
+
+    /**
+     * Should the CLUT build be skipped so the matrix-shaper implementation can
+     * take this transform?
+     *
+     * Asked DURING create(), against the temporary device-to-device pipeline
+     * the LUT builder makes before walking the grid — earlier than init(), and
+     * on a different pipeline. Opt-in via `wasmMatrixShaper: 'prefer'`, and
+     * deliberately conservative: saying yes means no CLUT is built, so a later
+     * refusal would strand the caller on the generic loops.
+     */
+    displacesLut: function(transform){
+        try { return matrixShaper.wantsInsteadOfLut(transform); }
+        catch(e){ return false; }
+    },
+
+    /**
+     * Settle this dimension once the pipeline exists.
+     *
+     * Kernel3D has two implementations. The table walk is the default; the
+     * matrix shaper is the other one, and it applies when the optimiser has
+     * folded the pipeline into a curve, a 3x3 and another curve. That is not
+     * knowable at setKernel() time -- `*sRGB -> *AdobeRGB` and
+     * `*sRGB -> GRACoL` are both 3-channel input and only one of them folds --
+     * which is why the decision lives here rather than in the channel count.
+     *
+     * IT RETURNS THE OTHER KERNEL, not a flag. The matrix shaper keeps the full
+     * kernel interface, so Kernel3D hands back an instance and Transform runs
+     * it without knowing what it is. Transform has no registry of these and no
+     * `claims` protocol; the kernel that owns the dimension decides.
+     *
+     * Cheap by contract: walks five stage names and samples the two curves. The
+     * 3-8 ms table build stays deferred to the first array call, so a Transform
+     * that only ever converts single colours never pays it.
+     */
+    init: function(pipeline, opts){
+
+
+        if(opts.wasmMatrixShaper === 'off')  return keep('wasmMatrixShaper is off');
+        // A pixel cache makes the batch path memoised, which is a different
+        // execution model — see the cache discussion in Transform.transformArray.
+        if(opts.pixelCacheActive)            return keep('a pixel cache is active');
+
+        var verdict;
+        try { verdict = matrixShaper.inspect(opts.transform); }
+        catch(e){ return keep('inspect threw: ' + e); }
+
+        if(!verdict || verdict.ok !== true) return keep(verdict ? verdict.why : null);
+
+        var instance = Object.create(MatrixShaperKernel);
+        instance.transform = opts.transform;
+        instance.claimed   = true;
+        instance._impl     = undefined;
+        instance._variant  = null;
+        return { pipeline: pipeline, kernel: instance, meta: instance.info() };
+    },
 
     /**
      * The single-colour stage function for a 3-D LUT, and the stage name.

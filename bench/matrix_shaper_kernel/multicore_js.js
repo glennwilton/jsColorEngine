@@ -39,7 +39,7 @@
 const path = require('path');
 const fs   = require('fs');
 const { Transform, eIntent } = require('../../src/main.js');
-const matrixShaper = require('../../src/kernels/matrixShaper/matrixShaperKernel.js');
+const matrixShaper = require('../../src/kernels/3d/matrixShaper/matrixShaperKernel.js');
 const pool = require('../../src/pool.js');
 
 const CORPUS = path.join(__dirname, '..', 'release_matrix', 'corpus');

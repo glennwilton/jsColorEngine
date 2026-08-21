@@ -17,7 +17,7 @@
 const path = require('path');
 const { Transform, eIntent, convert } = require('../src/main');
 const Profile = require('../src/Profile');
-const matrixShaper = require('../src/kernels/matrixShaper/matrixShaperKernel');
+const matrixShaper = require('../src/kernels/3d/matrixShaper/matrixShaperKernel');
 
 const CMYK = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
 
@@ -777,18 +777,20 @@ describe('matrix-shaper kernel — alpha', () => {
 // the kernel descriptor
 // ---------------------------------------------------------------------------
 
-describe('matrix-shaper kernel — registered as a claiming kernel module', () => {
+describe('matrix-shaper kernel — the other implementation Kernel3D yields to', () => {
 
     jest.setTimeout(120000);
 
-    test('it is registered, and does NOT occupy the 3-channel slot', () => {
-        // Kernel3D still owns 3 channels. A claiming kernel is an addition to
-        // the registry, not a replacement in it — every LUT-based RGB pair
-        // must still reach the tetrahedral kernel.
-        const names = Transform.claimKernels.map(k => k.name);
-        expect(names).toContain('matrix-shaper');
-        expect(Transform.kernels[3].name).not.toBe('matrix-shaper');
+    test('it does not occupy the 3-channel slot — Kernel3D yields to it', () => {
+        // v1.6 phase 5. There is no registry of claiming kernels on Transform
+        // any more: Kernel3D looks at its own pipeline in init() and hands back
+        // a matrix-shaper instance when the conversion folded. The slot still
+        // holds Kernel3D, so every LUT-based RGB pair reaches the tetrahedral
+        // kernel exactly as before.
+        expect(Transform.kernels[3].name).toBe('kernel3D');
         expect(Transform.kernels[3].dimensions).toBe(3);
+        expect(typeof Transform.kernels[3].init).toBe('function');
+        expect(Transform.claimKernels).toBeUndefined();
     });
 
     test('a matrix-shaper pair is claimed; a CMYK destination is not', () => {
@@ -855,36 +857,52 @@ describe('matrix-shaper kernel — registered as a claiming kernel module', () =
         expect(typeof info.simd).toBe('boolean');
     });
 
-    test('a claim that throws does not break create()', () => {
-        // A third-party kernel is registered code running inside create(). It
-        // must not be able to take the Transform down — declining is always an
-        // available answer, so an exception is treated as one.
-        const broken = {
-            name: 'test-broken-claim',
-            dimensions: 3,
-            claims: function(){ throw new Error('deliberate'); },
-            create: function(m){ return m; },
-            resolveRuns: function(){},
-            array: function(){ return null; },
-            release: function(){},
-            provideLut: function(){ return null; }
-        };
-        Transform.registerKernel(broken);
+    test('an init() that throws does not break create()', () => {
+        // A kernel is registered code running inside create(). It must not be
+        // able to take the Transform down — declining is always an available
+        // answer, so an exception is treated as one.
+        const saved = Transform.kernels[3];
         try {
+            const broken = Object.create(saved);
+            broken.name = 'test-broken-init';
+            broken.init = function(){ throw new Error('deliberate'); };
+            Transform.kernels[3] = broken;
+
             const t = accelerated('*sRGB', '*AdobeRGB');
-            // The broken one is asked first (registered last, but we only care
-            // that create() survived and the real kernel still won).
-            expect(t.kernelInfo().name).toBe('matrix-shaper');
-        } finally {
-            const i = Transform.claimKernels.findIndex(k => k.name === 'test-broken-claim');
-            if(i >= 0) Transform.claimKernels.splice(i, 1);
-        }
+            // create() survived, and the kernel fell back to its own table path
+            // rather than yielding to anything.
+            expect(t.kernelInfo().name).toBe('test-broken-init');
+            expect(t.kernelInfo().claimed).toBe(false);
+        } finally { Transform.kernels[3] = saved; }
     });
 
-    test('registering the same name twice replaces rather than duplicating', () => {
-        const before = Transform.claimKernels.length;
-        Transform.registerKernel(require('../src/kernels/matrixShaper/KernelMatrixShaper.js'));
-        expect(Transform.claimKernels.length).toBe(before);
+    test('a kernel yields by returning another kernel from init()', () => {
+        // The paradigm the matrix shaper uses, exercised directly: a wrapper
+        // that checks its own condition and either yields to something else or
+        // delegates to the kernel it wrapped.
+        const saved = Transform.kernels[3];
+        try {
+            const wrapper = Object.create(saved);
+            wrapper.name = 'kernel3D-wrapper';
+            wrapper.init = function(pipeline, opts){
+                if(opts.kernelOptions && opts.kernelOptions.refuse){
+                    return { pipeline: pipeline, kernel: null,
+                             meta: { name: 'kernel3D-wrapper', dimensions: 3, claimed: false } };
+                }
+                return saved.init.call(this, pipeline, opts);   // delegate
+            };
+            Transform.kernels[3] = wrapper;
+
+            // Delegating: the matrix shaper still wins.
+            expect(accelerated('*sRGB', '*AdobeRGB').kernelInfo().name).toBe('matrix-shaper');
+
+            // Refusing: the wrapper keeps the transform for itself.
+            const t = new Transform({ dataFormat: 'int8', buildLut: false,
+                                      kernelOptions: { refuse: true } });
+            t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+            expect(t.kernelInfo().name).toBe('kernel3D-wrapper');
+            expect(t.kernelInfo().claimed).toBe(false);
+        } finally { Transform.kernels[3] = saved; }
     });
 
     test('clear() releases the kernel, and create() re-decides', () => {
@@ -1026,7 +1044,7 @@ describe('matrix-shaper kernel — the JS implementation', () => {
         expect(check.ok).toBe(true);
 
         // Force the per-channel branch directly: same pipeline, three tables.
-        const js = require('../src/kernels/matrixShaper/matrixShaperJS');
+        const js = require('../src/kernels/3d/matrixShaper/matrixShaperJS');
         const perCh = js.build(t, Object.assign({}, check, {perChannel: 'input'}));
         const grey  = js.build(t, Object.assign({}, check, {perChannel: null}));
 

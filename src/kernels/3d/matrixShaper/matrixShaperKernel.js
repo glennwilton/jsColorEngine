@@ -119,7 +119,7 @@ function moduleFor(name){
  * change. The supported way to turn the kernel off entirely is
  * `wasmMatrixShaper: false` on the Transform.
  */
-var pinned = require('../../settings.js')
+var pinned = require('../../../settings.js')
     .readEnum('JSCE_MATRIX_SHAPER_VARIANT', ['simd', 'scalar', 'js']) || null;
 
 /**

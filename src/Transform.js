@@ -485,19 +485,6 @@
         // out at FCLR = 15.
         static MAX_KERNEL_DIMENSIONS = 15;
 
-        // DEPRECATED VIEW, kept so existing code and tests keep working.
-        //
-        // Strategies now belong to the kernel that owns their dimension
-        // (v1.6 phase 5). This returns the 3-channel list, which is where the
-        // only shipped strategy — the matrix shaper — lives. It is the live
-        // array, not a copy, so push/splice still work on it. A strategy
-        // registered for another dimension will not appear here; ask that
-        // kernel's `strategies` instead.
-        static get claimKernels(){
-            var k = Transform.kernels[3];
-            return (k && k.strategies) ? k.strategies : [];
-        }
-
         // Set by Transform.compatibility(); null means current defaults.
         static _compatDefaults = null;
 
@@ -905,6 +892,17 @@
             // Transforms created from the same bag share compile work. Each
             // Transform still has its own linear-memory instance.
             this.wasmCache             = options.wasmCache || null;
+
+            // Kernel-scoped options, keyed by kernel name, passed through to
+            // kernels untouched:
+            //
+            //     new Transform({ kernelOptions: { kernel3D: { f32: true } } })
+            //
+            // Transform never validates or interprets these — it does not know
+            // what any of them mean, and a typo is the kernel's to catch,
+            // because the kernel owns the schema. See _kernelOpts() and
+            // docs/deepdive/KernelContract.md.
+            this.kernelOptions         = options.kernelOptions || null;
             this._wasmShrinkRatio      = options.wasmShrinkRatio || 0;
             this._wasmMaxMemory        = options.wasmMaxMemory !== undefined
                 ? options.wasmMaxMemory : 128 * 1024 * 1024;
@@ -1079,7 +1077,7 @@
          * Register a kernel module descriptor.
          * Binds all array-kernel variants and lifecycle methods to Transform.prototype.
          * The HOW of binding is entirely inside this method — change it here to
-         * experiment with different dispatch strategies (prototype, this.kernels[key], etc.).
+         * experiment with different dispatch claimKernels (prototype, this.kernels[key], etc.).
          *
          * @param {object} descriptor  Kernel module export (see docs/deepdive/KernelModules.md)
          */
@@ -1130,22 +1128,6 @@
             // order, so a later registration is a lower priority than an
             // earlier one. They do not displace the dimensional slot: a pair
             // that is not claimed still gets Kernel3D, and so does every LUT.
-            // A STRATEGY GOES TO THE KERNEL THAT OWNS ITS DIMENSION (v1.6
-            // phase 5). Descriptors with `claims` are not dimensional kernels —
-            // they are alternatives offered to one, chosen on the shape the
-            // optimiser folded the conversion into rather than on channel
-            // count. They used to be held in one list on Transform and asked of
-            // every conversion; now the owning kernel holds them.
-            if(typeof descriptor.claims === 'function'){
-                var owner = Transform.kernels[from];
-                if(!owner || typeof owner.registerStrategy !== 'function'){
-                    throw new Error('Transform.registerKernel: no kernel at dimension ' + from
-                        + ' accepts strategies (descriptor "' + descriptor.name + '")');
-                }
-                owner.registerStrategy(descriptor);
-                return;
-            }
-
             // One descriptor object into every slot in the range. Sharing the
             // object is what keeps this free: Object.create(descriptor) in
             // setKernel() produces one hidden class for the whole span.
@@ -1172,18 +1154,16 @@
          * different pipeline, which is why it is a separate hook.
          */
         _kernelWantingInsteadOfLut(){
-            // Phase 6 folds this into wantsLut(); until then it reads the same
-            // per-kernel list init() does, rather than a registry on Transform.
+            // Ask the kernel that owns this dimension whether it would rather
+            // have no CLUT at all. Called during the LUT build, against the
+            // temporary device-to-device pipeline — earlier than init(), and on
+            // a different pipeline, which is why it stays a separate hook until
+            // phase 6 merges the two into wantsLut().
             var owner = Transform.kernels[this.inputChannels];
-            var list = (owner && owner.strategies) ? owner.strategies : [];
-            for(var i = 0; i < list.length; i++){
-                var d = list[i];
-                if(typeof d.displacesLut !== 'function') continue;
-                try {
-                    if(d.displacesLut(this) === true) return d;
-                } catch(e){ /* a broken hook must not break create() */ }
-            }
-            return null;
+            if(!owner || typeof owner.displacesLut !== 'function') return null;
+            try {
+                return owner.displacesLut(this) === true ? owner : null;
+            } catch(e){ return null; }   // a broken hook must not break create()
         }
 
         /** Release and detach the current kernel instance, if any. */
@@ -1199,8 +1179,8 @@
          *
          * Passed to init() rather than handing over the Transform itself, so a
          * kernel does not have to reach for private fields to answer a
-         * question. `transform` is still here because a strategy may need to
-         * walk the pipeline, but everything a strategy actually *decides* on
+         * question. `transform` is still here because a claiming kernel may need to
+         * walk the pipeline, but everything a claiming kernel actually *decides* on
          * should be a named entry rather than a field it went looking for.
          *
          * This is also where kernel-scoped options arrive — see the
@@ -1237,12 +1217,18 @@
         _initKernel(){
             this._kernelClaim = null;
 
-            var descriptor = Transform.kernels[this.inputChannels];
-            if(!descriptor || typeof descriptor.init !== 'function') return;
+            // ON THE INSTANCE, NOT THE DESCRIPTOR. setKernel() has already made
+            // a per-Transform instance; calling init() on the shared descriptor
+            // instead would have every Transform of a dimension writing its
+            // decision into one object — the next conversion would inherit the
+            // last one's. The prototype chain hides that until an instance
+            // field shadows it, which is exactly how it was found.
+            var kernel = this.kernel;
+            if(!kernel || typeof kernel.init !== 'function') return;
 
             var result;
             try {
-                result = descriptor.init(this.pipeline, this._kernelOpts());
+                result = kernel.init(this.pipeline, this._kernelOpts());
             } catch(e){
                 return;                 // a broken init must not break create()
             }
@@ -1253,20 +1239,29 @@
                 this.optimisePipeline();
                 if(this.validateOnCreate && !this.validatePipeline()){
                     throw new Error('jsColorEngine: a kernel rewrote the pipeline and it '
-                        + 'no longer validates. See kernel "' + descriptor.name + '".');
+                        + 'no longer validates. See kernel "' + kernel.name + '".');
                 }
             }
 
+            // `meta` is what the kernel decided, in its own words. Transform
+            // stores it rather than interpreting it — the only thing it knows
+            // is that a kernel which settled on something other than its
+            // default says so.
+            this._kernelClaim = (result.meta && result.meta.claimed) ? result.meta : null;
+            if(this.verbose && this._kernelClaim){
+                console.log('Kernel "' + this._kernelClaim.name + '" took this transform');
+            }
+
+            // A kernel MAY still hand back a different object to run the batch
+            // path. Nothing built-in does — the matrix shaper is Kernel3D's own
+            // other implementation, not a separate kernel — but the door stays
+            // open for one that genuinely is.
             if(result.kernel){
                 var instance = result.kernel;
                 if(typeof instance.create === 'function'){
                     this.lutMode = instance.create(this.lutMode);
                 }
                 this.kernel = instance;
-                this._kernelClaim = result.claim || null;
-                if(this.verbose && result.claim){
-                    console.log('Kernel "' + result.claim.name + '" claimed this transform');
-                }
             }
         }
 
@@ -1280,25 +1275,27 @@
          */
         kernelInfo(){
             if(!this.kernel) return null;
-            var info = {
-                name:       this.kernel.name || ('kernel' + (Array.isArray(this.kernel.dimensions)
-                                ? 'ND' : this.kernel.dimensions + 'D')),
-                dimensions: this.kernel.dimensions,
-                claimed:    this.kernel.claimed === true,
-                lutMode:    this.lutMode,
-                hasLut:     this.lut !== false && !!this.lut
-            };
-            // A claiming kernel builds lazily, so `built` is false until the
-            // first array call — which is a real state worth being able to see,
-            // not an implementation detail to hide.
-            if(info.claimed){
-                info.built = !!this.kernel._impl;
-                if(this.kernel._impl){
-                    info.variant = this.kernel._impl.variant;
-                    info.bits    = this.kernel._impl.bits;
-                    info.simd    = this.kernel._impl.simd;
-                }
-            }
+
+            // THE KERNEL DESCRIBES ITSELF. Transform used to infer this from
+            // fields it reached for — name, claimed, then _impl.variant/bits/simd
+            // if claimed — which meant it knew the shape of one particular
+            // kernel's internals. A kernel that has something to report says so;
+            // one that has not gets the default.
+            //
+            // LIVE, not a snapshot taken at init(). `built` is false between the
+            // decision and the first array call, and the WASM variant is not
+            // known until the tables are built — both are real states worth
+            // being able to see, and a bundle returned from init() could not
+            // show either.
+            var info = (typeof this.kernel.info === 'function')
+                ? this.kernel.info()
+                : { name: this.kernel.name || ('kernel' + (Array.isArray(this.kernel.dimensions)
+                        ? 'ND' : this.kernel.dimensions + 'D')),
+                    dimensions: this.kernel.dimensions,
+                    claimed: false };
+
+            info.lutMode = this.lutMode;
+            info.hasLut  = this.lut !== false && !!this.lut;
             return info;
         }
 
@@ -1330,6 +1327,11 @@
             instance._threshold = 0;
             instance._runBigKey = null;
             instance._runSmallKey = null;
+            // Set by a kernel that is running an alternative implementation
+            // instead of its table — see Kernel3D.init(). Declared here so
+            // every instance of a dimension keeps one hidden class.
+            instance.claimed = false;
+            instance._matrixShaper = null;
             // WASM module states, owned by the kernel that runs them (v1.6
             // phase 4c). Populated by kernel.create() via wasmLifecycle, nulled
             // by kernel.release(). Declared here in a fixed order so every
@@ -9703,9 +9705,9 @@ Transform.registerKernel(require('./kernels/3d/Kernel3D.js'));
 Transform.registerKernel(require('./kernels/4d/Kernel4D.js'));
 Transform.registerKernel(require('./kernels/nd/KernelND.js'));
 
-// Claiming kernels — offered every Transform after its pipeline is built, in
-// registration order, and free to take over the batch path. They do not occupy
-// a dimensional slot: an RGB pair this one declines still gets Kernel3D.
-Transform.registerKernel(require('./kernels/matrixShaper/KernelMatrixShaper.js'));
+// The matrix shaper is NOT registered here any more. It is Kernel3D's other
+// array implementation, lives in src/kernels/3d/matrixShaper/, and is chosen by
+// Kernel3D.init() looking at its own pipeline. Transform knows nothing about
+// it — which is the point. See docs/deepdive/KernelContract.md.
 
 module.exports = Transform;

@@ -15,27 +15,23 @@
 /**
  * KernelMatrixShaper.js — the matrix-shaper kernel, as a registered module.
  *
- * A CLAIMING KERNEL, NOT A DIMENSIONAL ONE. The other kernel modules are
- * selected by input channel count: 3 channels in, you get Kernel3D, decided
- * before the pipeline exists. This one cannot be chosen that way, because
- * "3-channel" is not the question. The question is whether the OPTIMISER
- * FOLDED THIS PARTICULAR PAIR into a curve, a 3x3 and another curve — and that
- * is only knowable once the pipeline has been built.
+ * KERNEL3D'S OTHER IMPLEMENTATION, not a kernel in its own right. It is
+ * selected by Kernel3D.init() looking at its own pipeline after the optimiser
+ * has run: sRGB -> AdobeRGB folds to a curve, a 3x3 and another curve and gets
+ * this; sRGB -> GRACoL does not; sRGB -> sRGB with identity detection on does
+ * not, because it collapsed to three stages with nothing left to accelerate.
+ * None of those distinctions survive a channel count, which is why the decision
+ * cannot be made at setKernel() time.
  *
- * So it registers a `claims(transform)` predicate instead, and Transform runs
- * the claim pass after `pipelineCreated`. sRGB -> AdobeRGB is claimed;
- * sRGB -> GRACoL is not; sRGB -> sRGB with identity detection on is not,
- * because it collapsed to three stages and there is nothing left to accelerate.
- * None of those distinctions survive a channel count.
+ * It keeps the full kernel interface — create, array, release — so Kernel3D can
+ * hand it back from init() and Transform can run it without knowing what it is.
+ * Transform has no registry of these and no `claims` protocol; the kernel that
+ * owns the dimension decides.
  *
- * IT BREAKS THE "KERNELS ARE LUT-ONLY" RULE, DELIBERATELY. KernelModules.md
- * said kernels are LUT batch processors and the no-LUT array path stays in
- * Transform.js. That held while every kernel WAS a table walker. This one has
- * no CLUT at all — two 1-D tables and nine coefficients — and it is the fast
- * path precisely when there is no LUT. Keeping it out of the kernel registry
- * to preserve the rule would have meant Transform.js importing one specific
- * kernel and branching on it in `transformArray`, which is what it did before
- * this file existed.
+ * NO CLUT AT ALL — two 1-D tables and nine coefficients — and it is the fast
+ * path precisely when there is no LUT. It has no floatFor either: the
+ * single-colour path is the stage pipeline, which already walks curve, matrix,
+ * curve correctly. Only `array` differs, which is the whole of what it is.
  *
  * LAZY, AND THAT MATTERS. `claims()` is cheap — it walks five stage names and
  * samples the two curves. `build()` fills a 64 KB or 256 KB table and costs
@@ -66,41 +62,22 @@ module.exports = {
     },
 
     /**
-     * Does this Transform's FINAL pipeline suit this kernel?
+     * What this kernel is, for kernelInfo(). The kernel describes itself
+     * rather than Transform reaching into _impl to work it out.
      *
-     * Called once per create(), after the pipeline exists. Cheap by contract —
-     * the expensive table build waits for the first array call.
-     *
-     * Returns the same {ok, why} shape as matrixShaperKernel.inspect(), so a
-     * caller can report why a transform was not claimed rather than guessing.
+     * `built` is false between the decision and the first array call — the
+     * tables cost 3-8 ms and are deferred — which is a real state worth being
+     * able to see rather than an implementation detail to hide.
      */
-    claims: function(pipeline, opts){
-        if(opts.wasmMatrixShaper === 'off'){
-            return {ok: false, why: 'wasmMatrixShaper is off'};
+    info: function(){
+        var out = { name: 'matrix-shaper', dimensions: 3, claimed: true,
+                    built: !!this._impl };
+        if(this._impl){
+            out.variant = this._impl.variant;
+            out.bits    = this._impl.bits;
+            out.simd    = this._impl.simd;
         }
-        // A pixel cache makes the batch path memoised, which is a different
-        // execution model — see the cache discussion in Transform.transformArray.
-        if(opts.pixelCacheActive){
-            return {ok: false, why: 'a pixel cache is active'};
-        }
-        // inspect() walks the stages, so it still needs the Transform. What it
-        // no longer does is reach for transform._pixelCacheData — a kernel
-        // reading a private field of the thing it is meant to be decoupled from
-        // was the boundary leaking, and opts carries that answer now.
-        return matrixShaper.inspect(opts.transform);
-    },
-
-    /**
-     * Should the CLUT build be skipped so this kernel can take the transform?
-     *
-     * Called DURING create(), against the temporary device-to-device pipeline
-     * the LUT builder makes before walking the grid — earlier than claims(),
-     * and on a different pipeline. Opt-in via `wasmMatrixShaper: 'prefer'`;
-     * refuses whenever something depends on the LUT existing (hooks, gamut
-     * mapping). See matrixShaperKernel.wantsInsteadOfLut.
-     */
-    displacesLut: function(transform){
-        return matrixShaper.wantsInsteadOfLut(transform);
+        return out;
     },
 
     /** Nothing to compile per Transform — the module is cached globally. */
@@ -132,6 +109,15 @@ module.exports = {
         }
         if(!this._impl) return null;
 
+        // Default the pixel count from the buffer, as the table path does.
+        // transformArray() lets its `pixelCount` parameter stay undefined when
+        // the caller omits it and passes it straight through to here, so before
+        // v1.6 a three-argument transformArray() on a matrix-shaper pair
+        // computed `undefined * 3`, allocated a zero-length output and returned
+        // an empty array. Shipped behaviour, and quiet about it.
+        if(pixelCount === undefined || pixelCount === null){
+            pixelCount = Math.floor(inputArray.length / (inAlpha ? 4 : 3));
+        }
         var need = pixelCount * (outAlpha ? 4 : 3);
         var out  = outputArray;
         if(!out || out.length < need){

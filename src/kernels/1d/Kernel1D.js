@@ -25,7 +25,6 @@
 
 var kernelUtils = require('../kernelUtils.js');
 var loops = require('./kernel1D_loops.js');
-var strategyHost = require('../strategyHost.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 
 /**
@@ -73,16 +72,9 @@ function linearInterp1D_NCh(input, lut){
     return output;
 }
 
-var _host = strategyHost.makeStrategyHost();
-
 module.exports = {
     name: 'kernel1D',
 
-    // Strategies for this dimension — alternatives offered after the
-    // pipeline is built. See src/kernels/strategyHost.js.
-    strategies:       _host.strategies,
-    registerStrategy: _host.registerStrategy,
-    init:             _host.init,
     dimensions: 1,
 
     _variant: null,
