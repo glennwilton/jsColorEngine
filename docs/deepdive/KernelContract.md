@@ -946,6 +946,28 @@ That makes GPU support a **new pool backend rather than a new API**, which is a
 much smaller and much better understood problem — the fragment queue,
 reassembly and progress reporting are all written.
 
+**And for a single buffer, `transformArrayAsync()`.** `transformImages()` is
+the right home for a batch, but it is the wrong shape for "convert this one
+image and give it back". An async sibling to `transformArray` covers that:
+
+```js
+var out = await t.transformArrayAsync(input, ...);
+```
+
+It is well behaved in the boring case, which is what makes it worth having: with
+no device, or a batch below the crossover, it does the synchronous work and
+resolves immediately. The caller writes `await` once and gets the GPU when the
+GPU helps, without branching on availability. `transformArray()` stays exactly
+as it is — synchronous, no promise allocation, no change for anyone.
+
+That leaves three entry points with clear jobs rather than one overloaded one:
+
+| | |
+|---|---|
+| `transformArray()` | sync, one buffer, CPU |
+| `transformArrayAsync()` | one buffer, may use a device, falls back silently |
+| `transformImages()` | batch, fragmented, workers or devices, progress |
+
 One thing carried over from the pool that a GPU tier would feel more sharply:
 [multicore.md](./multicore.md) found efficiency *falls* as the kernel gets
 faster, because the fixed per-fragment cost stays put while the compute it
