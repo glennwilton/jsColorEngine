@@ -4264,6 +4264,10 @@
             // branch measured ~2.5% on the uncached accuracy path, and
             // cache-off must pay nothing. Keep the loops below byte-identical.
             if(this._pixelCacheData !== null){
+                // _transformArrayCached lives in src/cache.js, attached to the
+                // prototype at the bottom of this file alongside stages.js and
+                // interp.js. It reads as a missing method from here, which is
+                // why the file is named.
                 return this._transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha,
                     preserveAlpha, pixelCount);
             }
@@ -4960,7 +4964,7 @@
             // verifyPipeline (so the injected device->device encodings are
             // still checked rather than silently trusted).
             if(this.pixelCache){
-                this.injectPixelCacheStages();
+                this.injectPixelCacheStages();   // src/cache.js, prototype-attached
             }
 
             // Ensure pipeline is valid by checking that the output of one stage matches the input of the next

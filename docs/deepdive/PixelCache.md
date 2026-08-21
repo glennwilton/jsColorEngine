@@ -1254,3 +1254,52 @@ the output marker lost to the optimiser.
   their justification and (1) is the whole story.
 - Interaction with `preserveAlpha` and the identity `_kernelCopy`
   path — both already skip work; confirm no double-counting.
+
+## N-channel input is a different regime
+
+Everything measured above is 3- and 4-channel, because those were the only
+profiles that existed. With the synthetic set (see
+[SyntheticProfiles.md](./SyntheticProfiles.md)) the wide inputs can be measured
+too, and they do not behave the same way.
+
+`KernelND` declines the LUT — an A2B bake is `grid^n` cells — so every pixel
+walks the pipeline at ~0.8 MPx/s rather than tens. **A miss therefore costs
+roughly fifty times what it costs in RGB**, and that moves the break-even.
+
+8-channel input, 4096 slots:
+
+| content | distinct colours | off | on | gain | hit% |
+|---|---|---|---|---|---|
+| noise | 6000 | 0.79 | 0.94 | **1.20×** | 17% |
+| flat, 256 colours | 256 | 0.78 | 9.28 | 11.95× | 96% |
+| flat, 16 colours | 16 | 0.79 | 17.60 | **22.29×** | 100% |
+
+The headline is not the 22×. It is that **17% reuse still pays at 8 channels**,
+where the same hit rate at 5 channels is a 0.82× *loss* and for RGB the
+equivalent is "break-even at best". Photographic content that this cache was
+originally judged not worth enabling for is worth enabling for here.
+
+By input width, at that same 17% hit rate: 5 channels 0.82×, 8 channels 1.20×,
+12 channels 1.22×. The crossover sits between 5 and 8.
+
+### Two things worth knowing before repeating the measurement
+
+**`pixelCache: true` is ONE slot.** It resolves to `1`, not "on with a sensible
+default" — a single-entry cache, which is a real mode and not what you want for
+this. Pass a count: `pixelCache: 4096`. Reading 13% hit rate on content with
+eight distinct colours is the symptom, because a single entry hits 1-in-8.
+
+**An LCG's low byte has a short period.** Generating "noise" as `s & 0xff`
+produces content that repeats far more than random, which flatters the cache
+into reporting 100% hits on supposedly-unique pixels. Take the high bits, and
+count the distinct colours to check what you actually generated.
+
+### Correctness
+
+`__tests__/pixelcache.tests.js` covers 35 input×output width combinations from
+1 to 15 channels, both depths, asserting cached output is byte-identical to
+uncached — plus that the cache genuinely engages at those widths rather than
+quietly declining, and that where it *does* decline (an identity pair, where
+the optimiser replaces the output boundary it needs) the conversion is still
+correct.
+

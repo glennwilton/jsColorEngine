@@ -427,3 +427,125 @@ describe('pixelCache — safety', () => {
         expect(cached.getPixelCacheStats().hits).toBe(EXPECTED_HITS);
     });
 });
+
+// ---------------------------------------------------------------------------
+//  N-channel input — the regime where the cache changes character
+// ---------------------------------------------------------------------------
+
+describe('pixelCache — n-channel input', () => {
+
+    // Everything above this point is 3- and 4-channel, because those were the
+    // only profiles that existed. N-channel input is a different regime for
+    // the cache: KernelND declines the LUT, so every pixel walks the pipeline
+    // at ~0.8 MPx/s instead of tens, and a miss therefore costs roughly fifty
+    // times what it costs in RGB.
+    //
+    // That moves the break-even. docs/deepdive/PixelCache.md records
+    // photographs as break-even at best for RGB. Measured on 8-channel input,
+    // 4096 slots:
+    //
+    //     content        distinct   off     on      gain   hit%
+    //     noise             6000    0.79    0.94    1.20x   17%
+    //     flat 256 colour    256    0.78    9.28   11.95x   96%
+    //     flat 16 colour      16    0.79   17.60   22.29x  100%
+    //
+    // Even 17% reuse pays here, where the same rate is a 0.82x LOSS at five
+    // channels. These tests are about CORRECTNESS at those widths, not speed.
+
+    const fs = require('fs');
+    const DIR = path.join(__dirname, 'profiles');
+    const profile = {};
+    for(const n of [1, 2, 3, 4, 5, 6, 8, 12, 15]){
+        const p = new (require('../src/Profile'))();
+        p.loadBinary(new Uint8Array(fs.readFileSync(
+            path.join(DIR, 'synthetic_' + String(n).padStart(2, '0') + 'ch.icc'))));
+        profile[n] = p;
+    }
+
+    /** Deterministic, and narrow enough that colours actually repeat. */
+    function pixels(count, channels){
+        const px = new Uint8ClampedArray(count * channels);
+        let s = 7;
+        for(let i = 0; i < px.length; i++){
+            s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff;
+            // HIGH bits: an LCG's low byte has a short period, which would make
+            // this content quietly cache-friendly and the test meaningless.
+            px[i] = (s >>> 16) & 0x3f;
+        }
+        return px;
+    }
+
+    const PAIRS = [];
+    for(const inCh of [1, 2, 3, 5, 8, 12, 15]){
+        for(const outCh of [1, 3, 4, 8, 15]) PAIRS.push([inCh, outCh]);
+    }
+
+    test.each(PAIRS)('%i -> %i channels: cached output is identical to uncached', (inCh, outCh) => {
+        const N = 32;
+        const px = pixels(N, inCh);
+
+        const plain = new Transform({ dataFormat: 'int8', buildLut: true });
+        plain.create(profile[inCh], profile[outCh], eIntent.relative);
+        const uncached = Array.from(plain.array(px, false, false, false, N));
+
+        const cached = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 256 });
+        cached.create(profile[inCh], profile[outCh], eIntent.relative);
+        const withCache = Array.from(cached.array(px, false, false, false, N));
+
+        expect(withCache).toEqual(uncached);
+        expect(withCache.length).toBe(N * outCh);
+    });
+
+    test('it actually engages on n-channel input, rather than quietly declining', () => {
+        // The suite above would pass just as well if the cache switched itself
+        // off everywhere, so this asserts it is really in the pipeline: feed
+        // one colour repeatedly and every lookup after the first must hit.
+        const N = 64;
+        const inCh = 8;
+        const px = new Uint8ClampedArray(N * inCh);
+        for(let p = 0; p < N; p++){
+            for(let c = 0; c < inCh; c++) px[p * inCh + c] = (c * 17) & 0xff;
+        }
+
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 64 });
+        t.create(profile[inCh], profile[3], eIntent.relative);
+        t.array(px, false, false, false, N);
+
+        const stats = t.getPixelCacheStats();
+        expect(stats.lookups).toBeGreaterThan(0);
+        expect(stats.hits).toBe(stats.lookups - 1);      // only the first misses
+    });
+
+    test('int16 too — the depth that could not reach these widths at all', () => {
+        const N = 32;
+        const inCh = 12, outCh = 6;
+        const px = new Uint16Array(N * inCh);
+        const src = pixels(N, inCh);
+        for(let i = 0; i < px.length; i++) px[i] = src[i] * 257;
+
+        const plain = new Transform({ dataFormat: 'int16', buildLut: true });
+        plain.create(profile[inCh], profile[outCh], eIntent.relative);
+        const uncached = Array.from(plain.array(px, false, false, false, N));
+
+        const cached = new Transform({ dataFormat: 'int16', buildLut: true, pixelCache: 256 });
+        cached.create(profile[inCh], profile[outCh], eIntent.relative);
+        const withCache = Array.from(cached.array(px, false, false, false, N));
+
+        expect(withCache).toEqual(uncached);
+    });
+
+    test('declining is safe: an identity pair still converts correctly', () => {
+        // Profile n into profile n collapses to identity, and the optimiser
+        // replaces the output boundary the cache needs -- so it switches off.
+        // The conversion must still be right, and it must not be a cache hit
+        // pretending to be one.
+        const N = 16, ch = 8;
+        const px = pixels(N, ch);
+
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 256 });
+        t.create(profile[ch], profile[ch], eIntent.relative);
+        const out = t.array(px, false, false, false, N);
+
+        expect(Array.from(out)).toEqual(Array.from(px));   // identity copies
+    });
+});
