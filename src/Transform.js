@@ -1148,25 +1148,6 @@
          * The reason it cannot happen in setKernel(): the answer depends on the
          * pipeline, and at setKernel() time there is not one yet.
          */
-        /**
-         * The first claiming kernel that wants this transform INSTEAD of a
-         * CLUT, or null. Asked during the LUT build, against the temporary
-         * device-to-device pipeline — earlier than the claim pass, and on a
-         * different pipeline, which is why it is a separate hook.
-         */
-        _kernelWantingInsteadOfLut(){
-            // Ask the kernel that owns this dimension whether it would rather
-            // have no CLUT at all. Called during the LUT build, against the
-            // temporary device-to-device pipeline — earlier than init(), and on
-            // a different pipeline, which is why it stays a separate hook until
-            // phase 6 merges the two into wantsLut().
-            var owner = Transform.kernels[this.inputChannels];
-            if(!owner || typeof owner.displacesLut !== 'function') return null;
-            try {
-                return owner.displacesLut(this) === true ? owner : null;
-            } catch(e){ return null; }   // a broken hook must not break create()
-        }
-
         /** Release and detach the current kernel instance, if any. */
         _releaseKernel(){
             if(this.kernel && typeof this.kernel.release === 'function'){
@@ -2071,34 +2052,6 @@
 
 
             // The Kernel can take over and build a LUT
-            // provideLut is a function that can be implemented by the kernel such
-            // as making a custom lut type
-            // null = Carry on and build the lut as normal
-            // false = Do not build a lut, this kernel does not have lut functions
-            // {lut} = Use this lut provided - NOT the Kernal will need to create
-            //         the pipeline if it needs it, as it DOES NOT EXIST YET
-            // TODO call anyway even if this.builtLut && this.lut === false as the kernal may decide to FORCE a lut always
-            if(this.builtLut && this.lut === false && this.kernel && typeof this.kernel.provideLut === 'function'){
-                let lut = this.kernel.provideLut(this.lutMode);
-                if(lut === false){
-                    // Kernal says DO NOT USE A LUT
-                    this.builtLut = false
-                    this.lut = false;
-                    if(this.verbose){
-                        console.log('Kernel disabled the LUT build')
-                    }
-                } else if (lut === null){
-                    // carry on as normal
-                } else {
-                    // use provided LUT
-                    if(this.verbose){
-                        console.log('Kernel provided a custom LUT')
-                    }
-                    this.builtLut = true;
-                    this.lut = lut;
-                }
-            }
-
             // Built lut or if lut pre-supplied use it
             var _skipLutForMatrixShaper = false;
             if(this.builtLut || this.lut !== false){
@@ -2149,17 +2102,48 @@
                     // pair collapses to three stages, and a LUT-based RGB
                     // profile produces interpolation stages, neither of which
                     // is visible before the pipeline exists.
-                    // Asked of every registered claiming kernel, in order,
-                    // rather than of one hard-coded module — the same list
-                    // _claimKernel() walks later. This is the earlier of the
-                    // two decisions and runs against a different pipeline.
-                    var _displacer = this._kernelWantingInsteadOfLut();
-                    if(_displacer){
-                        _skipLutForMatrixShaper = true;
-                        this.builtLut = false;
-                        this.lut = false;
-                        if(this.verbose){
-                            console.log('Kernel "' + _displacer.name + '" displaced the CLUT; none built');
+                    // ONE HOOK, ASKED ONCE. Until v1.6 there were two:
+                    // provideLut(lutMode), asked earlier on the instance, and
+                    // displacesLut(transform), asked here on the DESCRIPTOR.
+                    // They answered the same question with overlapping
+                    // vocabularies -- displacesLut could only say "no LUT" or
+                    // "carry on", which is a strict subset of what provideLut
+                    // already said -- and displacesLut existed only because
+                    // the matrix shaper needed to answer LATER, once the
+                    // temporary pipeline it inspects exists.
+                    //
+                    // So provideLut moved here rather than displacesLut being
+                    // kept. That is strictly more information for every
+                    // kernel, and it fixes a latent bug: displacesLut was
+                    // asked of Transform.kernels[inputChannels], the shared
+                    // DESCRIPTOR, so any kernel that cached during it would
+                    // have written into the object every Transform of that
+                    // dimension shares. The same mistake init() was fixed for.
+                    //
+                    //   null    carry on and build the LUT as normal
+                    //   false   build no LUT -- this kernel runs the pipeline
+                    //   {lut}   use this one, however the kernel made it
+                    //
+                    // A kernel is free to build its own with createNDDeviceLUT
+                    // and hand it back: a house look, an f32-celled table, a
+                    // small 8-bit preview grid. Transform stores what it gets
+                    // and asks nothing about it.
+                    if(typeof this.kernel.provideLut === 'function'){
+                        var _provided = this.kernel.provideLut(this.lutMode);
+                        if(_provided === false){
+                            _skipLutForMatrixShaper = true;
+                            this.builtLut = false;
+                            this.lut = false;
+                            if(this.verbose){
+                                console.log('Kernel "' + this.kernel.name + '" declined the CLUT; none built');
+                            }
+                        } else if(_provided !== null && _provided !== undefined){
+                            _skipLutForMatrixShaper = true;
+                            this.builtLut = true;
+                            this.lut = _provided;
+                            if(this.verbose){
+                                console.log('Kernel "' + this.kernel.name + '" provided a custom LUT');
+                            }
                         }
                     }
 

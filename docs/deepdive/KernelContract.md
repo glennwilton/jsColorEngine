@@ -1,7 +1,7 @@
 # The kernel contract
 
-> **Status: phases 1-5 landed 2026-08-21. Phase 6 (`wantsLut`), phase 7
-> (per-dimension WASM) and the simplification below are not built.**
+> **Status: phases 1-6 and 8 landed 2026-08-21. Phase 7 (per-dimension WASM)
+> is not built.**
 > This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
 > [KernelModules.md](./KernelModules.md), which this supersedes in part; when
 > this lands, the two are folded into one as-built document.
@@ -60,7 +60,7 @@ Transform provides is a **convenience with an escape hatch**:
 |---|---|
 | `hints` — the caller's interpolation preferences | ignores them; it is the authority on its own dimension |
 | `{big, small, threshold}` — the two-tier dispatch shape | returns its own dispatcher in both slots and routes however it likes |
-| the LUT the builder baked | supplies its own through `wantsLut`, in whatever representation suits it |
+| the LUT the builder baked | supplies its own through `provideLut`, in whatever representation suits it |
 | `opts.helpers` — the resolver, key format, gates | never touches them and writes its own dispatch |
 
 None of these is a requirement, and **nothing degrades if a kernel declines
@@ -170,7 +170,7 @@ var descriptor = Transform.kernels[inChannels];
 | `supports` | no | declarative variant capability map — diagnostics only |
 | **`floatFor(lut, hints)`** | **yes** | **NEW** — returns `{funct, stageName}` for a single-colour pipeline stage |
 | **`arrayFn(in, out, px, inAlpha, outAlpha, preserve)`** | yes | **TARGET** — converts an array. Any variant choice, including batch size, happens inside. See [arrayFn](#arrayfn) |
-| **`wantsLut(pipeline, opts)`** | no | **NEW** — replaces `provideLut` + `displacesLut` |
+| **`provideLut(lutMode)`** | no | one hook: `null` build normally · `false` build none · a LUT object to use instead. Absorbed `displacesLut` |
 | **`init(pipeline, opts)`** | no | **NEW** — replaces `claims`; returns `{pipeline, kernel}` |
 | `create(lutMode)` | yes | settle WASM state, demote lutMode if the host can't run the request; returns the settled mode |
 | ~~`resolveRuns()`~~ | — | **TO BE REMOVED** — see [why it exists](#resolveruns) |
@@ -284,106 +284,83 @@ touched, which is exactly the class of bug a written contract prevents.
 
 ---
 
-## `wantsLut()` and `init()` — two hooks, one object
+## `provideLut()` and `init()` — two hooks, one object
 
-The shipped design has three hooks (`provideLut`, `displacesLut`, `claims`) and
-two registries (`Transform.kernels`, `Transform.claimKernels`). This has two
-hooks and one registry.
+Two questions, asked at two moments, because the answers depend on different
+things:
 
-### Why it cannot be one hook
-
-`displacesLut` runs against the **temporary device-to-device pipeline** the LUT
-builder constructs before walking the grid. Its entire purpose is to decide
-whether a 214 KB table gets built at all. A post-pipeline hook is far too late
-— by then the table exists and the cost is paid.
-
-`provideLut` and `displacesLut` are the same question asked either side of a
-build, so they merge:
-
-```js
-// Before the CLUT grid walk, against the temporary device-to-device pipeline.
-// Returns: {lut}  — use this one, don't build
-//          false  — build no LUT; the pipeline path is the fast path here
-//          null   — build normally
-kernels[n].wantsLut(tempPipeline, opts)
+```
+kernels[n].provideLut(lutMode)      → null | false | a LUT
+kernels[n].init(pipeline, opts)     → {pipeline, kernel, meta}
 ```
 
-`init` runs where `_claimKernel()` runs today — after `optimisePipeline()`,
-after `pipelineCreated`:
+**`provideLut` runs against the temporary device-to-device pipeline** the LUT
+builder makes before it walks the grid. **`init` runs against the real one**,
+after `optimisePipeline()`, with `lutMode` already settled by `create()`.
+
+### One hook, not two
+
+Until v1.6 this was `provideLut` *and* `displacesLut`:
+
+| | asked on | when | could answer |
+|---|---|---|---|
+| `provideLut(lutMode)` | the instance | before any pipeline existed | `null` · `false` · a LUT |
+| `displacesLut(transform)` | the **descriptor** | against the temp pipeline | `false` · `true` |
+
+`displacesLut`'s answer space was a strict subset of `provideLut`'s — it could
+only say "no LUT" or "carry on". It existed for one reason: the matrix shaper
+has to answer **later** than `provideLut` was being asked, because its decision
+reads the pipeline.
+
+So `provideLut` moved to the later point and `displacesLut` was deleted. Two
+things fell out of that:
+
+- **A latent bug went with it.** `displacesLut` was asked of
+  `Transform.kernels[inputChannels]` — the shared *descriptor*, not the
+  per-Transform instance. Any kernel that cached during it would have written
+  into the object every Transform of that dimension shares. That is the same
+  mistake `init()` was fixed for, and it was harmless only because the one
+  implementation happened to be stateless.
+- **Every kernel gets more information.** A `provideLut` that wants to inspect
+  what it is replacing now can.
+
+### What the pipeline check buys
+
+Only one of `wantsInsteadOfLut`'s conditions needs a pipeline, and it is the
+one that matters: the stage names must read
 
 ```js
-// Post-optimise. The kernel may rewrite the pipeline and may hand back a
-// different kernel to run the batch path.
-var r = Transform.kernels[this.inputChannels].init(this.pipeline, opts);
-this.pipeline = r.pipeline;
-if(r.kernel) this.kernel = r.kernel;
+['stage_Gamma_Inverse', 'stage_matrix_rgb', 'stage_Gamma']
 ```
 
-### The kernel may also choose the LUT's *representation*
+That is what separates `*sRGB → *AdobeRGB`, which folds, from
+`*sRGB → GRACoL`, which does not — both are 3-channel input, and no amount of
+inspecting `inputProfile.type` distinguishes them. It also rejects identity
+pairs, which collapse to three different stages.
 
-`wantsLut` is not only a yes/no about building a table. A kernel may decide
-what the table should *be* — for example baking a u16 CLUT for its own
-interpolators and running float → u16 → float, where the win is not integer
-arithmetic but the size of the table. The shipping CLUT is a **`Float64Array`**
-([Transform.js:3627](../../src/Transform.js:3627)). A 33³ grid with 4 output
-channels is 143,748 cells — **1.10 MB at f64, 575 KB at f32, 287 KB at u16** —
-and a grid walk is cache-bound, so the cell type is a throughput decision as
-much as a memory one.
+### The cost, measured
 
-**This pattern already exists and is already formalised** — it just belongs to
-Transform instead of the kernel. `buildIntLut()` produces `lut.intLut`, a
-tagged sidecar carrying `{version, dataType, scale, gpsPrecisionBits,
-accWidth}`, and `isIntLutCompatible()` exists specifically to reject a foreign
-one from a serialised pipeline or a cross-version cache. The generalisation is
-to let a kernel own that view rather than have one Transform-wide integer
-mirror chosen by `lutMode`.
+The temporary pipeline is built **before** the hook is asked, so a kernel that
+declines has cost one pipeline construction: **0.155 ms**. Against the 33³ LUT
+bake it avoids — **6.95 ms** — that is a 45× win for the matrix shaper.
 
-**It must be additive, never a replacement.** The float CLUT stays canonical:
-`getLut()` is public API for serialising to JSON and shipping to a worker, the
-pool posts `{lut, lutMode}` across the worker boundary, and
-[Luts.md](./Luts.md) documents the portable JSON format. A `wantsLut` that
-returned a u16-only LUT would break all three. The kernel's representation is a
-sidecar it owns, tags, and can rebuild from the float CLUT at any time —
-which also means a worker can rebuild it locally instead of receiving it, for a
-smaller `postMessage`.
+It is pure waste in exactly one case: `KernelND` declines for reasons that
+never needed a pipeline (an N-D CLUT bake is impractical at grid^N cells). It
+pays 0.155 ms on a path that then runs at ~8 MPx/s, so roughly 0.1% of a single
+megapixel. Not worth a second hook to reclaim — which is what the second hook
+was.
 
-**One hazard, and it is about honesty rather than mechanism.** The obvious hint
-to hang this on is `interpolationFast`, and that would be wrong.
-`interpolationFast` is accuracy-neutral today: the fast `_3Ch`/`_4Ch`/`_NCh`
-variants "should produce numerically identical results to the reference
-variants — the LCMS test suite verifies this"
-([interp.js:81](../../src/interp.js:81)). Overloading it to authorise a lossy
-representation turns a free flag into one that silently costs LSBs, in an
-engine whose positioning is sub-LSB agreement with Little CMS on 130 of 150
-files. A representation change needs either its own hint or an explicit
-accuracy budget the kernel declares and `kernelInfo()` reports.
+### `provideLut` is not only a yes/no
 
-The direction is already measured on the batch path — the integer lutModes beat
-the float CLUT, which is the entire reason they exist. On the single-colour
-path it is unmeasured; `pixelCache.accuracyPath.*` in
-[BenchResults](../BenchResults.md) is where that number would go.
+A kernel may decide it wants a **different** LUT: a smaller grid for a preview
+mode, f32 cells instead of u16, an intLut it fills itself, or a table that was
+never derived from the profile pair at all. It can call `createNDDeviceLUT` and
+hand back whatever it built. Transform stores what it gets and asks nothing
+about it — `false` and a custom table travel the same path out.
 
-### Mutation gets a guardrail that already ships
-
-If `init` returns a changed pipeline, Transform re-runs `optimisePipeline()`
-(it loops `while(Opt)` to a fixpoint — idempotent, create-time only) and then
-`validatePipeline()`, which pushes a mid-grey colour through and fails on NaN,
-`undefined`, or a wrong output type. Both already exist. A mutator hook
-inherits a safety net rather than needing a new one.
-
-Encoding continuity is the thing a careless splice breaks — every stage has an
-`inputEncoding` / `outputEncoding` that must chain. `validatePipeline()` catches
-the resulting garbage; the contract should say to check it rather than rely on
-that.
-
-### A hook that throws is a decline
-
-Unchanged from today, and it matters more now that a hook can mutate: a kernel
-is registered third-party code running inside `create()`. Declining is always
-an available answer, so an exception must never take the Transform down. On a
-throw, the pre-hook pipeline stands.
-
----
+[Luts.md](./Luts.md) documents the portable JSON format. A `provideLut` that
+returns something `toJSON()` cannot serialise is making a private table, which
+is allowed and worth knowing.
 
 ## The sub-registry — where matrix-shaper goes
 
@@ -433,8 +410,8 @@ want, and check what Transform has to learn.**
 
 | Someone wants… | built as | what Transform must know |
 |---|---|---|
-| An f32 CLUT — half the memory, better cache behaviour, one ULP of loss | a Kernel3D variant whose `wantsLut` returns an f32-celled table and whose `floatFor` reads it | nothing |
-| RGB → sepiatone, or any house look baked as a table | a kernel whose `wantsLut` returns a LUT that was never derived from the profile pair | nothing |
+| An f32 CLUT — half the memory, better cache behaviour, one ULP of loss | a Kernel3D variant whose `provideLut` returns an f32-celled table and whose `floatFor` reads it | nothing |
+| RGB → sepiatone, or any house look baked as a table | a kernel whose `provideLut` calls `createNDDeviceLUT` itself and returns a table never derived from the profile pair | nothing |
 | A fast-preview mode on a small 8-bit grid | a kernel that returns a 9³ or 17³ u8 table when a preview option is set | nothing |
 | A tuned 7-channel press kernel, leaving 5, 6, 8–15 generic | `Transform.kernels[7] = Kernel7D` | nothing |
 | A probe that records every dispatch, for a test | `Transform.kernels[9] = probe` | nothing |
@@ -530,7 +507,7 @@ new Transform({
 
 Keyed by **kernel name**, not by dimension — the name is the stable identity,
 and a dimension slot can be re-registered by someone else. Passed opaquely into
-`floatFor(lut, hints)`, `wantsLut(pipeline, opts)` and `init(pipeline, opts)`.
+`floatFor(lut, hints)`, `provideLut(lutMode)` and `init(pipeline, opts)`.
 
 Three reasons over a flat prefixed key:
 
@@ -551,20 +528,29 @@ Three reasons over a flat prefixed key:
 
 ```
 create()
-  ├─ setKernel(inputChannels)            → Transform.kernels[n], one array index
-  ├─ kernels[n].wantsLut(tempPipeline)   → {lut} | false | null
-  ├─ [CLUT build, if any]
-  ├─ createPipeline(...)
+  ├─ isIdentity = <profile chain collapsed?>
+  ├─ inputDimension = isIdentity ? 0 : inputChannels
+  ├─ setKernel(inputDimension)           → Transform.kernels[n], one array index
+  │
+  ├─ IDENTITY: kernel.init() builds the copy pipeline, and create() returns
+  │
+  ├─ createPipeline(...)                 → the TEMPORARY device→device pipeline
+  ├─ kernel.provideLut(lutMode)          → null | false | a LUT
+  ├─ [CLUT build, unless it said otherwise]
+  ├─ createPipeline(...)                 → the real one
   │    ├─ addStageLUT → kernels[lut.inputChannels].floatFor(lut, hints)
-  │    │                 ↑ scales NOT final here
+  │    │                 ↑ on the DESCRIPTOR, scales NOT final here
   │    └─ optimisePipeline()             → folds scales into the LUT
   ├─ pipelineCreated = true
   ├─ kernel.create(lutMode)              → WASM settle + lutMode demotion
-  ├─ {pipeline, kernel} = kernels[n].init(pipeline, opts)
-  │    └─ if mutated: optimisePipeline() + validatePipeline()
-  ├─ _expectsU16 / _isIntegerMode        ← cached from the settled lutMode
-  └─ _resolveLutKernels()                → kernel.resolveRuns()
+  └─ {pipeline, kernel} = kernel.init(pipeline, opts)
+       ├─ resolves its own image path onto itself
+       └─ if it rewrote the pipeline: optimisePipeline() + validatePipeline()
 ```
+
+Then `transformArray()` hands the kernel an array, and `kernel.array()` decides
+everything else. There is no resolve step after `init`, and nothing outside the
+kernel holds a run reference or a threshold.
 
 ---
 
@@ -718,7 +704,7 @@ speedup", one level down: quote the measurement that controls its conditions.
 | ~~4~~ | ~~Loops and WASM state move onto the kernel; the 22 `run_` adapters in `lutKernelTable.js` follow the loops they call~~ **LANDED 2026-08-21** across 4/4b/4c/4d | ~~They exist only to rename `t.method`~~ **Corrected**: they are the family boundary that keeps float and int bodies from sharing a call site and poisoning the JIT |
 | ~~4e~~ | ~~`arrayFor()` returns `{big, small, threshold}`~~ **LANDED 2026-08-21, AND SUPERSEDED** — the shared `WASM_DISPATCH_MIN_PIXELS` retired into `dispatchThreshold.js`, but returning a threshold to the caller still made batch size Transform's business. Replaced by [`arrayFn`](#arrayfn) in phase 8 | After the loops move, this is the last thing Transform knows about dispatch |
 | ~~5~~ | ~~`init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire~~ **LANDED 2026-08-21** — no claim registry at all in the end: Kernel3D reads the pipeline and yields to the matrix shaper itself, and Transform never learns a choice was made. The 42-row dispatch table became a `resolve()` switch in each kernel file, verified against a 560-decision oracle; the u16 wide-output gap it hid (CMYK→5CLR threw at 16 bits) is fixed | Needs 3 and 4 landed first |
-| 6 | `wantsLut()` merges `provideLut` + `displacesLut` | Smallest surface, last |
+| ~~6~~ | ~~`wantsLut()` merges `provideLut` + `displacesLut`~~ **LANDED 2026-08-21** — kept the name `provideLut`, since `displacesLut` was the narrower of the two and its whole answer space already fitted. Moving the call to where the temporary pipeline exists is what made the merge possible, and it took a descriptor-vs-instance bug with it | Smallest surface, last |
 | 7 | Per-dimension WASM loading behind a cached host probe | Independent of the rest; re-express the loadout test first |
 | ~~8~~ | ~~`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business~~ **LANDED 2026-08-21**, and it took `transformArrayFn` with it: identity became `kernels[0]`, so the last closure Transform had a reason to bind stopped being a special case. See [What Transform actually does](#the-principle) |
 

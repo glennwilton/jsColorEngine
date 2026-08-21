@@ -31,18 +31,35 @@ module.exports = {
     dimensions: 3,
 
     /**
-     * Should the CLUT build be skipped so the matrix-shaper implementation can
-     * take this transform?
+     * What LUT does this kernel want, if any?
      *
-     * Asked DURING create(), against the temporary device-to-device pipeline
-     * the LUT builder makes before walking the grid — earlier than init(), and
-     * on a different pipeline. Opt-in via `wasmMatrixShaper: 'prefer'`, and
-     * deliberately conservative: saying yes means no CLUT is built, so a later
-     * refusal would strand the caller on the generic loops.
+     * Asked once during create(), against the TEMPORARY device-to-device
+     * pipeline the LUT builder makes before it walks the grid — so the answer
+     * is taken on a pipeline that exists rather than predicted from profile
+     * types. That matters: an identity pair collapses to three stages and this
+     * kernel rightly declines it, which no amount of inspecting
+     * inputProfile.type would have revealed.
+     *
+     *   null    build the CLUT as normal — the answer almost always
+     *   false   build none; the matrix shaper runs the folded pipeline instead
+     *   {lut}   a LUT this kernel made itself (nothing built-in does, but a
+     *           kernel is free to call createNDDeviceLUT and hand back a house
+     *           look, an f32-celled table, or a small preview grid)
+     *
+     * Deliberately conservative about `false`. Saying it means NO CLUT IS
+     * BUILT, so a later refusal by inspect() would strand the caller on the
+     * generic loops at ~8 MPx/s — far worse than the CLUT it replaced. Every
+     * condition inspect() checks is checked there too, against the equivalent
+     * stages. Opt-in via `wasmMatrixShaper: 'prefer'`.
+     *
+     * REPLACED displacesLut() in v1.6 — the same question asked through a
+     * narrower hook that could only ever answer "no LUT" or "carry on", and
+     * asked of the shared DESCRIPTOR rather than this instance.
      */
-    displacesLut: function(transform){
-        try { return matrixShaper.wantsInsteadOfLut(transform); }
-        catch(e){ return false; }
+    provideLut: function(lutMode){
+        try {
+            return matrixShaper.wantsInsteadOfLut(this.transform) ? false : null;
+        } catch(e){ return null; }
     },
 
     /**
@@ -225,5 +242,4 @@ module.exports = {
         wasmLifecycle.releaseWasmStates(this.transform);
     },
 
-    provideLut: function(lutMode){ return null; },
 };
