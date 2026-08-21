@@ -130,7 +130,7 @@ var descriptor = Transform.kernels[inChannels];
 | `name` | yes | stable identity; re-registering the same name replaces in place |
 | `supports` | no | declarative variant capability map — diagnostics only |
 | **`floatFor(lut, hints)`** | **yes** | **NEW** — returns `{funct, stageName}` for a single-colour pipeline stage |
-| **`arrayFor(lut, hints)`** | no | **PROPOSED** — returns one bound function for the image path, resolved once at create. See [arrayFor](#arrayfor) |
+| **`arrayFor(lut, hints)`** | no | **PROPOSED** — returns `{big, small, threshold, bigName, smallName}` for the image path, resolved once at create. See [arrayFor](#arrayfor) |
 | **`wantsLut(pipeline, opts)`** | no | **NEW** — replaces `provideLut` + `displacesLut` |
 | **`init(pipeline, opts)`** | no | **NEW** — replaces `claims`; returns `{pipeline, kernel}` |
 | `create(lutMode)` | yes | settle WASM state, demote lutMode if the host can't run the request; returns the settled mode |
@@ -802,11 +802,52 @@ and `transformArray` calls it with no dispatch on either side.
 
 ```js
 // at create()
-this._arrayFn = kernel.arrayFor(lut, hints);
+var bound = kernel.arrayFor(lut, hints);
+// { big, small, threshold, bigName, smallName }
 
-// per call — one indirect call, nothing else
-this._arrayFn(input, output, pixelCount, inAlpha, outAlpha, preserve);
+// per call
+var fn = (pixelCount >= bound.threshold) ? bound.big : bound.small;
+fn(input, output, pixelCount, inAlpha, outAlpha, preserve);
 ```
+
+**Two functions and a threshold, not one function that branches inside.** The
+kernel already resolves exactly this shape today — `_runBig`, `_runSmall`,
+`_threshold` on the instance — so returning it is a rename of something that
+exists rather than a new mechanism. Making it a return value rather than
+private state buys three things:
+
+- **The threshold becomes data.** Inspectable, assertable, reportable by
+  `kernelInfo()`. Today it is a private field and a test has to reach for
+  `kernel._threshold` to check it.
+- **Non-WASM modes collapse to one bound function and no compare at all.**
+  When nothing in the fallback chain is WASM-eligible, `big === small` and the
+  threshold is 0 — which the current resolver already special-cases, precisely
+  to skip the per-call comparison. Measured on `*sRGB → GRACoL`:
+
+  | lutMode | big | small | threshold | collapsed |
+  |---|---|---|---|:-:|
+  | `float` | `fl_3_4` | `fl_3_4` | 0 | **yes** |
+  | `int` | `i_3_4` | `i_3_4` | 0 | **yes** |
+  | `int-wasm-simd` | `i8wsi_3_4` | `i_3_4` | 256 | no |
+  | `int16-wasm-simd` | `i16wsi_3_4` | `i16_3_4` | 256 | no |
+
+  So the fully-bound "one and done" shape is real, but it is **not** the case
+  for the WASM modes — which are exactly the ones image work uses. Those keep
+  the compare. That costs one comparison per image, which is nothing, but it is
+  worth being accurate about rather than claiming a collapse that the fast path
+  does not get.
+- **A caller that knows its size can hoist the decision.** `transformImages()`
+  splits into fragments of known pixel count, so the pool can pick once for the
+  whole run instead of re-deciding per fragment.
+
+`bigName` / `smallName` carry the resolved table entry (`i8wsi_3_4`, `fl_4_n`)
+for diagnostics — the same strings `_runBigKey` / `_runSmallKey` hold now, which
+`verbose` already prints and which `kernelInfo()` should surface.
+
+Two tiers because the break-even is one decision, not a ladder: the fallback
+chain (simd → scalar → js → float) is walked once at create() and lands on
+exactly two outcomes. If a third tier ever earns its place the shape can grow,
+but nothing today wants one.
 
 Today the same journey is: `transformArrayViaLUT` preamble → `kernel.array()` →
 `ensureOutputArray` → `runTableKernel` → threshold compare → the resolved run
@@ -844,15 +885,21 @@ grounds should be shown this paragraph and the flag that already exists.
   WASM check become one function the kernel wrote, rather than three files that
   must agree.
 
-### The one real complication
+### The threshold is real, and must not be optimised away
 
-The BIG/SMALL threshold is a genuine per-call decision — WASM has a memcpy
-break-even, so a small batch is faster on the JS variant. `pixelCount` is not
-known at bind time, so `arrayFor` cannot bind it away. It can only move the
-compare inside the returned closure, which is where it effectively is now.
+WASM has a memcpy break-even: below it, the JS variant wins. `pixelCount` is
+not known at bind time, so the decision cannot be bound away in the general
+case — returning `{big, small, threshold}` exposes it rather than hiding it,
+which is the point.
 
-That is fine, and worth stating plainly so nobody "optimises" it out later and
-sends 64-pixel calls through a WASM path that loses on the memcpy.
+Worth stating plainly so nobody removes the compare later and sends 64-pixel
+calls through a path that loses on the copy. `WASM_DISPATCH_MIN_PIXELS` is
+where that break-even lives, and it is a class static so a profiler can move it
+before `create()`.
+
+The case where it *can* be bound away is when `big === small` — no WASM-eligible
+entry anywhere in the chain — and the resolver already collapses the threshold
+to 0 there for exactly this reason.
 
 ### Before building it
 
