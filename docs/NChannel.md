@@ -167,6 +167,51 @@ not a measurement of anyone's press.
    under-colour behaviour rather than a flat ramp, so the black generation
    logic actually gets exercised rather than bypassed.
 
+#### Both directions, and a round trip that needs no oracle at all
+
+The same construction gives **A2B and B2A**, which matters because they are not
+symmetrical problems:
+
+- **A2B** is device → PCS. Every input is reachable: n channels of ink, all
+  combinations valid, and the wheel construction above defines the whole
+  domain.
+- **B2A** is PCS → device, and most of its input space is *not reachable*. Lab
+  is far larger than any printable gamut, so a B2A table indexed over the full
+  space is mostly describing colours the device cannot make. Fill that with
+  nonsense and the table tests the interpolator fine — but it tests nothing
+  about gamut behaviour, and a round trip through it is meaningless.
+
+So constrain the PCS side to something gamut-shaped. **Two cones base to base**
+is the cheap approximation and close enough to a real gamut solid: chroma
+collapses to zero at L\*0 and L\*100 and is widest in the middle.
+
+```
+Cmax(L) = C0 * (1 - |L - 50| / 50)        // C0 around 60-70
+```
+
+Inside that solid, map Lab back to ink by inverting the wheel — hue angle
+selects the colourants, chroma sets how much, lightness drives the ink-to-black
+blend from step 4. Outside it, clamp to the boundary, which is what a real B2A
+does anyway.
+
+Flattening `Cmax(L)` to a constant — `a`, `b` limited to ±50 — is the simpler
+version and probably enough to start. It over-covers the light and dark ends,
+where a real gamut has already pinched in, so a round trip near L\*5 or L\*95
+will clamp rather than round-trip cleanly. That is a known and acceptable
+artefact of the simpler shape, not a bug to chase.
+
+**The payoff is a test with no external oracle.** With both tables built from
+one construction, `device → A2B → Lab → B2A → device` should return
+approximately what went in, for any starting ink combination inside the gamut.
+That exercises both interpolators, both channel counts, the full pipeline and
+the gamut clamp — and it is self-checking, so it needs neither lcms nor a
+committed profile. Divergence is the signal, and the size of the divergence is
+itself a measurement.
+
+Round-trip identity is a weaker check than agreeing with lcms — an error that
+is symmetric in both directions cancels — so it does not replace the oracle. It
+does arrive much sooner and costs almost nothing.
+
 #### Then test both engines
 
 Same stimuli through lcms and through jsColorEngine, same comparison the
