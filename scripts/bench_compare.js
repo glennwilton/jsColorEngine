@@ -20,6 +20,14 @@
  * ACCURACY IS GATED AT ZERO. Throughput has a tolerance; LSB error does not.
  * A refactor that quietly changes rounding is the failure mode worth catching.
  *
+ * THREE GATES, MATCHED TO WHAT EACH MEASUREMENT SUPPORTS. The solo bench
+ * controls its conditions and reports its own spread under 1%, so its cells
+ * gate individually. The content matrix does not: single 1024k cells were
+ * observed swinging 5-18% between clean runs on an idle machine while their
+ * median held to a fraction of a percent, so the median gates and individual
+ * cells are reported for diagnosis only. Gating a noisy instrument per cell
+ * produces failures nobody believes, which is how a gate stops being read.
+ *
  * Usage:
  *   node scripts/bench_compare.js                     # newest run vs pinned baseline
  *   node scripts/bench_compare.js <run>               # that run vs pinned baseline
@@ -27,8 +35,9 @@
  *   node scripts/bench_compare.js --tolerance 5       # percent, default 3
  *   node scripts/bench_compare.js --markdown          # emit a block for a PR/CHANGELOG
  *
- * Exit code 1 if anything outside tolerance survives the noise check, or if any
- * accuracy figure moved at all.
+ * Exit code 1 if the aggregate regresses past tolerance, an isolated
+ * measurement regresses, a single cell moves catastrophically, or any accuracy
+ * figure moves at all.
  */
 'use strict';
 
@@ -59,9 +68,23 @@ const positional = argv.filter((a, i) =>
 // in the same process on the same content — they answer "was it the machine?".
 // Everything else (distinct colour counts, cover ratios) is descriptive.
 
-const GATED   = /^(jsce|kernel|peakMpxs|sequentialMpxs|mpxs)/i;
+const GATED   = /^(jsce|kernel|peak|sequential|median|mean)?mpxs?$|^(jsce|kernel)/i;
 const CONTROL = /^(lcms|native)/i;
 const ACCURACY = /(MaxLsb|MeanLsb|Over1Pct|maxLsb|meanLsb)$/;
+
+// TWO MEASUREMENT REGIMES, TWO KINDS OF GATE.
+//
+// A table that reports its own spread (`spreadPct`) measured itself under
+// control — the solo bench runs one image, one engine, one process per cell and
+// reports 0.2-1.0%. Those cells are trustworthy individually, so each one gates.
+//
+// The content matrix does not. Individual 1024k cells were observed moving
+// 5-18% between clean runs on an idle machine, while the MEAN across 132 of
+// them held to +0.83% and +0.80% on two consecutive clean runs. So for those,
+// the aggregate gates and single cells are reported but never fail a build.
+// Gating a noisy instrument per-cell produces failures nobody believes, which
+// is how a gate stops being read.
+const CONTROLLED = t => t.rows.some(r => typeof r.spreadPct === 'number');
 
 // Small batches are dominated by per-call overhead and GC rather than the
 // kernel loop, and they measure like it. `js.sweep.rgb-rgb-matrix.64k /
@@ -145,7 +168,8 @@ function compare(base, run){
     for(const id of Object.keys(run)){
         const b = base[id];
         if(!b){ missing.push(id); continue; }
-        const small = tablePixels(run[id]) < GATE_MIN_PIXELS;
+        const small      = tablePixels(run[id]) < GATE_MIN_PIXELS;
+        const controlled = CONTROLLED(run[id]);
         const key = run[id].columns[0];
         for(const rowB of run[id].rows){
             const rowA = b.rows.find(r => r[key] === rowB[key]);
@@ -154,7 +178,8 @@ function compare(base, run){
                 const a = rowA[col], n = rowB[col];
                 if(typeof a !== 'number' || typeof n !== 'number') continue;
                 const kind = ACCURACY.test(col) ? 'accuracy'
-                           : GATED.test(col)    ? (small ? 'small' : 'gated')
+                           : GATED.test(col)    ? (controlled ? 'controlled'
+                                                 : small      ? 'small' : 'gated')
                            : CONTROL.test(col)  ? 'control'
                            : null;
                 if(!kind) continue;
@@ -169,6 +194,12 @@ function compare(base, run){
 }
 
 const mean = xs => xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0;
+const median = xs => {
+    if(!xs.length) return 0;
+    const s = xs.slice().sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 
 // ---- run ----------------------------------------------------------------
 
@@ -190,10 +221,11 @@ if(vsArg){
 }
 const { cells, missing } = compare(base, run);
 
-const gated    = cells.filter(c => c.kind === 'gated');
-const control  = cells.filter(c => c.kind === 'control');
-const accuracy = cells.filter(c => c.kind === 'accuracy');
-const small    = cells.filter(c => c.kind === 'small');
+const gated      = cells.filter(c => c.kind === 'gated');
+const control    = cells.filter(c => c.kind === 'control');
+const accuracy   = cells.filter(c => c.kind === 'accuracy');
+const small      = cells.filter(c => c.kind === 'small');
+const controlled = cells.filter(c => c.kind === 'controlled');
 
 const gatedMean   = mean(gated.map(c => c.delta));
 const controlMean = mean(control.map(c => c.delta));
@@ -202,13 +234,46 @@ const controlMean = mean(control.map(c => c.delta));
 // control on the same run did not move with it. If lcms swung as far as we
 // did, the machine was busy — that is a measurement to repeat, not a
 // regression to chase.
-const controlSpread = control.length
-    ? Math.max(...control.map(c => Math.abs(c.delta))) : 0;
+//
+// P95, NOT MAX. The control distribution on a healthy run is tight with a long
+// thin tail: one measured run went median 1.1%, p90 4.1%, p95 4.8% — and then a
+// single cell at 20.8%. Taking the max let that one cell raise the floor above
+// every plausible regression and silently switch the gate off. The p95 tracks
+// the machine's actual restlessness and still rises properly when a run is
+// genuinely contaminated, which is the behaviour that was wanted.
+function percentile(xs, p){
+    if(!xs.length) return 0;
+    const s = xs.slice().sort((a, b) => a - b);
+    return s[Math.floor((s.length - 1) * p)];
+}
+const controlAbs    = control.map(c => Math.abs(c.delta));
+const controlSpread = percentile(controlAbs, 0.95);
+const controlMax    = controlAbs.length ? Math.max(...controlAbs) : 0;
 const noiseFloor = Math.max(TOLERANCE, controlSpread);
 
-const findings   = gated.filter(c => c.delta < -noiseFloor);
-const suspicious = gated.filter(c => c.delta < -TOLERANCE && c.delta >= -noiseFloor);
+// THREE GATES, matched to what each measurement can actually support.
+//
+//   1. Accuracy — zero tolerance, per cell.
+//   2. Controlled tables (the solo bench) — per cell at tolerance. These
+//      report their own spread and it is under 1%, so a cell that moves 3% is
+//      a real event.
+//   3. The content matrix — AGGREGATE only. Its median across all gated cells
+//      is stable to a fraction of a percent between clean runs while
+//      individual cells swing 5-18%, so the median gates and single cells are
+//      reported for diagnosis. Median rather than mean: one wild cell should
+//      not move the verdict in either direction.
+//
+// A single catastrophic cell still fails, because a genuinely broken kernel
+// looks nothing like jitter. CATASTROPHIC is set well clear of the observed
+// per-cell spread.
+const CATASTROPHIC = 30;
+
 const accuracyChanged = accuracy.filter(c => c.old !== c.now);
+const controlledBad   = controlled.filter(c => c.delta < -TOLERANCE);
+const gatedMedian     = median(gated.map(c => c.delta));
+const aggregateBad    = gated.length && gatedMedian < -TOLERANCE;
+const findings        = gated.filter(c => c.delta < -CATASTROPHIC);
+const suspicious      = gated.filter(c => c.delta < -noiseFloor && c.delta >= -CATASTROPHIC);
 
 // ---- report -------------------------------------------------------------
 
@@ -226,10 +291,16 @@ if(crossMachine){
     L.push('    are hardware before they are code. Ratios within one run compare across');
     L.push('    machines; absolute MPx/s does not.');
 }
-L.push('  tolerance: ' + TOLERANCE + '%   noise floor from control columns: '
-       + controlSpread.toFixed(1) + '%');
+L.push('  tolerance: ' + TOLERANCE + '%   noise floor: ' + noiseFloor.toFixed(1)
+       + '%  (control p95 ' + controlSpread.toFixed(1)
+       + '%, max ' + controlMax.toFixed(1) + '%)');
 L.push('');
-L.push('  jsCE throughput   ' + String(gated.length).padStart(4) + ' cells   mean ' + pct(gatedMean));
+L.push('  jsCE throughput   ' + String(gated.length).padStart(4) + ' cells   median '
+       + pct(gatedMedian) + ', mean ' + pct(gatedMean) + '   <- GATES (aggregate)');
+if(controlled.length){
+    L.push('  isolated (solo)   ' + String(controlled.length).padStart(4) + ' cells   worst '
+           + pct(Math.min(...controlled.map(c => c.delta))) + '   <- GATES (per cell)');
+}
 L.push('  third-party ctrl  ' + String(control.length).padStart(4) + ' cells   mean ' + pct(controlMean));
 L.push('  accuracy          ' + String(accuracy.length).padStart(4) + ' cells   '
        + (accuracyChanged.length ? accuracyChanged.length + ' CHANGED' : 'identical'));
@@ -254,9 +325,24 @@ if(accuracyChanged.length){
     }
 }
 
+if(controlledBad.length){
+    L.push('');
+    L.push('  ISOLATED MEASUREMENT REGRESSED — these control their conditions:');
+    for(const c of controlledBad.sort((a, b) => a.delta - b.delta)){
+        L.push('      ' + pct(c.delta).padStart(8) + '  ' + c.id + ' / ' + c.row
+               + ' / ' + c.col + '   ' + c.old + ' -> ' + c.now);
+    }
+}
+
+if(aggregateBad){
+    L.push('');
+    L.push('  AGGREGATE REGRESSED — median across ' + gated.length + ' cells is '
+           + pct(gatedMedian) + ', past the ' + TOLERANCE + '% tolerance.');
+}
+
 if(findings.length){
     L.push('');
-    L.push('  REGRESSIONS beyond the noise floor:');
+    L.push('  CATASTROPHIC single cells (past ' + CATASTROPHIC + '% — not jitter):');
     for(const c of findings.sort((a, b) => a.delta - b.delta).slice(0, 20)){
         L.push('      ' + pct(c.delta).padStart(8) + '  ' + c.id + ' / ' + c.row
                + ' / ' + c.col + '   ' + c.old + ' -> ' + c.now);
@@ -264,14 +350,21 @@ if(findings.length){
 }
 
 if(suspicious.length){
+    const worst = suspicious.slice().sort((a, b) => a.delta - b.delta).slice(0, 5);
     L.push('');
-    L.push('  Below tolerance but within the control spread — the machine moved too,');
-    L.push('  so these are a re-measurement rather than a finding (' + suspicious.length + ' cells).');
+    L.push('  Largest individual moves (diagnosis only — the content matrix gates on');
+    L.push('  its median, because single cells here swing 5-18% between clean runs):');
+    for(const c of worst){
+        L.push('      ' + pct(c.delta).padStart(8) + '  ' + c.id + ' / ' + c.row + ' / ' + c.col);
+    }
+    if(suspicious.length > worst.length) L.push('      ... and ' + (suspicious.length - worst.length) + ' more');
 }
 
-const ok = !findings.length && !accuracyChanged.length;
+const ok = !findings.length && !accuracyChanged.length
+        && !controlledBad.length && !aggregateBad;
 L.push('');
-L.push(ok ? '  PASS — no regression outside the noise floor, accuracy unchanged.'
+L.push(ok ? '  PASS — aggregate within tolerance, isolated measurements steady,'
+            + ' accuracy unchanged.'
           : '  FAIL — see above.');
 L.push('');
 
