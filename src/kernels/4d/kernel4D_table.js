@@ -161,36 +161,6 @@ function resolve(kernel, lut){
 
     var mode = kernel.transform.lutMode;
 
-    // An int16 mode without a built intLut is misuse rather than a shape we
-    // can serve: the caller asked for 16-bit integer kernels and the table they
-    // read from was never built. Loud, because the alternative is a silent
-    // fall to a path they did not ask for.
-    //
-    // ONLY WHEN A u16 RUN ACTUALLY EXISTS, i.e. narrow output. Above 4 output
-    // channels there is no u16 kernel at all and u16Run is already the FLOAT
-    // run -- float being a legal landing point for an int16 mode, because
-    // lut.outputScale is folded to 65535 and it scales at call time. Throwing
-    // there said "you did not build a table" about a table that could not have
-    // helped.
-    //
-    // It was reachable and it threw. buildIntLut() does not produce a table for
-    // more than 4 output channels, so EVERY dataFormat:'int16' conversion into
-    // a 5-or-more-channel profile died here -- while the same conversion at
-    // int8 worked, because the u8 ladder degrades to float. The u16 ladder had
-    // no such rung. Found by the first int16 run of the B2A oracle, on a
-    // 6-channel profile.
-    //
-    // The narrow case keeps throwing, and that asymmetry with int8 (which falls
-    // to float silently) is worth a second look -- but it is a different
-    // decision from this one and nothing has demonstrated it wrong.
-    if(mode === 'int16' || mode === 'int16-wasm-scalar' || mode === 'int16-wasm-simd'){
-        if(!hasIntLut && narrow){
-            throw 'lutKernelTable: fallback chain exhausted from "'
-                + (mode === 'int16' ? 'i16' : mode === 'int16-wasm-simd' ? 'i16wsi' : 'i16ws')
-                + '_4_' + (narrow ? outCh : 'n') + '" (no float fallback?)';
-        }
-    }
-
     switch(mode){
 
         case 'int16-wasm-simd':
@@ -204,9 +174,27 @@ function resolve(kernel, lut){
             }
             /* falls through */
         case 'int16':
-            // u16Run is the float run when the output is wider than 4 channels
-            // — see the guard above. Narrow output with no intLut already threw.
-            return pick(u16Run, u16Name, u16Run, u16Name);
+            // A u16 run only exists for 3 and 4 output channels, and only
+            // works if the intLut it reads was actually built. Either miss
+            // lands on FLOAT -- legal for an int16 mode because outputScale is
+            // folded to 65535 and the float run scales at call time. (u16Run
+            // is already the float run above 4 channels.)
+            //
+            // THIS USED TO THROW. "You asked for 16-bit kernels and never
+            // built the table" -- inherited from the v1.3 dispatch table,
+            // which had no float terminus for the u16 family, and reproduced
+            // faithfully by the v1.6 switch. It meant dataFormat:'int16' could
+            // not convert into any profile with more than 4 output channels at
+            // all, while int8 handled it by degrading to float.
+            //
+            // The u8 ladder always degraded. There was never a reason for the
+            // u16 one not to, and the asymmetry cost a whole depth x width
+            // quadrant. Every input width 1-15 now reaches every output width
+            // 1-15 in every mode -- not always fast, but always an answer.
+            if(hasIntLut || !narrow){
+                return pick(u16Run, u16Name, u16Run, u16Name);
+            }
+            return pick(floatRun, floatName, floatRun, floatName);
 
         case 'int-wasm-simd':
             if(hasIntLut && narrow && kernel.wasmTetra4DSimd){

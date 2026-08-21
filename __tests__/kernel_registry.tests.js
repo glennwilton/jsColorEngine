@@ -1034,22 +1034,56 @@ describe('int16 wide output reaches float instead of throwing', () => {
         }
     });
 
-    test('NARROW output with no intLut still throws — a u16 run exists, its table does not', () => {
+    test('NARROW output with no intLut lands on float too — nothing throws now', () => {
+        // This used to throw, and the throw was inherited from the v1.3
+        // dispatch table: the u16 family had no float terminus, while the u8
+        // family always degraded. The reasoning was "you asked for 16-bit
+        // kernels and never built the table" -- but int8 in the same position
+        // falls to float without comment, and the asymmetry cost a whole
+        // depth x width quadrant for nothing.
         for(const [dim, mod] of [[3, t3], [4, t4]]){
             for(const mode of MODES){
                 for(const outCh of [3, 4]){
-                    expect(() => mod.resolve(kernelFor(mode, outCh), lutFor(dim, outCh, false)))
-                        .toThrow(/fallback chain exhausted/);
+                    const picked = mod.resolve(kernelFor(mode, outCh), lutFor(dim, outCh, false));
+                    expect(picked.bigName).toBe('fl_' + dim + '_' + outCh);
+                    expect(picked.smallName).toBe('fl_' + dim + '_' + outCh);
                 }
             }
         }
+    });
+
+    test('EVERY mode x output width x intLut x WASM state resolves to something', () => {
+        // 840 combinations. The point is not any single one of them: it is
+        // that no combination throws or comes back empty, so every input width
+        // reaches every output width in every mode. Not always fast -- the
+        // wide and table-less cases land on float -- but always an answer.
+        const ALL_MODES = ['float', 'int', 'int16', 'int-wasm-scalar', 'int-wasm-simd',
+                           'int16-wasm-scalar', 'int16-wasm-simd'];
+        let combinations = 0;
+        for(const [dim, mod] of [[3, t3], [4, t4]]){
+            for(const mode of ALL_MODES){
+                for(let outCh = 1; outCh <= 15; outCh++){
+                    for(const intLut of [true, false]){
+                        for(const wasm of [true, false]){
+                            const k = { transform: { lutMode: mode, outputChannels: outCh } };
+                            for(const slot of SLOTS) k[slot] = wasm ? {} : null;
+                            const picked = mod.resolve(k, lutFor(dim, outCh, intLut));
+                            expect(typeof picked.big).toBe('function');
+                            expect(typeof picked.small).toBe('function');
+                            combinations++;
+                        }
+                    }
+                }
+            }
+        }
+        expect(combinations).toBe(840);
     });
 
     test('end to end: int16 into a wide profile converts instead of throwing', () => {
         const path = require('path');
         const fs = require('fs');
         const { eIntent } = require('../src/main');
-        const file = path.join(__dirname, 'profiles', 'synthetic_6clr_b2a_g17.icc');
+        const file = path.join(__dirname, 'profiles', 'synthetic_06ch.icc');
         const prof = new Profile();
         prof.loadBinary(new Uint8Array(fs.readFileSync(file)));
 

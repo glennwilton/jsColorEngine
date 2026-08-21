@@ -1653,8 +1653,8 @@ class Profile {
     static createNChannelICC(opts) {
         opts = opts || {};
         const inCh = opts.channels;
-        if (!(inCh >= 2 && inCh <= 15)) {
-            throw new Error('Profile.createNChannelICC: channels must be 2-15, got ' + inCh);
+        if (!(inCh >= 1 && inCh <= 15)) {
+            throw new Error('Profile.createNChannelICC: channels must be 1-15, got ' + inCh);
         }
         const grid = opts.gridPoints || Profile.gridFor(inCh);
         const cells = Math.pow(grid, inCh);
@@ -1713,12 +1713,25 @@ class Profile {
             ['A2B0', a2b],
             ['A2B1', a2b],
             ['A2B2', a2b],
+        ];
+
+        // BOTH DIRECTIONS IN ONE FILE, which is what a real device profile is.
+        // It also collapses the test matrix: fifteen profiles carrying both
+        // tables give every input width paired with every output width -- 225
+        // combinations -- by running profile A's A2B into profile B's B2A.
+        // Fifteen files, not two hundred and twenty five.
+        if (opts.withB2A !== false) {
+            const b2a = Profile._b2aTable(inCh, opts.b2aGrid || 17);
+            tags.push(['B2A0', b2a], ['B2A1', b2a], ['B2A2', b2a]);
+        }
+
+        tags.push(
             ['cprt', encode.textType(SYNTHETIC_COPYRIGHT)],
             ['desc', encode.textDescriptionType(opts.description
                 || ('jsColorEngine synthetic ' + inCh + 'CLR grid' + grid
                     + ' - test profile, not for production'))],
             ['wtpt', encode.XYZType(encode.D50)],
-        ];
+        );
 
         return encode.assemble({
             colorSpace: encode.COLOUR_SPACE_SIG[inCh],
@@ -1745,14 +1758,21 @@ class Profile {
     static gridFor(channels) {
         // Chosen so every file lands under ~700 KB -- these are committed, and
         // a 6 MB fixture is its own problem. grid^channels grows fast enough
-        // that one step of grid is the difference between 354 KB and 6.3 MB
-        // at ten channels.
-        const GRID = { 2: 33, 3: 33, 4: 17, 5: 9, 6: 7, 7: 5, 8: 4, 9: 3, 10: 3 };
+        // that one step of grid is the difference between 354 KB and 6.3 MB at
+        // ten channels.
+        //
+        // 11 AND UP GET 2 POINTS PER AXIS, which is a table with no interior:
+        // every point is a corner and the interpolator has nothing to
+        // interpolate. That is not a useful profile and it is not pretending
+        // to be one -- it exists so the 11-to-15-channel INPUT path can be
+        // exercised end to end. Accuracy at those widths is measured through
+        // B2A, where the grid is 3-D and stays 17^3 however many inks there
+        // are.
+        const GRID = { 1: 255, 2: 33, 3: 33, 4: 17, 5: 9, 6: 7, 7: 5, 8: 4,
+                       9: 3, 10: 3, 11: 2, 12: 2, 13: 2, 14: 2, 15: 2 };
         const g = GRID[channels];
         if (!g) {
-            throw new Error('Profile.gridFor: no sensible grid for ' + channels
-                + ' channels -- above 10, device->PCS tables are grid^n and stop being'
-                + ' meaningful. Use a PCS->device (B2A) profile instead.');
+            throw new Error('Profile.gridFor: no grid for ' + channels + ' channels');
         }
         return g;
     }
@@ -1803,6 +1823,41 @@ class Profile {
         const grid = opts.gridPoints || 17;
         const cells = grid * grid * grid;
 
+        const b2a = Profile._b2aTable(outCh, grid);
+
+        const tags = [
+            ['B2A0', b2a],
+            ['B2A1', b2a],
+            ['B2A2', b2a],
+            ['cprt', encode.textType(SYNTHETIC_COPYRIGHT)],
+            ['desc', encode.textDescriptionType(opts.description
+                || ('jsColorEngine synthetic ' + outCh + 'CLR B2A grid' + grid
+                    + ' - test profile, not for production'))],
+            ['wtpt', encode.XYZType(encode.D50)],
+        ];
+
+        return encode.assemble({
+            colorSpace: encode.COLOUR_SPACE_SIG[outCh],
+            profileClass: 'prtr',
+            pcs: 'Lab ',
+            intent: 0,
+        }, tags);
+    }
+
+    /**
+     * The PCS -> device table itself, shared by both builders.
+     *
+     * A smooth ink model: darkness sets total ink, chroma and hue distribute
+     * it across the colourants through one cosine bump each. Not a
+     * characterisation of any press -- smooth in L, a and b, which is the
+     * property that makes a cross-engine comparison mean anything.
+     *
+     * @param {number} outCh  device channels
+     * @param {number} grid   per Lab axis
+     * @returns {number[]} mft2 tag bytes
+     */
+    static _b2aTable(outCh, grid) {
+        const cells = grid * grid * grid;
         const CLUT = new Uint16Array(cells * outCh);
         let w = 0;
         for (let li = 0; li < grid; li++) {
@@ -1831,27 +1886,9 @@ class Profile {
             }
         }
 
-        const b2a = encode.lut16Type({
+        return encode.lut16Type({
             inputChannels: 3, outputChannels: outCh, gridPoints: grid, CLUT,
         });
-
-        const tags = [
-            ['B2A0', b2a],
-            ['B2A1', b2a],
-            ['B2A2', b2a],
-            ['cprt', encode.textType(SYNTHETIC_COPYRIGHT)],
-            ['desc', encode.textDescriptionType(opts.description
-                || ('jsColorEngine synthetic ' + outCh + 'CLR B2A grid' + grid
-                    + ' - test profile, not for production'))],
-            ['wtpt', encode.XYZType(encode.D50)],
-        ];
-
-        return encode.assemble({
-            colorSpace: encode.COLOUR_SPACE_SIG[outCh],
-            profileClass: 'prtr',
-            pcs: 'Lab ',
-            intent: 0,
-        }, tags);
     }
 
 }

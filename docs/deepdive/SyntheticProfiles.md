@@ -1,7 +1,7 @@
 # Synthetic profiles, and testing what you cannot buy
 
-> **Status: gray, device→PCS (`A2B`) and PCS→device (`B2A`) built and passing
-> 2026-08-22. B2A reaches all 15 channels.**
+> **Status: built and passing 2026-08-22. Fifteen dual-table profiles, every
+> input width into every output width, 1 to 15, both depths.**
 
 Most of this engine has never been compared against another colour management
 system. Not because nobody thought to — because there was nothing to compare
@@ -66,10 +66,10 @@ So `src/encodeICC.js` is the mirror of `decodeICC.js`:
 | `encodeICC.js` | primitive writers, tag types, `mft2`, profile assembly |
 | `Profile.toICC()` | encode a loaded profile |
 | `Profile.createGrayICC()` | synthesise gray |
-| `Profile.createNChannelICC()` | synthesise 2CLR–10CLR, device→PCS |
-| `Profile.createNChannelB2AICC()` | synthesise 2CLR–15CLR, PCS→device |
+| `Profile.createNChannelICC()` | synthesise 1–15 channels, **both tables** |
 | `scripts/make_test_profiles.js` | write them to `__tests__/profiles/` once |
 | `accuracy_gray.js` / `_nchannel.js` / `_b2a.js` | hand them to lcms |
+| `__tests__/channel_matrix.tests.js` | every width into every width |
 
 It is also a feature rather than only scaffolding: decode a profile, change a
 TRC or a CLUT cell, write it back. That is profile editing.
@@ -92,11 +92,12 @@ rather than emitting one.
 
 ---
 
-## Four bugs, found immediately
+## Five bugs, found immediately
 
 The oracle earned itself on its first runs. Three below; the fourth — int16
-being unable to reach a wide profile at all — is in the B2A section, because
-that is the run that found it.
+unable to reach a wide profile at all — is in the B2A section, and the fifth —
+**165 of 225 conversions broken** — is in the channel matrix section, because
+those are the runs that found them.
 
 **1. `transformArray()` returned `undefined` for every input above 4 channels.**
 The per-pixel fallback switched on `inputChannels` with cases 1, 2, 3, 4 — and
@@ -122,6 +123,59 @@ callers could not rely on `.subarray()` or hand the result to `ImageData`. Now
 `device` and the float formats carry 0..1 values that a `Uint8ClampedArray`
 would round to 0 or 1 and destroy. `lutbuilder.tests.js` caught the first
 version of that fix doing exactly that.
+
+---
+
+## Fifteen files, two hundred and twenty-five combinations
+
+The first version of this generated separate A2B-only and B2A-only profiles, as
+though they were different kinds of thing. They are not: **a real device
+profile carries both tables**, and once each profile has both, the test matrix
+collapses.
+
+Run profile *A*'s `A2B` into profile *B*'s `B2A` and you have every input width
+paired with every output width. Fifteen files, 225 combinations, 4.6 MB.
+
+`__tests__/channel_matrix.tests.js` does exactly that, and the bar is
+deliberately low: three pixels, both surfaces, does it come back finite and the
+right length. Not speed, not agreement with another CMS — those are the
+accuracy benches. This one answers *can the engine do what it says it can*
+across its whole declared range.
+
+Two shapes fell out of the consolidation that were worth having anyway: a
+**LUT-based RGB** profile, where every RGB profile in the repo had been
+matrix-based, and a synthetic CMYK.
+
+### The fifth bug: 165 of 225 conversions were broken
+
+The matrix failed on its first run, and not narrowly. Every conversion **into**
+a 5-or-more-channel profile threw:
+
+```
+TypeError: Cannot read properties of undefined (reading 'call')
+```
+
+`optimisePipeline()` builds one stage name by concatenation:
+
+```js
+var deviceToIntFunctionName = 'stage_device' + lut.outputChannels + '_to_int';
+```
+
+The unrolled `stage_deviceN_to_int` variants exist for **1 to 4 channels**.
+Above that the name resolves to nothing, `createStage()` stores an `undefined`
+funct, and the pipeline dies on the first pixel. A generic
+`stage_deviceN_to_int` was sitting in `stages.js` unused; the fix is to fall
+back to it.
+
+Every input width was affected — this is about the *output* side — so it was
+165 of the 225 pairs. It survived because nothing in the repo could reach it:
+no profile above 4 channels existed to convert into.
+
+Worth noting what did **not** catch it. The B2A accuracy oracle converts sRGB
+into 6-, 10- and 15-channel profiles and passed. The optimiser pattern it needs
+did not fire on that pipeline shape, so the same conversion worked from one
+entry point and threw from another. A test that exercises one route through a
+feature is not a test of the feature.
 
 ---
 
@@ -329,9 +383,15 @@ found during the v1.6 kernel work.
 node scripts/make_test_profiles.js            # regenerate, deterministic
 node scripts/make_test_profiles.js --check    # verify, write nothing
 cd bench/lcms-comparison
-node accuracy_gray.js        # 1 channel
+node accuracy_gray.js        # 1 channel, kTRC profiles
 node accuracy_nchannel.js    # 2-10 channels, device -> PCS
 node accuracy_b2a.js         # 2-15 channels, PCS -> device, both depths
+```
+
+and the coverage matrix, which is an ordinary test:
+
+```bash
+npx jest channel_matrix
 ```
 
 The profiles are ordinary ICC files. Open them in any inspector — a

@@ -81,8 +81,11 @@ console.log('');
 console.log('  profile                        depth  kernel     out   exact%   <=1LSB%   max   mean');
 console.log('  -----------------------------  -----  ---------  ---   ------   -------   ---   -----');
 
-const files = fs.readdirSync(PROFILE_DIR).filter(f => /^synthetic_\d+clr_b2a.*\.icc$/i.test(f))
-    .sort((a, b) => parseInt(a.match(/\d+/)[0], 10) - parseInt(b.match(/\d+/)[0], 10));
+const files = fs.readdirSync(PROFILE_DIR)
+    .filter(f => /^synthetic_(\d{2})ch\.icc$/.test(f))
+    .filter(f => { const n = parseInt(f.match(/(\d{2})ch/)[1], 10);
+                   return n >= 2 && n <= 15; })
+    .sort();
 
 if(!files.length){
     console.error('  no B2A profiles found — run: node scripts/make_test_profiles.js');
@@ -95,7 +98,7 @@ const MAX_LSB = 8, MAX_MEAN = 1;
 let worst = 0, worstMean = 0, failed = false;
 
 for(const file of files){
-    const channels = parseInt(file.match(/synthetic_(\d+)clr/i)[1], 10);
+    const channels = parseInt(file.match(/(\d{2})ch/)[1], 10);
     const bytes = new Uint8Array(fs.readFileSync(path.join(PROFILE_DIR, file)));
 
     let state = 0xBADF00D;

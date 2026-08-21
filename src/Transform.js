@@ -5211,7 +5211,24 @@
                             lut.outputScale = 1;
                         }
 
+                        // SPECIALISED IF ONE EXISTS, GENERIC OTHERWISE. The
+                        // unrolled stage_deviceN_to_int variants only go up to
+                        // 4 channels, so this concatenation produced
+                        // 'stage_device6_to_int' -- a name nothing answers to.
+                        // createStage() then held an undefined funct and the
+                        // pipeline threw "Cannot read properties of undefined
+                        // (reading 'call')" on the first pixel.
+                        //
+                        // Every conversion INTO a 5-or-more-channel profile hit
+                        // it, whatever the input width. It survived because
+                        // nothing could reach it: this repo had no profiles
+                        // above 4 channels until the engine could write its
+                        // own, and the first run of the 15x15 channel matrix
+                        // failed on 165 of its 225 pairs.
                         var deviceToIntFunctionName = 'stage_device' + lut.outputChannels + '_to_int';
+                        if(typeof _this[deviceToIntFunctionName] !== 'function'){
+                            deviceToIntFunctionName = 'stage_deviceN_to_int';
+                        }
 
                         return [
                             _this.createStage(

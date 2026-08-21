@@ -133,13 +133,25 @@ describe('kernel dispatch — the switch that replaced the table', () => {
         }
     });
 
-    test('an int16 mode with no intLut throws rather than degrading quietly', () => {
-        // Misuse rather than a shape we cannot serve: the caller asked for
-        // 16-bit integer kernels and the table they read from was never built.
+    test('an int16 mode with no intLut degrades to float rather than throwing', () => {
+        // It threw until v1.6, on the reasoning that asking for 16-bit kernels
+        // without building their table is misuse rather than a shape we cannot
+        // serve. The u8 family never took that view -- it degrades to float
+        // silently in the identical position -- and the inconsistency meant
+        // dataFormat:'int16' could not reach a 5-or-more-channel profile at
+        // all, because buildIntLut() does not produce a table that wide.
+        //
+        // Float is legal here: lut.outputScale is folded to 65535 in an int16
+        // mode and the float run scales at call time.
         for(const [dim, mod] of DIMS){
             for(const mode of ['int16', 'int16-wasm-scalar', 'int16-wasm-simd']){
-                expect(() => mod.resolve(kernelFor(mode, 4, 'all'), lutFor(dim, 4, false)))
-                    .toThrow(/fallback chain exhausted/);
+                for(const outCh of [3, 4, 6, 15]){
+                    const picked = mod.resolve(kernelFor(mode, outCh, 'all'), lutFor(dim, outCh, false));
+                    const expected = (outCh === 3 || outCh === 4)
+                        ? 'fl_' + dim + '_' + outCh
+                        : 'fl_' + dim + '_n';
+                    expect(picked.bigName).toBe(expected);
+                }
             }
         }
     });

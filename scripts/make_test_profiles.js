@@ -80,29 +80,27 @@ const PROFILES = [
 // therefore stops at 10 — see Profile.gridFor(). PCS -> device (B2A) is a 3-D
 // grid with a long output stride and goes to 15; that needs B2A encoding,
 // which is the next piece.
-// PCS -> device (B2A): a 3-D Lab grid with an n-channel output. The grid stays
-// 17^3 however many inks there are and only the stride grows, which is why
-// this direction reaches 15 channels and A2B cannot -- and why real 12- and
-// 15-colour profiles are built around it.
+// THE MATRIX, IN FIFTEEN FILES.
 //
-// It also drives Kernel3D's WIDE-OUTPUT runs (fl_3_n / i_3_n) rather than
-// KernelND: 3 channels in, n out. Different code from everything above.
-for(const channels of [2, 4, 6, 8, 10, 12, 15]){
-    PROFILES.push({
-        file: 'synthetic_' + channels + 'clr_b2a_g17.icc',
-        make: () => Profile.createNChannelB2AICC({ channels }),
-        note: 'Lab -> ' + channels + '-channel device, 17^3 grid, smooth ink model'
-            + (channels > 10 ? ' — a width A2B cannot reach at any useful density' : ''),
-    });
-}
-
-for(const channels of [2, 5, 6, 7, 8, 9, 10]){
+// Each of these carries BOTH tables -- A2B (device -> PCS) and B2A (PCS ->
+// device) -- which is what a real device profile is, and which collapses the
+// test matrix: running profile A's A2B into profile B's B2A gives every input
+// width paired with every output width. 15 files, 225 combinations, rather
+// than 225 files.
+//
+// The A2B grid falls as the channel count rises because the table is
+// grid^channels; at 11 and up it is 2 points per axis, a table with no
+// interior. That is not a useful profile and is not pretending to be one --
+// it exists so the wide INPUT path can be exercised end to end. Accuracy at
+// those widths is measured through B2A, whose grid is 3-D and stays 17^3
+// however many inks there are.
+for(let channels = 1; channels <= 15; channels++){
     const grid = Profile.gridFor(channels);
     PROFILES.push({
-        file: 'synthetic_' + channels + 'clr_g' + grid + '.icc',
+        file: 'synthetic_' + String(channels).padStart(2, '0') + 'ch.icc',
         make: () => Profile.createNChannelICC({ channels }),
-        note: channels + '-channel device -> Lab, ' + grid + '^' + channels
-            + ' grid, noise-filled so an index error cannot hide behind a neighbour',
+        note: channels + '-channel: A2B ' + grid + '^' + channels + ' -> Lab, B2A Lab -> 17^3'
+            + (grid === 2 ? ' (A2B has no interior at this width — coverage, not accuracy)' : ''),
     });
 }
 
