@@ -46,6 +46,16 @@ Concretely, and to save anyone the trouble of re-reporting:
 - CVEs in transitive devDependencies or in the private, unpublished
   proof-of-concept packages under `bench/`
 
+**Dependency advisories against build and benchmark tooling are not a
+priority and will not be treated as urgent.** The published package is `src/`
+only; a CVE in a package that exists solely to compile a bundle, run the test
+suite, or drive a local benchmark cannot reach anyone who installs
+jsColorEngine. Such advisories get picked up during ordinary maintenance,
+alongside whatever else is being done — not on the clock a security report
+would otherwise imply. Advisories affecting a runtime dependency, or anything
+reachable from the published files, are a different matter and are treated as
+in scope.
+
 Please also note that changes to benchmark code are held to an unusual
 standard: these harnesses produce the published throughput figures, so a change
 that alters timing — pre-faulting buffers by swapping `malloc` for `calloc`
