@@ -14,23 +14,40 @@
 // profile editing is; and a Transform that has collapsed a chain can be
 // written as a device link.
 //
-// SCOPE, DELIBERATELY SMALL FOR NOW. Two shapes, both tag-based, no LUT
-// encoding:
+// SCOPE. Written as ICC v2.4 -- v2 rather than v4 because its text tag
+// (`desc`) is a fixed layout rather than a language table, every CMS reads it,
+// and nothing here needs what v4 added.
 //
-//   GRAY   wtpt + kTRC          -- gray, the smallest valid profile there is
-//   RGB    wtpt + [rgb]XYZ + [rgb]TRC   -- a matrix-shaper
+//   GRAY   wtpt + kTRC                 the smallest valid profile there is
+//   nCLR   wtpt + A2B0/1/2 as mft2     2CLR through FCLR, Lab PCS
 //
-// Both are written as ICC v2.4 with an XYZ PCS. v2 rather than v4 because its
-// text tag (`desc`) is a fixed layout rather than a language table, every CMS
-// reads it, and nothing here needs what v4 added.
+// RGB IS DELIBERATELY ABSENT. Not because it is hard -- because it is the one
+// shape there is no shortage of. Real RGB profiles are everywhere and this
+// engine already carries virtual ones; writing more would test the writer, not
+// the engine. The gaps worth filling are 1-2 channels and LUT-based profiles
+// above 4, which is exactly what is here.
 //
-// WHAT IT REFUSES. Anything needing an A2B/B2A LUT -- CMYK, nCLR, and any
-// profile whose decode produced .A2B or .B2A -- throws rather than writing a
-// profile that silently drops the tag that does the work. mft2/mAB encoding is
-// the next piece, and it is what unlocks 2CLR through 15CLR.
+// (It is also the shape most likely to be written WRONG: rXYZ/gXYZ/bXYZ hold
+// D50-adapted colourants while the decoder keeps the unadapted matrix, so a
+// naive writer produces a profile that opens cleanly and is off by a chromatic
+// adaptation. Skipping it skips that.)
 'use strict';
 
 var D50 = { X: 0.9642, Y: 1.0, Z: 0.8249 };
+
+/**
+ * ICC colour-space signatures by channel count.
+ *
+ * The n-colour signatures run '2CLR'..'9CLR' and then keep going in HEX --
+ * 'ACLR' is TEN channels, not A-as-in-letter, and 'FCLR' is fifteen. That is
+ * also where MAX_KERNEL_DIMENSIONS = 15 comes from: it is the widest thing ICC
+ * can name.
+ */
+var COLOUR_SPACE_SIG = {
+    1: 'GRAY', 3: 'RGB ', 4: 'CMYK',
+    2: '2CLR', 5: '5CLR', 6: '6CLR', 7: '7CLR', 8: '8CLR', 9: '9CLR',
+    10: 'ACLR', 11: 'BCLR', 12: 'CCLR', 13: 'DCLR', 14: 'ECLR', 15: 'FCLR',
+};
 
 // ============================================================================
 //  PRIMITIVE WRITERS — the inverse of decodeICC's readers
@@ -189,7 +206,7 @@ function header(opts){
     u32(out, 0x02400000);                         // v2.4.0
     chars(out, opts.profileClass || 'mntr', 4);
     chars(out, opts.colorSpace, 4);
-    chars(out, 'XYZ ', 4);                        // PCS
+    chars(out, opts.pcs || 'XYZ ', 4);            // 'XYZ ' or 'Lab '
 
     var d = opts.date || new Date();
     u16(out, d.getUTCFullYear()); u16(out, d.getUTCMonth() + 1); u16(out, d.getUTCDate());
@@ -218,26 +235,57 @@ function header(opts){
  */
 function assemble(opts, tags){
     var out = header(opts);
+    var i, t;
 
-    // The tag table is fixed-size once the count is known, so every tag's
-    // offset can be computed before any of the data is appended.
+    // SHARED TAG DATA. The ICC spec allows several tag signatures to point at
+    // the same element data, and real profiles lean on it hard: A2B0, A2B1 and
+    // A2B2 (perceptual, relative colorimetric, saturation) commonly reference
+    // one table rather than carrying three copies of it. There is no A2B3 --
+    // absolute colorimetric is derived from A2B1 and the media white point at
+    // transform time, not stored.
+    //
+    // Sharing is by ARRAY IDENTITY: pass the same array object for two tags
+    // and it is written once and pointed at twice. That keeps it explicit at
+    // the call site, where the caller knows whether two tables are genuinely
+    // the same thing or merely equal today. On a 6-channel A2B this is the
+    // difference between a 3 MB profile and a 1 MB one.
+    var written = [];               // [dataArray, offset] pairs, by identity
+    var offsetOf = function(data){
+        for(var w = 0; w < written.length; w++){
+            if(written[w][0] === data) return written[w][1];
+        }
+        return -1;
+    };
+
+    // The tag table is fixed-size once the count is known, so every offset can
+    // be computed before any data is appended.
     var tableBytes = 4 + tags.length * 12;
     var offset = out.length + tableBytes;
 
     u32(out, tags.length);
-    var offsets = [];
-    for(var i = 0; i < tags.length; i++){
-        var size = tags[i][1].length;
-        offsets.push(offset);
+    for(i = 0; i < tags.length; i++){
+        var data = tags[i][1];
+        var shared = offsetOf(data);
+        var at = (shared !== -1) ? shared : offset;
+
         chars(out, tags[i][0], 4);
-        u32(out, offset);
-        u32(out, size);                 // the SIZE excludes the alignment pad
-        offset += size;
-        while(offset % 4) offset++;     // ...but the next offset accounts for it
+        u32(out, at);
+        u32(out, data.length);          // the SIZE excludes the alignment pad
+
+        if(shared === -1){
+            written.push([data, offset]);
+            offset += data.length;
+            while(offset % 4) offset++; // ...but the next offset accounts for it
+        }
     }
 
-    for(var t = 0; t < tags.length; t++){
-        Array.prototype.push.apply(out, tags[t][1]);
+    // A PLAIN LOOP, NOT push.apply. apply() passes every element as an
+    // argument and blows the stack somewhere around 100k of them -- a 5CLR
+    // CLUT is 966k bytes, so the first n-channel profile written found this
+    // immediately.
+    for(t = 0; t < written.length; t++){
+        var data = written[t][0];
+        for(var k = 0; k < data.length; k++) out.push(data[k]);
         pad4(out);
     }
 
@@ -248,12 +296,142 @@ function assemble(opts, tags){
     return bytes;
 }
 
+/**
+ * lut16Type ('mft2') — the tag that does the work in a LUT-based profile.
+ *
+ * THE LAYOUT, which is the whole of it:
+ *
+ *    0  'mft2'
+ *    4  reserved (4 zero bytes)
+ *    8  input channels   (u8)
+ *    9  output channels  (u8)
+ *   10  grid points      (u8)   ONE byte, shared by every input axis
+ *   11  reserved         (u8)
+ *   12  3x3 matrix, 9 x s15Fixed16      (36 bytes)
+ *   48  input table entries   (u16)
+ *   50  output table entries  (u16)
+ *   52  input curves   entries x inputChannels  x u16
+ *       CLUT           grid^inputChannels x outputChannels x u16
+ *       output curves  entries x outputChannels x u16
+ *
+ * TWO THINGS THAT BITE.
+ *
+ * The grid count is a SINGLE BYTE for all axes, so every input dimension has
+ * the same resolution and the ceiling is 255. That is what makes a 15-channel
+ * A2B impractical rather than merely large: the cell count is grid^channels, so
+ * even 3 points per axis is 14.3 million cells before the output stride.
+ *
+ * The matrix is only meaningful when the input space is XYZ, and it must be
+ * IDENTITY otherwise -- not zero. A zero matrix is a valid encoding of "map
+ * everything to black", and a reader that applies it will do exactly that.
+ *
+ * @param {object} lut
+ * @param {number} lut.inputChannels
+ * @param {number} lut.outputChannels
+ * @param {number} lut.gridPoints          per axis, same for all
+ * @param {Uint16Array|number[]} lut.CLUT  grid^in x out, row-major, last axis fastest
+ * @param {Uint16Array|number[]} [lut.inputCurve]   entries x in, identity if omitted
+ * @param {Uint16Array|number[]} [lut.outputCurve]  entries x out, identity if omitted
+ * @param {number} [lut.inputEntries=2]    2 is the smallest legal identity ramp
+ * @param {number} [lut.outputEntries=2]
+ * @param {number[]} [lut.matrix]          9 values; identity when omitted
+ * @returns {number[]} tag bytes
+ */
+function lut16Type(lut){
+    var out = [];
+    var i;
+
+    var inCh  = lut.inputChannels;
+    var outCh = lut.outputChannels;
+    var grid  = lut.gridPoints;
+
+    if(!(inCh >= 1 && inCh <= 15))  throw new Error('encodeICC.lut16Type: inputChannels must be 1-15, got ' + inCh);
+    if(!(outCh >= 1 && outCh <= 15)) throw new Error('encodeICC.lut16Type: outputChannels must be 1-15, got ' + outCh);
+    if(!(grid >= 2 && grid <= 255)) throw new Error('encodeICC.lut16Type: gridPoints must be 2-255, got ' + grid);
+
+    var cells = Math.pow(grid, inCh) * outCh;
+    if(cells !== lut.CLUT.length){
+        throw new Error('encodeICC.lut16Type: CLUT is ' + lut.CLUT.length + ' cells, expected '
+            + 'grid^inputChannels * outputChannels = ' + grid + '^' + inCh + ' * ' + outCh
+            + ' = ' + cells);
+    }
+
+    var inEntries  = lut.inputEntries  || 2;
+    var outEntries = lut.outputEntries || 2;
+
+    chars(out, 'mft2', 4);
+    zeros(out, 4);
+    u8(out, inCh);
+    u8(out, outCh);
+    u8(out, grid);
+    u8(out, 0);
+
+    // Identity unless told otherwise. See the note above about zero.
+    var m = lut.matrix || [1,0,0, 0,1,0, 0,0,1];
+    for(i = 0; i < 9; i++) s15Fixed16(out, m[i]);
+
+    u16(out, inEntries);
+    u16(out, outEntries);
+
+    // Input curves. An identity ramp of 2 entries is 0, 65535 per channel --
+    // the smallest thing that says "do not change the input".
+    if(lut.inputCurve){
+        for(i = 0; i < lut.inputCurve.length; i++) u16(out, lut.inputCurve[i]);
+    } else {
+        for(var c = 0; c < inCh; c++){
+            for(var e = 0; e < inEntries; e++){
+                u16(out, Math.round(e / (inEntries - 1) * 65535));
+            }
+        }
+    }
+
+    for(i = 0; i < lut.CLUT.length; i++) u16(out, lut.CLUT[i]);
+
+    if(lut.outputCurve){
+        for(i = 0; i < lut.outputCurve.length; i++) u16(out, lut.outputCurve[i]);
+    } else {
+        for(var oc = 0; oc < outCh; oc++){
+            for(var oe = 0; oe < outEntries; oe++){
+                u16(out, Math.round(oe / (outEntries - 1) * 65535));
+            }
+        }
+    }
+
+    return out;
+}
+
+/**
+ * Legacy 16-bit Lab encoding, as an mft2 CLUT carries it.
+ *
+ * NOT THE OBVIOUS SCALING, and this is the single easiest thing to get wrong
+ * in a LUT profile because nothing crashes -- the colours are just quietly
+ * off. ICC v2 encodes PCS Lab in a CLUT so that 0xFF00 is the top of the
+ * range, NOT 0xFFFF:
+ *
+ *     L*  0..100     ->  0..0xFF00
+ *     a*  -128..127  ->  0..0xFF00
+ *
+ * so 100 % L is 65280 and the remaining 255 codes are above-white headroom.
+ * Using 65535 puts every value out by a factor of 1.0039, which reads as a
+ * fraction of an LSB at 8 bits and is invisible until something compares
+ * against another CMS.
+ *
+ * @returns {number[]} [L, a, b] as u16
+ */
+function labToU16v2(L, a, b){
+    var TOP = 0xFF00;
+    var enc = function(v){ return Math.max(0, Math.min(0xFFFF, Math.round(v * TOP))); };
+    return [enc(L / 100), enc((a + 128) / 255), enc((b + 128) / 255)];
+}
+
 module.exports = {
     D50: D50,
+    COLOUR_SPACE_SIG: COLOUR_SPACE_SIG,
     u8: u8, u16: u16, u32: u32,
     s15Fixed16: s15Fixed16, u8Fixed8: u8Fixed8,
     chars: chars, zeros: zeros, pad4: pad4,
-    XYZType: XYZType, curveType: curveType,
+    XYZType: XYZType, curveType: curveType, lut16Type: lut16Type,
+    labToU16v2: labToU16v2,
     textDescriptionType: textDescriptionType, textType: textType,
     header: header, assemble: assemble,
 };

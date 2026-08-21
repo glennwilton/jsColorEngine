@@ -1596,6 +1596,167 @@ class Profile {
         return encode.assemble({ colorSpace: 'GRAY', profileClass: 'mntr', intent: 0 }, tags);
     }
 
+
+    /**
+     * Build a synthetic n-channel device profile (device -> PCS) in memory.
+     *
+     * FOR TESTING, AND SAYING SO. There are no 2-channel or 5-to-15-channel
+     * profiles this repo can legally ship, so those kernels have never been
+     * compared against another CMS. This makes one so both engines can be
+     * pointed at the same file.
+     *
+     * WHY THE TABLE IS SMOOTH, AND WHY THAT WAS NOT THE FIRST ANSWER.
+     *
+     * The first version filled it with noise, on the reasoning already in
+     * __tests__/interp_reference.tests.js: a smooth ramp is the worst possible
+     * test of an interpolator, because getting a grid index wrong lands on a
+     * neighbour holding nearly the right answer and nothing fails.
+     *
+     * That reasoning is correct for comparing an implementation against a
+     * REFERENCE OF THE SAME SCHEME. It is wrong for comparing across ENGINES.
+     * jsColorEngine interpolates n-channel input with a tetrahedral base;
+     * Little CMS interpolates multilinearly on the extra axes. Both are valid
+     * -- ICC does not mandate one -- and on a noise table they disagree
+     * enormously, because unrelated neighbours mean there is no answer for the
+     * two schemes to converge on. Measured: max 144 LSB on noise, max 6 on a
+     * smooth table built from the same code.
+     *
+     * So the table is a plausible ink model: coverage darkens, the first two
+     * channels rotate hue, and chroma falls toward black as coverage rises. It
+     * is not a characterisation of anything real, but it is SMOOTH, which is
+     * the property that makes a cross-engine comparison mean something.
+     *
+     * `opts.noise` restores the old behaviour for self-consistency testing --
+     * comparing jsColorEngine's own single-colour path against its own array
+     * loop, where the scheme is identical on both sides and noise is once
+     * again the better choice.
+     *
+     * Seeded either way, so the bytes are identical on every run and every
+     * machine -- these files are committed.
+     *
+     * L is 0..100 and a/b are held to +/-50 rather than the full +/-128:
+     * outside a plausible gamut both engines are extrapolating into a corner
+     * nobody ships, and a disagreement there would say nothing useful.
+     *
+     * GRID SIZE IS THE CALLER'S PROBLEM, and it has to be. The CLUT is
+     * gridPoints^inputChannels cells, so the practical ceiling falls fast:
+     * 33 points at 4 channels is 3.5M cells, but 3 points at 15 channels is
+     * 43M. Pass something sane -- gridFor() below gives a default.
+     *
+     * @param {object}  opts
+     * @param {number}  opts.channels          input channels, 2..15
+     * @param {number}  [opts.gridPoints]      per axis; gridFor(channels) if omitted
+     * @param {number}  [opts.seed]
+     * @param {string}  [opts.description]
+     * @returns {Uint8Array} ICC bytes
+     */
+    static createNChannelICC(opts) {
+        opts = opts || {};
+        const inCh = opts.channels;
+        if (!(inCh >= 2 && inCh <= 15)) {
+            throw new Error('Profile.createNChannelICC: channels must be 2-15, got ' + inCh);
+        }
+        const grid = opts.gridPoints || Profile.gridFor(inCh);
+        const cells = Math.pow(grid, inCh);
+        if (cells * 3 > 4e6) {
+            throw new Error('Profile.createNChannelICC: ' + grid + '^' + inCh + ' x 3 = '
+                + Math.round(cells * 3 / 1e6) + 'M cells is too large to be useful.'
+                + ' Lower gridPoints -- see Profile.gridFor().');
+        }
+
+        // A plain LCG. Deterministic across machines and Node versions, which
+        // Math.random() is not, and these files are committed.
+        let state = (opts.seed === undefined ? 20260821 : opts.seed) >>> 0;
+        const rnd = () => {
+            state = (Math.imul(state, 1103515245) + 12345) & 0x7fffffff;
+            return state / 0x7fffffff;
+        };
+
+        const CLUT = new Uint16Array(cells * 3);
+        const idx = new Array(inCh);
+        for (let i = 0, w = 0; i < cells; i++) {
+            let L, a, b;
+            if (opts.noise) {
+                L = rnd() * 100; a = rnd() * 100 - 50; b = rnd() * 100 - 50;
+            } else {
+                // Unpack the cell index into grid coordinates. ICC order:
+                // channel 0 varies SLOWEST, the last channel fastest.
+                let rem = i;
+                for (let d = inCh - 1; d >= 0; d--) { idx[d] = rem % grid; rem = (rem / grid) | 0; }
+
+                // A plausible ink model. Coverage darkens; the first two
+                // channels rotate hue; chroma collapses toward black as
+                // coverage rises, so the far corner is dense and neutral the
+                // way a real n-colour press is.
+                let cov = 0;
+                for (let d = 0; d < inCh; d++) cov += idx[d];
+                cov /= inCh * (grid - 1);
+                L = 100 * (1 - cov);
+                a = 50 * Math.cos(idx[0] / (grid - 1) * Math.PI * 0.5) * (1 - cov);
+                b = 50 * Math.sin(idx[1] / (grid - 1) * Math.PI * 0.5) * (1 - cov);
+            }
+            const lab = encode.labToU16v2(L, a, b);
+            CLUT[w++] = lab[0]; CLUT[w++] = lab[1]; CLUT[w++] = lab[2];
+        }
+
+        const a2b = encode.lut16Type({
+            inputChannels: inCh, outputChannels: 3, gridPoints: grid, CLUT,
+        });
+
+        // ALL THREE INTENTS, ONE TABLE. A2B0/1/2 are perceptual, relative
+        // colorimetric and saturation; absolute is not a tag at all, it is
+        // derived from A2B1 and the media white point at transform time.
+        // Passing the same array three times makes assemble() write it once
+        // and point at it three times, so no requested intent can miss and the
+        // file does not triple in size.
+        const tags = [
+            ['A2B0', a2b],
+            ['A2B1', a2b],
+            ['A2B2', a2b],
+            ['cprt', encode.textType(SYNTHETIC_COPYRIGHT)],
+            ['desc', encode.textDescriptionType(opts.description
+                || ('jsColorEngine synthetic ' + inCh + 'CLR grid' + grid
+                    + ' - test profile, not for production'))],
+            ['wtpt', encode.XYZType(encode.D50)],
+        ];
+
+        return encode.assemble({
+            colorSpace: encode.COLOUR_SPACE_SIG[inCh],
+            profileClass: 'prtr',
+            pcs: 'Lab ',
+            intent: 0,
+        }, tags);
+    }
+
+    /**
+     * A grid size that keeps the CLUT usable at this channel count.
+     *
+     * The table is gridPoints^channels cells, so this cannot be one number.
+     * These are chosen to land between roughly 0.2M and 4M cells: fine enough
+     * that the interpolator has real interior to work in, small enough to
+     * commit.
+     *
+     * Ten channels is the honest ceiling for device -> PCS. At 15 the only
+     * legal grid is 2 points per axis -- a table with no interior at all,
+     * which would exercise the plumbing and say nothing about interpolation.
+     * That direction is what PCS -> device (B2A, a 3-D grid with a long output
+     * stride) is for.
+     */
+    static gridFor(channels) {
+        // Chosen so every file lands under ~700 KB -- these are committed, and
+        // a 6 MB fixture is its own problem. grid^channels grows fast enough
+        // that one step of grid is the difference between 354 KB and 6.3 MB
+        // at ten channels.
+        const GRID = { 2: 33, 3: 33, 4: 17, 5: 9, 6: 7, 7: 5, 8: 4, 9: 3, 10: 3 };
+        const g = GRID[channels];
+        if (!g) {
+            throw new Error('Profile.gridFor: no sensible grid for ' + channels
+                + ' channels -- above 10, device->PCS tables are grid^n and stop being'
+                + ' meaningful. Use a PCS->device (B2A) profile instead.');
+        }
+        return g;
+    }
+
 }
 
 

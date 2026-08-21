@@ -25,8 +25,12 @@ test('sRGB to CMYK via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual( [
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual( [
             94, 157, 243, 40,
             202, 183, 177, 170,
             62,  46, 46,0,
@@ -57,8 +61,12 @@ test('sRGB+Alpha to CMYK via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, false);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual( [
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual( [
         94, 157, 243, 40,
         202, 183, 177, 170,
         62,  46, 46,0,
@@ -87,8 +95,12 @@ test('sRGB+Alpha to CMYK+Alpha via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, false);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual( [
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual( [
         94, 157, 243, 40,       255,
         202, 183, 177, 170,     255,
         62, 46, 46, 0,          255,
@@ -117,8 +129,12 @@ test('sRGB+Alpha to CMYK+Alpha via arrays with PRESERVE Alpha ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, true);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual( [
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual( [
         94, 157, 243, 40,       200,
         202, 183, 177, 170,     200,
         62, 46, 46, 0,          200,
@@ -147,8 +163,12 @@ test('sRGB+Alpha to CMYK+Alpha via arrays with PRESERVE Alpha with length of 3',
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, true, 3);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual( [
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual( [
         94, 157, 243, 40,       200,
         202, 183, 177, 170,     200,
         62, 46, 46, 0,          200

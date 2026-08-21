@@ -72,6 +72,24 @@ const PROFILES = [
       note: '256-entry sampled TRC — exercises the count>1 path, not the gamma one' },
 ];
 
+// The n-channel device profiles: 2CLR (duotone) and 5..10.
+//
+// 2 and 5-15 are the channel counts this repo has never had a profile for, so
+// Kernel2D and KernelND have never been compared against another CMS. These
+// are device -> PCS (A2B), which is the direction that costs grid^channels and
+// therefore stops at 10 — see Profile.gridFor(). PCS -> device (B2A) is a 3-D
+// grid with a long output stride and goes to 15; that needs B2A encoding,
+// which is the next piece.
+for(const channels of [2, 5, 6, 7, 8, 9, 10]){
+    const grid = Profile.gridFor(channels);
+    PROFILES.push({
+        file: 'synthetic_' + channels + 'clr_g' + grid + '.icc',
+        make: () => Profile.createNChannelICC({ channels }),
+        note: channels + '-channel device -> Lab, ' + grid + '^' + channels
+            + ' grid, noise-filled so an index error cannot hide behind a neighbour',
+    });
+}
+
 // ---------------------------------------------------------------------------
 
 if(!CHECK) fs.mkdirSync(OUT_DIR, { recursive: true });

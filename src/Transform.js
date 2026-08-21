@@ -4436,7 +4436,20 @@
             inputChannels = this.inputChannels;
             outputChannels = this.outputChannels;
             inputItemsPerPixel = inputHasAlpha ? this.inputChannels + 1 :  this.inputChannels;
-            outputItemsPerPixel = (preserveAlpha) ? this.outputChannels + 1 :  this.outputChannels;
+            // AN ALPHA SLOT IS WRITTEN WHEN preserveAlpha OR outputHasAlpha --
+            // preserved from the input in the first case, filled with opaque in
+            // the second. This used to size on preserveAlpha alone, so a
+            // "fill" conversion (outputHasAlpha true, preserveAlpha false)
+            // under-allocated by one element per pixel.
+            //
+            // It went unnoticed because this path handed back an untyped
+            // Array, and writing past the end of one silently GROWS it. The
+            // moment the allocation became a Uint8ClampedArray the same writes
+            // were dropped on the floor and the reads came back undefined --
+            // which is how a latent bug in the sizing surfaced as NaN in a
+            // matrix-shaper alpha test.
+            outputItemsPerPixel = this.outputChannels
+                + ((preserveAlpha || outputHasAlpha) ? 1 : 0);
 
             if(pixelCount === undefined){
                 pixelCount = Math.floor(inputArray.length / inputItemsPerPixel);
@@ -4476,7 +4489,28 @@
                     }
                     break;
                 default:
-                    outputArray = new Array(pixelCount * outputItemsPerPixel);
+                    // outputFormat IS DEPRECATED, so undefined is the normal
+                    // case -- and it used to land here and hand back an
+                    // untyped Array while the LUT path handed back a
+                    // Uint8ClampedArray. Which container you got depended on
+                    // whether a LUT happened to be built, and the untyped one
+                    // has no .subarray() and cannot go straight into ImageData.
+                    //
+                    // dataFormat is the contract: it is what create() was told
+                    // and what the LUT path already allocates from. Several
+                    // tests asserted toBeInstanceOf(Array) on this route --
+                    // written against the observed behaviour rather than a
+                    // decision -- and were updated with it.
+                    //
+                    // ONLY the integer formats become typed. See below.
+                    outputArray =
+                          (this.dataFormat === 'int8')  ? new Uint8ClampedArray(pixelCount * outputItemsPerPixel)
+                        : (this.dataFormat === 'int16') ? new Uint16Array(pixelCount * outputItemsPerPixel)
+                        // 'device' and the float formats carry 0..1 values. A
+                        // Uint8ClampedArray would round every one of them to 0
+                        // or 1 and destroy the data, so these stay untyped --
+                        // and lutbuilder.tests.js asserts exactly that.
+                        : new Array(pixelCount * outputItemsPerPixel);
             }
 
 
@@ -4571,7 +4605,44 @@
                             }
                         }
                     }
+                    break;
 
+                default:
+                    // 5 TO 15 CHANNELS. There was no default here, and no
+                    // throw either: an n-channel transformArray() allocated an
+                    // output of the right length, filled none of it, and
+                    // returned an array of `undefined`. Silently, for every
+                    // input width the engine advertises N-channel support for.
+                    //
+                    // Nothing caught it because nothing could: there were no
+                    // 5-to-15-channel profiles to test with until this engine
+                    // could write its own. The first n-channel oracle run
+                    // found it on the first profile.
+                    //
+                    // A loop rather than more unrolled cases: this is the
+                    // accuracy path, one pixel at a time through the whole
+                    // pipeline, and eleven more copies of the same body would
+                    // buy nothing measurable against that.
+                    for(i = 0; i < pixelCount; i++){
+                        result = new Array(inputChannels);
+                        for(o = 0; o < inputChannels; o++){
+                            result[o] = inputArray[inputPos++];
+                        }
+                        for(s = 0; s < pipeLen; s++){
+                            result = pipeline[s].funct.call(this, result, pipeline[s].stageData, pipeline[s]);
+                        }
+                        for(o = 0; o < outputChannels; o++){
+                            outputArray[outputPos++] = result[o];
+                        }
+                        if(preserveAlpha) {
+                            outputArray[outputPos++] = inputArray[inputPos++];
+                        } else {
+                            if(inputHasAlpha)  { inputPos++;  }
+                            if(outputHasAlpha) {
+                                outputArray[outputPos++] = 255;
+                            }
+                        }
+                    }
             }
             return outputArray;
         };

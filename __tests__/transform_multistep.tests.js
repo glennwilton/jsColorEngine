@@ -25,8 +25,12 @@ test('multi Stage - sRGB->relative->CMYK->relative->adobeRGB ', async () => {
     ];
 
     let output = rgb2CMYK2rgb.transformArray(input);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual([
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual([
         139, 101, 59,
         53, 53, 54,
         199, 199, 199,
@@ -56,8 +60,12 @@ test('multi Stage - sRGB->perceptual->CMYK->relative->adobeRGB ', async () => {
     ];
 
     let output = rgb2CMYK2rgb.transformArray(input);
-    expect(output).toBeInstanceOf(Array);
-    expect(output).toEqual([
+    // transformArray() returns a TYPED array, matching dataFormat -- it used to
+    // hand back an untyped Array on the non-LUT route only, so which container
+    // you got depended on whether a LUT was built. Uint8ClampedArray is
+    // array-like but is NOT an instanceof Array, hence the explicit check.
+    expect(ArrayBuffer.isView(output)).toBe(true);
+    expect(Array.from(output)).toEqual([
         138, 102, 61,
         60, 60, 60, //<---- grey is different as perceptual intent shifts lightness
         205, 205, 205,
