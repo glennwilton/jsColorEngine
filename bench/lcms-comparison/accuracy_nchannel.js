@@ -22,11 +22,15 @@
  * implementation to a REFERENCE OF THE SAME SCHEME. It is wrong across
  * ENGINES, because the two schemes are not the same:
  *
- *   jsColorEngine  one Kuhn simplex over all N axes -- N+1 corners, O(N)
  *   Little CMS     tetrahedral in the last 3 axes, LINEAR on every extra one,
  *                  i.e. 2^(N-3) tetrahedral evaluations lerped together
- *                  (see Eval4Inputs and the Eval##N##Inputs macro in
+ *                  (Eval4Inputs and the Eval##N##Inputs macro in
  *                  lcms2/src/cmsintrp.c)
+ *   jsColorEngine  the same scheme since v1.6. It used to walk one Kuhn
+ *                  simplex over all N axes -- O(N) rather than O(2^(N-3)) and
+ *                  the nicer algorithm, but slower or less accurate at every
+ *                  channel count measured. Kept as simplexInterpND_NCh with
+ *                  the numbers, behind the toggle in KernelND.js.
  *
  * Both are exact at grid points and differ inside a cell. On a noise table
  * they cannot converge, because unrelated neighbours mean there is no answer
@@ -104,7 +108,7 @@ if(!files.length){
 // Structural faults show as tens of LSB and a mean in double figures; the
 // scheme difference shows as a handful of LSB and a mean near zero. The gate
 // sits in the gap, an order of magnitude clear of both.
-const MAX_LSB = 8, MAX_MEAN = 2;
+const MAX_LSB = 8, MAX_MEAN = 1;
 let worst = 0, worstMean = 0, failed = false;
 for(const file of files){
     const channels = parseInt(file.match(/synthetic_(\d+)clr/i)[1], 10);

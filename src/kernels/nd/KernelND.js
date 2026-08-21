@@ -12,6 +12,32 @@ var kernelUtils = require('../kernelUtils.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 var interp = require('../../interp.js');
 
+// ---------------------------------------------------------------------------
+// WHICH N-CHANNEL INTERPOLATOR RUNS. A hard-coded toggle, deliberately: this
+// is not a user option, it is a switch for the next person who wants to
+// re-run the comparison rather than take the numbers on trust.
+//
+//   'tetrahedral'  tetrahedral on the last three axes, linear on every extra
+//                  one -- the Little CMS scheme. THE DEFAULT.
+//   'simplex'      one Kuhn simplex across all n axes, O(n) rather than
+//                  O(2^(n-3)). The nicer algorithm, and slower or less
+//                  accurate at every channel count measured.
+//
+// Measured against lcms on smooth tables, via
+// bench/lcms-comparison/accuracy_nchannel.js:
+//
+//      ch  grid   simplex             tetrahedral (default)
+//       5     9   119ms  mean 0.177   60ms   mean 0.197
+//       8     4   155ms  mean 0.479   441ms  mean 0.021
+//      10     3   180ms  mean 1.130   1746ms mean 0.008
+//
+// The simplex is faster only at 8+ channels, where grid^n has already forced
+// the table to 3 or 4 points per axis. The Lab gamut is a lobed solid, not a
+// box, so at that density nothing is recovering real colour and the speed is
+// bought with nothing. Full reasoning in the JSDoc on both functions in
+// src/interp.js.
+var ND_INTERPOLATOR = 'tetrahedral';
+
 module.exports = {
     name: 'kernelND',
 
@@ -37,7 +63,15 @@ module.exports = {
      * into lut.inputScale / lut.outputScale after the stage is built.
      */
     floatFor: function(lut, hints) {
-        return { funct: interp.tetrahedralInterpND_NCh, stageName: 'tetrahedralInterpND' };
+        // The stage name does not change with the toggle: it is what
+        // optimisePipeline() and the compiler match on, and both
+        // implementations occupy the same slot in the pipeline.
+        return {
+            funct: (ND_INTERPOLATOR === 'simplex')
+                ? interp.simplexInterpND_NCh
+                : interp.tetrahedralInterpND_NCh,
+            stageName: 'tetrahedralInterpND',
+        };
     },
 
     create: function(lutMode) {

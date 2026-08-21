@@ -2591,12 +2591,196 @@
         };
 
         /**
-         * N-dimensional tetrahedral interpolation, N-channel input → N-channel output.
-         * @param input
-         * @param lut
-         * @returns {any[]}
+         * N-channel input interpolation: tetrahedral base, linear extras.
+         *
+         * THE SCHEME, AND WHY THIS ONE. Little CMS evaluates an n-dimensional
+         * CLUT by peeling the FIRST input axis, evaluating the remaining
+         * (n-1)-dimensional table at the two bracketing planes, and lerping
+         * between them -- recursing until three axes are left, where it does a
+         * real 3-D tetrahedral interpolation (cmsintrp.c: Eval4Inputs and the
+         * Eval##N##Inputs macro). Last three axes tetrahedral, every extra
+         * axis linear.
+         *
+         * The 4-channel case of that is a deliberate colour decision, and lcms
+         * names its variables to say so -- fk, fx, fy, fz: K is the linear
+         * axis, CMY the tetrahedral base, which is exactly what
+         * tetrahedralInterp4D_3Ch does. The n>4 generalisation is MECHANICAL,
+         * not colour-reasoned: the recursion peels from the front because that
+         * is the cheapest way to reuse the 3-D evaluator, so on a CMYK+spots
+         * profile it is the SPOTS that get the tetrahedron and CMYK that gets
+         * lerped. Nobody chose that; it falls out of the recursion.
+         *
+         * WHAT IT REPLACED. simplexInterpND_NCh below -- a Kuhn simplex across
+         * all n axes, O(n) rather than O(2^(n-3)), and the nicer algorithm.
+         * Retired on measurement, not taste:
+         *
+         *      ch  grid   simplex             lcms scheme
+         *       5     9   119ms  mean 0.177   60ms   mean 0.197
+         *       8     4   155ms  mean 0.479   441ms  mean 0.021
+         *      10     3   180ms  mean 1.130   1746ms mean 0.008
+         *
+         * (mean = LSB from Little CMS over a smooth table --
+         * bench/lcms-comparison/accuracy_nchannel.js)
+         *
+         * The simplex is not better anywhere. At 5 and 6 channels -- the
+         * counts anyone ships, Hexachrome being 6 -- this scheme is FASTER,
+         * because four tetrahedral evaluations cost less than the sort the
+         * simplex cannot avoid. Above that the simplex wins on speed and loses
+         * 23x to 140x on agreement, and loses it exactly where grid^n has
+         * squeezed the table to 3 or 4 points per axis. The Lab gamut is a
+         * lobed solid rather than a box, so at that density no scheme recovers
+         * anything real, and the speed is bought with nothing.
+         *
+         * @param {number[]|TypedArray} input  n channels
+         * @param {object} lut
+         * @returns {number[]} new array of length lut.outputChannels
          */
         tetrahedralInterpND_NCh(input, lut) {
+            const dims    = lut.inputChannels;
+            const outCh   = lut.outputChannels;
+            const CLUT    = lut.CLUT;
+            const gPoints = lut.gridPoints;
+            const scale   = lut.outputScale;
+            const inScale = lut.inputScale;
+
+            // stride[d] = one step along axis d, in CLUT elements. Last axis
+            // fastest, which is the ICC storage order.
+            const stride = new Array(dims);
+            stride[dims - 1] = outCh;
+            for (let d = dims - 2; d >= 0; d--) {
+                stride[d] = stride[d + 1] * gPoints[d + 1];
+            }
+
+            // Lower grid index and fraction per axis. Scale FIRST, clamp in
+            // grid space -- see tetrahedralInterp3D_NCh for what clamping to
+            // 0..1 beforehand costs when inputScale is 1/255.
+            const idx = new Array(dims);
+            const fx  = new Array(dims);
+            for (let d = 0; d < dims; d++) {
+                const gm = gPoints[d] - 1;
+                const v  = Math.min(Math.max(input[d] * inScale, 0), 1) * gm;
+                const i0 = Math.floor(v);
+                idx[d] = (i0 >= gm) ? (gm > 0 ? gm - 1 : 0) : i0;
+                fx[d]  = v - idx[d];
+            }
+
+            // The 3-D tetrahedral base on axes (b, b+1, b+2). Six cases, one
+            // per ordering of the three fractions: which tetrahedron of the
+            // cube the point landed in.
+            const tetra = (b, off, out) => {
+                const rx = fx[b], ry = fx[b + 1], rz = fx[b + 2];
+                const sx = stride[b], sy = stride[b + 1], sz = stride[b + 2];
+                const base = off + idx[b] * sx + idx[b + 1] * sy + idx[b + 2] * sz;
+
+                for (let c = 0; c < outCh; c++) {
+                    const c000 = CLUT[base + c];
+                    let c1, c2, c3;
+                    if (rx >= ry && ry >= rz) {
+                        c1 = CLUT[base + sx + c] - c000;
+                        c2 = CLUT[base + sx + sy + c] - CLUT[base + sx + c];
+                        c3 = CLUT[base + sx + sy + sz + c] - CLUT[base + sx + sy + c];
+                    } else if (rx >= rz && rz >= ry) {
+                        c1 = CLUT[base + sx + c] - c000;
+                        c2 = CLUT[base + sx + sy + sz + c] - CLUT[base + sx + sz + c];
+                        c3 = CLUT[base + sx + sz + c] - CLUT[base + sx + c];
+                    } else if (rz >= rx && rx >= ry) {
+                        c1 = CLUT[base + sx + sz + c] - CLUT[base + sz + c];
+                        c2 = CLUT[base + sx + sy + sz + c] - CLUT[base + sx + sz + c];
+                        c3 = CLUT[base + sz + c] - c000;
+                    } else if (ry >= rx && rx >= rz) {
+                        c1 = CLUT[base + sx + sy + c] - CLUT[base + sy + c];
+                        c2 = CLUT[base + sy + c] - c000;
+                        c3 = CLUT[base + sx + sy + sz + c] - CLUT[base + sx + sy + c];
+                    } else if (ry >= rz && rz >= rx) {
+                        c1 = CLUT[base + sx + sy + sz + c] - CLUT[base + sy + sz + c];
+                        c2 = CLUT[base + sy + c] - c000;
+                        c3 = CLUT[base + sy + sz + c] - CLUT[base + sy + c];
+                    } else {
+                        c1 = CLUT[base + sx + sy + sz + c] - CLUT[base + sy + sz + c];
+                        c2 = CLUT[base + sy + sz + c] - CLUT[base + sz + c];
+                        c3 = CLUT[base + sz + c] - c000;
+                    }
+                    out[c] = c000 + c1 * rx + c2 * ry + c3 * rz;
+                }
+            };
+
+            // Peel axis d linearly, recursing until three axes remain.
+            const peel = (d, off, out) => {
+                if (dims - d === 3) { tetra(d, off, out); return; }
+                const s  = stride[d];
+                const lo = new Array(outCh);
+                const hi = new Array(outCh);
+                peel(d + 1, off + idx[d] * s, lo);
+                peel(d + 1, off + (idx[d] + 1) * s, hi);
+                const r = fx[d];
+                for (let c = 0; c < outCh; c++) out[c] = lo[c] + (hi[c] - lo[c]) * r;
+            };
+
+            const result = new Array(outCh);
+
+            if (dims >= 3) {
+                peel(0, 0, result);
+            } else {
+                // 1 or 2 axes: no tetrahedron to reach. Multilinear over the
+                // 2^dims corners. KernelND owns 5..15 so nothing built-in
+                // arrives here, but this is exported and a caller with a
+                // narrow LUT should get an answer rather than a crash.
+                const corners = 1 << dims;
+                for (let c = 0; c < outCh; c++) result[c] = 0;
+                for (let m = 0; m < corners; m++) {
+                    let w = 1, off = 0;
+                    for (let d = 0; d < dims; d++) {
+                        const up = (m >> d) & 1;
+                        w *= up ? fx[d] : (1 - fx[d]);
+                        off += (idx[d] + up) * stride[d];
+                    }
+                    if (w === 0) continue;
+                    for (let c = 0; c < outCh; c++) result[c] += w * CLUT[off + c];
+                }
+            }
+
+            for (let c = 0; c < outCh; c++) result[c] *= scale;
+            return result;
+        }
+
+        /**
+         * N-dimensional Kuhn simplex interpolation. NOT THE DEFAULT.
+         *
+         * Sort the fractional coordinates, walk the n+1 corners of the simplex
+         * they select, weight by the sorted differences. This is the honest
+         * generalisation of tetrahedral interpolation to n dimensions: O(n)
+         * corner reads and one sort, against O(2^(n-3)) tetrahedral
+         * evaluations for tetrahedralInterpND_NCh above. It is the nicer
+         * algorithm, which is why it is still here.
+         *
+         * WHY IT IS NOT USED, measured rather than argued:
+         *
+         *      ch  grid   simplex             lcms scheme
+         *       5     9   119ms  mean 0.177   60ms   mean 0.197
+         *       8     4   155ms  mean 0.479   441ms  mean 0.021
+         *      10     3   180ms  mean 1.130   1746ms mean 0.008
+         *
+         * (mean = LSB from Little CMS over a smooth table --
+         * bench/lcms-comparison/accuracy_nchannel.js)
+         *
+         * Not better anywhere. At 5 and 6 channels it is SLOWER and no more
+         * accurate -- the sort costs more than four tetrahedral evaluations.
+         * Above that it wins on speed and loses 23x to 140x on agreement with
+         * the reference CMS, and loses it exactly where grid^n has forced the
+         * table down to 3 or 4 points per axis. At that density, the Lab gamut
+         * being a lobed solid rather than a box, nothing is recovering real
+         * colour and the speed buys nothing.
+         *
+         * KEPT DELIBERATELY. The measurement belongs in the source rather than
+         * a commit message, and a future workflow with a genuinely dense
+         * n-channel table would change the arithmetic. Reachable through the
+         * toggle at the top of src/kernels/nd/KernelND.js.
+         *
+         * @param {number[]|TypedArray} input  n channels
+         * @param {object} lut
+         * @returns {number[]} new array of length lut.outputChannels
+         */
+        simplexInterpND_NCh(input, lut) {
             const dims    = lut.inputChannels;
             const outCh   = lut.outputChannels;
             const CLUT    = lut.CLUT;
