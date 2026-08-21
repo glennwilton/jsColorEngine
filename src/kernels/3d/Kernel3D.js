@@ -59,7 +59,17 @@ module.exports = {
      * that only ever converts single colours never pays it.
      */
     init: function(pipeline, opts){
-
+        // `kernel: null` means NO YIELD — this kernel keeps the transform and
+        // runs its own table path. It is not a refusal: Kernel3D always has an
+        // answer for 3-channel input, and the only question is which of its two
+        // implementations runs. (An earlier draft called this `decline`, left
+        // over from the claim registry where declining meant passing to the
+        // next claimant. There is no next claimant, and a real decline would
+        // fail the transform outright.)
+        var keep = function(why){
+            return { pipeline: pipeline, kernel: null,
+                     meta: { name: 'kernel3D', dimensions: 3, claimed: false, why: why } };
+        };
 
         if(opts.wasmMatrixShaper === 'off')  return keep('wasmMatrixShaper is off');
         // A pixel cache makes the batch path memoised, which is a different
@@ -142,14 +152,13 @@ module.exports = {
     },
 
     /**
-     * The image path, bound once. See kernelUtils.boundRuns.
+     * The image path, bound once. See kernelUtils.resolveArrayRuns.
      *
      * Returns {big, small, threshold, bigName, smallName}. A caller holding
      * both picks with one compare, or none at all when the threshold is 0.
      */
     arrayFor: function(lut, hints){
-        kernelUtils.resolveTableRuns(this);
-        return kernelUtils.boundRuns(this);
+        return kernelUtils.resolveArrayRuns(this);
     },
 
     create: function(lutMode){

@@ -84,44 +84,58 @@ function ensureOutputArray(transform, lut, pixelCount, outputHasAlpha, outputArr
  * @param {object} kernel  kernel instance (has .transform)
  */
 function resolveTableRuns(kernel){
+    var bound = resolveArrayRuns(kernel);
+    kernel._runBig      = bound.big;
+    kernel._runSmall    = bound.small;
+    kernel._threshold   = bound.threshold;
+    kernel._runBigKey   = bound.bigName;
+    kernel._runSmallKey = bound.smallName;
+}
+
+/**
+ * Walk this kernel's table and answer with the bound image path.
+ *
+ * THE TABLE BELONGS TO THE KERNEL (v1.6 phase 4d) — kernel3D_table.js and
+ * kernel4D_table.js hold their own rows, gates and fallback ladders. This is
+ * the parser for them, not the owner of them: it walks a chain, checks gates,
+ * and returns what won. A kernel with a different idea about dispatch ignores
+ * it entirely and returns its own {big, small, threshold}.
+ *
+ * @param {object} kernel  kernel instance (has .transform)
+ * @returns {{big:?Function, small:?Function, threshold:number,
+ *            bigName:?string, smallName:?string}}
+ */
+function resolveArrayRuns(kernel){
     var transform = kernel.transform;
-    kernel._runBig      = null;
-    kernel._runSmall    = null;
-    kernel._threshold   = 0;
-    kernel._runBigKey   = null;   // diagnostic — which table entry won
-    kernel._runSmallKey = null;   // diagnostic — which table entry won
+    var none = { big: null, small: null, threshold: 0, bigName: null, smallName: null };
 
     var lut = transform.lut;
-    if(!lut){
-        return;
-    }
+    if(!lut) return none;
 
     var inCh = lut.inputChannels;
 
     // Gray and duotone bypass the table — their kernels call the dedicated
     // interp loops directly, with no fallback chain to express.
-    if(inCh !== 3 && inCh !== 4){
-        return;
-    }
+    if(inCh !== 3 && inCh !== 4) return none;
 
     var modeShort = lutKernelTable.LUT_MODE_SHORT[transform.lutMode];
     if(modeShort === undefined){
         // Not a built-in lutMode — plugin-registered kernels resolve here.
         var plugin = transform.constructor._plugins[transform.lutMode];
-        if(plugin){
-            _resolvePluginRuns(kernel, plugin);
-        }
-        return;
+        return plugin ? _resolvePluginRuns(kernel, plugin) : none;
     }
 
     var startKey = lutKernelTable.makeKey(modeShort, inCh, lut.outputChannels);
     var bigRes   = lutKernelTable.resolveLutKernel(transform, lut, startKey, Infinity);
     var smallRes = lutKernelTable.resolveLutKernel(transform, lut, startKey, 0);
 
-    kernel._runBig      = bigRes.entry.run;
-    kernel._runSmall    = smallRes.entry.run;
-    kernel._runBigKey   = bigRes.key;
-    kernel._runSmallKey = smallRes.key;
+    var bound = {
+        big:       bigRes.entry.run,
+        small:     smallRes.entry.run,
+        bigName:   bigRes.key,
+        smallName: smallRes.key,
+        threshold: 0,
+    };
     // Threshold for choosing BIG vs SMALL at call time:
     //   collapsed (BIG === SMALL) → 0 — no WASM-eligible win anywhere in the
     //     chain; threshold=0 saves a per-call comparison in this common case.
@@ -146,14 +160,15 @@ function resolveTableRuns(kernel){
     // Collapsed chains stay at 0: when BIG and SMALL resolve to the same entry
     // there is no WASM-eligible win anywhere in the chain, and a threshold of 0
     // saves the per-call comparison.
-    kernel._threshold = (bigRes.entry === smallRes.entry) ? 0 : resolveThreshold(kernel);
+    bound.threshold = (bigRes.entry === smallRes.entry) ? 0 : resolveThreshold(kernel);
 
     if(transform.verbose){
         console.log('  lutKernelTable: ' + startKey
-            + ' → big=' + kernel._runBigKey
-            + ' small=' + kernel._runSmallKey
-            + ' threshold=' + kernel._threshold);
+            + ' → big=' + bound.bigName
+            + ' small=' + bound.smallName
+            + ' threshold=' + bound.threshold);
     }
+    return bound;
 }
 
 /**
@@ -175,15 +190,11 @@ function _resolvePluginRuns(kernel, plugin){
     if(plugin.wasmKernel && isSup('wasmKernel')) run = plugin.wasmKernel;
     if(plugin.simdKernel && isSup('simdKernel')) run = plugin.simdKernel;
 
-    kernel._runBig      = run;
-    kernel._runSmall    = run;
-    kernel._threshold   = 0;
-    kernel._runBigKey   = transform.lutMode + ':plugin';
-    kernel._runSmallKey = transform.lutMode + ':plugin';
-
+    var key = transform.lutMode + ':plugin';
     if(transform.verbose){
-        console.log('  pluginKernel: ' + transform.lutMode + ' → ' + kernel._runBigKey);
+        console.log('  pluginKernel: ' + transform.lutMode + ' → ' + key);
     }
+    return { big: run, small: run, threshold: 0, bigName: key, smallName: key };
 }
 
 /**
@@ -215,43 +226,10 @@ function runTableKernel(kernel, inputArray, outputArray, pixelCount, lut, inputH
     transform._postRunWasmCheck();
 }
 
-/**
- * The image path as a bound result rather than instance state — v1.6 phase 4e.
- *
- * `floatFor` gives the kernel ownership of the single-colour path; this is its
- * counterpart. The kernel resolves once at create() and hands back everything
- * the dispatcher needs, so the decisions live in one object instead of being
- * spread across Transform.js, kernelUtils.js and lutKernelTable.js.
- *
- * TWO FUNCTIONS AND A THRESHOLD, not one function that branches inside. WASM
- * has a memcpy break-even, so a small batch is faster on the JS variant and
- * `pixelCount` is not known at bind time. Returning the threshold exposes that
- * decision rather than hiding it -- and where `big === small` it is 0, the
- * caller binds one reference and never compares.
- *
- * NOT A THROUGHPUT CHANGE, and nobody should expect one: this resolves once per
- * create() and the returned function runs once per image, not once per pixel.
- * `bindTransformArrayFn` already measured that and is off by default because it
- * showed nothing. The value here is ownership, and a step toward emitKernel().
- *
- * @param {object} kernel  kernel instance, already resolved
- * @returns {{big:Function, small:Function, threshold:number,
- *            bigName:?string, smallName:?string}}
- */
-function boundRuns(kernel){
-    return {
-        big:       kernel._runBig,
-        small:     kernel._runSmall,
-        threshold: kernel._threshold,
-        bigName:   kernel._runBigKey,
-        smallName: kernel._runSmallKey,
-    };
-}
-
 module.exports = {
     ensureOutputArray: ensureOutputArray,
     resolveTableRuns: resolveTableRuns,
     runTableKernel: runTableKernel,
     resolveThreshold: resolveThreshold,
-    boundRuns: boundRuns,
+    resolveArrayRuns: resolveArrayRuns,
 };

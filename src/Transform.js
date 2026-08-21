@@ -1230,7 +1230,24 @@
             try {
                 result = kernel.init(this.pipeline, this._kernelOpts());
             } catch(e){
-                return;                 // a broken init must not break create()
+                // A BROKEN init MUST NOT BREAK create(), but it must not be
+                // silent either. Declining is always an available answer, so a
+                // third-party kernel that throws simply does not get the
+                // transform — but a swallowed exception hid a ReferenceError in
+                // one of the BUILT-IN kernels through an entire test suite,
+                // because falling back to the table path is also the correct
+                // outcome. The tests passed on an accident.
+                //
+                // Warned once per process: a kernel that throws on one create()
+                // throws on all of them, and a warning per conversion would be
+                // its own problem.
+                if(!Transform._warnedKernelInit){
+                    Transform._warnedKernelInit = true;
+                    console.warn('jsColorEngine: kernel "' + (kernel.name || '?')
+                        + '" threw from init() and was ignored — the dimension kept '
+                        + 'its default path. This is a bug in that kernel: ' + e);
+                }
+                return;
             }
             if(!result) return;
 
@@ -7826,7 +7843,14 @@
                 useTrilinearFor3ChInput: useTrilinearFor3ChInput,
                 interpolation3D:         this.interpolation3D,
                 interpolation4D:         this.interpolation4D,
-                fast:                    this.interpolationFast
+                fast:                    this.interpolationFast,
+                // floatFor runs on the DESCRIPTOR while the pipeline is still
+                // being built — before init(), so a kernel cannot have stashed
+                // anything yet. Its options have to arrive here or it cannot
+                // make an options-dependent choice about the single-colour path
+                // at all, which would leave a kernel able to change images but
+                // not colours. See docs/deepdive/KernelContract.md.
+                kernelOptions:           this.kernelOptions || null
             });
 
             this.addStage(inputEncoding, bind.stageName, bind.funct, lut, outputEncoding, debugFormat);

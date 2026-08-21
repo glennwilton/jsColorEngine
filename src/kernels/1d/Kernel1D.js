@@ -109,14 +109,13 @@ module.exports = {
     },
 
     /**
-     * The image path, bound once. See kernelUtils.boundRuns.
+     * The image path, bound once. See kernelUtils.resolveArrayRuns.
      *
      * Returns {big, small, threshold, bigName, smallName}. A caller holding
      * both picks with one compare, or none at all when the threshold is 0.
      */
     arrayFor: function(lut, hints){
-        kernelUtils.resolveTableRuns(this);
-        return kernelUtils.boundRuns(this);
+        return kernelUtils.resolveArrayRuns(this);
     },
 
     create: function(lutMode){
