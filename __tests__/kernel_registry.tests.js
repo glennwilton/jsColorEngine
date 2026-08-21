@@ -425,3 +425,68 @@ describe('floatFor — 3D, 4D and ND resolve every branch of the old switch', ()
         for(const name of produced) expect(known).toContain(name);
     });
 });
+
+describe('the array loops are reached through their modules, not the Transform', () => {
+
+    // v1.6 phase 4b. The tuned loops used to be reachable only as
+    // Transform.prototype methods, so lutKernelTable called them as
+    // `t.tetrahedralInterp3DArray_3Ch_loop(...)`. They are pure functions of
+    // their arguments — the last `this` went when the N-channel loops were
+    // inlined in 4a — so callers now require the module directly.
+    //
+    // The prototype attachment stays as compatibility surface. These tests hold
+    // the two to being the SAME function objects, because a copy would mean two
+    // implementations that could drift.
+
+    const loopModules = {
+        '1d': require('../src/kernels/1d/kernel1D_loops.js'),
+        '2d': require('../src/kernels/2d/kernel2D_loops.js'),
+        '3d': require('../src/kernels/3d/kernel3D_loops.js'),
+        '4d': require('../src/kernels/4d/kernel4D_loops.js'),
+    };
+
+    test('every loop is one object, shared by the module and the prototype', () => {
+        let count = 0;
+        for(const mod of Object.values(loopModules)){
+            for(const name of Object.keys(mod)){
+                expect(typeof mod[name]).toBe('function');
+                // Identity, not equality: a copy would be a second implementation.
+                expect(Transform.prototype[name]).toBe(mod[name]);
+                count++;
+            }
+        }
+        expect(count).toBeGreaterThanOrEqual(16);
+    });
+
+    test('the loops use no `this` — calling them bare produces the same result', () => {
+        // This is what let them move. If a loop ever regains a `this`, calling
+        // it detached throws or silently misbehaves, and this test says so
+        // before lutKernelTable does it a million times per image.
+        const g1 = 17, outCh = 3, dims = 3;
+        const cells = g1 * g1 * g1 * outCh;
+        const CLUT = new Float64Array(cells);
+        let s = 7;
+        for(let i = 0; i < cells; i++){ s = (s * 1103515245 + 12345) & 0x7fffffff; CLUT[i] = s / 0x7fffffff; }
+        const lut = { inputChannels: dims, outputChannels: outCh,
+                      gridPoints: [g1, g1, g1], CLUT, inputScale: 1 / 255, outputScale: 255,
+                      g1, g2: g1 * g1, g3: g1 * g1 * g1,
+                      go0: outCh, go1: g1 * outCh, go2: g1 * g1 * outCh };
+
+        const px = 256;
+        const input = new Uint8ClampedArray(px * dims);
+        for(let i = 0; i < input.length; i++) input[i] = (i * 37) & 255;
+
+        const loop = loopModules['3d'].tetrahedralInterp3DArray_3Ch_loop;
+        const viaModule = new Uint8ClampedArray(px * outCh);
+        const viaProto  = new Uint8ClampedArray(px * outCh);
+
+        // Bare call — no receiver at all.
+        loop(input, 0, viaModule, 0, px, lut, false, false, false);
+        // Through the prototype, the way it was always called.
+        Transform.prototype.tetrahedralInterp3DArray_3Ch_loop.call(
+            Transform.prototype, input, 0, viaProto, 0, px, lut, false, false, false);
+
+        expect(Array.from(viaModule)).toEqual(Array.from(viaProto));
+        expect(viaModule.some(v => v !== 0)).toBe(true);   // it actually ran
+    });
+});

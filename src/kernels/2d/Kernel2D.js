@@ -6,6 +6,7 @@
 'use strict';
 
 var kernelUtils = require('../kernelUtils.js');
+var loops = require('./kernel2D_loops.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
 
 /**
@@ -117,7 +118,7 @@ module.exports = {
     array: function(inputArray, outputArray, pixelCount, lut, inAlpha, outAlpha, preserve){
         var transform = this.transform;
         outputArray = kernelUtils.ensureOutputArray(transform, lut, pixelCount, outAlpha, outputArray);
-        transform.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inAlpha, outAlpha, preserve);
+        loops.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inAlpha, outAlpha, preserve);
         return outputArray;
     },
 

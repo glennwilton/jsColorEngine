@@ -105,6 +105,21 @@
 
 'use strict';
 
+// The tuned array loops, called DIRECTLY rather than through the Transform
+// (v1.6 phase 4b — docs/deepdive/KernelContract.md). They were reached as
+// `t.tetrahedralInterp3DArray_3Ch_loop(...)` because they were attached to
+// Transform.prototype and there was no other handle on them. They are pure
+// functions of their arguments — the last `this` in any of them went when
+// the N-channel loops were inlined — so the indirection through an instance
+// bought nothing but a coupling.
+//
+// The prototype attachment stays for now: Transform.js still reaches for
+// these names in its bound fast path, and they are effectively public.
+var loops1d = require('./kernels/1d/kernel1D_loops.js');
+var loops2d = require('./kernels/2d/kernel2D_loops.js');
+var loops3d = require('./kernels/3d/kernel3D_loops.js');
+var loops4d = require('./kernels/4d/kernel4D_loops.js');
+
 // Kept in sync with Transform.WASM_DISPATCH_MIN_PIXELS. Hard-coded here
 // to break the require cycle (Transform.js requires this module at
 // load time, before `Transform.WASM_DISPATCH_MIN_PIXELS = 256` runs).
@@ -187,53 +202,53 @@ function needsWasm4DInt16Simd(t, lut){
 // ---- float (last resort) ----------------------------------------------------
 
 function run_fl_3_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_3Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_3Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 function run_fl_3_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_4Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_4Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 function run_fl_3_n(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_NCh_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_NCh_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 function run_fl_4_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_3Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_3Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 function run_fl_4_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_4Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_4Ch_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 function run_fl_4_n(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_NCh_loop(input, 0, output, 0, px, lut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_NCh_loop(input, 0, output, 0, px, lut, ia, oa, pa);
 }
 
 // ---- u8 JS integer ----------------------------------------------------------
 
 function run_i_3_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_3Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_3Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i_3_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_4Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_4Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i_4_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_3Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_3Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i_4_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_4Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_4Ch_intLut_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 // no _i_3_n / _i_4_n: integer NCh has no intLut variant — falls to fl
 
 // ---- u16 JS integer ---------------------------------------------------------
 
 function run_i16_3_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_3Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_3Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i16_3_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp3DArray_4Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops3d.tetrahedralInterp3DArray_4Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i16_4_3(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_3Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_3Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 function run_i16_4_4(t, input, output, px, lut, ia, oa, pa){
-    t.tetrahedralInterp4DArray_4Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
+    loops4d.tetrahedralInterp4DArray_4Ch_intLut16_loop(input, 0, output, 0, px, lut.intLut, ia, oa, pa);
 }
 // no _i16_3_n / _i16_4_n: u16 NCh has no intLut16 variant — falls to i_*_n → fl
 

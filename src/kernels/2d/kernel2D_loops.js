@@ -1,11 +1,11 @@
 // src/kernels/2d/kernel2D_loops.js
 //
-// The duotone (2-channel input) image loop. Attached to Transform.prototype at
-// load time (see _attachPrototypeLoops at the bottom of Transform.js), so
-// `this` is the Transform instance and every call site is unchanged.
+// The duotone (2-channel input) image loop.
 //
-// Do not add module-scope dependencies here: bodies may only use their
-// arguments and locals.
+// PURE FUNCTIONS OF THEIR ARGUMENTS. No `this`, no module-scope state.
+// Callers reach them through the module (v1.6 phase 4b); the
+// Transform.prototype attachment is kept for compatibility, not for binding.
+// Do not add module-scope dependencies here.
 'use strict';
 
 module.exports = {

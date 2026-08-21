@@ -6,8 +6,11 @@
 // semantics), so `this` is the Transform instance and every call site —
 // lutKernelTable run closures, kernel modules, tests — is unchanged.
 //
-// Do not add module-scope dependencies here: bodies may only use their
-// arguments, locals, and `this.*`.
+// PURE FUNCTIONS OF THEIR ARGUMENTS. No `this`, no module-scope state — the
+// last `this` in these files went when the N-channel loops were inlined in
+// v1.6 phase 4a. Callers reach them through the module (phase 4b); the
+// Transform.prototype attachment is kept for compatibility, not for binding.
+// Do not add module-scope dependencies here.
 'use strict';
 
 module.exports = {
