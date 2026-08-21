@@ -1,13 +1,32 @@
-/tests/
-/dev/
+# ---------------------------------------------------------------------------
+# Every rule in this file says WHY. A rule without a reason is one nobody dares
+# remove, and this project's ignores carry real decisions — licensing, machine
+# specificity, generated-vs-source — that are not recoverable from the path.
+# ---------------------------------------------------------------------------
+
+# Dependencies and editor/tooling state.
 node_modules
-speed_tests/
 .env
-@charset
 /.idea/
-*.tgz
+.claude/
+
+# Unminified dev bundles built by `npm run dev` / `npm run browser-watch`.
+# The published bundles in build/ and browser/ ARE committed.
+/dev/
 /browser-dev/
 
+# Scratch test and timing directories predating the __tests__/ and bench/
+# layouts. Local only; nothing references them.
+/tests/
+speed_tests/
+
+# `npm pack` output.
+*.tgz
+
+# Stray file created by an editor mangling a CSS @charset rule.
+@charset
+
+# Per-project agent instructions — local working notes, not project source.
 CLAUDE.md
 
 
@@ -32,18 +51,25 @@ CLAUDE.md
 /bench/lcms_c/bench_content_matrix.exe
 
 # lcms_compat/ harness — profiles are licensed artefacts (Adobe,
-# IDEAlliance, ECI, RISO, etc.) so user-supplied copies stay local;
-# reference .it8 data is derived measurement data and IS committed.
+# IDEAlliance, ECI, RISO, etc.) so user-supplied copies stay local.
 # See bench/lcms_compat/profiles/README.md for the licensing split.
 /bench/lcms_compat/profiles/*
 !/bench/lcms_compat/profiles/README.md
+
+# The reference .it8 set was committed until 1.5.5 — 150 files, 63 MB of
+# measurements DERIVED from those licensed profiles by running lcms against
+# them. Untracked now for two reasons: whether derived data inherits the
+# profiles' restriction is unsettled, and nobody actually needs ours. Anyone
+# can generate their own against their own library, which is the direction
+# both harnesses are heading. Same rule as testbed/testData/ below.
+/bench/lcms_compat/reference/*
+!/bench/lcms_compat/reference/README.md
 
 # Scratch / work-in-progress instrumented lcms2 tree — will be
 # distilled down to a patch file under bench/lcms_compat/lcms_patch/
 # in v1.5 (deferred from v1.3 to keep the release scoped), at which
 # point this whole folder goes away.
 /bench/lcms_exposed/
-.claude/
 
 # Private work-in-progress — not ready for public repo
 /_wip/
@@ -66,22 +92,23 @@ bench/_archive/
 bench/release_matrix/corpus/
 bench/release_matrix/node_modules/
 
-# Reproduction runs from bench/reproduce.js — raw timing output, machine-specific.
-# Curated result summaries (e.g. bench/results/v1.5.0-dev.md) stay tracked.
-bench/results/[0-9]*/
-
-# Bench runs (bench/results/<timestamp>/) stay ignored — raw, machine-specific,
-# and superseded by the next run. Two things are NOT ignored and must stay
-# tracked, because a control that lives on one disk is not a control:
+# Reproduction runs from bench/reproduce.js — raw timing output, machine-specific,
+# superseded by the next run. Curated summaries (bench/results/v1.5.0-dev.md)
+# stay tracked, as do the loose logs' curated equivalents.
 #
-#   bench/baseline/<machine>/   the pinned reference every refactor is gated
-#                              against (scripts/bench_compare.js). Per machine:
-#                              a Ryzen pin is not a control for an M2.
-#   bench/history/<version>/<machine>/
-#                              frozen per-release measurements, so a figure
-#                              published in 1.5.5 can still be re-derived in 1.9.
+# Two sibling trees are deliberately NOT ignored, because a control that lives
+# on one disk is not a control:
+#
+#   bench/baseline/<machine>/            the pinned reference every refactor is
+#                                        gated against (scripts/bench_compare.js).
+#                                        Per machine: a Ryzen pin is not a
+#                                        control for an M2.
+#   bench/history/<version>/<machine>/   frozen per-release measurements, so a
+#                                        figure published in 1.5.5 can still be
+#                                        re-derived in 1.9.
 #
 # ~120 KB each. See bench/baseline/README.md.
+bench/results/[0-9]*/
 
 # Licensed ICC profiles — same rule as bench/lcms_compat/profiles/ above.
 # testbed/profiles/README.md says so of itself: ICC profiles are licensed

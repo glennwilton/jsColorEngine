@@ -124,7 +124,7 @@ The harness is what makes the third category visible at all.
 
 ```
 bench/lcms_compat/
-├── reference/         150 CGATS .it8 files — the oracle (committed)
+├── reference/         150 CGATS .it8 files — the oracle (generated locally)
 ├── stimuli/           6 grid-sweep input files — public data (committed)
 ├── profiles/          27 ICC profiles — gitignored, see profiles/README
 ├── lcms_patch/        (v1.3) lcms2 instrumentation patch + regenerator

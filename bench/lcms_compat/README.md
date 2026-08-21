@@ -83,6 +83,7 @@ bench/lcms_compat/
 ├── profiles/          29 ICC profiles — gitignored (see profiles/README.md)
 ├── stimuli/           6 CGATS input files (grid sweeps, public data)
 ├── reference/         150 CGATS reference files from instrumented lcms2 2.16
+│                    — gitignored, generate locally (see below)
 ├── lcms_patch/        (v1.3) lcms2 stage-instrumentation patch + build scripts
 ├── parse-cgats.js     CGATS.17 reader + row→color helpers
 └── README.md          this file
@@ -104,12 +105,25 @@ industry-standard tabular format. They're not the profile. They're
 what anyone with the same profile + the same lcms version would
 compute.
 
+> **Changed after 1.5.5: `reference/` is no longer committed.** That
+> paragraph is the argument for treating derived data as
+> redistributable, and it may well be right — but "may well be right"
+> is a thin basis for putting 63 MB derived from licensed profiles on
+> a public repo, and nobody needs *our* copy. The last sentence above
+> is the whole point: anyone with the same profiles and the same lcms
+> version computes the same numbers. So generate your own.
+>
+> The generator is here and unchanged. Nothing is hidden and nothing
+> is lost — the set is reproducible from a profile library plus the
+> instrumented lcms2 in `lcms_patch/`.
+
 **The design:**
 
-- `reference/` is **committed to git** — it's the public, versioned
-  oracle. 150 files, ~1.4 M reference samples, pinned to lcms2 2.16
-  with the stage-level instrumentation documented in
-  `lcms_patch/README.md`.
+- `reference/` is **gitignored**. Generate it locally: 150 files,
+  ~1.4 M reference samples against lcms2 2.16 with the stage-level
+  instrumentation documented in `lcms_patch/README.md`. Regenerating
+  it is also the only way to pin it to a *newer* lcms, which the
+  committed copy quietly prevented.
 - `profiles/` is **gitignored**. You supply your own licensed copies
   of each profile. `profiles/README.md` lists the canonical sources
   (Adobe, ICC.org, IDEAlliance, ECI, RISO) for each file.
