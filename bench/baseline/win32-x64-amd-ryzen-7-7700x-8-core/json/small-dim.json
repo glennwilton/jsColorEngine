@@ -1,0 +1,124 @@
+{
+  "tool": "bench/small_dim/run.js",
+  "generated": "2026-08-21T11:37:53.716Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.5.5",
+    "tool": "bench/small_dim/run.js"
+  },
+  "tables": [
+    {
+      "id": "smallDim.throughput",
+      "title": "Throughput on synthetic LUTs — narrow input and wide output",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "grid": 256,
+        "reps": 5,
+        "lutMode": "float",
+        "dataFormat": "int8"
+      },
+      "columns": [
+        "workflow",
+        "kernel",
+        "outputChannels",
+        "grid",
+        "mpxs"
+      ],
+      "rows": [
+        {
+          "workflow": "gray -> RGB",
+          "kernel": "kernel1D",
+          "outputChannels": 3,
+          "grid": 256,
+          "mpxs": 90.7
+        },
+        {
+          "workflow": "gray -> CMYK",
+          "kernel": "kernel1D",
+          "outputChannels": 4,
+          "grid": 256,
+          "mpxs": 79.8
+        },
+        {
+          "workflow": "gray -> 6CLR",
+          "kernel": "kernel1D",
+          "outputChannels": 6,
+          "grid": 256,
+          "mpxs": 64.6
+        },
+        {
+          "workflow": "duotone -> RGB",
+          "kernel": "kernel2D",
+          "outputChannels": 3,
+          "grid": 256,
+          "mpxs": 60.7
+        },
+        {
+          "workflow": "duotone -> CMYK",
+          "kernel": "kernel2D",
+          "outputChannels": 4,
+          "grid": 256,
+          "mpxs": 51.3
+        },
+        {
+          "workflow": "duotone -> 6CLR",
+          "kernel": "kernel2D",
+          "outputChannels": 6,
+          "grid": 256,
+          "mpxs": 41.4
+        },
+        {
+          "workflow": "RGB -> RGB",
+          "kernel": "kernel3D",
+          "outputChannels": 3,
+          "grid": 33,
+          "mpxs": 76.3
+        },
+        {
+          "workflow": "RGB -> CMYK",
+          "kernel": "kernel3D",
+          "outputChannels": 4,
+          "grid": 33,
+          "mpxs": 67.8
+        },
+        {
+          "workflow": "RGB -> 6CLR",
+          "kernel": "kernel3D",
+          "outputChannels": 6,
+          "grid": 33,
+          "mpxs": 34.8
+        },
+        {
+          "workflow": "RGB -> 8CLR",
+          "kernel": "kernel3D",
+          "outputChannels": 8,
+          "grid": 33,
+          "mpxs": 29.7
+        },
+        {
+          "workflow": "CMYK -> RGB",
+          "kernel": "kernel4D",
+          "outputChannels": 3,
+          "grid": 17,
+          "mpxs": 44.3
+        },
+        {
+          "workflow": "CMYK -> CMYK",
+          "kernel": "kernel4D",
+          "outputChannels": 4,
+          "grid": 17,
+          "mpxs": 36.5
+        },
+        {
+          "workflow": "CMYK -> 6CLR",
+          "kernel": "kernel4D",
+          "outputChannels": 6,
+          "grid": 17,
+          "mpxs": 23.9
+        }
+      ]
+    }
+  ]
+}

@@ -5,7 +5,7 @@
   "node": "v24.16.0",
   "platform": "win32 x64",
   "measured": "2026-08-20",
-  "tables": 54,
+  "tables": 55,
   "why": "Full 8-phase run that docs/BenchResults.md is generated from. Pinned as the reference for the v1.6 kernel contract migration (docs/deepdive/KernelContract.md) so that seven refactor phases cannot ratchet the baseline downward one passing step at a time. Valid for THIS machine only — see bench/baseline/README.md.",
   "repin": "Only on a deliberate, reviewed re-measurement — a new machine, a new Node major, or a shipped optimisation. Never to make a failing comparison pass.",
   "machine": {
@@ -17,5 +17,13 @@
     "memoryGB": 31,
     "release": "10.0.19045",
     "node": "v24.16.0"
+  },
+  "addedLater": {
+    "small-dim.json": {
+      "run": "2026-08-21T11-37-53",
+      "pinned": "2026-08-21",
+      "jsce": "1.5.5",
+      "why": "The 1- and 2-channel input bench did not exist when the main run was pinned, so it had no baseline and never gated. Measured on its own, on the same machine, with nothing else running. Recorded separately rather than re-pinning everything: a full re-pin would have moved the baseline for eleven other files that had no reason to move."
+    }
   }
 }
