@@ -855,13 +855,58 @@ A kernel that wants routing this shape cannot express — three tiers, a decisio
 on content rather than size, a cache, anything — returns *its own dispatcher* in
 both slots:
 
+There are two shapes for this, and both are legitimate.
+
+**Resolved at bind time** — everything decidable is decided once, and the
+returned closure does one thing:
+
 ```js
 arrayFor: function(lut, hints){
-    var dispatch = makeWhateverRoutingIWant(lut, hints);
+    var dispatch = makeWhateverRoutingIWant(lut, hints);   // built once
     return { big: dispatch, small: dispatch, threshold: 0,
              bigName: 'custom', smallName: 'custom' };
 }
 ```
+
+**Decided per call** — the kernel keeps a real dispatcher and re-decides on
+whatever it likes: size, content, cache state, how the last call went:
+
+```js
+arrayFor: function(lut, hints){
+    var dispatch = this.multiDispatch.bind(this);          // NOTE the bind
+    return { big: dispatch, small: dispatch, threshold: 0,
+             bigName: 'multiDispatch', smallName: 'multiDispatch' };
+},
+
+multiDispatch: function(input, output, px, inAlpha, outAlpha, preserve){
+    // size, content, anything — then delegate
+}
+```
+
+**The `.bind(this)` is not optional.** A method reference returned raw loses its
+receiver: these files are strict-mode modules, so `this` inside `multiDispatch`
+is `undefined` and the first `this.anything` throws. It fails loudly rather than
+silently, but it fails on the first array call rather than at create, which is
+the worst time to find out.
+
+Binding once inside `arrayFor` costs one allocation per `create()` and nothing
+per call, so there is no reason to avoid it. The alternative — having Transform
+invoke `kernel.method(...)` so the receiver comes along — reintroduces exactly
+the property lookup the bound shape exists to remove, and puts the kernel's
+internal structure back into Transform's hands.
+
+**Per-call decisions are free here.** `arrayFor`'s result is invoked once per
+image, not once per pixel, so "check size and other stuff per call" costs
+nothing measurable. A kernel should feel free to be as dynamic as it wants.
+This is not a fast-path-versus-flexible trade; the fast path is inside the
+loop, and this is outside it.
+
+One thing the dynamic shape gives up: `bigName` / `smallName` can only name the
+dispatcher, not the variant that actually ran. A kernel doing per-call routing
+that wants honest diagnostics should record its choice and expose it — the
+built-in kernels report `i8wsi_3_4` and friends, and a `multiDispatch` that
+reports only `'multiDispatch'` is a step backwards for anyone reading
+`verbose` output.
 
 Threshold 0 means `big` is always chosen, Transform makes no comparison, and
 whatever happens inside `dispatch` is invisible to it. **Transform.js does not
