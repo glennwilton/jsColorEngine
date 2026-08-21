@@ -101,6 +101,17 @@ module.exports = {
         return { funct: bilinearInterp2D_NCh, stageName: 'bilinearInterp2D' };
     },
 
+    /**
+     * The image path, bound once. See kernelUtils.boundRuns.
+     *
+     * Returns {big, small, threshold, bigName, smallName}. A caller holding
+     * both picks with one compare, or none at all when the threshold is 0.
+     */
+    arrayFor: function(lut, hints){
+        kernelUtils.resolveTableRuns(this);
+        return kernelUtils.boundRuns(this);
+    },
+
     create: function(lutMode){
         // No 2D WASM kernels exist, but the WASM settle still runs so a
         // 'int-wasm-*' lutMode demotes exactly as it did in v1.5 (the init

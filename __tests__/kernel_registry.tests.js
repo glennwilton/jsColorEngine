@@ -625,3 +625,94 @@ describe('WASM state belongs to the kernel', () => {
         expect(t.kernel.wasmTetra3D).not.toBeNull();   // ← phase 7 changes this
     });
 });
+
+describe('arrayFor — the image path as a bound result', () => {
+
+    // v1.6 phase 4e. floatFor gives the kernel the single-colour path; this is
+    // its counterpart for images. It returns {big, small, threshold, bigName,
+    // smallName} rather than one function that branches inside, so the
+    // threshold is data — inspectable, assertable, and hoistable by a caller
+    // that knows its pixel count.
+    //
+    // NOT A THROUGHPUT CHANGE. It resolves once per create() and the returned
+    // function runs once per image, not once per pixel. bindTransformArrayFn
+    // already measured that idea and is off by default because it showed
+    // nothing. The value is ownership.
+
+    const cmykPath = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
+    const HAS_WASM = typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS;
+
+    function bound(opts, a, b){
+        const t = new Transform(Object.assign({ buildLut: true }, opts));
+        t.create(a, b, eIntent.relative);
+        return { t, bound: t.kernel.arrayFor(t.lut, {}) };
+    }
+
+    test('every kernel answers with the full shape', () => {
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        for(const [a, b] of [['*sRGB', '*AdobeRGB'], ['*sRGB', cmyk], [cmyk, '*sRGB']]){
+            const r = bound({ dataFormat: 'int8' }, a, b).bound;
+            expect(typeof r.big).toBe('function');
+            expect(typeof r.small).toBe('function');
+            expect(typeof r.threshold).toBe('number');
+            expect(r.threshold).toBeGreaterThanOrEqual(0);
+        }
+    });
+
+    test('non-WASM modes collapse: one function, threshold 0, no compare', () => {
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        for(const lutMode of ['float', 'int']){
+            const r = bound({ lutMode, dataFormat: 'int8' }, '*sRGB', cmyk).bound;
+            expect(r.big).toBe(r.small);
+            expect(r.threshold).toBe(0);
+        }
+    });
+
+    (HAS_WASM ? test : test.skip)('WASM modes do not collapse — big and small differ', () => {
+        // The fast path for image work keeps the compare. Worth asserting so
+        // nobody "optimises" it away and sends 64-pixel calls through a path
+        // that loses on the memcpy.
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const r = bound({ lutMode: 'int-wasm-simd', dataFormat: 'int8' }, '*sRGB', cmyk).bound;
+        expect(r.big).not.toBe(r.small);
+        expect(r.threshold).toBeGreaterThan(0);
+        expect(r.bigName).not.toBe(r.smallName);
+    });
+
+    (HAS_WASM ? test : test.skip)('the threshold has one source, with the override winning', () => {
+        // It used to exist twice: entry.minPx baked into the table at load, and
+        // a read of the Transform static at resolve. Precedence now: an
+        // explicit global override, then the kernel's own wasmMinPixels, then
+        // the shared default.
+        const DEFAULT = require('../src/kernels/dispatchThreshold.js');
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const opts = { lutMode: 'int-wasm-simd', dataFormat: 'int8' };
+
+        expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(DEFAULT);
+
+        // A kernel that has measured its own break-even declares it.
+        const restore = snapshot(3, 3);
+        try {
+            const tuned = Object.create(Transform.kernels[3]);
+            tuned.name = 'kernel3D-tuned';
+            tuned.wasmMinPixels = 1024;
+            Transform.kernels[3] = tuned;
+            expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(1024);
+
+            // The documented profiling override still beats it — `= 0` must
+            // keep forcing the WASM path at every size.
+            Transform.WASM_DISPATCH_MIN_PIXELS = 0;
+            expect(bound(opts, '*sRGB', cmyk).bound.threshold).toBe(0);
+        } finally {
+            Transform.WASM_DISPATCH_MIN_PIXELS = DEFAULT;
+            restore();
+        }
+    });
+
+    test('the names describe which table entry won', () => {
+        const cmyk = new Profile(); cmyk.loadFile(cmykPath);
+        const r = bound({ lutMode: 'int', dataFormat: 'int8' }, '*sRGB', cmyk).bound;
+        expect(r.bigName).toBe('i_3_4');
+        expect(r.smallName).toBe('i_3_4');
+    });
+});

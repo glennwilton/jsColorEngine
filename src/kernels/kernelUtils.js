@@ -9,6 +9,24 @@
 'use strict';
 
 var lutKernelTable = require('../lutKernelTable.js');
+var DEFAULT_WASM_MIN_PIXELS = require('./dispatchThreshold.js');
+
+/**
+ * The batch size at which this kernel's WASM variant beats its JS one.
+ *
+ * See the note at the _threshold assignment below for why this exists and what
+ * the precedence is.
+ *
+ * @param {object} kernel  kernel instance (has .transform)
+ * @returns {number}
+ */
+function resolveThreshold(kernel){
+    var override = kernel.transform.constructor.WASM_DISPATCH_MIN_PIXELS;
+    if(override !== DEFAULT_WASM_MIN_PIXELS) return override;
+    return (typeof kernel.wasmMinPixels === 'number')
+        ? kernel.wasmMinPixels
+        : DEFAULT_WASM_MIN_PIXELS;
+}
 
 /**
  * Allocate or validate the output array for a LUT batch run.
@@ -110,7 +128,25 @@ function resolveTableRuns(kernel){
     //   distinct (BIG ≠ SMALL) → the class static, read at resolve time so
     //     callers can override it BEFORE create() for profiling (contract
     //     covered by transform_lutMode_wasm.tests.js).
-    kernel._threshold = (bigRes.entry === smallRes.entry) ? 0 : transform.constructor.WASM_DISPATCH_MIN_PIXELS;
+    // THE THRESHOLD HAS ONE SOURCE (v1.6 phase 4e). It used to be read straight
+    // off the Transform class static here, while the table rows carried their
+    // own copy in `minPx` -- two numbers for one concept. They are reconciled
+    // now: `minPx` is a MARKER in the table (the resolver only ever compares it
+    // against Infinity or 0, so its value never mattered there), and the real
+    // number comes from the kernel.
+    //
+    // Precedence, most specific first:
+    //   1. Transform.WASM_DISPATCH_MIN_PIXELS when a caller has moved it off
+    //      the default -- the documented profiling override, which must keep
+    //      winning or `= 0` stops forcing the WASM path
+    //   2. the kernel's own wasmMinPixels, for a kernel that has measured its
+    //      own break-even
+    //   3. the shared default
+    //
+    // Collapsed chains stay at 0: when BIG and SMALL resolve to the same entry
+    // there is no WASM-eligible win anywhere in the chain, and a threshold of 0
+    // saves the per-call comparison.
+    kernel._threshold = (bigRes.entry === smallRes.entry) ? 0 : resolveThreshold(kernel);
 
     if(transform.verbose){
         console.log('  lutKernelTable: ' + startKey
@@ -179,8 +215,43 @@ function runTableKernel(kernel, inputArray, outputArray, pixelCount, lut, inputH
     transform._postRunWasmCheck();
 }
 
+/**
+ * The image path as a bound result rather than instance state — v1.6 phase 4e.
+ *
+ * `floatFor` gives the kernel ownership of the single-colour path; this is its
+ * counterpart. The kernel resolves once at create() and hands back everything
+ * the dispatcher needs, so the decisions live in one object instead of being
+ * spread across Transform.js, kernelUtils.js and lutKernelTable.js.
+ *
+ * TWO FUNCTIONS AND A THRESHOLD, not one function that branches inside. WASM
+ * has a memcpy break-even, so a small batch is faster on the JS variant and
+ * `pixelCount` is not known at bind time. Returning the threshold exposes that
+ * decision rather than hiding it -- and where `big === small` it is 0, the
+ * caller binds one reference and never compares.
+ *
+ * NOT A THROUGHPUT CHANGE, and nobody should expect one: this resolves once per
+ * create() and the returned function runs once per image, not once per pixel.
+ * `bindTransformArrayFn` already measured that and is off by default because it
+ * showed nothing. The value here is ownership, and a step toward emitKernel().
+ *
+ * @param {object} kernel  kernel instance, already resolved
+ * @returns {{big:Function, small:Function, threshold:number,
+ *            bigName:?string, smallName:?string}}
+ */
+function boundRuns(kernel){
+    return {
+        big:       kernel._runBig,
+        small:     kernel._runSmall,
+        threshold: kernel._threshold,
+        bigName:   kernel._runBigKey,
+        smallName: kernel._runSmallKey,
+    };
+}
+
 module.exports = {
     ensureOutputArray: ensureOutputArray,
     resolveTableRuns: resolveTableRuns,
     runTableKernel: runTableKernel,
+    resolveThreshold: resolveThreshold,
+    boundRuns: boundRuns,
 };

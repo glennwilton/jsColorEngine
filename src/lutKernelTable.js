@@ -203,6 +203,13 @@ function resolveLutKernel(t, lut, startKey, pixelCountFloor){
         if (entry === undefined) {
             throw new Error('lutKernelTable: missing entry "' + key + '" (chain from "' + startKey + '")');
         }
+        // `minPx` IS A MARKER HERE, NOT A NUMBER. pixelCountFloor is only ever
+        // Infinity (resolving BIG) or 0 (resolving SMALL), so this compares to
+        // "does this row need a big batch?" and the actual value never
+        // participates. The real threshold — the one compared against a live
+        // pixel count — is resolved per kernel in kernelUtils.resolveThreshold.
+        // Keeping the value here anyway means the table still reads as the
+        // documentation of which rows are WASM-gated.
         if (entry.run !== null && entry.gate(t, lut) && pixelCountFloor >= entry.minPx) {
             return { entry: entry, key: key };
         }

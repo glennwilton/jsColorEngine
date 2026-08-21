@@ -92,6 +92,17 @@ module.exports = {
         }
     },
 
+    /**
+     * The image path, bound once. See kernelUtils.boundRuns.
+     *
+     * Returns {big, small, threshold, bigName, smallName}. A caller holding
+     * both picks with one compare, or none at all when the threshold is 0.
+     */
+    arrayFor: function(lut, hints){
+        kernelUtils.resolveTableRuns(this);
+        return kernelUtils.boundRuns(this);
+    },
+
     create: function(lutMode){
         // Load the WASM kernels (3D + 4D families — see wasmLifecycle.js for
         // why both) and demote lutMode if the host can't run the request.
