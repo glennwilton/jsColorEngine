@@ -344,3 +344,157 @@ describe('the N-channel array loops agree with their single-colour counterparts'
         }
     });
 });
+
+describe('the 8-bit input contract — inputScale 1/255, raw 0..255 colours', () => {
+
+    // THE DIAGONAL THIS SUITE WAS MISSING, AND WHAT FELL THROUGH IT.
+    //
+    // Everything above ran the specialised variants against _Master with
+    // inputScale = 1, i.e. device 0..1 colours. The N-channel block below ran
+    // inputScale = 1/255 -- but only against _NCh, at 5, 6 and 8 output
+    // channels. So the specialised _3Ch and _4Ch forms, which are what a
+    // 3-channel or 4-channel output actually selects, were never once run at
+    // 1/255 by anything.
+    //
+    // They were broken there. All four clamped the input to 0..1 BEFORE
+    // applying gridPointsScale:
+    //
+    //     input0 = Math.min(1, Math.max(0, input[0]));
+    //     px     = input0 * gridPointsScale;
+    //
+    // With inputScale = 1/255 every value from 1 to 255 collapses to 1, lands
+    // on the same grid cell, and returns the same colour. transform() on a
+    // buildLut:true + dataFormat:"int8" Transform gave a CONSTANT for every
+    // input -- [2,2,2] for sRGB->AdobeRGB, whatever the colour. The batch path
+    // was correct throughout, because the array loops are separate code, so
+    // the two disagreed and nothing noticed.
+    //
+    // A test at inputScale 1 cannot see it: clamping to 1 is a no-op when the
+    // contract already says 0..1. That is the whole reason this block exists
+    // as a scale dimension rather than a regression case for one function --
+    // the same blind spot would hide the next one.
+
+    function scaled(dims, gridPoints, outputChannels, seed){
+        const lut = makeLut(dims, gridPoints, outputChannels, seed);
+        lut.inputScale  = 1 / 255;   // callers hand over raw 0..255
+        lut.outputScale = 1;         // keep the comparison in CLUT units
+        return lut;
+    }
+
+    describe('3D', () => {
+        const variants = [
+            [3, 'tetrahedralInterp3D_3Ch'],
+            [4, 'tetrahedralInterp3D_4Ch'],
+            [3, 'tetrahedralInterp3D_NCh'],
+            [4, 'tetrahedralInterp3D_NCh'],
+        ];
+        for(const [outputChannels, variant] of variants){
+            for(const gridPoints of [17, 33]){
+                test(`_Master vs ${variant} at ${outputChannels}ch, ${gridPoints}^3 grid`, () => {
+                    const lut  = scaled(3, gridPoints, outputChannels, 12345);
+                    const fast = interp[variant];
+                    const rnd  = lcg(999);
+                    for(let i = 0; i < 2000; i++){
+                        const input = [rnd() * 255, rnd() * 255, rnd() * 255];
+                        const ref = interp.tetrahedralInterp3D_Master.call(T, input, lut, 0);
+                        const got = fast.call(T, input, lut);
+                        for(let c = 0; c < outputChannels; c++) expect(got[c]).toBe(ref[c]);
+                    }
+                });
+            }
+        }
+    });
+
+    describe('4D', () => {
+        for(const outputChannels of [3, 4]){
+            for(const gridPoints of [9, 17]){
+                const name = outputChannels === 3 ? 'tetrahedralInterp4D_3Ch' : 'tetrahedralInterp4D_4Ch';
+                test(`_Master vs ${name}, ${gridPoints}^4 grid`, () => {
+                    const lut  = scaled(4, gridPoints, outputChannels, 777);
+                    const fast = interp[name];
+                    const rnd  = lcg(31337);
+                    for(let i = 0; i < 1500; i++){
+                        const input = [rnd() * 255, rnd() * 255, rnd() * 255, rnd() * 255];
+                        const ref = interp.tetrahedralInterp4D_3or4Ch_Master.call(T, input, lut);
+                        const got = fast.call(T, input, lut);
+                        for(let c = 0; c < outputChannels; c++) expect(got[c]).toBe(ref[c]);
+                    }
+                });
+            }
+        }
+    });
+
+    test('the whole 8-bit range is used, not collapsed onto one cell', () => {
+        // The direct statement of the bug, independent of any reference: a
+        // sweep across 0..255 must produce many distinct answers. The variants
+        // returned exactly two -- one for 0, one for everything else.
+        const cases = [
+            [3, 'tetrahedralInterp3D_3Ch', 3], [3, 'tetrahedralInterp3D_4Ch', 4],
+            [4, 'tetrahedralInterp4D_3Ch', 3], [4, 'tetrahedralInterp4D_4Ch', 4],
+        ];
+        for(const [dims, name, outputChannels] of cases){
+            const lut = scaled(dims, 17, outputChannels, 4242);
+            const seen = new Set();
+            for(let v = 0; v <= 255; v += 5){
+                const got = interp[name].call(T, new Array(dims).fill(v), lut);
+                seen.add(got.slice(0, outputChannels).join(','));
+            }
+            expect(seen.size).toBeGreaterThan(40);
+        }
+    });
+
+    test('out-of-range input still clamps, at the grid edges', () => {
+        // Clamping moved into grid space; it did not go away. Below 0 and
+        // above 255 must pin to the first and last cell.
+        for(const [dims, name, outputChannels] of [
+            [3, 'tetrahedralInterp3D_3Ch', 3], [4, 'tetrahedralInterp4D_4Ch', 4]]){
+            const lut = scaled(dims, 17, outputChannels, 555);
+            const fn  = interp[name];
+            const at  = v => Array.from(fn.call(T, new Array(dims).fill(v), lut)).slice(0, outputChannels);
+            expect(at(-50)).toEqual(at(0));
+            expect(at(400)).toEqual(at(255));
+        }
+    });
+});
+
+describe('single colour and batch agree on a real profile pair', () => {
+
+    // The end-to-end shape of the same bug, which is how it was found:
+    // transform() and transformArray() disagreeing on a buildLut:true,
+    // dataFormat:"int8" Transform. One pair per specialised variant.
+
+    const Profile = require('../src/Profile');
+    const { eIntent } = require('../src/main');
+    const path = require('path');
+
+    const cmyk = new Profile();
+    cmyk.loadFile(path.join(__dirname, 'GRACoL2006_Coated1v2.icc'));
+
+    for(const [a, b, label] of [
+        ['*sRGB', '*AdobeRGB', 'RGB→RGB  (3D_3Ch)'],
+        ['*sRGB', cmyk,        'RGB→CMYK (3D_4Ch)'],
+        [cmyk,    '*sRGB',     'CMYK→RGB  (4D_3Ch)'],
+        [cmyk,    cmyk,        'CMYK→CMYK (4D_4Ch)'],
+    ]){
+        test(label, () => {
+            const t = new Transform({ dataFormat: 'int8', buildLut: true });
+            t.create(a, b, eIntent.relative);
+            const inCh = t.inputChannels;
+
+            for(const v of [0, 1, 17, 64, 128, 200, 254, 255]){
+                const px     = new Array(inCh).fill(v);
+                const single = t.transform(px, false).map(x => Math.round(x));
+
+                const flat = new Uint8ClampedArray(inCh);
+                flat.set(px);
+                const batch = Array.from(t.transformArray(flat, false, false, false, 1));
+
+                // 1 LSB, because the batch path rounds through a
+                // Uint8ClampedArray (half-to-even) and transform() does not.
+                single.forEach((got, c) => {
+                    expect(Math.abs(got - batch[c])).toBeLessThanOrEqual(1);
+                });
+            }
+        });
+    }
+});

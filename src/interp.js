@@ -1070,21 +1070,21 @@
             var go1 = lut.go1;
             var go2 = lut.go2;
 
-            input0 = Math.min(1, Math.max(0, input[0]));
-            input1 = Math.min(1, Math.max(0, input[1]));
-            input2 = Math.min(1, Math.max(0, input[2]));
-
-
-            // Rather than divide input by 255 then multiply by (lut.g1 - 1)
-            // Just do this once, this means input0 stays an int and
-            // only px needs to be a float
-            px = input0 * gridPointsScale;
-            py = input1 * gridPointsScale;
-            pz = input2 * gridPointsScale;
+            // CLAMP IN GRID SPACE, NOT IN 0..1. `input` here is whatever the
+            // caller's contract says: device 0..1 when inputScale is 1, raw
+            // 0..255 when the LUT was built for an 8-bit pipeline and folded
+            // 1/255 into inputScale. Clamping to 1 BEFORE applying the scale
+            // collapsed the whole 8-bit range onto one grid cell, so every
+            // colour came back as the same value. tetrahedralInterp3D_NCh had
+            // the same shape and was fixed first; these four kept it.
+            //
+            // gridPointsScale does the divide and the multiply at once.
+            px = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd);
+            py = Math.min(Math.max(input[1] * gridPointsScale, 0), gridEnd);
+            pz = Math.min(Math.max(input[2] * gridPointsScale, 0), gridEnd);
 
             //
             // A few optimisations here, X0 is multiplied by go2, which is precalculated grid x outputChannels
-            // Keeping input0 as int means we can just check input0 === 255 rather than input0 >= 1.0 as a float
             // And rather than X0+1 we can just do X0 + offset to location in lut
             X0 = ~~px; //~~ is the same as Math.floor(px)
             rx = (px - X0); // get the fractional part
@@ -1319,23 +1319,21 @@
             var go1 = lut.go1;
             var go2 = lut.go2;
 
-            // We need some clipping here
-            input0 = Math.min(1, Math.max(0, input[0]));
-            input1 = Math.min(1, Math.max(0, input[1]));
-            input2 = Math.min(1, Math.max(0, input[2]));
-
-            // No clipping checks for speed needed for clamped arrays
-
-            // Rather than divide input by 255 then multiply by (lut.g1 - 1)
-            // Just do this once, this means input0 stays an int and
-            // only px needs to be a float
-            px = input0 * gridPointsScale;
-            py = input1 * gridPointsScale;
-            pz = input2 * gridPointsScale;
+            // CLAMP IN GRID SPACE, NOT IN 0..1. `input` here is whatever the
+            // caller's contract says: device 0..1 when inputScale is 1, raw
+            // 0..255 when the LUT was built for an 8-bit pipeline and folded
+            // 1/255 into inputScale. Clamping to 1 BEFORE applying the scale
+            // collapsed the whole 8-bit range onto one grid cell, so every
+            // colour came back as the same value. tetrahedralInterp3D_NCh had
+            // the same shape and was fixed first; these four kept it.
+            //
+            // gridPointsScale does the divide and the multiply at once.
+            px = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd);
+            py = Math.min(Math.max(input[1] * gridPointsScale, 0), gridEnd);
+            pz = Math.min(Math.max(input[2] * gridPointsScale, 0), gridEnd);
 
             //
             // A few optimisations here, X0 is multiplied by go2, which is precalculated grid x outputChannels
-            // Keeping input0 as int means we can just check input0 === 255 rather than input0 >= 1.0 as a float
             // And rather than X0+1 we can just do X0 + offset to location in lut
             X0 = ~~px; //~~ is the same as Math.floor(px)
             rx = (px - X0); // get the fractional part
@@ -1558,15 +1556,19 @@
             var go3 = lut.go3;
             var kOffset = go3 - lut.outputChannels + 1; // +1 since we don't do a [base++] for the last CLUT lookup
 
-            inputK = Math.min(1,Math.max(0 , input[0])); // K
-            input0 = Math.min(1,Math.max(0 , input[1])); // C
-            input1 = Math.min(1,Math.max(0 , input[2])); // M
-            input2 = Math.min(1,Math.max(0 , input[3])); // Y
-
-            px = input0 * gridPointsScale;
-            py = input1 * gridPointsScale;
-            pz = input2 * gridPointsScale;
-            pk = inputK * gridPointsScale;
+            // CLAMP IN GRID SPACE, NOT IN 0..1. `input` here is whatever the
+            // caller's contract says: device 0..1 when inputScale is 1, raw
+            // 0..255 when the LUT was built for an 8-bit pipeline and folded
+            // 1/255 into inputScale. Clamping to 1 BEFORE applying the scale
+            // collapsed the whole 8-bit range onto one grid cell, so every
+            // colour came back as the same value. tetrahedralInterp3D_NCh had
+            // the same shape and was fixed first; these four kept it.
+            //
+            // gridPointsScale does the divide and the multiply at once.
+            px = Math.min(Math.max(input[1] * gridPointsScale, 0), gridEnd); // C
+            py = Math.min(Math.max(input[2] * gridPointsScale, 0), gridEnd); // M
+            pz = Math.min(Math.max(input[3] * gridPointsScale, 0), gridEnd); // Y
+            pk = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd); // K
 
             K0 = ~~pk;
             rk = (pk - K0);
@@ -1930,16 +1932,19 @@
             var go3 = lut.go3;
             var kOffset = go3 - lut.outputChannels + 1; // +1 since we don't do a [base++] for the last CLUT lookup
 
-            // We need some clipping here
-            inputK = Math.min(1,Math.max(0 , input[0])); // K
-            input0 = Math.min(1,Math.max(0 , input[1])); // C
-            input1 = Math.min(1,Math.max(0 , input[2])); // M
-            input2 = Math.min(1,Math.max(0 , input[3])); // Y
-
-            px = input0 * gridPointsScale;
-            py = input1 * gridPointsScale;
-            pz = input2 * gridPointsScale;
-            pk = inputK * gridPointsScale;
+            // CLAMP IN GRID SPACE, NOT IN 0..1. `input` here is whatever the
+            // caller's contract says: device 0..1 when inputScale is 1, raw
+            // 0..255 when the LUT was built for an 8-bit pipeline and folded
+            // 1/255 into inputScale. Clamping to 1 BEFORE applying the scale
+            // collapsed the whole 8-bit range onto one grid cell, so every
+            // colour came back as the same value. tetrahedralInterp3D_NCh had
+            // the same shape and was fixed first; these four kept it.
+            //
+            // gridPointsScale does the divide and the multiply at once.
+            px = Math.min(Math.max(input[1] * gridPointsScale, 0), gridEnd); // C
+            py = Math.min(Math.max(input[2] * gridPointsScale, 0), gridEnd); // M
+            pz = Math.min(Math.max(input[3] * gridPointsScale, 0), gridEnd); // Y
+            pk = Math.min(Math.max(input[0] * gridPointsScale, 0), gridEnd); // K
 
             K0 = ~~pk;
             rk = (pk - K0);
