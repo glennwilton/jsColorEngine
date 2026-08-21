@@ -121,9 +121,11 @@ module.exports = {
         if(pixelCount === undefined){
             pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inAlpha ? 1 : 0)));
         }
-        if(preserve === undefined){
-            preserve = outAlpha && inAlpha;
-        }
+        // PRESERVE ALPHA IS A PREFERENCE, NOT A RULE. Asking to carry alpha
+        // through a batch where some images have none is a reasonable thing to
+        // say once and mean for all of them, so it clamps to what the input
+        // can actually supply rather than refusing the call.
+        preserve = (preserve === undefined ? outAlpha : preserve) && inAlpha;
 
         outputArray = kernelUtils.ensureOutputArray(transform, lut, pixelCount, outAlpha, outputArray);
         loops.bilinearInterp2DArray_NCh_loop(inputArray, 0, outputArray, 0, pixelCount, lut, inAlpha, outAlpha, preserve);

@@ -50,11 +50,25 @@ test('transformArray throws when no pipeline has been created', () => {
 
 // ---------- transformArray: preserveAlpha without input alpha ----------
 
-test('transformArray throws when preserveAlpha=true but inputHasAlpha=false (pipeline path)', () => {
-    var t = new Transform({ dataFormat: 'int8', buildLut: false, verbose: false });
-    t.create('*srgb', '*adobergb', eIntent.relative);
-    var input = makeRGBInput(4);
-    expect(() => t.transformArray(input, false, false, true)).toThrow('preserveAlpha');
+test('preserveAlpha is a preference: asking for it without input alpha is served, not refused', () => {
+    // It used to throw -- and only on the per-pixel path, because the CLUT and
+    // identity routes dispatch before the check, so the same call was refused
+    // or served depending on which kernel took the batch.
+    //
+    // Refusing is the wrong answer either way. Running a batch and saying
+    // "keep the alpha" is a reasonable thing to mean for all of it, including
+    // the images that have none. It clamps to what the input can supply.
+    for(const buildLut of [false, true]){
+        var t = new Transform({ dataFormat: 'int8', buildLut: buildLut, verbose: false });
+        t.create('*srgb', '*adobergb', eIntent.relative);
+        var input = makeRGBInput(4);
+
+        var asked = t.transformArray(input, false, false, true);
+        var plain = t.transformArray(input, false, false, false);
+
+        expect(asked.length).toBe(4 * 3);          // no alpha slot invented
+        expect(Array.from(asked)).toEqual(Array.from(plain));
+    }
 });
 
 // ---------- transformArrayViaLUT: outputArray type guards ----------
@@ -202,4 +216,154 @@ describe('transformArray forwards outputArray guards to transformArrayViaLUT', (
             t.transformArray(input, false, false, false, undefined, undefined, small);
         }).toThrow(/outputArray too small/);
     });
+});
+
+// ---------- Transform.reformat: the container conversion outputFormat implied ----------
+
+describe('Transform.reformat', () => {
+
+    // transformArray's outputFormat looked like it converted and did not: it
+    // changed the container the engine allocated without touching the numbers
+    // going into it, so an integer LUT mode wrote 0-255 values into a
+    // Float32Array and called it float. This is the conversion that was meant.
+
+    test('integer widths use 257, so white stays white', () => {
+        // 256 would put 0xFF at 0xFF00 and drift the whole range.
+        const wide = Transform.reformat(new Uint8ClampedArray([0, 128, 255]), 'int8', 'int16');
+        expect(Array.from(wide)).toEqual([0, 32896, 65535]);
+        expect(wide).toBeInstanceOf(Uint16Array);
+    });
+
+    test('int8 round-trips through int16 exactly', () => {
+        const src = new Uint8ClampedArray(256);
+        for(let i = 0; i < 256; i++) src[i] = i;
+        const back = Transform.reformat(
+            Transform.reformat(src, 'int8', 'int16'), 'int16', 'int8');
+        expect(Array.from(back)).toEqual(Array.from(src));
+    });
+
+    test('integers become 0..1 floats and back', () => {
+        const f = Transform.reformat(new Uint8ClampedArray([0, 128, 255]), 'int8', 'float32');
+        expect(f).toBeInstanceOf(Float32Array);
+        expect(f[0]).toBeCloseTo(0, 6);
+        expect(f[1]).toBeCloseTo(128 / 255, 6);
+        expect(f[2]).toBeCloseTo(1, 6);
+
+        const back = Transform.reformat(f, 'float32', 'int8');
+        expect(Array.from(back)).toEqual([0, 128, 255]);
+    });
+
+    test('writes into a supplied buffer and returns it', () => {
+        const out = new Uint8ClampedArray(3);
+        const got = Transform.reformat(new Uint16Array([0, 32896, 65535]), 'int16', 'int8', out);
+        expect(got).toBe(out);
+        expect(Array.from(out)).toEqual([0, 128, 255]);
+    });
+
+    test('same format in and out still copies into the right container', () => {
+        const got = Transform.reformat(new Uint8ClampedArray([1, 2, 3]), 'int8', 'int8');
+        expect(got).toBeInstanceOf(Uint8ClampedArray);
+        expect(Array.from(got)).toEqual([1, 2, 3]);
+    });
+
+    test('refuses an unknown format or an undersized buffer', () => {
+        expect(() => Transform.reformat(new Uint8ClampedArray(3), 'int8', 'int12'))
+            .toThrow(/unknown toFormat/);
+        expect(() => Transform.reformat(new Uint8ClampedArray(3), 'rgb8', 'int8'))
+            .toThrow(/unknown fromFormat/);
+        expect(() => Transform.reformat(new Uint8ClampedArray(3), 'int8', 'int16', new Uint16Array(2)))
+            .toThrow(/needs 3/);
+    });
+
+    test('transformArray applies outputFormat instead of casting into it', () => {
+        // It used to allocate the requested container and write the
+        // transform's own values in unscaled: an int8 LUT mode put 0-255
+        // numbers into a Float32Array and called it float. Now the values are
+        // rescaled to match, so the two agree once you undo the scale.
+        const t = new Transform({ dataFormat: 'int8', buildLut: true });
+        t.create('*srgb', '*adobergb', eIntent.relative);
+        const px = makeRGBInput(2);
+
+        const native = t.array(px, false, false, false, 2);
+        const asF32  = t.transformArray(px, false, false, false, 2, 'float32');
+        const asU16  = t.transformArray(px, false, false, false, 2, 'int16');
+
+        expect(asF32).toBeInstanceOf(Float32Array);
+        expect(asU16).toBeInstanceOf(Uint16Array);
+        for(let i = 0; i < native.length; i++){
+            expect(Math.round(asF32[i] * 255)).toBe(native[i]);
+            expect(Math.round(asU16[i] / 257)).toBe(native[i]);
+        }
+
+        // Asking for the format it already is costs nothing extra.
+        const same = t.transformArray(px, false, false, false, 2, 'int8');
+        expect(Array.from(same)).toEqual(Array.from(native));
+    });
+
+    test('deprecated, but silent — a batch loop must not print per call', () => {
+        const warn = console.warn;
+        const said = [];
+        console.warn = m => said.push(String(m));
+        try {
+            const t = new Transform({ dataFormat: 'int8', buildLut: true });
+            t.create('*srgb', '*adobergb', eIntent.relative);
+            for(let i = 0; i < 5; i++){
+                t.transformArray(makeRGBInput(2), false, false, false, 2, 'float32');
+            }
+        } finally { console.warn = warn; }
+        expect(said.filter(m => /outputFormat/.test(m))).toEqual([]);
+    });
+});
+
+test('reformat is device-scaled, which is why it must not be handed Lab', () => {
+    // PCS Lab v2 tops out at 0xFF00, not 0xFFFF. This helper scales by 65535,
+    // so Lab through it lands 1.0039x out — a fraction of an LSB at 8 bits,
+    // and invisible until another CMS disagrees. There is no flag because a
+    // buffer of numbers cannot say which it is, and guessing would be wrong
+    // quietly. The test states the boundary rather than defending it.
+    const LAB_TOP = 0xFF00;
+    const white = Transform.reformat(new Uint8ClampedArray([255]), 'int8', 'int16');
+    expect(white[0]).toBe(0xFFFF);          // device: full range
+    expect(white[0]).not.toBe(LAB_TOP);     // NOT the Lab v2 ceiling
+    expect(white[0] / LAB_TOP).toBeCloseTo(1.0039, 4);
+});
+
+test('a LUT attached out of band gets a kernel, rather than the input back', () => {
+    // The supported route for a Transform that never ran create(): assign a
+    // LUT and convert. transformArrayViaLUT() used to set the kernel itself;
+    // when its body merged into array() that net briefly went with it, and the
+    // failure mode was the quiet kind — no kernel, so the dispatch fell to the
+    // per-pixel walk, which found an EMPTY pipeline and handed the input
+    // straight back looking like a conversion.
+    const grid = 9, inCh = 2, outCh = 3, cells = grid * grid;
+    const CLUT = new Float64Array(cells * outCh);
+    for(let i = 0; i < CLUT.length; i++) CLUT[i] = ((i * 2654435761) >>> 0) / 4294967295;
+    const lut = { inputChannels: inCh, outputChannels: outCh, gridPoints: [grid, grid],
+                  CLUT, inputScale: 1 / 255, outputScale: 255,
+                  g1: grid, g2: grid * grid,
+                  go0: outCh, go1: grid * outCh, go2: grid * grid * outCh, intLut: null };
+
+    const px = new Uint8ClampedArray([10, 20, 128, 200]);
+
+    function convert(setKernelFirst){
+        const t = new Transform({ dataFormat: 'int8' });
+        t.lut = lut;
+        t.inputChannels = inCh;
+        t.outputChannels = outCh;
+        if(setKernelFirst) t.setKernel(inCh);
+        return Array.from(t.array(px, false, false, false, 2));
+    }
+
+    const explicit = convert(true);
+    const viaNet   = convert(false);
+
+    expect(viaNet).toEqual(explicit);
+    expect(viaNet.length).toBe(2 * outCh);
+    // Not the input echoed back, which is what the missing net produced.
+    expect(viaNet.slice(0, 2)).not.toEqual([10, 20]);
+
+    // transformArrayViaLUT still reaches the same place.
+    const t = new Transform({ dataFormat: 'int8' });
+    t.lut = lut; t.inputChannels = inCh; t.outputChannels = outCh;
+    expect(Array.from(t.transformArrayViaLUT(px, false, false, false, 2))).toEqual(explicit);
 });

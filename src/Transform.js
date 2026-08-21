@@ -4107,156 +4107,6 @@
          * @throws {string} 'No LUT loaded' if the Transform was built without
          *                  buildLut: true.
          */
-        /**
-         * IMAGE FAST PATH. Pre-built LUT → buffered pixel transform.
-         * v1.3 table-driven dispatcher.
-         *
-         * The 3D / 4D dispatch — previously a 200-line if/else cascade with
-         * inline WASM bind/run calls — now collapses to:
-         *
-         *     run = (pixelCount >= threshold) ? big : small;
-         *     run(this, in, out, px, lut, ia, oa, pa);
-         *
-         * because all the gating (WASM state availability, intLut presence,
-         * cMax bucketing, fallback degradation) is resolved ONCE at create()
-         * time, inside the kernel, and cached on the kernel. Per-array overhead vs
-         * the legacy cascade: one less conditional pyramid, one extra
-         * indirect call. Net ~zero on hot paths, massively cleaner to
-         * read and extend.
-         *
-         *  ROUTING TABLE (single source of truth — src/lutKernelTable.js)
-         *
-         *      input → output channels       resolved key (sample for lutMode='float')
-         *      ───────────────────────       ──────────────────────────────────────────
-         *      1     → N                     (gray bypass — linearInterp1DArray_NCh_loop)
-         *      2     → N                     (duotone bypass — bilinearInterp2DArray_NCh_loop)
-         *      3     → 3   (RGB→RGB,  Lab)   fl_3_3   → tetrahedralInterp3DArray_3Ch_loop
-         *      3     → 4   (RGB→CMYK)        fl_3_4   → tetrahedralInterp3DArray_4Ch_loop
-         *      3     → N   (RGB→6+ch)        fl_3_n   → tetrahedralInterp3DArray_NCh_loop
-         *      4     → 3   (CMYK→RGB, Lab)   fl_4_3   → tetrahedralInterp4DArray_3Ch_loop
-         *      4     → 4   (CMYK→CMYK)       fl_4_4   → tetrahedralInterp4DArray_4Ch_loop
-         *      4     → N                     fl_4_n   → tetrahedralInterp4DArray_NCh_loop
-         *
-         * For other lutModes (int / int16 / int-wasm-* / int16-wasm-*)
-         * the resolver walks the same matrix with the appropriate
-         * `<modeShort>_<inCh>_<outCh>` start key, falling through the
-         * sibling chain on any per-host miss (no WASM, no intLut, batch
-         * below threshold).
-         *
-         *  INPUT CONTRACT — NOT validated in the per-pixel inner loop
-         *
-         *   - inputArray must be Uint8ClampedArray (int8 modes), Uint16Array
-         *     (int16 modes), or numeric Array.
-         *   - Length must equal pixelCount * inputBytesPerPixel.
-         *   - The Transform must have been created with `buildLut: true`.
-         *
-         *  ALPHA HANDLING
-         *
-         *   - inputHasAlpha:  if true, every (channels+1)th byte/word is
-         *                     treated as alpha and skipped (or copied — see
-         *                     preserveAlpha).
-         *   - outputHasAlpha: if true, the output is written with an alpha
-         *                     slot after each pixel.
-         *   - preserveAlpha:  if true, copy alpha from input to output
-         *                     (requires both the above to be true). If
-         *                     undefined, defaults to
-         *                     `outputHasAlpha && inputHasAlpha`.
-         *
-         * @param  {Uint8ClampedArray|Uint16Array|Float64Array|Array} inputArray
-         * @param  {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
-         * @param  {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
-         * @param  {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
-         *                                   to (outputHasAlpha && inputHasAlpha).
-         * @param  {number}  [pixelCount]    Pixels to convert. Defaults to
-         *                                   Math.floor(inputArray.length / inputBPP).
-         * @param  {Uint8ClampedArray|Uint16Array} [outputArray]
-         *                                   Optional destination buffer to reuse.
-         *                                   Must match expected output type and
-         *                                   have at least pixelCount * outputBPP
-         *                                   length.
-         * @return {Uint8ClampedArray|Uint16Array} Output typed array. If
-         *                                   outputArray is provided and valid, the
-         *                                   same instance is returned.
-         *  WASM MEMORY RETENTION
-         *
-         *   When lutMode is a WASM variant ('int-wasm-scalar', 'int-wasm-simd',
-         *   etc.), each call allocates WASM linear memory sized for the current
-         *   image. This memory persists between calls and only grows — WASM
-         *   pages cannot be released back to the OS by spec. In practice:
-         *
-         *   - Fixed-size workflows (video frames, same-size batch): memory
-         *     stabilises after the first call. No growth, no waste.
-         *   - Mixed-size workflows: memory stays at the high-water mark of
-         *     the largest image processed unless automatic guards are active.
-         *
-         *   Automatic guards (checked immediately after every transform):
-         *     wasmMaxMemory  (default 128 MB) — compacts any state whose memory
-         *                    exceeds this absolute byte ceiling. Set 0 to disable.
-         *     wasmShrinkRatio — compacts when memory exceeds ratio × what was
-         *                    needed for the image just processed. Default 0 (off).
-         *
-         *   Both fire post-run, so even the last image in a batch releases
-         *   memory immediately — no need to wait for a subsequent call.
-         *
-         *   Manual control:
-         *     transform.compactWasmMemory()    — re-instantiate, fresh memory
-         *     transform.releaseWasmMemory()    — drop WASM entirely, use JS
-         *     transform.wasmMemoryBytes()      — check current usage
-         *
-         *   See docs/deepdive/WasmKernels.md § "WASM memory management" for
-         *   benchmarked costs and design rationale.
-         *
-         * @param  {Uint8ClampedArray|Uint16Array|Float64Array|Array} inputArray
-         * @param  {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
-         * @param  {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
-         * @param  {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
-         *                                   to (outputHasAlpha && inputHasAlpha).
-         * @param  {number}  [pixelCount]    Pixels to convert. Defaults to
-         *                                   Math.floor(inputArray.length / inputBPP).
-         * @param  {Uint8ClampedArray|Uint16Array} [outputArray]
-         *                                   Optional destination buffer to reuse.
-         *                                   Must match expected output type and
-         *                                   have at least pixelCount * outputBPP
-         *                                   length. Eliminates per-call allocation
-         *                                   and reduces GC pressure — especially
-         *                                   beneficial for real-time loops (video,
-         *                                   animation).
-         * @return {Uint8ClampedArray|Uint16Array} Output typed array. If
-         *                                   outputArray is provided and valid, the
-         *                                   same instance is returned.
-         * @throws {string} 'No LUT loaded' if the Transform was built without
-         *                  buildLut: true.
-         */
-        transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
-            var lut = this.lut;
-            if(!lut){
-                throw 'No LUT loaded';
-            }
-
-            // NO PREAMBLE. pixelCount and preserveAlpha used to be defaulted
-            // here, and again by whichever other caller reached the kernel --
-            // and NOT AT ALL by a third, which is how
-            // transformArray(input, false, false) on a matrix-shaper pair once
-            // returned [] : pixelCount arrived undefined and sized the output
-            // as undefined * 3. They are the kernel's, defaulted once at the
-            // top of its array(), and undefined travels there untouched.
-
-            // v1.7 kernel modules — the kernel instance (set at create() time
-            // by setKernel()) owns output allocation/validation and variant
-            // dispatch. See src/kernels/ and docs/deepdive/KernelModules.md.
-            //
-            // Safety net: the only way to get here without a kernel is a LUT
-            // attached out-of-band onto a Transform that never ran create()
-            // — route by the LUT's own input dimension in that case.
-            if(this.kernel === null){
-                this.setKernel(lut.inputChannels);
-                if(this.kernel === null){
-                    throw 'Invalid inputChannels ' + lut.inputChannels;
-                }
-            }
-
-            return this.kernel.array(inputArray, outputArray, pixelCount, lut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-        }
 
         /**
          * Generic array transform. Routes to the right path based on dataFormat
@@ -4326,71 +4176,86 @@
          * @throws {string} 'forwardArray can only be used with int8 or int16
          *                  dataFormat' for invalid combinations.
          */
-        transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat, outputArray){
+        array(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
 
-            if(!this.pipelineCreated){
+            // A PIPELINE OR A LUT. The per-pixel routes below walk the
+            // pipeline and need one; the kernel dispatch does not -- a LUT
+            // attached out of band onto a Transform that never ran create() is
+            // a supported route, and the kernel takes it straight from the
+            // table. Requiring a pipeline for both refused that route.
+            if(!this.pipelineCreated && !this.lut){
                 throw 'No Pipeline';
             }
 
-            // outputFormat is deprecated. The output array type is fixed at create() time
-            // via dataFormat and is baked into the LUT's outputScale. Passing outputFormat
-            // produces incorrect results for integer LUT modes (values are pre-scaled to
-            // 0–255 or 0–65535; writing into a mismatched container gives garbage).
-            // Pass a pre-allocated outputArray of the correct type instead, or omit it
-            // and let transformArray allocate based on the dataFormat set at create().
-            if(outputFormat !== undefined && outputFormat !== null){
-                console.warn('jsColorEngine: transformArray outputFormat parameter is deprecated ' +
-                    'and will be removed in a future release. Output array type is fixed at ' +
-                    'create() time via dataFormat. Remove outputFormat from your call.');
-            }
-
-            // IDENTITY GOES STRAIGHT TO ITS KERNEL. There is no LUT to route
-            // through, and without this it would fall into the generic
-            // per-pixel pipeline walk below -- correct, but orders of
-            // magnitude slower for what is a memcpy with alpha handling.
+            // PRESERVE ALPHA IS A PREFERENCE, NOT A RULE. This used to throw
+            // when asked to preserve alpha from an input that has none -- and
+            // only on the per-pixel path, because the CLUT and identity routes
+            // dispatch before it, so the same call was refused or served
+            // depending on which kernel happened to take the batch.
             //
-            // This is what the bound closure used to be for. It is a direct
-            // call now because kernels[0] has an array() like every other
-            // kernel; the preamble it needs is its own.
-            if(this.isIdentity && this.kernel){
-                return this.kernel.array(inputArray, outputArray, pixelCount, this.lut,
-                                         inputHasAlpha, outputHasAlpha, preserveAlpha);
+            // Refusing is the wrong answer either way. Running a batch of
+            // images and saying "keep the alpha" is a reasonable thing to mean
+            // for all of them, including the ones that do not have any. It
+            // clamps to what the input can supply, in every kernel's preamble
+            // and here.
+            // Defaulted AND clamped in one step. `undefined && true` is
+            // `true`, so the default has to be resolved before the clamp or an
+            // omitted preserveAlpha turns into "yes" wherever the input has
+            // alpha.
+            preserveAlpha = (preserveAlpha === undefined ? outputHasAlpha : preserveAlpha)
+                && inputHasAlpha;
+
+            // A LUT WITHOUT A KERNEL. The only way here is a table attached
+            // out of band onto a Transform that never ran create() -- a
+            // supported route, and one the old transformArrayViaLUT() had a
+            // net for. Without it the dispatch below sees no kernel, falls to
+            // the per-pixel walk, finds an EMPTY pipeline, and hands back the
+            // input unchanged: silently wrong rather than loud.
+            if(this.lut && this.kernel === null){
+                this.setKernel(this.lut.inputChannels);
+                if(this.kernel === null){
+                    throw 'Invalid inputChannels ' + this.lut.inputChannels;
+                }
             }
 
-            if((this.dataFormat === 'int8' || this.dataFormat === 'int16') && this.lut !== false){
-                return this.transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray);
+            // ONE DISPATCH TO THE KERNEL. Three routes used to reach
+            // kernel.array() by three separate conditions -- identity, which
+            // has no LUT; a built CLUT; and a claiming kernel, which also has
+            // no LUT. They are the same question asked three ways: can this
+            // kernel take the batch. Since identity became kernels[0] and got
+            // an array() like every other kernel, there is nothing left to
+            // distinguish them at the call site.
+            //
+            //   identity   always, whatever the dataFormat -- a copy with
+            //              alpha handling, and the pipeline walk below would
+            //              be orders of magnitude slower for it
+            //   claimed    a kernel that took the transform instead of a CLUT
+            //              (the matrix shaper). May still decline, in which
+            //              case falling through is the safe answer.
+            //   CLUT       int8/int16 only; the float and object formats keep
+            //              the accuracy path
+            //
+            // A pixel cache excludes all of them: the per-pixel walk below
+            // resolves through the cache, and a batch kernel would bypass it.
+            if(this.kernel && this._pixelCacheData === null){
+                var batchLut = this.lut || null;
+                var canBatch = this.isIdentity
+                    || this.kernel.claimed === true
+                    || (batchLut !== null
+                        && (this.dataFormat === 'int8' || this.dataFormat === 'int16'));
+
+                if(canBatch){
+                    var batched = this.kernel.array(inputArray, outputArray, pixelCount,
+                        batchLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                    if(batched) return batched;
+                }
             }
 
             if(this.dataFormat === 'object' || this.dataFormat === 'objectFloat'){
                 throw 'forwardArray can only be used with int8 or int16 dataFormat';
             }
 
-            if(preserveAlpha && !inputHasAlpha){
-                throw 'preserveAlpha is true but inputArray has no alpha channel';
-            }
 
-            if(preserveAlpha === undefined){
-                preserveAlpha = outputHasAlpha && inputHasAlpha;
-            }
-
-            // A CLAIMING KERNEL TOOK THIS TRANSFORM AT create(). It has no LUT
-            // to walk — that is why it claimed — so it is dispatched here,
-            // ahead of the generic per-pixel loops below, which walk the
-            // pipeline stage by stage at ~8 MPx/s.
-            //
-            // The only claiming kernel today is the matrix shaper, at 331
-            // MPx/s and within 1 LSB of those same loops. It builds its tables
-            // LAZILY on this first call — 3-8 ms — so a Transform that only
-            // ever converts single colours never pays for them.
-            //
-            // A null return means it declined after all, which claims() should
-            // have prevented; falling through is the safe answer rather than
-            // stranding the caller.
-            if(this.kernel && this.kernel.claimed === true && this._pixelCacheData === null){
-                var claimedOut = this.kernel.array(inputArray, outputArray, pixelCount,
-                    null, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                if(claimedOut) return claimedOut;
-            }
 
             // A pixel cache makes the per-pixel walks below wrong: they
             // increment blindly, so they would re-run the maths on a value a
@@ -4400,7 +4265,7 @@
             // cache-off must pay nothing. Keep the loops below byte-identical.
             if(this._pixelCacheData !== null){
                 return this._transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha,
-                    preserveAlpha, pixelCount, outputFormat);
+                    preserveAlpha, pixelCount);
             }
 
             var pipeline = this.pipeline;
@@ -4413,7 +4278,6 @@
             var outputChannels ;
             var inputItemsPerPixel;
             var outputItemsPerPixel;
-            var outputArray;
 
 
             if(this.dataFormat === 'object' || this.dataFormat === 'objectFloat'){
@@ -4455,65 +4319,22 @@
                 pixelCount = Math.floor(inputArray.length / inputItemsPerPixel);
             }
 
-            switch(outputFormat){
-                case 'int8':
-                    outputArray = new Uint8ClampedArray(pixelCount * outputItemsPerPixel);
-                    break;
-                case 'int16':
-                    outputArray = new Uint16Array(pixelCount * outputItemsPerPixel);
-                    break;
-                case 'float32':
-                    outputArray = new Float32Array(pixelCount * outputItemsPerPixel);
-                    break;
-                case 'float64':
-                    outputArray = new Float64Array(pixelCount * outputItemsPerPixel);
-                    break;
-                case 'same':
-                    // get input array type
-                    var inputArrayType = inputArray.constructor.name;
-                    switch(inputArrayType){
-                        case 'Uint8Array':
-                            outputArray = new Uint8ClampedArray(pixelCount * outputItemsPerPixel);
-                            break;
-                        case 'Uint16Array':
-                            outputArray = new Uint16Array(pixelCount * outputItemsPerPixel);
-                            break;
-                        case 'Float32Array':
-                            outputArray = new Float32Array(pixelCount * outputItemsPerPixel);
-                            break;
-                        case 'Float64Array':
-                            outputArray = new Float64Array(pixelCount * outputItemsPerPixel);
-                            break;
-                        default:
-                            throw 'Unknown inputArray type ' + inputArrayType;
-                    }
-                    break;
-                default:
-                    // outputFormat IS DEPRECATED, so undefined is the normal
-                    // case -- and it used to land here and hand back an
-                    // untyped Array while the LUT path handed back a
-                    // Uint8ClampedArray. Which container you got depended on
-                    // whether a LUT happened to be built, and the untyped one
-                    // has no .subarray() and cannot go straight into ImageData.
-                    //
-                    // dataFormat is the contract: it is what create() was told
-                    // and what the LUT path already allocates from. Several
-                    // tests asserted toBeInstanceOf(Array) on this route --
-                    // written against the observed behaviour rather than a
-                    // decision -- and were updated with it.
-                    //
-                    // ONLY the integer formats become typed. See below.
-                    outputArray =
-                          (this.dataFormat === 'int8')  ? new Uint8ClampedArray(pixelCount * outputItemsPerPixel)
-                        : (this.dataFormat === 'int16') ? new Uint16Array(pixelCount * outputItemsPerPixel)
-                        // 'device' and the float formats carry 0..1 values. A
-                        // Uint8ClampedArray would round every one of them to 0
-                        // or 1 and destroy the data, so these stay untyped --
-                        // and lutbuilder.tests.js asserts exactly that.
-                        : new Array(pixelCount * outputItemsPerPixel);
-            }
-
-
+            // ONE ALLOCATION RULE, and it honours a caller's buffer.
+            //
+            // This used to be a switch on `outputFormat`, which is deprecated
+            // and which the generic path handled differently from every other
+            // route: the kernel paths take a supplied outputArray, and this one
+            // overwrote it unconditionally. `outputArray` was also both a
+            // parameter and a `var` here, which hid that.
+            //
+            // dataFormat is the contract. int8 and int16 get typed arrays,
+            // matching what the CLUT routes return. 'device' and the float
+            // formats carry 0..1 values and stay untyped -- a Uint8ClampedArray
+            // would round every one of them to 0 or 1.
+            outputArray = outputArray || (
+                  (this.dataFormat === 'int8')  ? new Uint8ClampedArray(pixelCount * outputItemsPerPixel)
+                : (this.dataFormat === 'int16') ? new Uint16Array(pixelCount * outputItemsPerPixel)
+                : new Array(pixelCount * outputItemsPerPixel));
 
             switch(inputChannels){
                 case 1:
@@ -4646,6 +4467,174 @@
             }
             return outputArray;
         };
+
+        /**
+         * Rescale a pixel array between container formats.
+         *
+         * THE ANSWER TO WHAT `outputFormat` USED TO PROMISE. That parameter
+         * looked like it converted, and did not: it changed the container the
+         * engine allocated without changing the numbers going into it, so an
+         * integer LUT mode -- where values are already scaled to 0-255 or
+         * 0-65535 -- wrote 8-bit numbers into a Float32Array and called it
+         * float. Hence the deprecation, and hence this.
+         *
+         * Conversion is a separate step because it IS a separate step. The
+         * transform produces values in its own dataFormat; changing container
+         * afterwards is arithmetic on the result, and doing it here keeps that
+         * visible instead of hiding it in an argument.
+         *
+         *     Transform.reformat(buf, 'int8', 'float32')      // new Float32Array, / 255
+         *     Transform.reformat(buf, 'int16', 'int8', out)   // into out, * 255 / 65535
+         *
+         * Named for what it does. This repo already uses "convert" for colour
+         * -- src/convert.js is Lab, XYZ, chromatic adaptation -- and nothing
+         * here touches colour. The numbers mean the same thing afterwards;
+         * only the container they live in has changed.
+         *
+         * FORMATS. 'int8' is 0-255, 'int16' is 0-65535, 'float32' and
+         * 'float64' are 0..1. Integer widths convert by 257 rather than 256 --
+         * 0xFF maps to 0xFFFF, so white stays white; scaling by 256 would put
+         * it at 0xFF00 and drift the whole range.
+         *
+         * DEVICE BUFFERS ONLY. IT DOES NOT GUESS LAB. PCS Lab in ICC v2 tops
+         * out at 0xFF00, not 0xFFFF -- L* 100 is 65280 and the codes above it
+         * are headroom -- so running Lab through this scales it by 65535 and
+         * puts every value out by a factor of 1.0039. That reads as a fraction
+         * of an LSB at 8 bits and does not announce itself until something
+         * compares against another CMS.
+         *
+         * There is no flag for it because there is no way to tell from a
+         * buffer of numbers which one it is holding, and a helper that guessed
+         * would be wrong silently. This is for DEVICE buffers -- what
+         * transform.array() hands back.
+         *
+         * Lab has its own pair, and they take the encoding explicitly rather
+         * than inferring it, which is the whole difference:
+         *
+         *     convert.lab2Int16(L, a, b, encoding)
+         *     convert.int162Lab(uL, ua, ub, encoding)
+         *
+         * plus encodeICC.labToU16v2() for writing a v2 CLUT. Use those when
+         * the numbers are PCS.
+         *
+         * @param {TypedArray|Array} input
+         * @param {string} fromFormat  int8 | int16 | float32 | float64
+         * @param {string} toFormat    int8 | int16 | float32 | float64
+         * @param {TypedArray} [out]   write here instead of allocating
+         * @returns {TypedArray} `out` when given, otherwise a new array
+         */
+        static reformat(input, fromFormat, toFormat, out){
+            const SCALE = { int8: 255, int16: 65535, float32: 1, float64: 1 };
+            const MAKE  = {
+                int8:    n => new Uint8ClampedArray(n),
+                int16:   n => new Uint16Array(n),
+                float32: n => new Float32Array(n),
+                float64: n => new Float64Array(n),
+            };
+            if(!(fromFormat in SCALE)) throw new Error('Transform.reformat: unknown fromFormat "' + fromFormat + '"');
+            if(!(toFormat in SCALE))   throw new Error('Transform.reformat: unknown toFormat "' + toFormat + '"');
+
+            if(out){
+                if(out.length < input.length){
+                    throw new Error('Transform.reformat: out is ' + out.length
+                        + ' long, needs ' + input.length);
+                }
+            } else {
+                out = MAKE[toFormat](input.length);
+            }
+            if(fromFormat === toFormat){
+                out.set(input);
+                return out;
+            }
+
+            const factor = SCALE[toFormat] / SCALE[fromFormat];
+            const rounding = (toFormat === 'int8' || toFormat === 'int16');
+            for(let i = 0; i < input.length; i++){
+                const v = input[i] * factor;
+                out[i] = rounding ? Math.round(v) : v;
+            }
+            return out;
+        }
+
+        /**
+         * @deprecated since v1.6 — prefer {@link Transform#array} for native units.
+         *
+         * Same as `array()`, plus the sixth argument this signature has always
+         * carried: `outputFormat`.
+         *
+         * IT NOW DOES WHAT IT LOOKED LIKE IT DID. The old behaviour allocated
+         * the requested container and wrote the transform's own values into it
+         * unscaled, so an integer LUT mode -- where values are already 0-255 or
+         * 0-65535 -- put 8-bit numbers into a Float32Array and called it float.
+         * The argument promised a conversion and performed a cast. It is routed
+         * through {@link Transform.reformat} now, so the values are rescaled to
+         * match the container and a caller who never noticed gets the result
+         * they always meant.
+         *
+         * Deprecated all the same, because the conversion is a separate step
+         * and saying so at the call site reads better than an argument that
+         * changes what the method returns. `array()` for native units;
+         * `Transform.reformat()` after it when you want another container.
+         *
+         * @param {TypedArray|Array} inputArray
+         * @param {boolean} inputHasAlpha
+         * @param {boolean} outputHasAlpha
+         * @param {boolean} [preserveAlpha]  a preference, clamped to what the input has
+         * @param {number}  [pixelCount]
+         * @param {string}  [outputFormat]   deprecated; applied via {@link Transform.reformat}
+         * @param {TypedArray|Array} [outputArray]
+         * @returns {TypedArray|Array}
+         */
+        transformArray(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat, outputArray){
+            // No warning. Deprecated in the JSDoc, where a reader looking at
+            // the signature will see it, rather than on every call at runtime
+            // -- a batch loop would print it a thousand times to say something
+            // that has not changed since the first one.
+            var remap = outputFormat && outputFormat !== this.dataFormat;
+
+            // outputArray belongs to the REQUESTED format, so when a remap is
+            // coming it goes to reformat() as the destination rather than to
+            // array(), where it would be the wrong container for the native
+            // pass.
+            var native = this.array(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha,
+                                    pixelCount, remap ? undefined : outputArray);
+            if(!remap) return native;
+            return Transform.reformat(native, this.dataFormat, outputFormat, outputArray);
+        }
+
+        /**
+         * @deprecated since v1.6 — use {@link Transform#array} instead.
+         *
+         * There is nothing left here that array() does not do. It existed when
+         * the CLUT path had its own routing and its own preamble; both now live
+         * in the kernel, and array() reaches the same kernel.array() by the
+         * same dispatch.
+         *
+         * The one thing it still adds is the explicit "No LUT loaded" refusal,
+         * kept because callers reaching for this name are asking for the CLUT
+         * path specifically and a silent fall to the per-pixel walk would be a
+         * hundredfold slower without saying so.
+         *
+         * NOTE the argument order differs from transformArray(): the sixth
+         * parameter here is `outputArray`, not `outputFormat`. Two public
+         * methods, same shape, sixth argument meaning different things — which
+         * is its own reason to have one.
+         *
+         * @param {TypedArray|Array} inputArray
+         * @param {boolean} inputHasAlpha
+         * @param {boolean} outputHasAlpha
+         * @param {boolean} [preserveAlpha]
+         * @param {number}  [pixelCount]
+         * @param {TypedArray} [outputArray]
+         * @returns {TypedArray|Array}
+         */
+        transformArrayViaLUT(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
+            if(!this.lut){
+                throw 'No LUT loaded';
+            }
+            return this.array(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha,
+                              pixelCount, outputArray);
+        }
 
         /**
          *

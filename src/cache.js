@@ -352,7 +352,7 @@
          *
          * @returns {Array|Uint8ClampedArray|Uint16Array|Float32Array|Float64Array}
          */
-        _transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputFormat){
+        _transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
             var inputChannels = this.inputChannels;
             var outputChannels = this.outputChannels;
             var inputItemsPerPixel = inputHasAlpha ? inputChannels + 1 : inputChannels;
@@ -378,22 +378,13 @@
             }
 
             var outputLength = pixelCount * outputItemsPerPixel;
-            switch(outputFormat){
-                case 'int8':    outputArray = new Uint8ClampedArray(outputLength); break;
-                case 'int16':   outputArray = new Uint16Array(outputLength);       break;
-                case 'float32': outputArray = new Float32Array(outputLength);      break;
-                case 'float64': outputArray = new Float64Array(outputLength);      break;
-                case 'same':
-                    switch(inputArray.constructor.name){
-                        case 'Uint8Array':   outputArray = new Uint8ClampedArray(outputLength); break;
-                        case 'Uint16Array':  outputArray = new Uint16Array(outputLength);       break;
-                        case 'Float32Array': outputArray = new Float32Array(outputLength);      break;
-                        case 'Float64Array': outputArray = new Float64Array(outputLength);      break;
-                        default: throw 'Unknown inputArray type ' + inputArray.constructor.name;
-                    }
-                    break;
-                default: outputArray = new Array(outputLength);
-            }
+            // Same rule as Transform.array(): dataFormat decides, and a
+            // caller's buffer is honoured. outputFormat is gone from the
+            // signature it used to arrive through.
+            outputArray = outputArray || (
+                  (this.dataFormat === 'int8')  ? new Uint8ClampedArray(outputLength)
+                : (this.dataFormat === 'int16') ? new Uint16Array(outputLength)
+                : new Array(outputLength));
 
             for(i = 0; i < pixelCount; i++){
                 pixel = new Array(inputChannels);

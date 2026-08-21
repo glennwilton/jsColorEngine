@@ -133,9 +133,11 @@ module.exports = {
         if(pixelCount === undefined){
             pixelCount = Math.floor(inputArray.length / (lut.inputChannels + (inAlpha ? 1 : 0)));
         }
-        if(preserve === undefined){
-            preserve = outAlpha && inAlpha;
-        }
+        // PRESERVE ALPHA IS A PREFERENCE, NOT A RULE. Asking to carry alpha
+        // through a batch where some images have none is a reasonable thing to
+        // say once and mean for all of them, so it clamps to what the input
+        // can actually supply rather than refusing the call.
+        preserve = (preserve === undefined ? outAlpha : preserve) && inAlpha;
 
         if (!outputArray) outputArray = new Uint8ClampedArray(pixelCount * outBPP);
 
@@ -175,14 +177,42 @@ module.exports = {
         wasmLifecycle.releaseWasmStates(this.transform);
     },
 
-    // N-channel INPUT LUT building is not implemented yet — a 5D+ CLUT bake
-    // needs the kernel-owned u16 N-D grid walk specified in
-    // docs/deepdive/KernelModules.md (memory grows as gridPoints^N, so u16 +
-    // reduced grid density is mandatory). Until that lands, decline the LUT:
-    // Transform.create() clears buildLut and uses the per-pixel pipeline —
-    // correct, just not image-rate. (N-channel OUTPUT profiles don't come
-    // through here — a Lab→7CLR transform has a 3-channel input and uses
-    // Kernel3D with the generic 3D→NCh loops.)
+    /**
+     * No CLUT for n-channel input. Returns false, and here is the reasoning,
+     * because it is a decision rather than a gap.
+     *
+     * An A2B-shaped bake is gridPoints^N cells. At 5 channels a 9-point grid
+     * is 59k cells; at 8 a 4-point grid is 65k; at 11 and up only 2 points per
+     * axis fit, which is a table with no interior at all. So the density that
+     * would make a CLUT worth having is exactly the density that stops being
+     * encodable.
+     *
+     * MEASURED, so it is not an assumption. A LUT-backed KernelND.array()
+     * against the per-pixel pipeline walk it would replace:
+     *
+     *     in  grid   pipeline   array()   gain   build   table
+     *      5     9      3.23      4.18    1.3x    20ms   1.4MB
+     *      6     7      2.22      2.63    1.2x    60ms   3.8MB
+     *      8     4      0.71      0.77    1.1x    97ms   1.6MB
+     *
+     * 1.1x to 1.3x, because BOTH PATHS CALL THE SAME INTERPOLATOR per pixel.
+     * A CLUT only removes the other seven pipeline stages, about 0.2us/px.
+     * Paying grid^N memory and a 20-97ms build for that is the wrong trade,
+     * so Transform.create() clears buildLut and walks the pipeline instead --
+     * correct, just not image-rate.
+     *
+     * (N-channel OUTPUT does not come through here. A Lab->7CLR transform has
+     * 3-channel input, so it is Kernel3D on its wide-output runs, and it does
+     * build a CLUT.)
+     *
+     * WHAT WOULD CHANGE THIS. Multi-profile chains. The measurement above is
+     * a single hop, where the pipeline is eight stages. A proofing chain --
+     * device to PCS to device to PCS -- stacks those, and the per-pixel walk
+     * grows with the chain while a baked CLUT stays one interpolation whatever
+     * the chain length. The trade that fails at 1.2x for one hop can look very
+     * different across four, and this is the hook to revisit when that
+     * workflow lands.
+     */
     provideLut: function(lutMode) {
         // Not silent — the caller asked for buildLut:true and is getting the
         // (correct, slower) per-pixel pipeline instead.

@@ -121,9 +121,11 @@ module.exports = {
         if(pixelCount === undefined || pixelCount === null){
             pixelCount = Math.floor(inputArray.length / (inAlpha ? 4 : 3));
         }
-        if(preserve === undefined){
-            preserve = outAlpha && inAlpha;
-        }
+        // PRESERVE ALPHA IS A PREFERENCE, NOT A RULE. Asking to carry alpha
+        // through a batch where some images have none is a reasonable thing to
+        // say once and mean for all of them, so it clamps to what the input
+        // can actually supply rather than refusing the call.
+        preserve = (preserve === undefined ? outAlpha : preserve) && inAlpha;
         var need = pixelCount * (outAlpha ? 4 : 3);
         var out  = outputArray;
         if(!out || out.length < need){
