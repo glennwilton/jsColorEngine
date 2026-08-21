@@ -393,7 +393,7 @@ want, and check what Transform has to learn.**
 | A fast-preview mode on a small 8-bit grid | a kernel that returns a 9³ or 17³ u8 table when a preview option is set | nothing |
 | A tuned 7-channel press kernel, leaving 5, 6, 8–15 generic | `Transform.kernels[7] = Kernel7D` | nothing |
 | A probe that records every dispatch, for a test | `Transform.kernels[9] = probe` | nothing |
-| Routing the two-tier `arrayFor` shape cannot express — three tiers, a decision on content rather than size, a memo cache | the kernel's own dispatcher returned in both slots with `threshold: 0` | nothing |
+| A JS → WASM → GPU kernel: three tiers, two thresholds orders of magnitude apart, and a decision that depends on device availability | the kernel's own dispatcher returned in both slots with `threshold: 0` | nothing — though a GPU tier raises an async question for the *public API*, see [arrayFor](#arrayfor) |
 
 Every row is a kernel decision expressed through hooks that already exist in
 this document. None of them is a case in a switch in `Transform.js`, which is
@@ -851,9 +851,17 @@ chain (simd → scalar → js → float) is walked once at create() and lands on
 exactly two outcomes.
 
 **And two tiers is enough forever, because the second tier is an escape hatch.**
-A kernel that wants routing this shape cannot express — three tiers, a decision
-on content rather than size, a cache, anything — returns *its own dispatcher* in
-both slots:
+
+The case that makes this concrete is a **JS → WASM → GPU** kernel. Three tiers,
+and not evenly spaced: the WASM crossover is a memcpy, a few hundred pixels,
+while a GPU crossover is an upload plus a round trip and sits somewhere in the
+millions. Two thresholds, wildly different magnitudes, and the second one
+depends on things `{big, small, threshold}` knows nothing about — whether a
+device is available, whether the last upload is still resident, whether the
+caller is going to ask for the result back immediately.
+
+That shape cannot be expressed as one threshold, and it should not have to be.
+A kernel that wants it returns *its own dispatcher* in both slots:
 
 There are two shapes for this, and both are legitimate.
 
@@ -911,6 +919,19 @@ reports only `'multiDispatch'` is a step backwards for anyone reading
 Threshold 0 means `big` is always chosen, Transform makes no comparison, and
 whatever happens inside `dispatch` is invisible to it. **Transform.js does not
 care what it was handed — it calls a function.**
+
+And the cost of being that dynamic is nil, because the dispatcher runs once per
+image. A three-way branch on device availability and pixel count, per image, is
+not a measurable thing.
+
+> **One real constraint on a GPU tier, worth knowing before anyone starts:**
+> `transformArray()` is synchronous, and a GPU round trip is not. A GPU tier
+> therefore either needs an async entry point of its own, or its dispatcher
+> falls back to WASM whenever it is reached synchronously and only takes the
+> GPU path from an async caller. That is a question about the *public API*
+> rather than about the kernel contract — which is the right place for it to
+> sit, and is the sort of thing this boundary is supposed to make visible
+> early rather than at integration time.
 
 So the contract does not need to grow a third tier, and should not. `{big,
 small, threshold}` is the *convenience* shape for the one decision every
