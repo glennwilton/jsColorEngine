@@ -924,14 +924,35 @@ And the cost of being that dynamic is nil, because the dispatcher runs once per
 image. A three-way branch on device availability and pixel count, per image, is
 not a measurable thing.
 
-> **One real constraint on a GPU tier, worth knowing before anyone starts:**
-> `transformArray()` is synchronous, and a GPU round trip is not. A GPU tier
-> therefore either needs an async entry point of its own, or its dispatcher
-> falls back to WASM whenever it is reached synchronously and only takes the
-> GPU path from an async caller. That is a question about the *public API*
-> rather than about the kernel contract — which is the right place for it to
-> sit, and is the sort of thing this boundary is supposed to make visible
-> early rather than at integration time.
+### Where a GPU tier would actually live
+
+`transformArray()` is synchronous and a GPU round trip is not, which looks at
+first like a problem needing a new async API.
+
+It is not, because that API already exists. **`transformImages()` is already
+`await`-able**, already fragments the work, already hands each fragment to
+another execution context and reassembles the results out of order, already
+reports per-image progress through `onImage`. Today that other context is a
+worker pool. A GPU is another executor of the same shape.
+
+So the split is clean, and it is the one the library already has:
+
+| | | |
+|---|---|---|
+| `transformArray()` | synchronous, one buffer | CPU: JS and WASM. A GPU tier reached here falls back to WASM. |
+| `transformImages()` | async, fragmented, out-of-order reassembly | where a GPU backend belongs |
+
+That makes GPU support a **new pool backend rather than a new API**, which is a
+much smaller and much better understood problem — the fragment queue,
+reassembly and progress reporting are all written.
+
+One thing carried over from the pool that a GPU tier would feel more sharply:
+[multicore.md](./multicore.md) found efficiency *falls* as the kernel gets
+faster, because the fixed per-fragment cost stays put while the compute it
+overlaps shrinks. A GPU's fixed cost is an upload and a download rather than a
+`postMessage`, so its crossover sits higher again — well into the millions of
+pixels, and higher still for anything that wants its result back immediately.
+That is the number to measure first, before writing a shader.
 
 So the contract does not need to grow a third tier, and should not. `{big,
 small, threshold}` is the *convenience* shape for the one decision every
