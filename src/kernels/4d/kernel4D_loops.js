@@ -22,18 +22,285 @@ module.exports = {
          * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
          */
         tetrahedralInterp4DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha) {
-            var colorIn, temp, o;
+            // INLINED in v1.6 phase 4, completing what phase 2 started on the
+            // 1-D and 2-D loops. This used to call tetrahedralInterp4D_NCh once
+            // per pixel, which returned a fresh `new Array(outputChannels)`
+            // every time -- and it is the CMYK -> 6CLR / n-colour separation
+            // path, the slowest row in bench/small_dim.
+            //
+            // THE SCRATCH IS NOT TIDINESS. A 4-D interpolation evaluates two
+            // 3-D ones at the bracketing K planes. When interpK is true the
+            // first pass writes an UNSCALED 0..1 intermediate that the second
+            // reads back, and `output` here is a Uint8ClampedArray -- writing
+            // that intermediate into it would round to 0 or 1 and quietly
+            // destroy it. Both passes therefore write to a float scratch,
+            // allocated once outside the pixel loop, and the final values are
+            // copied out afterwards.
+            //
+            // Derived mechanically from tetrahedralInterp4D_NCh rather than
+            // transcribed: six branches, each with two channel loops whose
+            // differences pair with the fractions differently, is too much to
+            // retype safely. Verified bit-identical against the previous loop.
+            var outputScale = lut.outputScale;
+            var gridEnd = (lut.g1 - 1);
+            var gridPointsScale = gridEnd * lut.inputScale;
             var outputChannels = lut.outputChannels;
-            colorIn = new Uint8ClampedArray(4);
+            var CLUT = lut.CLUT;
+            var go0 = lut.go0;
+            var go1 = lut.go1;
+            var go2 = lut.go2;
+            var go3 = lut.go3;
+            var kOffset = go3 - lut.outputChannels;
+            var scratch = new Float64Array(outputChannels);
+            var in0, in1, in2, in3, oo;
+
             for(var p = 0; p < length; p++) {
-                colorIn[0] = input[inputPos++];
-                colorIn[1] = input[inputPos++];
-                colorIn[2] = input[inputPos++];
-                colorIn[3] = input[inputPos++];
-                temp = this.tetrahedralInterp4D_NCh(colorIn, lut)
-                for(o = 0; o < outputChannels; o++) {
-                    output[outputPos++] = temp[o];
+                in0 = input[inputPos++];
+                in1 = input[inputPos++];
+                in2 = input[inputPos++];
+                in3 = input[inputPos++];
+
+                var X0, X1, Y0, K0,
+                    Y1, Z0, Z1,
+                    rx, ry, rz, rk,
+                    px, py, pz, pk,
+                    input0, input1, input2, inputK,
+                    base0, base1, base2, base3, base4,
+                    a, b, c, d, o,
+                    interpK;
+    
+    
+                // Scale FIRST, then clamp in grid space — see linearInterp1D_NCh
+                // note (raw u8/u16 vs device 0..1 input contracts).
+                pk = Math.min(Math.max(in0 * gridPointsScale, 0), gridEnd); // K
+                px = Math.min(Math.max(in1 * gridPointsScale, 0), gridEnd); // C
+                py = Math.min(Math.max(in2 * gridPointsScale, 0), gridEnd); // M
+                pz = Math.min(Math.max(in3 * gridPointsScale, 0), gridEnd); // Y
+    
+                K0 = ~~pk;
+                rk = (pk - K0);
+                interpK = !(K0 === gridEnd)// K0 and K1 are identical if K0 is the last grid point
+                K0 *= go3;
+                // No need to calc K1 as we will add kOffset to the base location to get the K1 location
+    
+                X0 = ~~px; //~~ is the same as Math.floor(px)
+                rx = (px - X0); // get the fractional part
+                if(X0 === gridEnd){
+                    X1 = X0 *= go2;// change to index in array
+                } else {
+                    X0 *= go2;
+                    X1 = X0 + go2;
                 }
+    
+                Y0 = ~~py;
+                ry = (py - Y0);
+                if(Y0 === gridEnd){
+                    Y1 = Y0 *= go1;
+                } else {
+                    Y0 *= go1;
+                    Y1 = Y0 + go1;
+                }
+    
+                Z0 = ~~pz;
+                rz = (pz - Z0);
+                if(Z0 === gridEnd){
+                    Z1 = Z0 *= go0;
+                } else {
+                    Z0 *= go0;
+                    Z1 = Z0 + go0;
+                }
+    
+                var outputScaleK0 = (interpK) ? 1 : outputScale
+    
+                base0 = X0 + Y0 + Z0 + K0;
+    
+    
+                if (rx >= ry && ry >= rz) {
+                    // block1
+                    base1 = X1 + Y0 + Z0 + K0;
+                    base2 = X1 + Y1 + Z0 + K0;
+                    base4 = X1 + Y1 + Z1 + K0;
+    
+                    // Read in K0, If K1 is needed outputScaleK0 = 1, else outputScaleK0 = outputScale
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base1++];
+                        b = CLUT[base2++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((a - c) * rx) + ((b - a) * ry) + ((CLUT[base4++] - b) * rz)) * outputScaleK0;
+                    }
+    
+                    // Only interpolate K1 if needed, K1 is the next n items in the LUT
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base4 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base1++];
+                            b = CLUT[base2++];
+                            c = CLUT[base0++];
+                            d = scratch[o]; // get the output from the previous loop to interpolate
+                            scratch[o] = (d + (((c + ((a - c) * rx) + ((b - a) * ry) + ((CLUT[base4++] - b) * rz)) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else if (rx >= rz && rz >= ry) {
+                    // block2
+    
+                    base1 = X1 + Y0 + Z0 + K0;
+                    base2 = X1 + Y1 + Z1 + K0;
+                    base3 = X1 + Y0 + Z1 + K0;
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base3++];
+                        b = CLUT[base1++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((b - c) * rx) + ((CLUT[base2++] - a) * ry) + ((a - b) * rz)) * outputScaleK0;
+                    }
+    
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base3 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base3++];
+                            b = CLUT[base1++];
+                            c = CLUT[base0++];
+                            d = scratch[o];
+                            scratch[o] = (d + ((( c + ((b - c) * rx) + ((CLUT[base2++] - a) * ry) + ((a - b) * rz) ) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else if (rx >= ry && rz >= rx) {
+                    // block3
+    
+                    base1 = X1 + Y0 + Z1 + K0;
+                    base2 = X0 + Y0 + Z1 + K0;
+                    base3 = X1 + Y1 + Z1 + K0;
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base1++];
+                        b = CLUT[base2++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((a - b) * rx) + ((CLUT[base3++] - a) * ry) + ((b - c) * rz)) * outputScaleK0;
+                    }
+    
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base3 += kOffset;
+    
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base1++];
+                            b = CLUT[base2++];
+                            c = CLUT[base0++];
+                            d = scratch[o];
+                            scratch[o] = (d + ((( c + ((a - b) * rx) + ((CLUT[base3++] - a) * ry) + ((b - c) * rz) ) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else if (ry >= rx && rx >= rz) {
+                    // block4
+    
+                    base1 = X1 + Y1 + Z0 + K0;
+                    base2 = X0 + Y1 + Z0 + K0;
+                    base4 = X1 + Y1 + Z1 + K0;
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base2++];
+                        b = CLUT[base1++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((b - a) * rx) + ((a - c) * ry) + ((CLUT[base4++] - b) * rz)) * outputScaleK0;
+                    }
+    
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base4 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base2++];
+                            b = CLUT[base1++];
+                            c = CLUT[base0++];
+                            d = scratch[o];
+                            scratch[o] = (d + (((c + ((b - a) * rx) + ((a - c) * ry) + ((CLUT[base4++] - b) * rz) ) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else if (ry >= rz && rz >= rx) {
+                    // block5
+    
+                    base1 = X1 + Y1 + Z1 + K0;
+                    base2 = X0 + Y1 + Z1 + K0;
+                    base3 = X0 + Y1 + Z0 + K0;
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base2++];
+                        b = CLUT[base3++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((CLUT[base1++] - a) * rx) + ((b - c) * ry) + ((a - b) * rz)) * outputScaleK0;
+                    }
+    
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base3 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base2++];
+                            b = CLUT[base3++];
+                            c = CLUT[base0++];
+                            d = scratch[o];
+                            scratch[o] = (d + ((( c + ((CLUT[base1++] - a) * rx) + ((b - c) * ry) + ((a - b) * rz) ) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else if (rz >= ry && ry >= rx) {
+                    // block6
+    
+                    base1 = X1 + Y1 + Z1 + K0;
+                    base2 = X0 + Y1 + Z1 + K0;
+                    base4 = X0 + Y0 + Z1 + K0;
+    
+                    for(o = 0 ; o < outputChannels ; o++) {
+                        a = CLUT[base2++];
+                        b = CLUT[base4++];
+                        c = CLUT[base0++];
+                        scratch[o] = (c + ((CLUT[base1++] - a) * rx) + ((a - b) * ry) + ((b - c) * rz)) * outputScaleK0;
+                    }
+    
+                    if(interpK) {
+                        base0 += kOffset;
+                        base1 += kOffset;
+                        base2 += kOffset;
+                        base4 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            a = CLUT[base2++]
+                            b = CLUT[base4++]
+                            c = CLUT[base0++]
+                            d = scratch[o];
+                            scratch[o] = (d + ((( c + ((CLUT[base1++] - a) * rx) + ((a - b) * ry) + ((b - c) * rz) ) - d) * rk)) * outputScale;
+                        }
+                    }
+    
+                } else {
+                    if(interpK) {
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            scratch[o] = CLUT[base0++];
+                        }
+                        base0 += kOffset;
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            c = CLUT[base0++]
+                            scratch[o] = (c + (( scratch[o] - c ) * rk)) * outputScale;
+                        }
+                    } else {
+                        for(o = 0 ; o < outputChannels ; o++) {
+                            scratch[o] = CLUT[base0++] * outputScale;
+                        }
+                    }
+                }
+    
+
+                for(oo = 0; oo < outputChannels; oo++) output[outputPos++] = scratch[oo];
+
                 if(preserveAlpha) {
                     output[outputPos++] = input[inputPos++];
                 } else {

@@ -408,17 +408,143 @@ module.exports = {
          * See HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
          */
         tetrahedralInterp3DArray_NCh_loop(input, inputPos, output, outputPos, length, lut, inputHasAlpha, outputHasAlpha, preserveAlpha) {
-            var colorIn, temp, o;
+            // INLINED in v1.6 phase 4. This used to call
+            // tetrahedralInterp3D_NCh once per pixel, which returned a fresh
+            // `new Array(outputChannels)` every time -- and it is the RGB ->
+            // 6CLR / 8CLR n-colour separation path, so it is not a corner. The
+            // same fix as the 1-D and 2-D loops got in phase 2.
+            //
+            // Derived from tetrahedralInterp3D_NCh rather than transcribed from
+            // the _4Ch loop: the six simplex branches pair their differences
+            // with the fractions differently, so there is no shared channel
+            // loop to factor out, and copying the wrong branch would be a
+            // plausible-looking wrong answer. The maths below is that function
+            // with the LUT reads hoisted out of the pixel loop and the result
+            // written straight to the destination.
+            var rx, ry, rz;
+            var X0, X1, Y0, Y1, Z0, Z1, px, py, pz;
+            var base0, base1, base2, base3, base4, a, b, c, o;
+
+            var outputScale = lut.outputScale;
             var outputChannels = lut.outputChannels;
-            colorIn = new Uint8ClampedArray(3);
+            var gridEnd = (lut.g1 - 1);
+            var gridPointsScale = gridEnd * lut.inputScale;
+            var CLUT = lut.CLUT;
+            var go0 = lut.go0;
+            var go1 = lut.go1;
+            var go2 = lut.go2;
+
             for(var p = 0; p < length; p++) {
-                colorIn[0] = input[inputPos++];
-                colorIn[1] = input[inputPos++];
-                colorIn[2] = input[inputPos++];
-                temp = this.tetrahedralInterp3D_NCh(colorIn, lut)
-                for(o = 0; o < outputChannels; o++) {
-                    output[outputPos++] = temp[o];
+                // Scale FIRST, then clamp in grid space — the LUT may be baked
+                // (inputScale = 1/255) or an ICC LUT in device 0..1.
+                px = input[inputPos++] * gridPointsScale;
+                if(px < 0){ px = 0; } else if(px > gridEnd){ px = gridEnd; }
+                py = input[inputPos++] * gridPointsScale;
+                if(py < 0){ py = 0; } else if(py > gridEnd){ py = gridEnd; }
+                pz = input[inputPos++] * gridPointsScale;
+                if(pz < 0){ pz = 0; } else if(pz > gridEnd){ pz = gridEnd; }
+
+                X0 = ~~px;
+                rx = (px - X0);
+                if(X0 === gridEnd){
+                    X1 = X0 *= go2;
+                } else {
+                    X0 *= go2;
+                    X1 = X0 + go2;
                 }
+
+                Y0 = ~~py;
+                ry = (py - Y0);
+                if(Y0 === gridEnd){
+                    Y1 = Y0 *= go1;
+                } else {
+                    Y0 *= go1;
+                    Y1 = Y0 + go1;
+                }
+
+                Z0 = ~~pz;
+                rz = (pz - Z0);
+                if(Z0 === gridEnd){
+                    Z1 = Z0 *= go0;
+                } else {
+                    Z0 *= go0;
+                    Z1 = Z0 + go0;
+                }
+
+                base0 = X0 + Y0 + Z0;
+
+                if (rx >= ry && ry >= rz) {
+                    base1 = X1 + Y0 + Z0;
+                    base2 = X1 + Y1 + Z0;
+                    base4 = X1 + Y1 + Z1;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base1++];
+                        b = CLUT[base2++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((a - c) * rx) +  ((b - a) * ry) + ((CLUT[base4++] - b) * rz)) * outputScale;
+                    }
+
+                } else if (rx >= rz && rz >= ry) {
+                    base1 = X1 + Y0 + Z0;
+                    base2 = X1 + Y1 + Z1;
+                    base3 = X1 + Y0 + Z1;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base3++];
+                        b = CLUT[base1++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((b - c) * rx) + ((CLUT[base2++] - a) * ry) + ((a - b) * rz)) * outputScale;
+                    }
+
+                } else if (rx >= ry && rz >= rx) {
+                    base1 = X1 + Y0 + Z1;
+                    base2 = X0 + Y0 + Z1;
+                    base3 = X1 + Y1 + Z1;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base1++];
+                        b = CLUT[base2++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((a - b) * rx) + ((CLUT[base3++] - a) * ry) + ((b - c) * rz)) * outputScale;
+                    }
+
+                } else if (ry >= rx && rx >= rz) {
+                    base1 = X1 + Y1 + Z0;
+                    base2 = X0 + Y1 + Z0;
+                    base4 = X1 + Y1 + Z1;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base2++];
+                        b = CLUT[base1++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((b - a) * rx) + ((a - c) * ry) + ((CLUT[base4++] - b) * rz) ) * outputScale;
+                    }
+
+                } else if (ry >= rz && rz >= rx) {
+                    base1 = X1 + Y1 + Z1;
+                    base2 = X0 + Y1 + Z1;
+                    base3 = X0 + Y1 + Z0;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base2++];
+                        b = CLUT[base3++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((CLUT[base1++] - a) * rx) + ((b - c) * ry) + ((a - b) * rz)) * outputScale;
+                    }
+
+                } else if (rz >= ry && ry >= rx) {
+                    base1 = X1 + Y1 + Z1;
+                    base2 = X0 + Y1 + Z1;
+                    base4 = X0 + Y0 + Z1;
+                    for(o = 0; o < outputChannels; o++){
+                        a = CLUT[base2++];
+                        b = CLUT[base4++];
+                        c = CLUT[base0++];
+                        output[outputPos++] = (c + ((CLUT[base1++] - a) * rx) + ((a - b) * ry) + ((b - c) * rz) ) * outputScale;
+                    }
+
+                } else {
+                    for(o = 0; o < outputChannels; o++){
+                        output[outputPos++] = CLUT[base0++] * outputScale;
+                    }
+                }
+
                 if(preserveAlpha) {
                     output[outputPos++] = input[inputPos++];
                 } else {

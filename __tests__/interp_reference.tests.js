@@ -234,3 +234,113 @@ describe('optimised interpolators match the reference implementation', () => {
         expect([...selected]).not.toContain('tetrahedralInterp4D_3or4Ch_Master');
     });
 });
+
+describe('the N-channel array loops agree with their single-colour counterparts', () => {
+
+    // v1.6 phase 4 inlined tetrahedralInterp3DArray_NCh_loop and
+    // tetrahedralInterp4DArray_NCh_loop, which had been calling their
+    // single-colour interpolator once per pixel. Those are the RGB -> 6CLR and
+    // CMYK -> 6CLR n-colour separation paths.
+    //
+    // The single-colour function is the oracle here — it is the code the loop
+    // was derived from, and it is separately checked against _Master above at
+    // the channel counts _Master supports.
+    //
+    // The 4-D case earns particular attention. A 4-D interpolation evaluates
+    // two 3-D ones at the bracketing K planes, and when interpK is true the
+    // first pass produces an UNSCALED 0..1 intermediate that the second reads
+    // back. The batch output is a Uint8ClampedArray, so writing that
+    // intermediate into it would round to 0 or 1 and silently destroy it. The
+    // loop keeps a float scratch for exactly that reason, and these tests cover
+    // both sides of the interpK branch.
+
+    function ndLut(dims, gridPoints, outputChannels, seed){
+        const lut = makeLut(dims, gridPoints, outputChannels, seed);
+        lut.inputScale = 1 / 255;
+        lut.outputScale = 255;
+        return lut;
+    }
+
+    function viaLoop(dims, lut, pixels, outputChannels){
+        const loop = dims === 3 ? 'tetrahedralInterp3DArray_NCh_loop'
+                                : 'tetrahedralInterp4DArray_NCh_loop';
+        const out = new Uint8ClampedArray((pixels.length / dims) * outputChannels);
+        T[loop].call(T, pixels, 0, out, 0, pixels.length / dims, lut, false, false, false);
+        return out;
+    }
+
+    function viaSingle(dims, lut, pixels, outputChannels){
+        const fn = dims === 3 ? interp.tetrahedralInterp3D_NCh : interp.tetrahedralInterp4D_NCh;
+        const n = pixels.length / dims;
+        const out = new Uint8ClampedArray(n * outputChannels);
+        for(let p = 0, w = 0; p < n; p++){
+            const colour = [];
+            for(let c = 0; c < dims; c++) colour.push(pixels[p * dims + c]);
+            const r = fn.call(T, colour, lut);
+            for(let c = 0; c < outputChannels; c++) out[w++] = r[c];
+        }
+        return out;
+    }
+
+    for(const [dims, gridPoints] of [[3, 33], [3, 17], [4, 17], [4, 9]]){
+        for(const outputChannels of [5, 6, 8]){
+            test(`${dims}D -> ${outputChannels}ch on a ${gridPoints}-point grid`, () => {
+                const lut = ndLut(dims, gridPoints, outputChannels, 20260821);
+                const n = 1024;
+                const pixels = new Uint8ClampedArray(n * dims);
+                for(let i = 0; i < pixels.length; i++) pixels[i] = (i * 61) & 255;
+
+                expect(Array.from(viaLoop(dims, lut, pixels, outputChannels)))
+                    .toEqual(Array.from(viaSingle(dims, lut, pixels, outputChannels)));
+            });
+        }
+    }
+
+    test('4D agrees on both sides of the interpK branch, including the K edge', () => {
+        // interpK is false only when K lands exactly on the last grid point, so
+        // the K=255 column is the one that exercises the "scratch already holds
+        // the scaled value" path. It is a single column of the input space and
+        // trivially missed by random sampling.
+        const lut = ndLut(4, 17, 6, 99);
+        const ks = [0, 1, 15, 16, 127, 200, 253, 254, 255];
+        const pixels = new Uint8ClampedArray(ks.length * 4);
+        ks.forEach((k, i) => {
+            pixels[i * 4]     = k;
+            pixels[i * 4 + 1] = 10;
+            pixels[i * 4 + 2] = 200;
+            pixels[i * 4 + 3] = 60;
+        });
+        expect(Array.from(viaLoop(4, lut, pixels, 6)))
+            .toEqual(Array.from(viaSingle(4, lut, pixels, 6)));
+    });
+
+    test('alpha handling matches across every mode', () => {
+        for(const dims of [3, 4]){
+            const outputChannels = 6;
+            const lut = ndLut(dims, dims === 3 ? 17 : 9, outputChannels, 555);
+            const n = 256;
+
+            for(const [inAlpha, outAlpha, preserve] of
+                [[false, false, false], [true, true, true], [true, false, false], [false, true, false]]){
+                const inBPP  = inAlpha ? dims + 1 : dims;
+                const outBPP = (outAlpha || preserve) ? outputChannels + 1 : outputChannels;
+                const pixels = new Uint8ClampedArray(n * inBPP);
+                for(let i = 0; i < pixels.length; i++) pixels[i] = (i * 37) & 255;
+
+                const loop = dims === 3 ? 'tetrahedralInterp3DArray_NCh_loop'
+                                        : 'tetrahedralInterp4DArray_NCh_loop';
+                const out = new Uint8ClampedArray(n * outBPP);
+                T[loop].call(T, pixels, 0, out, 0, n, lut, inAlpha, outAlpha, preserve);
+
+                // Every colour channel written, and the alpha slot carrying what
+                // the mode says it should.
+                expect(out.length).toBe(n * outBPP);
+                if(preserve){
+                    expect(out[outputChannels]).toBe(pixels[dims]);
+                } else if(outAlpha){
+                    expect(out[outputChannels]).toBe(255);
+                }
+            }
+        }
+    });
+});

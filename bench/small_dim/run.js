@@ -80,6 +80,39 @@ function duoLut(outCh, g1){
              go0: outCh, go1: g1 * outCh, intLut: null };
 }
 
+// 3-D and 4-D tables, for the WIDE OUTPUT case. Those loops are picked by
+// output channel count, and past 4 they fall to the generic *_NCh variants --
+// the RGB -> 6CLR / CMYK -> 6CLR n-colour separation paths, which have the same
+// per-pixel allocation the 1-D and 2-D loops had before v1.6 phase 2.
+//
+// Synthetic again, and for the same reason: a real n-colour press profile is a
+// licensed vendor artefact. See docs/NChannel.md.
+
+function gridLut(dims, outCh, g1){
+    const cells = Math.pow(g1, dims) * outCh;
+    const CLUT = new Float64Array(cells);
+    // Deterministic pseudo-random rather than a ramp: a smooth table hides
+    // index errors because the neighbouring cell holds nearly the right answer.
+    let s = 20260821;
+    for(let i = 0; i < cells; i++){
+        s = (s * 1103515245 + 12345) & 0x7fffffff;
+        CLUT[i] = s / 0x7fffffff;
+    }
+    const lut = {
+        inputChannels: dims, outputChannels: outCh,
+        gridPoints: new Array(dims).fill(g1), CLUT,
+        inputScale: 1 / 255, outputScale: 255,
+        g1, g2: g1 * g1, g3: g1 * g1 * g1,
+        go0: outCh, go1: g1 * outCh, go2: g1 * g1 * outCh,
+        intLut: null,
+    };
+    if(dims === 4){
+        lut.g4  = g1 * g1 * g1 * g1;
+        lut.go3 = g1 * g1 * g1 * outCh;
+    }
+    return lut;
+}
+
 // ---- harness ------------------------------------------------------------
 
 function build(lut){
@@ -112,6 +145,15 @@ const CASES = [
     { name: 'duotone -> RGB',  dims: 2, outCh: 3 },
     { name: 'duotone -> CMYK', dims: 2, outCh: 4 },
     { name: 'duotone -> 6CLR', dims: 2, outCh: 6 },
+    // Wide output. 3 and 4 channels have unrolled loops; past that both fall to
+    // the generic *_NCh variants, which is the interesting row here.
+    { name: 'RGB -> RGB',      dims: 3, outCh: 3, grid: 33 },
+    { name: 'RGB -> CMYK',     dims: 3, outCh: 4, grid: 33 },
+    { name: 'RGB -> 6CLR',     dims: 3, outCh: 6, grid: 33 },
+    { name: 'RGB -> 8CLR',     dims: 3, outCh: 8, grid: 33 },
+    { name: 'CMYK -> RGB',     dims: 4, outCh: 3, grid: 17 },
+    { name: 'CMYK -> CMYK',    dims: 4, outCh: 4, grid: 17 },
+    { name: 'CMYK -> 6CLR',    dims: 4, outCh: 6, grid: 17 },
 ];
 
 console.log('');
@@ -123,12 +165,14 @@ console.log(' grid      : ' + G1 + (G1 === 256 ? ' (1:1 with u8 input)' : ''));
 console.log(' reps      : best of ' + REPS + ' after 2 warm-ups');
 console.log(' node      : ' + process.version + '   platform: ' + process.platform + ' ' + process.arch);
 console.log('');
-console.log(' case              kernel      out ch     MPx/s');
-console.log(' ----------------  ----------  ------  --------');
+console.log(' case              kernel      out ch  grid     MPx/s');
+console.log(' ----------------  ----------  ------  ----  --------');
 
 const rows = [];
 for(const c of CASES){
-    const lut = c.dims === 1 ? grayLut(c.outCh, G1) : duoLut(c.outCh, G1);
+    const lut = c.dims === 1 ? grayLut(c.outCh, G1)
+              : c.dims === 2 ? duoLut(c.outCh, G1)
+              : gridLut(c.dims, c.outCh, c.grid || 17);
     const t   = build(lut);
     const inp = new Uint8ClampedArray(PX * c.dims);
     for(let i = 0; i < inp.length; i++) inp[i] = (i * 7) & 255;
@@ -138,9 +182,12 @@ for(const c of CASES){
     const kernelName = t.kernelInfo().name;
 
     console.log(' ' + c.name.padEnd(17) + ' ' + kernelName.padEnd(11)
-        + ' ' + String(c.outCh).padStart(5) + '   ' + mpxs.toFixed(1).padStart(7));
+        + ' ' + String(c.outCh).padStart(5) + '  '
+        + String(c.dims <= 2 ? G1 : (c.grid || 17)).padStart(4) + '   '
+        + mpxs.toFixed(1).padStart(7));
 
     rows.push({ workflow: c.name, kernel: kernelName, outputChannels: c.outCh,
+                grid: c.dims <= 2 ? G1 : (c.grid || 17),
                 mpxs: Number(mpxs.toFixed(1)) });
 }
 
@@ -152,10 +199,10 @@ console.log('');
 
 emit.table({
     id: 'smallDim.throughput',
-    title: 'Gray and duotone kernel throughput (synthetic LUTs)',
+    title: 'Throughput on synthetic LUTs — narrow input and wide output',
     units: 'MPx/s',
     meta: { pixels: PX, grid: G1, reps: REPS, lutMode: 'float', dataFormat: 'int8' },
-    columns: ['workflow', 'kernel', 'outputChannels', 'mpxs'],
+    columns: ['workflow', 'kernel', 'outputChannels', 'grid', 'mpxs'],
     rows,
 });
 emit.save();
