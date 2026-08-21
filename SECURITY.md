@@ -1,0 +1,84 @@
+# Security policy
+
+## What this project is
+
+jsColorEngine is a colour management library: it parses ICC profiles and
+transforms pixel data. It runs in Node and in the browser, in-process, on data
+the host application hands it.
+
+The repository also contains benchmark harnesses (`bench/`), a comparison
+testbed (`testbed/`), and samples (`samples/`). Those are developer tooling.
+They are not published to npm — the package is `src/` only, 64 files — and they
+are not part of the library's attack surface.
+
+## The real attack surface
+
+**Parsing an ICC profile you did not create.** `src/decodeICC.js` and
+`src/Profile.js` read a binary format with self-describing tag tables, offsets
+and lengths. A profile is data from wherever the host got it: an uploaded
+image, a downloaded asset, a document. That is the boundary worth defending,
+and reports there are genuinely welcome:
+
+- out-of-bounds reads from malformed tag offsets or lengths
+- unbounded allocation driven by header-declared sizes
+- infinite loops or pathological runtimes on crafted input
+- prototype pollution through parsed profile metadata
+- anything that turns a malformed profile into a crash, a hang, or memory
+  disclosure in the host process
+
+Transform code reachable from a parsed profile counts too — a crafted CLUT or
+curve that drives an out-of-range index, for instance.
+
+## What is out of scope
+
+**`bench/`, `testbed/` and `samples/` are not a security boundary.** They are
+programs a developer compiles and invokes with arguments they type, against
+corpora they generate on their own machine. Reports that assume an attacker
+controls a benchmark's command line, its pixel counts, or its input files
+describe a situation where the attacker is already running code as the
+developer, and will be closed.
+
+Concretely, and to save anyone the trouble of re-reporting:
+
+- unchecked arithmetic before allocation in `bench/lcms_c/*.c`, where the
+  sizes come from a `--sizes` flag the developer types
+- `strtok` rather than `strtok_r` in single-threaded argument parsing
+- CVEs in transitive devDependencies or in the private, unpublished
+  proof-of-concept packages under `bench/`
+
+Please also note that changes to benchmark code are held to an unusual
+standard: these harnesses produce the published throughput figures, so a change
+that alters timing — pre-faulting buffers by swapping `malloc` for `calloc`
+inside a measurement loop, for example — is a correctness regression in this
+repository even when it would be harmless anywhere else. See
+[`bench/baseline/README.md`](bench/baseline/README.md).
+
+## Automated reports
+
+Scanner-generated pull requests are welcome if the finding is in scope, but
+please:
+
+- state the threat model in your own words, not just a CWE number and a
+  severity label — "an attacker who can supply an ICC profile can …" is a
+  report we can act on; "likely exploitable" against a local benchmark is not
+- open an issue before a pull request for anything touching `bench/`
+- do not bundle unrelated refactors with a fix
+
+Severity assigned by a scanner is treated as a starting point, not a
+conclusion. A finding is assessed on whether the described attacker can
+actually reach the described code.
+
+## Reporting
+
+Open a [security advisory](https://github.com/glennwilton/jsColorEngine/security/advisories/new)
+for anything in the "real attack surface" section above, or an ordinary issue
+if you are unsure whether it qualifies. There is no bounty programme.
+
+Please include the profile or input that triggers it where you can — a
+malformed profile is small, and it is the difference between a report we can
+reproduce in a minute and one we cannot.
+
+## Supported versions
+
+The latest published release. This is a small project; fixes land on `main` and
+ship in the next release rather than being backported.
