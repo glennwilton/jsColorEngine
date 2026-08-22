@@ -130,12 +130,14 @@
     (local $vSum         v128)
     (local $vU16         v128)
     (local $vOut         v128)
+    ;;Inject:localsAfter
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     ;; outputStride = cMax * 2 (bytes per pixel)
     (local.set $outputStride (i32.shl (local.get $cMax) (i32.const 1)))
+    ;;Inject:initAfter
 
     ;; --- Per-pixel loop -------------------------------------------------------
     (block $pixel_exit
@@ -148,6 +150,7 @@
         (local.set $input1 (i32.load16_u offset=2   (local.get $inputPos)))
         (local.set $input2 (i32.load16_u offset=4   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 6)))
+        ;;Inject:probeAfter
 
         ;; px = input * gps  (u16 * Q0.13 — fits i32 with 3 bits headroom)
         (local.set $px (i32.mul (local.get $input0) (local.get $gps)))
@@ -483,6 +486,7 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
+        ;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_nch_int16.wat — u16 stride) -----
         ;; Same outer i32.or guard as the u8 SIMD path: collapses the
         ;; no-alpha hot path to a single test per pixel. inputPos is at

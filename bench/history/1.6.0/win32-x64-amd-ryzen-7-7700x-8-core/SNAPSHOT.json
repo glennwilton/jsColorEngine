@@ -1,0 +1,20 @@
+{
+  "version": "1.6.0",
+  "machine": {
+    "id": "win32-x64-amd-ryzen-7-7700x-8-core",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor             ",
+    "cores": 16,
+    "memoryGB": 31,
+    "release": "10.0.19045",
+    "node": "v24.16.0"
+  },
+  "run": "2026-08-22T22-31-22",
+  "snapshot": "2026-08-22",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "tables": 55,
+  "tests": "full suite passed",
+  "note": "Frozen at release. Never edit — it is the record of what this version measured on this machine. Compare releases with scripts/bench_compare.js <newer> --vs bench/history/<older>."
+}

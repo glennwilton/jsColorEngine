@@ -1,7 +1,7 @@
 // src/kernels/4d/kernel4D_loops.js
 //
 // 4D (CMYK-input) LUT array loops — MOVED VERBATIM from src/Transform.js (v1.7 phase B,
-// see docs/deepdive/KernelModules.md). Transform.js attaches these to
+// see docs/deepdive/KernelContract.md). Transform.js attaches these to
 // Transform.prototype at load time (non-enumerable, matching class-method
 // semantics), so `this` is the Transform instance and every call site —
 // lutKernelTable run closures, kernel modules, tests — is unchanged.

@@ -32,7 +32,7 @@ measures **native** lcms2 (C) on the exact
 same 4 workflows, exact same pixel count, exact same seeded PRNG
 input, and exact same timing loop (warmup + median-of-5 batches of
 100 iters). The MPx/s numbers drop straight into the comparison
-tables in [`../../docs/Performance.md`](../../docs/Performance.md).
+tables in [`../../docs/deepdive/Performance.md`](../../docs/deepdive/Performance.md).
 
 This is the missing row in the existing comparison story: the JS
 bench reports jsColorEngine vs `lcms-wasm` (LittleCMS compiled to
@@ -187,7 +187,7 @@ Markdown:
 ```
 
 Real numbers depend on CPU — run it yourself and drop them into
-`docs/Performance.md §4 "How does this compare to LittleCMS in C?"`
+`docs/deepdive/Performance.md §4 "How does this compare to LittleCMS in C?"`
 to replace the current `wasm × 1.5–2.5` estimate with measured
 values.
 
@@ -295,7 +295,7 @@ kernels have nothing to contribute (0–2% noise).
 
 The plugin's own docs claim "approximately 20% faster for CLUT
 profiles." We measured ~0%. The dispatch-bound analysis in
-[docs/Performance.md §2.1](../../docs/Performance.md) predicted this;
+[docs/deepdive/Performance.md §2.1](../../docs/deepdive/Performance.md) predicted this;
 the measurement confirms it.
 
 **What this means for jsColorEngine:** jsCE WASM SIMD (128–210 MPx/s)
@@ -304,7 +304,7 @@ matrix-shaper, fast_float wins at 455 MPx/s vs jsCE's ~216 MPx/s.
 jsCE routes all transforms through the CLUT pipeline including
 matrix-shaper profiles; a dedicated fused-matrix path is a future
 optimization. Full analysis:
-[docs/Performance.md — Steelmanning the steelman](../../docs/Performance.md#steelmanning-the-steelman--fast-float-measured-directly).
+[docs/deepdive/Performance.md — Steelmanning the steelman](../../docs/deepdive/Performance.md#steelmanning-the-steelman--fast-float-measured-directly).
 
 ## What's deliberately **not** configurable (yet)
 

@@ -4,12 +4,14 @@
 [← Project README](../README.md) ·
 [Transform](./Transform.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [Examples](./Examples.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](./Bench.md). Canonical tables: [BenchResults.md](./BenchResults.md).
 
 `transformImages()` converts a batch of images, across a pool of worker
 threads when one is available and sequentially when it is not — **the same
@@ -61,6 +63,9 @@ The tidiest way to ask is once, at startup:
 
 ```js
 await Transform.enablePool({ workers: 4 });   // then every batch is parallel
+await Transform.enablePool({                  // browser: say where the bundle is
+    workerUrl: '/path/to/jsColorEngineWorker.js'
+});
 ```
 
 `enablePool()` starts the workers, **rejects with the reason if it cannot**
@@ -188,7 +193,7 @@ await t.transformImages([
 ```
 
 `preserveAlpha` left unstated means **"preserve if both sides have one"** —
-the same rule `transformArray()` uses — so an image declaring alpha in and out
+the same rule `array()` uses — so an image declaring alpha in and out
 does not have to say it a third time.
 
 **Alpha is the only thing that may vary per image**, and deliberately so: it is
@@ -207,7 +212,7 @@ onImage: (index, data, info) => { … }
 |---|---|
 | `index` | position in the array you passed in |
 | `data` | the converted pixels, or **`null` if the image was cancelled** |
-| `info` | `{id, index, pixelCount, outputChannels, ms, computeMs, cancelled, source}` |
+| `info` | `{id, index, pixelCount, outputChannels, ms, computeMs, fragments, cancelled, source}` |
 
 - **`ms`** is wall time from the start of the call — it includes queue wait, so
   for a batch it is *not* per-image cost.
@@ -317,6 +322,7 @@ globalThis.JSCE_POOL_MAX_THREADS = 4;      // browser, or anywhere
 | `JSCE_POOL_IDLE_MS` | `0` = never expire |
 | `JSCE_POOL_TRANSFORMS_PER_WORKER` | LRU depth per worker |
 | `JSCE_POOL_DISABLE=1` | force the sequential path |
+| `JSCE_WORKER_URL` | browser only — URL of `jsColorEngineWorker.js` |
 
 The case that motivates it: `cores: 'auto'` asks
 `os.availableParallelism()`, which inside a cgroup-limited container usually

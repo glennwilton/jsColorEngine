@@ -2,7 +2,7 @@
 
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [Examples](./Examples.md) ·
@@ -12,17 +12,17 @@
 
 ---
 
-**Don't trust our numbers — run them yourself.**
+**Don't trust our numbers — run them yourself.** Figures on this page are performance at the time of writing.
 
 [`samples/bench/`](../samples/bench/) is a fully self-contained, zero-
 upload, in-browser benchmark. Clone the repo, start a tiny local
 static server, open <http://localhost:8080/samples/bench/>, and the page runs every
 `lutMode` × every direction × the real lcms-wasm library right there
-on your hardware. All the MPx/s numbers in
-[`docs/Performance.md`](./Performance.md) and the headline table in
-the [README](../README.md) were measured this way — and you can
-reproduce them (or disagree with them) on your own CPU / browser in
-about a minute.
+on your hardware. This page and
+[BenchResults.md](./BenchResults.md) are the canonical numbers.
+[deepdive/Performance.md](./deepdive/Performance.md) is the
+measurement retrospective. You can reproduce (or disagree with) the
+figures on your own CPU / browser in about a minute.
 
 No telemetry, no upload — everything runs locally. Your browser is
 the only thing measured.
@@ -54,14 +54,16 @@ Stop the server with `Ctrl+C` in the terminal.
 
 ---
 
-## The five tabs, at a glance
+## The seven tabs, at a glance
 
 | Tab | What it tells you | When to reach for it |
 |---|---|---|
-| **Full comparison** | Steady-state MPx/s for every mode × every direction, with summary cards for the Accuracy and Image use-cases | The headline test — this is the tab that produces the numbers quoted in [Performance.md](./Performance.md) |
+| **Full comparison** | Steady-state MPx/s for every mode × every direction, with summary cards for the Accuracy and Image use-cases | The headline test — this is the tab that produces the numbers quoted in [Performance.md](./deepdive/Performance.md) |
 | **Accuracy sweep** | ΔE76 round-trip (Lab → device → Lab) through the full-float jsce pipeline, for both matrix (RGB) and 4D-tetra (CMYK) kernels | When you want to see *how accurate* the accuracy path really is, independent of speed |
 | **JIT warmup curve** | Per-iter ms plotted across N iterations, showing the V8 Ignition → Sparkplug → TurboFan tier-up ramp | When you suspect your results are polluted by warmup, or just want to see the tier-up visually |
 | **Pixel-count sweep** | Same direction × mode swept from 4 K to 4 M pixels per batch — shows throughput as the working set outgrows L1 / L2 / L3 | When the "headline MPx/s" feels suspiciously good and you want to see memory-bandwidth effects |
+| **Pool demo** | Three photographs at different sizes through `transformImages()` — wall time, per-image compute, fragment counts, finish order, sequential baseline | When you want to see the Web Worker pool actually run in this tab |
+| **Speed vs Noise** | Why we add grain: a pinch of noise stabilises MPx/s so a clean photo and a solid stop swinging with cache locality | When you want to see why headline content is photo with 5 % noise added, on this machine (a Mac will differ) |
 | **About this bench** | Methodology essay — modes, directions, LUT-column derivation, reproducibility notes | First stop if you want to understand *why* a number is what it is |
 
 ---
@@ -82,11 +84,28 @@ per cell.
 
 ### Modes
 
-Eight cells per direction:
+Headline content is **photo with 5 % noise added** — the strawberries
+frame (`jacek-dylag-559115`) tiled to the buffer, then 5 % high-bit
+grain. Past ~3 % grain every starting content collapses onto the same
+plateau; 5 % sits on it without walking as far into noise. The dropdown
+also has **photo with 15 % noise added** (deep plateau),
+**solid** (one colour — algorithm bound), **photo** (clean strawberries —
+locality), **noise** (high-bit LCG), and **legacy** (do not quote).
+CMYK workflows use a GRACoL separation of the same frame, not RGB
+stuffed into four channels. The old generator (`seed * k + c` then
+`seed & 0xff`) produced ~105 colours — L1-resident, labelled noise.
+See [benchmark.md](./deepdive/benchmark.md#the-generator-that-produced-256-colours).
+
+Run the bench yourself — headline content is photo with 5 % noise
+added. The **Speed vs Noise** tab is why: a pinch of grain puts
+every starting picture on the same plateau. Photo with 15 % noise
+added sits on that plateau; **legacy** is L1-flattering and must
+not be quoted.
 
 | Mode | What it is                                                                                                                                                                                                                                                                                 |
 |---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`jsce no-LUT` (f64)** | `buildLut: false`. Every pixel walks the full per-stage pipeline in 64-bit float. The accuracy configuration — slowest by design, most faithful math jsColorEngine can produce. For lcms-wasm `NOOPTIMIZE`, see the row below — it is **not** f64 in the wasm build we ship.               |
+| **`jsce no-LUT` (f64)** | `buildLut: false` **and** `wasmMatrixShaper: false`. Full per-stage f64 pipeline. The accuracy configuration. For lcms-wasm `NOOPTIMIZE`, see the row below — it is **not** f64 in the wasm build we ship.               |
+| **`jsce matrix-shaper`** | RGB→RGB only. Same pair, no CLUT: Kernel3D yields the fused curve + 3×3 + curve kernel. Used to hide inside the no-LUT row when `wasmMatrixShaper` defaulted to `'auto'`. |
 | **`jsce float`** | `buildLut: true` + `lutMode: 'float'`. Float64 CLUT, tetrahedral interp in f64. Same interp math as no-LUT but the pipeline pre-collapses to a LUT so it's much faster                                                                                                                     |
 | **`jsce int`** | u16 CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via `Math.imul`. v1.1 default. Bit-exact vs the float path on 8-bit I/O                                                                                                                                                     |
 | **`jsce int-wasm-scalar`** | Same int math compiled to WebAssembly. ~1.4× over `int` on 3D, ~1.2× on 4D                                                                                                                                                                                                                 |
@@ -131,7 +150,7 @@ The five numbers are:
 5. **vs `int`** — speedup vs jsColorEngine `int` for the same
    direction. Apples-to-apples "what does the WASM / SIMD port buy
    us" number; matches the figures in
-   [Performance.md](./Performance.md).
+   [Performance.md](./deepdive/Performance.md).
 
 The rightmost column in each row is a bar normalised per direction so
 the fastest mode for that direction fills the bar — easy at-a-glance
@@ -246,6 +265,48 @@ Close other tabs, re-run.
 
 ---
 
+## Tab 5: Pool demo
+
+Three photographs at different sizes (illustration 512×384, strawberries
+1000×1000, beach 1920×1280), queued **1, 2, 3 × 5** (15 images) through
+`transformImages()`. Headline is **total MPx/s** on the whole queue —
+that is the parallelism. The table averages the five copies of each
+photo. Also: workers, fragments, sequential baseline, cold vs hot.
+
+Photographs live in `samples/bench/images/` (copies — the release-matrix
+originals are untouched). `npm run browser` copies the engine and worker
+into `samples/browser/`. Without the worker the batch is still correct;
+it just runs on one thread.
+
+---
+
+## Tab 6: Speed vs Noise
+
+This tab is why headline content is **photo with 5 % noise added**.
+A clean photograph and a solid do not give the same MPx/s, and they
+do not travel: neighbours stay in cache on one machine and miss on
+another. **A pinch of grain stabilises the numbers.** After a few
+percent, every starting picture collapses onto the same plateau.
+
+- **Solid** — one colour, one lookup; the machine flies.
+- **A photograph** — neighbours are still similar, so most lookups
+  reuse what just landed in cache.
+- **A pinch of grain** — enough for that locality to fall away.
+- **Pure noise is the worst case** — almost every pixel is a new
+  colour.
+
+The lines are how *this* machine treats three kernels as grain
+rises. A Mac will draw a different shape. After ~3 % this computer
+is already on the plateau — that is why the other tabs default to
+photo with 5 % noise added.
+
+lcms’s extra 1-pixel memo only helps when neighbours match (the solid
+cliff); `NOCACHE` has no cliff. Default direction is RGB → Lab; 262 K
+is the interactive size, 1 M matches the published table. See
+[deepdive/benchmark.md](./deepdive/benchmark.md).
+
+---
+
 ## The identity gotcha — why RGB→RGB is sRGB → AdobeRGB, not sRGB → sRGB
 
 This is the single most important methodology detail, and the one
@@ -272,7 +333,25 @@ than synthesising the profile in memory.
 
 The full journey on this one discovery — how we tripped over it,
 what the wrong number looked like, how we fixed it — lives in
-[Performance.md § 3.1](./Performance.md#31-lcms-wasm-rgbrgb-is-a-no-op--a-benchmarking-trap).
+[Performance.md § 3.1](./deepdive/Performance.md#31-lcms-wasm-rgbrgb-is-a-no-op--a-benchmarking-trap).
+
+The Full comparison tab has an **include identity** checkbox (off by
+default) that adds `sRGB → sRGB` and `GRACoL → GRACoL` as extra
+blocks. Both engines now collapse those to a copy (jsCE as of v1.5,
+lcms always). Use it to measure the memcpy ceiling on this machine;
+those rows stay out of the summary cards.
+
+**pixel cache** is also off by default (`pixelCache: 0`). Headline
+photos with 5 % / 15 % noise added must not include the last-pixel
+tax. Tick it for `'auto'` — WASM 3–6 bind `interp_*_cached`; 4/5/6
+also inject the accuracy-path stage. Solids and logos are the content
+that wins.
+
+Node, this machine, `int-wasm-simd`, 65 K px (so you know what the
+box does): RGB→CMYK solid **2.2×**, photo with 5 % noise **0.96×**,
+photo with 15 % noise **0.94×**. CMYK→RGB solid **3.7×**, photo with
+5 % noise ~1.0×, photo with 15 % noise **0.97×**. Matrix-shaper is
+`'not-supported'` either way.
 
 ---
 
@@ -369,7 +448,9 @@ back to `samples/lcms-wasm-dist/lcms.wasm`
 
 - **Run with the browser tab focused.** Background tabs throttle
   `setTimeout` and (in some browsers) reduce `performance.now()`
-  precision. Both scramble the numbers.
+  precision. Both scramble the numbers. The in-page bench pauses and
+  shows a warning if the tab loses focus; click Resume after you
+  bring it back (hot batches that blurred mid-sample are discarded).
 - **Close other heavy tabs / apps.** CPU contention shows up
   directly in MPx/s.
 - **First run after page load includes WASM compile + profile decode.**
@@ -385,7 +466,7 @@ back to `samples/lcms-wasm-dist/lcms.wasm`
   prediction lived in the [JIT inspection deep-dive](./deepdive/JitInspection.md#implications-for-future-work)
   for months before an M4 Mac mini measurement confirmed it; full
   numbers and analysis in
-  [Performance § 2.6](./Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
+  [Performance § 2.6](./deepdive/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
 - **Mobile CPUs throttle aggressively under sustained load.** The
   "Hot iters" setting is conservative by default; bumping it on
   mobile can show throttling kick in (MPx/s sliding down across
@@ -404,7 +485,7 @@ back to `samples/lcms-wasm-dist/lcms.wasm`
 ## Submitting your results
 
 If your numbers are meaningfully different from the headline table
-in [Performance.md](./Performance.md) or the README — faster, slower,
+in [Performance.md](./deepdive/Performance.md) or the README — faster, slower,
 or the ratios don't match — we want to see it.
 
 1. Run the Full comparison tab to completion on your machine.
@@ -417,7 +498,7 @@ or the ratios don't match — we want to see it.
    methodology issue rather than a perf one, note that in the title
    instead (`bench-methodology: <what you noticed>`).
 
-We'll fold the numbers into [Performance.md's § 1 caveats](./Performance.md#1-where-we-are--current-numbers)
+We'll fold the numbers into [Performance.md's § 1 caveats](./deepdive/Performance.md#1-where-we-are--current-numbers)
 or open a follow-up issue to investigate. **Critique of the
 methodology is equally welcome** — if the test is broken we'd rather
 hear about it than keep quoting biased numbers.
@@ -426,7 +507,7 @@ hear about it than keep quoting biased numbers.
 
 ## Related
 
-- [Performance.md](./Performance.md) — the numbers this bench
+- [Performance.md](./deepdive/Performance.md) — the numbers this bench
   produces, explained, with the journey + lessons around them
 - [Deep dive / WASM kernels](./deepdive/WasmKernels.md) — why the
   SIMD rows land where they do

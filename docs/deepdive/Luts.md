@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -22,6 +22,8 @@
 **Companion guide:** [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md) — the practical how-to with code samples, written for developers using the LutBuilder helper. This document is the *deep dive*: design rationale, format spec, the lcms bridge, the TIFF roadmap, and why the architecture looks the way it does.
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 > **Status: shipped — v1.4.4.** All three stages are implemented. This document
 > is the architecture reference and rationale; the practical how-to and CLI guide
@@ -196,7 +198,7 @@ Builder.
 
 The engine owns: profile parsing, pipeline stage assembly, LUT
 sampling, kernel dispatch. The LUT is an *internal* artefact —
-created during `Transform.create()`, consumed by `transformArray()`,
+created during `Transform.create()`, consumed by `array()`,
 never exposed as a first-class portable object.
 
 ### 2.2 What the LUT Builder adds
@@ -403,7 +405,7 @@ the pixel loop.
                           │
                           ▼
               Transform.setLut(lut)
-              transformArray()  ← same WASM-SIMD kernels
+              array()  ← same WASM-SIMD kernels
 ```
 
 ---
@@ -1261,7 +1263,7 @@ support an optional verification system:
    the Builder (a compact colour checker or synthetic gradient —
    small enough to embed, diverse enough to exercise the gamut).
 2. **Hash on build.** When the LUT is created, the Builder runs the
-   reference target through the LUT (via `transformArray`) and
+   reference target through the LUT (via `array()`) and
    stores a hash of the output alongside the LUT metadata.
 3. **Verify on demand.** A third party can take the same reference
    target, run it through their own CMS pipeline (Photoshop, lcms,
@@ -1317,7 +1319,7 @@ That's below visual threshold for any practical application.
       ↓                                    ↓
   builder.createFromLCMS()              builder.toTransform()
       ↓                                    ↓
-  builder.toJSON()                      transformArray()  ← WASM-SIMD
+  builder.toJSON()                      array()  ← WASM-SIMD
       ↓                                    ↓
   lut.json                              pixels ✓ lcms-accurate
                                             ✓ no profiles loaded
@@ -1801,7 +1803,7 @@ builder.createFromLCMS(lcms, xform, {
 // builder now holds an lcms-accurate LUT
 ```
 
-**Performance and async.** The bridge calls `lcms.doTransformU16()` once per grid point — 35,937 calls for a 33-point 3D LUT, ~1.2M for a 33-point 4D LUT. At jsCE's throughput (see [Performance.md](../Performance.md)), this is fast in absolute terms, and LUTs are built once and serialised — not rebuilt per request. For 4D LUTs where the fill loop is non-trivial, the caller can offload to a Worker. No async variant is planned because the build-time use case is the norm; if runtime build is needed in a UI context, a Worker is the right tool.
+**Performance and async.** The bridge calls `lcms.doTransformU16()` once per grid point — 35,937 calls for a 33-point 3D LUT, ~1.2M for a 33-point 4D LUT. At jsCE's throughput (see [Performance.md](./Performance.md)), this is fast in absolute terms, and LUTs are built once and serialised — not rebuilt per request. For 4D LUTs where the fill loop is non-trivial, the caller can offload to a Worker. No async variant is planned because the build-time use case is the norm; if runtime build is needed in a UI context, a Worker is the right tool.
 
 #### `fromTransform()` and grid size modes
 
@@ -1935,7 +1937,7 @@ wiring so the result dispatches to WASM-SIMD if available.
 
 ```js
 const transform = builder.toTransform({ lutMode: 'auto', dataFormat: 'int16' });
-transform.transformArray(pixels);
+transform.array(pixels);
 ```
 
 **`builder.toJSON(options)`** — serialise to the portable JSON
@@ -2022,7 +2024,7 @@ target — the manual version of the future `'test'` mode (§3b).
 
 ```js
 const ref = LutBuilder.fromTransform(transform, { gridSize: 65 });
-const refOutput = ref.toTransform({ dataFormat: 'int16' }).transformArray(testImage);
+const refOutput = ref.toTransform({ dataFormat: 'int16' }).array(testImage);
 
 for (const size of [33, 17, 9]) {
     const candidate = LutBuilder.fromTransform(transform, { gridSize: size });
@@ -2131,7 +2133,7 @@ const transform = new LutBuilder()
     .addAdjustment('Vintage warmth: R+5% G-5% B-15%')
     .toTransform({ dataFormat: 'int16' });
 
-transform.transformArray(pixels);
+transform.array(pixels);
 
 // Or save instead of using immediately
 const json = new LutBuilder()
@@ -2178,7 +2180,7 @@ fs.writeFileSync('srgb_to_gracol_perceptual.json', JSON.stringify(json));
 // Runtime — no profiles, no pipeline build, no lcms
 const builder2 = LutBuilder.fromJSON(fs.readFileSync('srgb_to_gracol_perceptual.json'));
 const transform2 = builder2.toTransform({ dataFormat: 'int16' });
-transform2.transformArray(pixels);
+transform2.array(pixels);
 // Startup: ~5 ms (JSON parse + setLut) vs ~50 ms (profile + pipeline + LUT)
 ```
 
@@ -2204,7 +2206,7 @@ lcms.closeProfile(dst);
 
 // Transform runs at full WASM-SIMD speed, lcms-accurate data
 const transform = builder.toTransform({ dataFormat: 'int16' });
-transform.transformArray(pixels);
+transform.array(pixels);
 
 // Or serialize — drop lcms-wasm from the runtime bundle entirely
 const json = builder.toJSON({ source: 'lcms-wasm 2.16 + jsColorEngine 1.4' });
@@ -2224,7 +2226,7 @@ try {
     transform = builder.toTransform({ dataFormat: 'int16' });
 }
 // Either path: same API, same speed
-transform.transformArray(pixels);
+transform.array(pixels);
 ```
 
 ### 8.4 Load → mutate → save
@@ -2440,7 +2442,7 @@ try {
     transform = builder.toTransform({ dataFormat: 'int16' });
 }
 // Either path: same API, same WASM-SIMD speed
-transform.transformArray(pixels);
+transform.array(pixels);
 ```
 
 **Example — bake once, dispose lcms:**
@@ -2554,7 +2556,7 @@ behaviour validation). It can take its time.
   motivates the Tier 3 bridge
 - [WASM kernels](./WasmKernels.md) — the SIMD interpolation kernels
   that make all three Builder tiers fast at runtime
-- [Performance](../Performance.md) — throughput numbers across kernel
+- [Performance](./Performance.md) — throughput numbers across kernel
   tiers
 - [Roadmap](../Roadmap.md) — implementation timeline
 

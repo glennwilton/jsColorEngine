@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * scripts/build_bench_results.js — render docs/BenchResults.md from measured JSON.
+ * scripts/build_bench_results.js — render docs/BenchResults.md (or a
+ * named sibling) from measured JSON.
  *
  * WHY. Throughput figures used to be transcribed by hand into whichever page
  * needed them, so the same number could exist in three vintages at once and
@@ -18,6 +19,11 @@
  * Usage:
  *   node scripts/build_bench_results.js                 # newest results folder
  *   node scripts/build_bench_results.js <results-dir>
+ *   node scripts/build_bench_results.js "bobs pc"       # newest folder → BenchResults-bobs-pc.md
+ *   node scripts/build_bench_results.js <results-dir> "bobs pc"
+ *
+ * A host name writes docs/BenchResults-<slug>.md and leaves the default
+ * BenchResults.md alone.
  */
 'use strict';
 
@@ -27,7 +33,6 @@ const path = require('path');
 const ROOT    = path.join(__dirname, '..');
 const RESULTS = path.join(ROOT, 'bench', 'results');
 const DOCS    = path.join(ROOT, 'docs');
-const OUT     = path.join(DOCS, 'BenchResults.md');
 
 const PKG_VERSION = JSON.parse(
     fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
@@ -46,7 +51,36 @@ function newestRun() {
     return path.join(RESULTS, stamped[stamped.length - 1]);
 }
 
-const RUN_DIR = process.argv[2] ? path.resolve(process.argv[2]) : newestRun();
+function isResultsDir(arg) {
+    const resolved = path.resolve(arg);
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) return resolved;
+    const under = path.join(RESULTS, arg);
+    if (fs.existsSync(under) && fs.statSync(under).isDirectory()) return under;
+    return null;
+}
+
+function parseArgs() {
+    var runDir = null;
+    var hostName = null;
+    process.argv.slice(2).forEach(function(arg) {
+        if (arg.charAt(0) === '-') return;
+        var dir = isResultsDir(arg);
+        if (dir && !runDir) runDir = dir;
+        else if (!hostName) hostName = arg;
+    });
+    return { runDir: runDir || newestRun(), hostName: hostName };
+}
+
+function hostSlug(name) {
+    var s = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return s || 'named';
+}
+
+const ARGS    = parseArgs();
+const RUN_DIR = ARGS.runDir;
+const OUT     = path.join(DOCS, ARGS.hostName
+    ? 'BenchResults-' + hostSlug(ARGS.hostName) + '.md'
+    : 'BenchResults.md');
 
 // ---- load ---------------------------------------------------------------
 
@@ -150,6 +184,12 @@ try {
     const lines = fs.readFileSync(path.join(RUN_DIR, 'conditions.md'), 'utf8').split('\n');
     const start = lines.findIndex(l => l.startsWith('| | |'));
     conditions = (start === -1 ? lines : lines.slice(start)).join('\n').trim();
+    if (ARGS.hostName && conditions.indexOf('| | |') !== -1) {
+        conditions = conditions.replace(
+            /\|---\|---\|\r?\n/,
+            '|---|---|\n| Machine | ' + ARGS.hostName + ' |\n'
+        );
+    }
 } catch { /* an older run without a conditions file */ }
 
 const cites   = citations();
@@ -159,14 +199,18 @@ const versions = [...new Set(tables
     .map(t => (t._run.meta && t._run.meta.jsce) || null).filter(Boolean))];
 
 const page = [];
-page.push('# Benchmark results — generated');
+page.push('# Benchmark results — ' + (ARGS.hostName || 'generated'));
 page.push('');
 page.push('**jsColorEngine docs:**');
 page.push('[← Project README](../README.md) ·');
-page.push('[Performance](./Performance.md) ·');
+page.push('[Performance](./deepdive/Performance.md) ·');
 page.push('[LittleCMS comparison](./LcmsComparison.md) ·');
 page.push('[Parallel pool](./pool.md) ·');
 page.push('[Bench](./Bench.md)');
+if (ARGS.hostName) {
+    page.push('');
+    page.push('Named run — the default tables stay in [BenchResults.md](./BenchResults.md).');
+}
 page.push('');
 page.push('---');
 page.push('');
@@ -177,7 +221,9 @@ page.push('>');
 page.push('>     node bench/reproduce.js');
 page.push('>     node scripts/build_bench_results.js');
 page.push('>');
-page.push('> Run `' + runName + '` · measured ' + dates.join(', ') +
+page.push('> Run `' + runName + '`' +
+          (ARGS.hostName ? ' · **' + ARGS.hostName + '**' : '') +
+          ' · measured ' + dates.join(', ') +
           (versions.length ? ' · jsCE ' + versions.join(', ') : '') +
           ' · package now **' + PKG_VERSION + '**');
 page.push('');
@@ -220,4 +266,5 @@ page.push('');
 
 fs.writeFileSync(OUT, page.join('\n'));
 process.stdout.write('wrote ' + path.relative(ROOT, OUT) + ' — ' + tables.length +
-    ' tables from ' + runName + '\n');
+    ' tables from ' + runName +
+    (ARGS.hostName ? ' (' + ARGS.hostName + ')' : '') + '\n');

@@ -12,10 +12,13 @@
 > and [what it costs](#we-support-multicore-but-it-is-not-free).
 >
 > Headline: **6.2x peak** (noise/int), **787 MPx/s** peak throughput
-> (solid/wasm-simd), byte-identical in all 72 cells. Current tables are
-> generated into [BenchResults](../BenchResults.md#table-pool-peak); the
-> analysis below is written against the 2026-08-19 run, whose numbers sit
-> within run-to-run spread of these.
+> (solid/wasm-simd), byte-identical in all 72 cells. Figures are from the
+> date in the status — re-run: browser [`samples/bench/`](../../samples/bench/)
+> or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md).
+> Current tables are generated into
+> [BenchResults](../BenchResults.md#table-pool-peak); the analysis below
+> is written against the 2026-08-19 run, whose numbers sit within
+> run-to-run spread of these.
 >
 > **Two things to take away if you read nothing else.**
 >

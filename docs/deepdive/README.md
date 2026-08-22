@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -13,9 +13,11 @@
 ---
 
 This folder is the "how it works and why it's fast" layer of the docs. The
-[project README](../../README.md) tells you *what it does*, the
-[Performance page](../Performance.md) tells you *how fast it goes* and what we
-learned measuring it. This folder answers the third question: *why*.
+[project README](../../README.md) tells you *what it does*;
+[Bench.md](../Bench.md) and [BenchResults.md](../BenchResults.md) are
+the current numbers. [Performance.md](./Performance.md) is the
+measurement retrospective — what we learned measuring it. This folder
+answers *why*.
 
 If you're here you probably:
 
@@ -63,7 +65,8 @@ has a deep-dive page behind it if you want the receipts.
   general-purpose C codebase compiled through Emscripten, carrying all
   of lcms2's dispatcher generality, with no SIMD and no Fast Float
   plugin". The comparison is really about *specialisation*, not language
-  choice. → [Performance](../Performance.md)
+  choice. → [LcmsComparison](../LcmsComparison.md), historical notes in
+  [Performance](./Performance.md)
 
 - **And the *answers* match too — jsCE's float pipeline agrees with
   lcms's float pipeline within visual-noise levels** across a
@@ -90,12 +93,13 @@ recipes.
 | [Accuracy](./Accuracy.md)                        | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
 | [Custom LUT Builder](./Luts.md)                  | Custom LUT creation, TIFF-based visual editing, lcms-wasm bridge, portable JSON serialisation format, and the architecture for CMS-agnostic LUT capture and redistribution. Companion how-to: [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md).            |
 | [Identity / NOP detection](./Identity.md)        | How same-profile pairs are detected (binary hash, virtual name, matrix comparison), how multi-stage chains are collapsed, the identity pipeline and `kernelCopy` path, and the connection to kernel binding.                                                      |
-| [Kernel modules](./KernelModules.md)             | **Shipped v1.5.0** as-built architecture: dimension-specific kernel instances (`src/kernels/{1d..4d,nd}/`) own the tuned array loops, WASM lifecycle, output allocation, and per-call dispatch (`kernel._runBig`/`_runSmall` resolved at create() time). Registration/override patterns, `provideLut()` contract, plugin coexistence, V8 dispatch analysis, migration history. |
-| [The kernel contract](./KernelContract.md)       | **v1.6, ALL PHASES BUILT.** The next kernel boundary: Transform owns the pipeline, the kernel owns the transforms, one kernel per input dimension 1-15. `floatFor()` gives the kernel its single-colour stage function, `init()` lets it rewrite the pipeline, and the claim registry moves inside the dimension that owns it. Includes the two-phase LUT-scale contract and the invariants that break silently. |
-| [Synthetic profiles](./SyntheticProfiles.md)     | Three of five kernels had no second opinion, because real ICC profiles are licensed and this repo ships two. So the engine writes its own: `encodeICC.js`, fifteen dual-table profiles at 1-15 channels, handed to Little CMS. Every input width now converts into every output width, both depths, and Kernel2D agrees bit for bit. The journey doc: what the oracle reached that nothing else could, and the two routes -- noise CLUTs, and a preallocation that looked obvious -- that measured something other than what they seemed to. |
+| [The kernel contract](./KernelContract.md)       | **As-built v1.6.** Transform owns the pipeline; the kernel owns both surfaces (`floatFor` + `array()`). Dense registry `kernels[0..15]` (Identity at 0); Kernel3D may yield the matrix shaper; batch-size dispatch is the kernel's secret. Includes the journey from the v1.5 file split, a “do not reinvent” table, coverage, and the N-channel oracle gap. |
+| [Kernel modules](./KernelModules.md)             | **Stub.** v1.5 snapshot retired; redirects to [KernelContract.md](./KernelContract.md). |
+| [Synthetic profiles](./SyntheticProfiles.md)     | Three of five kernels had no second opinion, because real ICC profiles are licensed and this repo ships two. So the engine writes its own: `encodeICC.js`, fifteen dual-table profiles at 1-15 channels, handed to Little CMS. Also: `gridFor` is a fixture budget, not an ICC rule — real 5/6/7 A2B tables are typically 9 / 7–9 / 5 pts/axis; 2-pt at 11+ is ours. |
 | [Matrix-shaper WASM kernel](./MatrixShaperKernel.md) | The fused curve + 3x3 + curve path in WebAssembly, int8 and int16, with a bit-identical scalar fallback and five alpha entry points. **328 MPx/s on photographs against ~119 for the CLUT** (see [BenchResults](../BenchResults.md#table-matrixshaper-throughput-int8) for current numbers), and more accurate than it — the CLUT's interpolation error is what the kernel removes. *(shipped in v1.5.5)* |
 | [Why MPE is not supported](./multiProcessElements.md) | Why `multiProcessElementsType` (`mpet`) / `DToB`/`BToD` tags are not decoded: spec-mandated fallback to `AToB`/`BToA`, near-zero real-world prevalence, and why ICC's own answer to HDR (iccMAX) made MPE a dead end. |
 | [Why named colour profiles are not supported](./namedColorProfiles.md) | Why `ncl2` profiles are outside transform scope: they are pure name→Lab/XYZ lookup tables with no pipeline, and real-world spot colour workflows use RIP-internal databases, PANTONE-licensed app libraries, or CxF/X-4 instead. |
+| [The Good / Bad / Ugly (archived)](./good-bad-ugly/) | Failed Schrödinger's Bench reproduction. Off the samples index; pixels are the old 256-colour LCG. Lesson in [benchmark.md §20](./benchmark.md#20-schrödingers-bench-bites-back--the-failed-reproduction). |
 | LUT Accuracy                                     | Baseline interpolation error for standard LUT grid sizes, measured against the full f64 accuracy pipeline. *(In progress — not yet published.)*                                                                                                                 |
 
 ## Learn more (external)

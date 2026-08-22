@@ -241,6 +241,7 @@ describe('pixelCache — profiling mode', () => {
         const normal = rgbTransform(32);
         normal.resetPixelCacheStats();
         normal.transformArray(pixels, false, false, false, COUNT);
+        expect(normal.lastUsedKernel).toBe('cache');
         const normalStats = normal.getPixelCacheStats();
 
         const profiling = rgbTransform(32);
@@ -434,11 +435,10 @@ describe('pixelCache — safety', () => {
 
 describe('pixelCache — n-channel input', () => {
 
-    // Everything above this point is 3- and 4-channel, because those were the
-    // only profiles that existed. N-channel input is a different regime for
-    // the cache: KernelND declines the LUT, so every pixel walks the pipeline
-    // at ~0.8 MPx/s instead of tens, and a miss therefore costs roughly fifty
-    // times what it costs in RGB.
+    // 5/6 now bake a LUT (Kernel5D / Kernel6D); 7–15 still decline and walk
+    // the pipeline. These tests are CORRECTNESS at those widths: cached
+    // output matches uncached. The in-kernel WASM inject for 5/6 is
+    // `__tests__/pixel_cache_wasm_5d_6d.tests.js`.
     //
     // That moves the break-even. docs/deepdive/PixelCache.md records
     // photographs as break-even at best for RGB. Measured on 8-channel input,
@@ -476,7 +476,7 @@ describe('pixelCache — n-channel input', () => {
     }
 
     const PAIRS = [];
-    for(const inCh of [1, 2, 3, 5, 8, 12, 15]){
+    for(const inCh of [1, 2, 3, 5, 6, 8, 12, 15]){
         for(const outCh of [1, 3, 4, 8, 15]) PAIRS.push([inCh, outCh]);
     }
 
@@ -547,5 +547,165 @@ describe('pixelCache — n-channel input', () => {
         const out = t.array(px, false, false, false, N);
 
         expect(Array.from(out)).toEqual(Array.from(px));   // identity copies
+    });
+});
+
+// ---------------------------------------------------------------------------
+//  'auto' — Transform ignores it; the kernel may change it to 1
+// ---------------------------------------------------------------------------
+
+describe('pixelCache — kernel decides auto', () => {
+
+    const fs = require('fs');
+    const Profile = require('../src/Profile');
+    const DIR = path.join(__dirname, 'profiles');
+    const profile = {};
+    for(const n of [3, 5, 6]){
+        const p = new Profile();
+        p.loadBinary(new Uint8Array(fs.readFileSync(
+            path.join(DIR, 'synthetic_' + String(n).padStart(2, '0') + 'ch.icc'))));
+        profile[n] = p;
+    }
+
+    test('6CLR init promotes auto to 1 and the pipeline is injected', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true });
+        t.create(profile[6], profile[3], eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(1);
+        expect(t.kernelInfo().cache).toBe(1);
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).toMatch(/stage_pixelCache_/);
+    });
+
+    test('5CLR does the same', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 'auto' });
+        t.create(profile[5], profile[3], eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(1);
+    });
+
+    test('3CLR leaves auto alone — nothing injected on the pipeline', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false });
+        t.create('*sRGB', '*Lab', eIntent.relative);
+        expect(t.pixelCache).toBe('auto');
+        expect(t.pixelCacheUsed).toBe(0);
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).not.toMatch(/stage_pixelCache_/);
+        // Image path: WASM binds the single-entry export; JS fallback stays off.
+        if(String(t.lutMode).indexOf('wasm') >= 0){
+            expect(t.kernelInfo().cache).toBe(1);
+        } else {
+            expect(t.kernelInfo().cache).toBe('off');
+        }
+    });
+
+    test('3CLR forced 1 still injects', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false, pixelCache: 1 });
+        t.create('*sRGB', '*Lab', eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(1);
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).toMatch(/stage_pixelCache_/);
+    });
+
+    test('6CLR pixelCache: 0 stays off', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 0 });
+        t.create(profile[6], profile[3], eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(0);
+        expect(t.kernelInfo().cache).toBe('off');
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).not.toMatch(/stage_pixelCache_/);
+    });
+
+    test('array() still uses the 6D kernel — auto does not steal the image path', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
+        t.create(profile[6], profile[3], eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(1);
+        const px = new Uint8ClampedArray(16 * 6);
+        t.array(px, false, false, false, 16);
+        expect(t.lastUsedKernel).toBe('kernel6D');
+    });
+});
+
+// ---------------------------------------------------------------------------
+//  In-kernel WASM single-entry — create() binds interp_*_cached
+// ---------------------------------------------------------------------------
+
+describe('pixelCache — in-kernel WASM', () => {
+
+    const haveWasm = typeof WebAssembly !== 'undefined' && !process.env.SKIP_WASM_TESTS;
+    const describeIf = haveWasm ? describe : describe.skip;
+    const Profile = require('../src/Profile');
+    const fs = require('fs');
+    const cmyk = new Profile();
+    cmyk.loadFile(path.join(__dirname, 'GRACoL2006_Coated1v2.icc'));
+
+    function maxAbs(a, b){
+        let m = 0;
+        for(let i = 0; i < a.length; i++){
+            const d = Math.abs(a[i] - b[i]);
+            if(d > m) m = d;
+        }
+        return m;
+    }
+
+    test('shipped tetra modules export the single-entry twin', () => {
+        const bytes = require('../src/kernels/3d/tetra3d_simd.wasm.js');
+        const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), {});
+        expect(typeof inst.exports.interp_tetra3d_simd).toBe('function');
+        expect(typeof inst.exports.interp_tetra3d_simd_cached).toBe('function');
+        expect(inst.exports.interp_tetra3d_simd_cached_8).toBeUndefined();
+    });
+
+    describeIf('create() wiring', () => {
+
+        test('RGB→CMYK auto uses the cached export; 0 does not', () => {
+            const on = new Transform({ dataFormat: 'int8', buildLut: true });
+            on.create('*sRGB', cmyk, eIntent.relative);
+            expect(String(on.lutMode).indexOf('wasm')).toBeGreaterThan(-1);
+            expect(on.kernelInfo().cache).toBe(1);
+            expect(on.pixelCacheUsed).toBe(0);
+
+            const off = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 0 });
+            off.create('*sRGB', cmyk, eIntent.relative);
+            expect(off.kernelInfo().cache).toBe('off');
+        });
+
+        test('array() cached vs uncached is bit-exact with preserveAlpha', () => {
+            const on = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar' });
+            on.create('*sRGB', '*AdobeRGB', eIntent.relative);
+            const off = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-scalar', pixelCache: 0 });
+            off.create('*sRGB', '*AdobeRGB', eIntent.relative);
+            if(String(on.lutMode).indexOf('wasm') < 0) return;
+
+            const rgba = new Uint8ClampedArray(64 * 4);
+            for(let i = 0; i < 64; i++){
+                const same = (i & 3) !== 0;
+                rgba[i * 4]     = same ? 40 : 200;
+                rgba[i * 4 + 1] = 80;
+                rgba[i * 4 + 2] = 120;
+                rgba[i * 4 + 3] = (i * 7) & 255;
+            }
+            expect(maxAbs(on.array(rgba, true, true, true), off.array(rgba, true, true, true))).toBe(0);
+        });
+
+        test('array() cached vs uncached is bit-exact on solid and alternate', () => {
+            const on = new Transform({ dataFormat: 'int8', buildLut: true });
+            on.create('*sRGB', cmyk, eIntent.relative);
+            const off = new Transform({ dataFormat: 'int8', buildLut: true, pixelCache: 0 });
+            off.create('*sRGB', cmyk, eIntent.relative);
+            if(String(on.lutMode).indexOf('wasm') < 0) return;
+
+            const solid = new Uint8ClampedArray(64 * 3);
+            for(let i = 0; i < solid.length; i += 3){
+                solid[i] = 40; solid[i + 1] = 80; solid[i + 2] = 120;
+            }
+            const alt = new Uint8ClampedArray(64 * 3);
+            for(let i = 0; i < alt.length; i += 3){
+                const onPx = (i / 3) & 1;
+                alt[i] = onPx ? 200 : 10;
+                alt[i + 1] = onPx ? 20 : 180;
+                alt[i + 2] = onPx ? 90 : 30;
+            }
+            expect(maxAbs(on.array(solid), off.array(solid))).toBe(0);
+            expect(maxAbs(on.array(alt), off.array(alt))).toBe(0);
+        });
     });
 });

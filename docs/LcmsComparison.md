@@ -3,12 +3,14 @@
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [API: Transform](./Transform.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](./Bench.md). Canonical tables: [BenchResults.md](./BenchResults.md).
 
 [LittleCMS](https://littlecms.com/) is the goalpost. It is the 25-year
 reference implementation of ICC colour management, it ships inside
@@ -652,7 +654,7 @@ is probably never worth building — the experiment meant to choose
 between the two models chose the cheap one. And the crossover is **slice
 size, not image size**: below roughly 64 K px per worker the split stops
 paying. When workers are unavailable the same call falls back to running
-images sequentially through `transformArray()`, so multicore stays an
+images sequentially through `array()`, so multicore stays an
 optimisation rather than a capability.
 [deepdive/multicore.md](./deepdive/multicore.md).
 
@@ -708,10 +710,9 @@ kernel makes the pool's fixed per-fragment cost a larger share of the
 job.
 [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md).
 
-**Pixel cache in the image kernels (POC).** A 4D-kernel experiment
-measured break-even at roughly a 10 % hit rate and up to +169 % on
-repetitive content, but it is not wired to the dispatcher.
-[deepdive/PixelCache.md](./deepdive/PixelCache.md).
+**Pixel cache in the image kernels.** WASM 3–6 kernels bind
+`interp_*_cached` when `pixelCache !== 0`. Solids 3–5×; photo tax
+~2–3 % (5D photo 0.84×). [deepdive/PixelCache.md](./deepdive/PixelCache.md).
 
 ## Why the numbers come out this way
 

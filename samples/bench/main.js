@@ -2,7 +2,7 @@
  * samples/bench/main.js
  * =====================
  *
- * Browser-side bench orchestrator. Three tabs:
+ * Browser-side bench orchestrator. Tabs:
  *
  *   1. Full comparison   - all 4 directions x all 4 jsColorEngine
  *                          lutModes + lcms-wasm (HIGHRES + NOOPT). Per
@@ -13,16 +13,26 @@
  *   3. Pixel-count sweep - one direction + mode, sweep pixel count from
  *                          4 K to 4 M. Sanity-checks that headline MPx/s
  *                          is L2-cache-flattering, not peak truth.
+ *   4. Pool demo         - 15-image queue through transformImages().
+ *   5. Speed vs Noise    - solid / photo blended toward noise; jsCE vs
+ *                          lcms vs lcms NOCACHE. Why a pinch of grain
+ *                          stabilises headline MPx/s.
  *
  * Loads jsColorEngine via the UMD bundle (`window.jsColorEngine`) and
  * lcms-wasm via dynamic ESM import (see lcms-runner.js).
  *
  * UI yielding: between every config we `await yieldUi()` so the progress
- * bar / status text actually paints. Timing-critical loops use
- * `performance.now()` not Date.now (us precision in modern browsers).
+ * bar / status text actually paints. `yieldUi` also `await browserFocus()`
+ * — if the tab blurs, the pause overlay holds until Resume. Timing-
+ * critical loops use `performance.now()` not Date.now.
  */
 
 import { loadLcms, buildProfiles, freeProfiles, makeLcmsRunner, probeLcmsBuild } from './lcms-runner.js';
+import { browserFocus, installBrowserFocus } from './browserFocus.js';
+import {
+    buildInput, buildInputU16, contentLabel, DEFAULT_KIND,
+    PHOTO_URL, loadPhotoFromUrl, setPhotoCmyk, paintKneePreview,
+} from './content.js';
 
 // CMYK input profile: US coated sheet standard.
 const PROFILE_URL       = '../profiles/CoatedGRACoL2006.icc';
@@ -67,11 +77,15 @@ function nowMs() { return performance.now(); }
  * Yield to the event loop so the browser can paint. Two rAFs ensures
  * the layout step actually runs before we resume - one rAF queues for
  * the next frame, the second rAF runs after the paint has committed.
+ * Also awaits browserFocus() so a blurred tab pauses instead of
+ * writing a throttled sample.
  */
-function yieldUi() {
-    return new Promise((resolve) => {
+async function yieldUi() {
+    await browserFocus();
+    await new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
     });
+    await browserFocus();
 }
 
 function median(arr) {
@@ -173,34 +187,15 @@ function sortFullResultsByDirAndMpx(results, directions) {
     return out;
 }
 
-/**
- * Same seeded PRNG as bench/mpx_summary.js + bench/lcms-comparison/bench.js.
- * Identical bytes both sides means like-for-like cache behaviour.
- */
-function buildInput(channels, pixelCount) {
-    const arr = new Uint8ClampedArray(pixelCount * channels);
-    let seed = 0x13579bdf;
-    for (let i = 0; i < arr.length; i++) {
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-        arr[i] = seed & 0xff;
-    }
-    return arr;
+function currentContentKind() {
+    const el = $('#content-full') || $('#content-warmup') || $('#content-sweep');
+    return (el && el.value) || DEFAULT_KIND;
 }
 
-/**
- * 16-bit input (full u16 range, not just u8 expanded). Same PRNG shape as
- * buildInput so the byte stream is correlated across calls of the same
- * seed - lets jsce u16 and lcms u16 see the same pixels and keeps cache
- * behaviour like-for-like with the u8 path.
- */
-function buildInputU16(channels, pixelCount) {
-    const arr = new Uint16Array(pixelCount * channels);
-    let seed = 0x13579bdf;
-    for (let i = 0; i < arr.length; i++) {
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-        arr[i] = seed & 0xffff;
-    }
-    return arr;
+/** Off = 0 (headline). On = 'auto' (in-kernel WASM + 4/5/6 accuracy path). */
+function currentPixelCacheHint() {
+    const el = $('#pixel-cache-full');
+    return (el && el.checked) ? 'auto' : 0;
 }
 
 /**
@@ -296,6 +291,32 @@ function directionConfigs(jsGracol, jsIsoCoated) {
 }
 
 /**
+ * Same-profile pairs. Both engines collapse these to a copy (jsCE
+ * identity kernel, lcms pipeline optimiser). Off by default — tick
+ * "include identity" to measure the memcpy ceiling on this machine.
+ */
+function identityDirectionConfigs(jsGracol) {
+    return [
+        {
+            id: 'rgb-id',
+            identity: true,
+            shortLabel: 'RGB &rarr; RGB <span class="id-tag">identity</span>',
+            longLabel:  'RGB to RGB (sRGB to sRGB — identity / copy)',
+            js:   { src: '*srgb', dst: '*srgb', inCh: 3, outCh: 3 },
+            lcms: { pIn: 'srgb', fIn: 'TYPE_RGB_8',  fIn16: 'TYPE_RGB_16',  pOut: 'srgb', fOut: 'TYPE_RGB_8',  fOut16: 'TYPE_RGB_16',  inCh: 3, outCh: 3 },
+        },
+        {
+            id: 'cmyk-id',
+            identity: true,
+            shortLabel: 'CMYK &rarr; CMYK <span class="id-tag">identity</span>',
+            longLabel:  'CMYK to CMYK (GRACoL to GRACoL — identity / copy)',
+            js:   { src: jsGracol, dst: jsGracol, inCh: 4, outCh: 4 },
+            lcms: { pIn: 'cmyk', fIn: 'TYPE_CMYK_8', fIn16: 'TYPE_CMYK_16', pOut: 'cmyk', fOut: 'TYPE_CMYK_8', fOut16: 'TYPE_CMYK_16', inCh: 4, outCh: 4 },
+        },
+    ];
+}
+
+/**
  * Mirror of LittleCMS's `_cmsReasonableGridpointsByColorspace` from
  * lcms2-2.18/src/cmspcs.c. lcms picks the precalc-LUT grid size at
  * cmsCreateTransform() time based on:
@@ -358,6 +379,7 @@ function lcmsReasonableGrid(inCh, flags, consts) {
 // the JS/scalar/SIMD speed step is visible in adjacent rows.
 const JSCE_MODES = [
     { id: 'no-lut',            label: 'jsce no-LUT (f64)',          badge: 'b-nolut',    isLut: false, dataFormat: 'int8'  },
+    { id: 'matrix-shaper',     label: 'jsce matrix-shaper',         badge: 'b-shaper',   isLut: false, dataFormat: 'int8'  },
     { id: 'float',             label: 'jsce float',                 badge: 'b-float',    isLut: true,  dataFormat: 'int8'  },
     { id: 'int',               label: 'jsce int',                   badge: 'b-int',      isLut: true,  dataFormat: 'int8'  },
     { id: 'int16',             label: 'jsce int16 (u16 I/O)',       badge: 'b-int16',    isLut: true,  dataFormat: 'int16' },
@@ -396,6 +418,7 @@ async function init() {
 
         $('#info-ua').textContent    = navigator.userAgent;
         $('#info-cores').textContent = String(navigator.hardwareConcurrency || '?');
+        $('#info-pool').textContent = 'not started';
         $('#info-secure').textContent = window.isSecureContext
             ? 'secure context'
             : 'NOT secure (some perf APIs throttled)';
@@ -456,12 +479,29 @@ async function init() {
         // built-in resolves faster and is byte-identical in colour output
         // for our purposes. Smoke-tested: 65K pixel RGB->RGB matches to
         // within +/-1 LSB vs the ICC.
+        // Strawberries frame — the same JPEG the Node solo / release-matrix
+        // benches use. CMYK workflows get a real GRACoL separation of it,
+        // not four random ink channels.
+        let photoNote = '';
+        try {
+            const photo = await loadPhotoFromUrl(PHOTO_URL);
+            const sep = new state.jsce.Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
+            sep.create('*srgb', state.jsGracol, state.jsce.eIntent.relative);
+            const rgbPlane = buildInput(3, photo.npx, 'photo');
+            setPhotoCmyk(sep.transformArray(rgbPlane, false, false, false, photo.npx), photo.npx);
+            photoNote = '; photo ' + photo.width + '\u00d7' + photo.height + ' strawberries + GRACoL sep';
+            renderKneePreviews();
+        } catch (e) {
+            console.warn('jsColorEngine bench: photo failed to load, content will fall back', e);
+            photoNote = '; photo FAILED — falling back';
+        }
+
         const profileMs = nowMs() - t0;
         $('#info-profile').textContent =
             'CoatedGRACoL2006.icc (' + (buf.byteLength / 1024).toFixed(0) + ' KB) + ' +
             'ISOcoated_v2_eci.icc (' + (bufIso.byteLength / 1024).toFixed(0) + ' KB) + ' +
             'AdobeRGB1998.icc (' + (bufAdobe.byteLength / 1024).toFixed(1) + ' KB), ' +
-            'fetched + decoded in ' + profileMs.toFixed(0) + ' ms';
+            'fetched + decoded in ' + profileMs.toFixed(0) + ' ms' + photoNote;
         $('#info-profile').classList.add('is-ok');
 
         // ---- 4. lcms-wasm (best-effort - missing => disable lcms rows) ----
@@ -533,11 +573,13 @@ async function init() {
  * fallbacks (e.g. user picked int-wasm-simd but host has no SIMD ->
  * Transform.lutMode auto-demoted to int-wasm-scalar at create() time).
  */
-function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
+function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache, contentKind) {
     const jsce = state.jsce;
     const wf = dir.js;
+    const kind = contentKind || currentContentKind();
 
     const isNoLut = (modeId === 'no-lut');
+    const isShaper = (modeId === 'matrix-shaper');
     // Any mode whose id starts with 'int16' uses u16 typed I/O. That
     // covers the JS u16 path (`int16`) AND the two WASM siblings
     // (`int16-wasm-scalar` / `int16-wasm-simd`) — they all consume the
@@ -547,17 +589,20 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
 
     // Input typed-array width follows dataFormat, NOT lutMode:
     //   - int16-family : Uint16Array (full u16 range)
-    //   - everything else (int / float / int-wasm-* / no-LUT): Uint8ClampedArray
-    const input = isInt16Family
-        ? buildInputU16(wf.inCh, pixelCount)
-        : buildInput(wf.inCh, pixelCount);
+    //   - everything else (int / float / int-wasm-* / no-LUT / shaper): Uint8ClampedArray
+    let input = isInt16Family
+        ? buildInputU16(wf.inCh, pixelCount, kind)
+        : buildInput(wf.inCh, pixelCount, kind);
 
     const t0 = nowMs();
     let opts;
     if (isNoLut) {
-        // useCurveLut:true replaces Math.pow with a 4096-entry LUT lookup per pixel.
-        // Error is ≤ 0.03 LSB at u8 output — imperceptible for image work.
-        opts = { dataFormat: 'int8', buildLut: false, useCurveLut: true };
+        // Pin the stage pipeline OFF. Default wasmMatrixShaper:'auto' would
+        // yield the fused kernel on sRGB→AdobeRGB and this row would quote
+        // 300 MPx/s as "the accuracy path".
+        opts = { dataFormat: 'int8', buildLut: false, useCurveLut: true, wasmMatrixShaper: false };
+    } else if (isShaper) {
+        opts = { dataFormat: 'int8', buildLut: false, wasmMatrixShaper: 'auto' };
     } else if (modeId === 'int16') {
         // dataFormat: 'int16' + buildLut: true with no explicit lutMode lets
         // the auto-resolver pick the best int16-family kernel for the host
@@ -574,12 +619,17 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
     } else {
         opts = { dataFormat: 'int8', buildLut: true, lutMode: modeId, wasmCache: sharedWasmCache };
     }
+    opts.pixelCache = currentPixelCacheHint();
     const xform = new jsce.Transform(opts);
     xform.create(wf.src, wf.dst, jsce.eIntent.relative);
     const lutBuildMs = nowMs() - t0;
 
     // may differ from requested if host lacked e.g. SIMD and the engine demoted
-    const actualMode = isNoLut ? 'no-lut' : xform.lutMode;
+    let actualMode = isNoLut ? 'no-lut' : (isShaper ? 'matrix-shaper' : xform.lutMode);
+    if (isShaper) {
+        const info = (typeof xform.kernelInfo === 'function') ? xform.kernelInfo() : null;
+        if (!info || info.name !== 'matrix-shaper') actualMode = 'matrix-shaper (declined)';
+    }
 
     // Describe the LUT for the results column. This answers the question
     // "exactly how is this transform storing its colour data?" - which is
@@ -588,7 +638,8 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
     //
     //   - `no-lut`        : there IS no CLUT; every pixel walks the full
     //                       per-stage pipeline in f64. Most accurate jsce
-    //                       path we ship.
+    //                       path we ship. Matrix-shaper is FORCED off.
+    //   - `matrix-shaper` : same pair, fused curve+3×3+curve WASM (or JS).
     //   - `float`         : Float64Array CLUT + f64 tetra interp. Same
     //                       accuracy as no-LUT in practice (grid interp is
     //                       the dominant error, not f64 vs f64) but much
@@ -596,7 +647,11 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
     //   - `int*`          : Uint16Array CLUT (Q0.16) + int32 tetra interp.
     //                       The "image throughput" configuration.
     let lutDesc;
-    if (isNoLut) {
+    if (isShaper) {
+        lutDesc = (actualMode === 'matrix-shaper')
+            ? 'no CLUT (curve + 3×3 + curve)'
+            : 'declined — stage pipeline';
+    } else if (isNoLut) {
         lutDesc = 'no LUT (f64 pipeline)';
     } else if (xform.lut && xform.lut.CLUT) {
         const g1    = xform.lut.g1 || 0;
@@ -614,13 +669,15 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
 
     function run() { xform.transformArray(input); }
 
+    function setInput(next) { input = next; }
+
     function free() {
         // jsColorEngine Transform has no explicit free; GC will clean up.
         // Drop the closure references so the WASM linear-memory instances
         // can be reclaimed sooner.
     }
 
-    return { run, free, lutBuildMs, actualMode, lutDesc, input };
+    return { run, setInput, free, lutBuildMs, actualMode, lutDesc, input };
 }
 
 // ============================================================ MEASUREMENT CORE
@@ -639,6 +696,7 @@ function makeJsceRunner(dir, modeId, pixelCount, sharedWasmCache) {
  */
 async function measureRunner(runner, pixelCount, warmupIters, hotItersPerBatch) {
     const BATCHES = 5;
+    await browserFocus();
 
     // 1) Cold
     const tCold = nowMs();
@@ -655,12 +713,18 @@ async function measureRunner(runner, pixelCount, warmupIters, hotItersPerBatch) 
         await yieldUi();
     }
 
-    // 3) Hot - 5 batches, take the median (robust to GC noise)
+    // 3) Hot - 5 batches, take the median (robust to GC noise).
+    //    If the tab blurred mid-batch, drop that sample and retry.
     const samples = [];
-    for (let b = 0; b < BATCHES; b++) {
+    while (samples.length < BATCHES) {
+        await browserFocus();
         const t0 = nowMs();
         for (let i = 0; i < hotItersPerBatch; i++) runner.run();
         const t1 = nowMs();
+        if (browserFocus.lost) {
+            await browserFocus();
+            continue;
+        }
         samples.push((t1 - t0) / hotItersPerBatch);
         await yieldUi();
     }
@@ -689,6 +753,9 @@ function benchTypeLabel(cfg) {
         if (id === 'no-lut' || id === 'float') {
             return 'f64';
         }
+        if (id === 'matrix-shaper') {
+            return 'u8';
+        }
         if (id === 'int16' || id.indexOf('int16-') === 0) {
             return 'u16';
         }
@@ -704,6 +771,7 @@ function benchTypeLabel(cfg) {
 
 function badgeForMode(modeId) {
     if (modeId === 'no-lut')            return 'b-nolut';
+    if (modeId === 'matrix-shaper')     return 'b-shaper';
     if (modeId === 'float')             return 'b-float';
     if (modeId === 'int')               return 'b-int';
     if (modeId === 'int16')             return 'b-int16';
@@ -726,18 +794,24 @@ function setProgress(panelId, pct, text, kind) {
 
 async function runFullComparison() {
     await init();
+    await browserFocus();
 
     const pixelCount   = parseInt($('#pixels-full').value,  10);
     const warmupIters  = parseInt($('#warmup-full').value,  10);
     const hotPerBatch  = parseInt($('#hot-full').value,     10);
     const inclLcms     = $('#incl-lcms-full').checked && state.lcmsAvailable;
+    const inclIdentity = !!( $('#incl-identity-full') && $('#incl-identity-full').checked );
 
-    const directions = directionConfigs(state.jsGracol, state.jsIsoCoated);
+    const realDirs = directionConfigs(state.jsGracol, state.jsIsoCoated);
+    const directions = inclIdentity
+        ? realDirs.concat(identityDirectionConfigs(state.jsGracol))
+        : realDirs;
 
     // Build the full config matrix
     const configs = [];
     for (const dir of directions) {
         for (const mode of JSCE_MODES) {
+            if (mode.id === 'matrix-shaper' && (dir.js.inCh !== 3 || dir.js.outCh !== 3)) continue;
             configs.push({ kind: 'jsce', dir, mode, isLut: mode.isLut });
         }
         if (inclLcms) {
@@ -814,6 +888,7 @@ async function runFullComparison() {
         const tr = document.createElement('tr');
         tr.dataset.benchDir = cfg.dir.id;
         if (isNewDir) tr.classList.add('dir-sep');
+        if (cfg.dir.identity) tr.classList.add('is-identity');
         prevDirId = cfg.dir.id;
 
         try {
@@ -836,8 +911,8 @@ async function runFullComparison() {
                 const fIn   = is16 ? state.lcmsConsts[wf.fIn16]  : state.lcmsConsts[wf.fIn];
                 const fOut  = is16 ? state.lcmsConsts[wf.fOut16] : state.lcmsConsts[wf.fOut];
                 const input = is16
-                    ? buildInputU16(wf.inCh, pixelCount)
-                    : buildInput(wf.inCh, pixelCount);
+                    ? buildInputU16(wf.inCh, pixelCount, currentContentKind())
+                    : buildInput(wf.inCh, pixelCount, currentContentKind());
                 const runner = makeLcmsRunner(
                     state.lcms, state.lcmsConsts,
                     {
@@ -883,8 +958,10 @@ async function runFullComparison() {
 
             results.push({
                 dirId: cfg.dir.id,
-                dirLabel: cfg.dir.shortLabel,
+                dirLabel: cfg.dir.shortLabel.replace(/<[^>]+>/g, ''),
+                identity: !!cfg.dir.identity,
                 mode: kernelLabel,
+                modeId: cfg.kind === 'jsce' ? cfg.mode.id : null,
                 typeCode,
                 kind: cfg.kind,
                 isLut: cfg.isLut,
@@ -951,7 +1028,7 @@ async function runFullComparison() {
     // For each (engine, case) tuple we pick the fastest row in EACH direction,
     // so the reader sees 4 direction-specific numbers rather than a single
     // headline that's always going to be RGB->RGB (the cheapest direction).
-    renderSummaryCards(results, directions, state.lcmsAvailable);
+    renderSummaryCards(results, realDirs, state.lcmsAvailable);
 
     setProgress('full', 1, 'Done. ' + configs.length + ' configs measured. Best per direction is highlighted.', 'done');
     $('#run-full').disabled  = false;
@@ -977,7 +1054,7 @@ function renderSummaryCards(results, directions, lcmsAvailable) {
 
     // Category predicates: (result) => boolean
     const cats = [
-        { id: 'jsce-accuracy', key: (r) => r.kind === 'jsce' && !r.isLut },
+        { id: 'jsce-accuracy', key: (r) => r.kind === 'jsce' && r.modeId === 'no-lut' },
         { id: 'jsce-lut',      key: (r) => r.kind === 'jsce' &&  r.isLut },
         { id: 'lcms-accuracy', key: (r) => r.kind === 'lcms' && !r.isLut },
         { id: 'lcms-lut',      key: (r) => r.kind === 'lcms' &&  r.isLut },
@@ -1077,14 +1154,19 @@ function copyFullMarkdown() {
     }
     lines.push('');
     lines.push('Run config: pixels/iter = ' + r.pixelCount.toLocaleString() +
+               ', content = ' + contentLabel(currentContentKind()) +
+               ', pixelCache = ' + (currentPixelCacheHint() === 0 ? 'off' : 'auto') +
                ', warmup = ' + r.warmupIters +
-               ', hot iters per batch = ' + r.hotPerBatch + ' (x5 batches, median reported).');
+               ', hot iters per batch = ' + r.hotPerBatch + ' (x5 batches, median reported)' +
+               (r.results.some((x) => x.identity)
+                   ? ', identity pairs included (sRGB→sRGB, GRACoL→GRACoL — memcpy ceiling).'
+                   : '.'));
     lines.push('');
 
     // ---- Summary cards ----
     const directions = directionConfigs(state.jsGracol, state.jsIsoCoated);
     const cats = [
-        { id: 'jsce-accuracy', title: 'Accuracy &middot; jsColorEngine', key: (x) => x.kind === 'jsce' && !x.isLut },
+        { id: 'jsce-accuracy', title: 'Accuracy &middot; jsColorEngine', key: (x) => x.kind === 'jsce' && x.modeId === 'no-lut' },
         { id: 'lcms-accuracy', title: 'Accuracy &middot; lcms-wasm',     key: (x) => x.kind === 'lcms' && !x.isLut },
         { id: 'jsce-lut',      title: 'Image &middot; jsColorEngine',    key: (x) => x.kind === 'jsce' &&  x.isLut },
         { id: 'lcms-lut',      title: 'Image &middot; lcms-wasm',        key: (x) => x.kind === 'lcms' &&  x.isLut },
@@ -1382,6 +1464,7 @@ async function runOneAccuracyKernel(kernelKey, target, intent, pts, step, inGamu
 
 async function runAccuracySweep() {
     await init();
+    await browserFocus();
     const rgbKey  = $('#rgb-accuracy').value;
     const cmykKey = $('#cmyk-accuracy').value;
     const intent  = $('#intent-accuracy').value;
@@ -1533,8 +1616,8 @@ function makeLcmsWarmupRunner(dir, modeId, pixelCount) {
     const fIn  = is16 ? state.lcmsConsts[wf.fIn16]  : state.lcmsConsts[wf.fIn];
     const fOut = is16 ? state.lcmsConsts[wf.fOut16] : state.lcmsConsts[wf.fOut];
     const input = is16
-        ? buildInputU16(wf.inCh, pixelCount)
-        : buildInput(wf.inCh, pixelCount);
+        ? buildInputU16(wf.inCh, pixelCount, currentContentKind())
+        : buildInput(wf.inCh, pixelCount, currentContentKind());
     return makeLcmsRunner(
         state.lcms, state.lcmsConsts,
         {
@@ -1550,6 +1633,7 @@ function makeLcmsWarmupRunner(dir, modeId, pixelCount) {
 
 async function runWarmupCurve() {
     await init();
+    await browserFocus();
     const dirId      = $('#dir-warmup').value;
     const modeId     = $('#mode-warmup').value;
     const pixelCount = parseInt($('#pixels-warmup').value, 10);
@@ -1655,6 +1739,7 @@ function drawWarmupChart(samples, pixelCount, modeId) {
     // Scatter points (small alpha so density is visible)
     const colorByMode = {
         'no-lut':              '#94a3b8',
+        'matrix-shaper':       '#e879f9',
         'float':               '#c084fc',
         'int':                 '#38bdf8',
         'int16':               '#22d3ee',
@@ -1718,6 +1803,7 @@ function drawWarmupChart(samples, pixelCount, modeId) {
 
 async function runPixelSweep() {
     await init();
+    await browserFocus();
     const dirId      = $('#dir-sweep').value;
     const modeId     = $('#mode-sweep').value;
     const hotPerBatch = parseInt($('#hot-sweep').value, 10);
@@ -1796,11 +1882,830 @@ async function runPixelSweep() {
     $('#run-sweep').disabled = false;
 }
 
+// ============================================================ POOL DEMO
+
+// Resolved from this module so the samples tree can sit anywhere on a site.
+// `npm run browser` copies the worker into samples/browser/.
+const WORKER_URL = new URL('../browser/jsColorEngineWorker.js', import.meta.url).href;
+const POOL_PHOTOS = [
+    {
+        id: 'illustration',
+        label: 'Illustration (small)',
+        url: new URL('./images/illustration.jpg', import.meta.url).href,
+        w: 512, h: 384,
+    },
+    {
+        id: 'strawberries',
+        label: 'Strawberries (medium)',
+        url: new URL('./images/strawberries.jpg', import.meta.url).href,
+        w: 1000, h: 1000,
+    },
+    {
+        id: 'beach',
+        label: 'Beach (large)',
+        url: new URL('./images/beach.jpg', import.meta.url).href,
+        w: 1920, h: 1280,
+    },
+];
+
+let poolPhotos = null;
+
+async function loadPoolPhoto(spec) {
+    const img = new Image();
+    img.decoding = 'async';
+    await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('failed to load ' + spec.url));
+        img.src = spec.url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = spec.w;
+    canvas.height = spec.h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, spec.w, spec.h);
+    const rgba = ctx.getImageData(0, 0, spec.w, spec.h).data;
+    const npx = spec.w * spec.h;
+    const rgb = new Uint8ClampedArray(npx * 3);
+    for (let p = 0, i = 0; p < npx; p++, i += 4) {
+        rgb[p * 3] = rgba[i];
+        rgb[p * 3 + 1] = rgba[i + 1];
+        rgb[p * 3 + 2] = rgba[i + 2];
+    }
+    return { spec, canvas, rgb, npx };
+}
+
+function drawRgbThumb(rgb, w, h) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+        img.data[i]     = rgb[p * 3];
+        img.data[i + 1] = rgb[p * 3 + 1];
+        img.data[i + 2] = rgb[p * 3 + 2];
+        img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+}
+
+function poolStat(label, value, sub, extraClass) {
+    const el = document.createElement('div');
+    el.className = 'pool-stat' + (extraClass ? ' ' + extraClass : '');
+    el.innerHTML = '<span class="lbl"></span><span class="val"></span>' +
+        (sub ? '<span class="sub"></span>' : '');
+    el.querySelector('.lbl').textContent = label;
+    el.querySelector('.val').textContent = value;
+    if (sub) el.querySelector('.sub').textContent = sub;
+    return el;
+}
+
+function appendPoolLog(line) {
+    const log = $('#pool-log');
+    log.hidden = false;
+    log.textContent += (log.textContent ? '\n' : '') + line;
+}
+
+function showPoolError(msg) {
+    const box = $('#pool-error');
+    if (!box) return;
+    box.hidden = false;
+    box.replaceChildren();
+    const strong = document.createElement('strong');
+    strong.textContent = 'Can’t run this combo. ';
+    box.appendChild(strong);
+    box.appendChild(document.createTextNode(msg));
+}
+
+function hidePoolError() {
+    const box = $('#pool-error');
+    if (!box) return;
+    box.hidden = true;
+    box.textContent = '';
+}
+
+function poolComboOk() {
+    const dir = $('#dir-pool') && $('#dir-pool').value;
+    const modeId = $('#mode-pool') && $('#mode-pool').value;
+    if (modeId === 'matrix-shaper' && dir !== 'rgb-rgb') {
+        showPoolError('matrix-shaper is RGB→RGB only. Switch direction to RGB → RGB, or pick another mode.');
+        return false;
+    }
+    hidePoolError();
+    return true;
+}
+
+async function runPoolDemo() {
+    if (!poolComboOk()) {
+        setProgress('pool', 0, 'idle');
+        return;
+    }
+    await init();
+    await browserFocus();
+    const jsce = state.jsce;
+    const Transform = jsce.Transform;
+    $('#run-pool').disabled = true;
+    hidePoolError();
+    $('#pool-log').hidden = true;
+    $('#pool-log').textContent = '';
+    $('#pool-summary').replaceChildren();
+    $('#results-pool tbody').replaceChildren();
+    setProgress('pool', 0.05, 'Loading photographs…', 'busy');
+    await yieldUi();
+
+    try {
+        if (!poolPhotos) {
+            poolPhotos = await Promise.all(POOL_PHOTOS.map(loadPoolPhoto));
+        }
+
+        const thumbs = $('#pool-thumbs');
+        thumbs.replaceChildren();
+        for (const photo of poolPhotos) {
+            const card = document.createElement('div');
+            card.className = 'pool-thumb';
+            card.appendChild(photo.canvas);
+            const cap = document.createElement('div');
+            cap.className = 'cap';
+            cap.innerHTML = '<strong></strong><br>';
+            cap.querySelector('strong').textContent = photo.spec.label;
+            cap.appendChild(document.createTextNode(
+                photo.spec.w + '\u00d7' + photo.spec.h + '  ·  ' +
+                (photo.npx / 1e6).toFixed(2) + ' MP'));
+            card.appendChild(cap);
+            thumbs.appendChild(card);
+        }
+
+        const dir = $('#dir-pool').value;
+        const modeId = $('#mode-pool').value;
+        const dst = dir === 'rgb-rgb' ? '*adobergb' : state.jsGracol;
+        const opts = (modeId === 'matrix-shaper')
+            ? { dataFormat: 'int8', buildLut: false, wasmMatrixShaper: 'auto' }
+            : { dataFormat: 'int8', buildLut: true, lutMode: modeId };
+        opts.pixelCache = currentPixelCacheHint();
+
+        setProgress('pool', 0.2, 'Starting worker pool…', 'busy');
+        await yieldUi();
+        const tSpawn = nowMs();
+        const info = await Transform.enablePool({
+            workerUrl: WORKER_URL,
+            idleTimeoutMs: 0,
+        });
+        const spawnMs = nowMs() - tSpawn;
+        const poolEl = $('#info-pool');
+        poolEl.textContent = info.workers + ' × ' + info.host +
+            (info.alreadyEnabled ? ' (already up)' : '');
+        poolEl.classList.add('is-ok');
+        appendPoolLog('enablePool: ' + info.workers + ' workers, host=' +
+            info.host + ', ' + spawnMs.toFixed(1) + ' ms' +
+            (info.alreadyEnabled ? ' (already enabled)' : ''));
+
+        setProgress('pool', 0.35, 'Building transform…', 'busy');
+        await yieldUi();
+        const xform = new Transform(opts);
+        xform.create('*srgb', dst, jsce.eIntent.relative);
+        const k = xform.kernelInfo && xform.kernelInfo();
+        appendPoolLog('kernel: ' + (k ? (k.name + (k.variant ? '/' + k.variant : '')) : modeId));
+
+        let preview = null;
+        if (dir === 'rgb-cmyk') {
+            preview = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int' });
+            preview.create(state.jsGracol, '*srgb', jsce.eIntent.relative);
+        }
+
+        // 1,2,3,1,2,3… × 5. Same three buffers, unique ids. A 15-image
+        // queue is long enough that wall time shows the cores overlapping
+        // instead of three images racing to idle.
+        const REPEATS = 5;
+        const images = [];
+        for (let r = 0; r < REPEATS; r++) {
+            for (let p = 0; p < poolPhotos.length; p++) {
+                const photo = poolPhotos[p];
+                images.push({
+                    id: photo.spec.id + '-' + (r + 1),
+                    kind: p,
+                    data: photo.rgb,
+                    pixelCount: photo.npx,
+                    width: photo.spec.w,
+                    height: photo.spec.h,
+                    label: photo.spec.label,
+                });
+            }
+        }
+        const totalPx = images.reduce((a, im) => a + im.pixelCount, 0);
+
+        setProgress('pool', 0.5, 'Sequential baseline (15 images)…', 'busy');
+        await yieldUi();
+        const tSeq = nowMs();
+        const seq = await xform.transformImages(images, { multicore: false });
+        const seqMs = nowMs() - tSeq;
+
+        setProgress('pool', 0.65, 'Pool — first batch (LUT ship + compile)…', 'busy');
+        await yieldUi();
+        // Finish-order only during the timed window — no DOM. Logging
+        // here used to recopy #pool-log on every image and count against
+        // cold wall time.
+        const finishOrder = [];
+        const tCold = nowMs();
+        const cold = await xform.transformImages(images, {
+            multicore: true,
+            requireWorkers: true,
+            onImage: (_index, _data, imInfo) => {
+                finishOrder.push(imInfo.id);
+            },
+        });
+        const coldMs = nowMs() - tCold;
+        finishOrder.forEach((id, i) => {
+            const im = cold.imageInfo.find((info) => info && info.id === id);
+            appendPoolLog('onImage  #' + (i + 1) + '  ' + id +
+                '  wall ' + (im && im.ms != null ? im.ms : '—') + ' ms  compute ' +
+                (im && im.computeMs != null ? im.computeMs.toFixed(1) : '—') +
+                ' ms  fragments ' + (im && im.fragments != null ? im.fragments : '—'));
+        });
+
+        setProgress('pool', 0.85, 'Pool — hot 15-image queue…', 'busy');
+        await yieldUi();
+        const tHot = nowMs();
+        const hot = await xform.transformImages(images, {
+            multicore: true,
+            requireWorkers: true,
+        });
+        const hotMs = nowMs() - tHot;
+
+        const speedup = seqMs / hotMs;
+        const hotMpx = mpxPerSec(hotMs, totalPx);
+        const seqMpx = mpxPerSec(seqMs, totalPx);
+        const summary = $('#pool-summary');
+        summary.replaceChildren(
+            poolStat('Speedup', speedup.toFixed(2) + '×',
+                fmtMpx(hotMpx) + ' MPx/s total  ·  15-image queue', 'is-hero'),
+            poolStat('Total MPx/s', fmtMpx(hotMpx),
+                fmtMpx(seqMpx) + ' sequential'),
+            poolStat('Workers', String(hot.workersUsed), info.host),
+            poolStat('Fragments', String(hot.tasks),
+                REPEATS + ' × 3 images'),
+            poolStat('Sequential', fmtMs(seqMs) + ' ms',
+                fmtMpx(seqMpx) + ' MPx/s'),
+            poolStat('Pool cold', fmtMs(coldMs) + ' ms',
+                'first ship + compile'),
+            poolStat('Pool hot', fmtMs(hotMs) + ' ms',
+                fmtMpx(hotMpx) + ' MPx/s total'),
+        );
+
+        if (typeof Transform.poolMemory === 'function') {
+            appendPoolLog(Transform.poolMemory());
+        }
+        if (typeof Transform.workerStats === 'function') {
+            const stats = Transform.workerStats();
+            for (const pool of stats) {
+                (pool.perWorker || []).forEach((w, i) => {
+                    appendPoolLog('worker ' + i + ': ' +
+                        (w.tasks || 0) + ' fragments, ' +
+                        ((w.pixels || 0) / 1e6).toFixed(2) + ' MP, ' +
+                        (w.mpxs != null ? w.mpxs.toFixed(1) + ' MPx/s' : '—'));
+                });
+                if (pool.spread != null) {
+                    appendPoolLog('worker spread: ' + Number(pool.spread).toFixed(2));
+                }
+            }
+        }
+
+        const tbody = $('#results-pool tbody');
+        tbody.replaceChildren();
+        const byKind = poolPhotos.map((_, kind) =>
+            hot.imageInfo.filter((_, i) => images[i].kind === kind));
+        byKind.forEach((infos, kind) => {
+            const photo = poolPhotos[kind];
+            const avgCompute = infos.reduce((a, im) => a + (im.computeMs || 0), 0) / infos.length;
+            const avgWall = infos.reduce((a, im) => a + (im.ms || 0), 0) / infos.length;
+            const fragments = infos[0] && infos[0].fragments != null ? infos[0].fragments : '—';
+            const mpx = avgCompute > 0 ? mpxPerSec(avgCompute, photo.npx) : 0;
+            const ranks = infos.map((im) => finishOrder.indexOf(im.id))
+                .filter((n) => n >= 0)
+                .map((n) => n + 1);
+            const avgRank = ranks.length
+                ? (ranks.reduce((a, n) => a + n, 0) / ranks.length)
+                : 0;
+            const tr = document.createElement('tr');
+            const cells = [
+                photo.spec.label + '  ×' + infos.length,
+                photo.spec.w + '\u00d7' + photo.spec.h,
+                (photo.npx / 1e6).toFixed(2) + ' M',
+                String(fragments),
+                fmtMs(avgWall),
+                fmtMs(avgCompute),
+                fmtMpx(mpx),
+                avgRank ? '#' + avgRank.toFixed(1) + ' avg' : '—',
+            ];
+            cells.forEach((text, c) => {
+                const td = document.createElement('td');
+                if (c > 0) td.className = 'num';
+                td.textContent = text;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+
+        const lastOfKind = (kind) => {
+            for (let i = images.length - 1; i >= 0; i--) {
+                if (images[i].kind === kind) return hot.images[i];
+            }
+            return null;
+        };
+
+        if (preview) {
+            setProgress('pool', 0.95, 'Previewing CMYK→sRGB…', 'busy');
+            await yieldUi();
+            thumbs.replaceChildren();
+            for (let i = 0; i < poolPhotos.length; i++) {
+                const photo = poolPhotos[i];
+                const out = lastOfKind(i);
+                const rgbOut = preview.array(out, false, false, false, photo.npx);
+                const card = document.createElement('div');
+                card.className = 'pool-thumb';
+                card.appendChild(drawRgbThumb(rgbOut, photo.spec.w, photo.spec.h));
+                const cap = document.createElement('div');
+                cap.className = 'cap';
+                cap.innerHTML = '<strong></strong><br>';
+                cap.querySelector('strong').textContent = photo.spec.label + ' — GRACoL preview';
+                cap.appendChild(document.createTextNode(
+                    String(byKind[i][0] && byKind[i][0].fragments != null
+                        ? byKind[i][0].fragments : '?') +
+                    ' fragments · avg of ' + REPEATS));
+                card.appendChild(cap);
+                thumbs.appendChild(card);
+            }
+        } else {
+            thumbs.replaceChildren();
+            for (let i = 0; i < poolPhotos.length; i++) {
+                const photo = poolPhotos[i];
+                const card = document.createElement('div');
+                card.className = 'pool-thumb';
+                card.appendChild(drawRgbThumb(lastOfKind(i), photo.spec.w, photo.spec.h));
+                const cap = document.createElement('div');
+                cap.className = 'cap';
+                cap.innerHTML = '<strong></strong><br>';
+                cap.querySelector('strong').textContent = photo.spec.label + ' — AdobeRGB';
+                cap.appendChild(document.createTextNode(
+                    String(byKind[i][0] && byKind[i][0].fragments != null
+                        ? byKind[i][0].fragments : '?') +
+                    ' fragments · avg of ' + REPEATS));
+                card.appendChild(cap);
+                thumbs.appendChild(card);
+            }
+        }
+
+        setProgress('pool', 1, 'Done. ' + hot.workersUsed + ' workers, ' +
+            hot.tasks + ' fragments, ' + fmtMpx(hotMpx) + ' MPx/s total, ' +
+            speedup.toFixed(2) + '× vs sequential.', 'done');
+    } catch (err) {
+        console.error(err);
+        const msg = String(err && err.message || err);
+        showPoolError(msg);
+        setProgress('pool', 1, msg, 'error');
+        appendPoolLog(String(err && err.stack || err));
+        const poolEl = $('#info-pool');
+        if (poolEl && !poolEl.classList.contains('is-ok')) {
+            poolEl.textContent = 'failed — sequential fallback';
+            poolEl.classList.add('is-warn');
+        }
+    } finally {
+        $('#run-pool').disabled = false;
+    }
+}
+
+function imFragments(res, i) {
+    const info = res.imageInfo && res.imageInfo[i];
+    return (info && info.fragments != null) ? info.fragments : '?';
+}
+
+// ============================================================ NOISE KNEE
+
+const KNEE_PCTS = [0, 1, 2, 3, 5, 10, 15, 25, 50, 100];
+const KNEE_BASES = ['solid', 'photo'];
+
+const KNEE_SERIES = [
+    { id: 'jsce-solid',    engine: 'jsce',    base: 'solid', label: 'jsCE · solid',     color: '#4ade80', dash: [] },
+    { id: 'jsce-photo',    engine: 'jsce',    base: 'photo', label: 'jsCE · photo',     color: '#a3e635', dash: [6, 4] },
+    { id: 'lcms-solid',    engine: 'lcms',    base: 'solid', label: 'lcms · solid',     color: '#fb7185', dash: [] },
+    { id: 'lcms-photo',    engine: 'lcms',    base: 'photo', label: 'lcms · photo',     color: '#f472b6', dash: [6, 4] },
+    { id: 'nocache-solid', engine: 'nocache', base: 'solid', label: 'NOCACHE · solid',  color: '#fbbf24', dash: [] },
+    { id: 'nocache-photo', engine: 'nocache', base: 'photo', label: 'NOCACHE · photo',  color: '#f59e0b', dash: [6, 4] },
+];
+
+const KNEE_NOISE = [
+    { id: 'jsce-noise',    engine: 'jsce',    label: 'jsCE · noise',    color: '#86efac' },
+    { id: 'lcms-noise',    engine: 'lcms',    label: 'lcms · noise',    color: '#fda4af' },
+    { id: 'nocache-noise', engine: 'nocache', label: 'NOCACHE · noise', color: '#fcd34d' },
+];
+
+function kneeDirection(id) {
+    if (id === 'rgb-lab') {
+        return {
+            id: 'rgb-lab',
+            shortLabel: 'RGB → Lab',
+            js:   { src: '*srgb', dst: '*Lab', inCh: 3, outCh: 3 },
+            lcms: {
+                pIn: 'srgb', fIn: 'TYPE_RGB_8',  fIn16: 'TYPE_RGB_16',
+                pOut: 'lab', fOut: 'TYPE_Lab_8', fOut16: 'TYPE_Lab_16',
+                inCh: 3, outCh: 3,
+            },
+        };
+    }
+    const dirs = directionConfigs(state.jsGracol, state.jsIsoCoated);
+    return dirs.find((d) => d.id === id) || dirs[1];
+}
+
+function contentKindFor(base, pct) {
+    if (base === 'noise' || pct >= 100) return 'noise';
+    if (pct <= 0) return base;
+    return base + '-' + pct;
+}
+
+function kneeX01(pct) {
+    // 0–10 % (the knee) occupies 55 % of the plot; 10–100 % the rest.
+    if (pct <= 10) return (pct / 10) * 0.55;
+    return 0.55 + ((pct - 10) / 90) * 0.45;
+}
+
+function renderKneePreviews() {
+    const host = $('#knee-previews');
+    if (!host) return;
+    host.innerHTML = '';
+    const side = 128;
+    for (const pct of [0, 1, 3, 15, 100]) {
+        const wrap = document.createElement('div');
+        wrap.className = 'knee-preview';
+        const canvas = document.createElement('canvas');
+        canvas.width = side;
+        canvas.height = side;
+        paintKneePreview(canvas, pct);
+        const cap = document.createElement('div');
+        cap.className = 'cap';
+        cap.textContent = pct === 0 ? 'photo 0%'
+            : (pct === 100 ? 'noise 100%' : 'photo with ' + pct + '% noise');
+        wrap.appendChild(canvas);
+        wrap.appendChild(cap);
+        host.appendChild(wrap);
+    }
+}
+
+async function timeKneeCell(run, warmup, batches, perBatch) {
+    await browserFocus();
+    for (let i = 0; i < warmup; i++) run();
+    await yieldUi();
+    const samples = [];
+    while (samples.length < batches) {
+        await browserFocus();
+        const t0 = nowMs();
+        for (let i = 0; i < perBatch; i++) run();
+        if (browserFocus.lost) {
+            await browserFocus();
+            continue;
+        }
+        samples.push((nowMs() - t0) / perBatch);
+        await yieldUi();
+    }
+    return median(samples);
+}
+
+function drawKneeChart(seriesMap, noiseMap) {
+    const canvas = $('#chart-knee');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cssW = canvas.clientWidth || 900;
+    const cssH = 380;
+    const dpr  = window.devicePixelRatio || 1;
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas.style.height = cssH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const W = cssW, H = cssH;
+    ctx.clearRect(0, 0, W, H);
+    const padL = 62, padR = 16, padT = 16, padB = 40;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    const ys = [];
+    for (const s of KNEE_SERIES) {
+        for (const p of (seriesMap[s.id] || [])) {
+            if (isFinite(p.mpxs)) ys.push(p.mpxs);
+        }
+    }
+    for (const n of KNEE_NOISE) {
+        if (isFinite(noiseMap[n.id])) ys.push(noiseMap[n.id]);
+    }
+    const yMax = Math.max(10, (ys.length ? Math.max.apply(null, ys) : 100) * 1.12);
+
+    ctx.fillStyle = '#0f1419';
+    ctx.fillRect(padL, padT, plotW, plotH);
+    ctx.strokeStyle = '#2a323d';
+    ctx.lineWidth = 1;
+    ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
+    ctx.fillStyle = '#8b95a4';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i++) {
+        const v = (yMax * i) / yTicks;
+        const y = padT + plotH - (i / yTicks) * plotH;
+        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+        ctx.fillText(v.toFixed(0) + ' MPx/s', padL - 6, y);
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const pct of KNEE_PCTS) {
+        const x = padL + kneeX01(pct) * plotW;
+        ctx.strokeStyle = '#2a323d';
+        ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+        ctx.fillStyle = '#8b95a4';
+        ctx.fillText(String(pct) + '%', x, padT + plotH + 8);
+    }
+
+    const kneeX = padL + kneeX01(3) * plotW;
+    ctx.save();
+    ctx.strokeStyle = '#e6edf3';
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(kneeX, padT); ctx.lineTo(kneeX, padT + plotH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#e6edf3';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('knee', kneeX + 4, padT + 6);
+    ctx.restore();
+
+    function xy(pct, mpxs) {
+        return {
+            x: padL + kneeX01(pct) * plotW,
+            y: padT + plotH - (mpxs / yMax) * plotH,
+        };
+    }
+
+    for (const n of KNEE_NOISE) {
+        const v = noiseMap[n.id];
+        if (!isFinite(v)) continue;
+        const y = xy(0, v).y;
+        ctx.save();
+        ctx.strokeStyle = n.color;
+        ctx.globalAlpha = 0.55;
+        ctx.setLineDash([2, 5]);
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(padL + plotW, y);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    for (const s of KNEE_SERIES) {
+        const pts = (seriesMap[s.id] || []).filter((p) => isFinite(p.mpxs));
+        if (!pts.length) continue;
+        ctx.save();
+        ctx.strokeStyle = s.color;
+        ctx.fillStyle = s.color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash(s.dash);
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+            const pt = xy(p.pct, p.mpxs);
+            if (i === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+        for (const p of pts) {
+            const pt = xy(p.pct, p.mpxs);
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    const legend = $('#legend-knee');
+    if (legend) {
+        legend.innerHTML = '';
+        const addItem = (label, color, kind) => {
+            const item = document.createElement('div');
+            item.className = 'legend-item';
+            const sw = document.createElement('span');
+            sw.className = 'legend-swatch' + (kind === 'dash' ? ' is-dash' : kind === 'dot' ? ' is-dot' : '');
+            sw.style.color = color;
+            if (kind === 'solid') sw.style.background = color;
+            const lab = document.createElement('span');
+            lab.textContent = label;
+            item.appendChild(sw);
+            item.appendChild(lab);
+            legend.appendChild(item);
+        };
+        for (const s of KNEE_SERIES) {
+            addItem(s.label, s.color, s.dash.length ? 'dash' : 'solid');
+        }
+        for (const n of KNEE_NOISE) {
+            if (!isFinite(noiseMap[n.id])) continue;
+            addItem(n.label + ' (' + fmtMpx(noiseMap[n.id]) + ')', n.color, 'dot');
+        }
+    }
+}
+
+function renderKneeTable(seriesMap) {
+    const tbody = $('#results-knee tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    const by = {};
+    for (const s of KNEE_SERIES) {
+        by[s.id] = {};
+        for (const p of (seriesMap[s.id] || [])) by[s.id][p.pct] = p.mpxs;
+    }
+    for (const pct of KNEE_PCTS) {
+        const tr = document.createElement('tr');
+        if (pct === 3) tr.style.fontWeight = '600';
+        const cells = [
+            pct === 3 ? String(pct) + '%  ← knee' : String(pct) + '%',
+            by['jsce-solid'][pct],
+            by['jsce-photo'][pct],
+            by['lcms-solid'][pct],
+            by['lcms-photo'][pct],
+            by['nocache-solid'][pct],
+            by['nocache-photo'][pct],
+        ];
+        tr.innerHTML =
+            '<td>' + cells[0] + '</td>' +
+            cells.slice(1).map((v) =>
+                '<td class="num">' + (isFinite(v) ? fmtMpx(v) : '…') + '</td>'
+            ).join('');
+        tbody.appendChild(tr);
+    }
+}
+
+function pctDrop(a, b) {
+    if (!isFinite(a) || !isFinite(b) || a === 0) return null;
+    return ((b - a) / a) * 100;
+}
+
+function renderKneeInsights(seriesMap, noiseMap) {
+    const host = $('#knee-insights');
+    if (!host) return;
+    const val = (id, pct) => {
+        const hit = (seriesMap[id] || []).find((p) => p.pct === pct);
+        return hit ? hit.mpxs : NaN;
+    };
+    const jsce1   = pctDrop(val('jsce-photo', 0), val('jsce-photo', 1));
+    const cliff   = pctDrop(val('lcms-solid', 0), val('lcms-solid', 1));
+    function spreadOf(ids, pct) {
+        const vs = ids.map((id) => val(id, pct)).filter(isFinite);
+        if (vs.length < 2) return null;
+        return ((Math.max.apply(null, vs) - Math.min.apply(null, vs)) /
+            Math.max.apply(null, vs)) * 100;
+    }
+    const jsceSpread = spreadOf(['jsce-solid', 'jsce-photo'], 3);
+
+    host.hidden = false;
+    host.innerHTML = '';
+    function card(label, value, sub) {
+        const el = document.createElement('div');
+        el.className = 'pool-stat';
+        el.innerHTML = '<span class="lbl"></span><span class="val"></span><span class="sub"></span>';
+        el.querySelector('.lbl').textContent = label;
+        el.querySelector('.val').textContent = value;
+        el.querySelector('.sub').textContent = sub || '';
+        host.appendChild(el);
+    }
+    const solid0 = val('jsce-solid', 0);
+    const photo0 = val('jsce-photo', 0);
+    if (isFinite(solid0) && isFinite(photo0) && photo0 > 0) {
+        card('same colour vs a photo',
+            (solid0 / photo0).toFixed(1) + '×',
+            'on this PC — one colour stays in L1; a photo already wanders');
+    }
+    if (jsce1 != null) {
+        card('1% grain, this PC',
+            (jsce1 >= 0 ? '+' : '') + jsce1.toFixed(0) + '%',
+            'a pinch of random colour and L1 is already missing');
+    }
+    if (jsceSpread != null) {
+        card('past 3% on this PC',
+            jsceSpread.toFixed(0) + '% spread',
+            'solid and photo have already met — this machine is on the plateau');
+    }
+    const noiseJs = noiseMap['jsce-noise'];
+    if (isFinite(noiseJs)) {
+        card('pure noise, this PC',
+            fmtMpx(noiseJs) + ' MPx/s',
+            'worst case — almost every pixel wants a new corner of the table');
+    }
+    if (cliff != null) {
+        card('lcms solid at 1%',
+            (cliff >= 0 ? '+' : '') + cliff.toFixed(0) + '%',
+            'its 1-pixel memo only helps when neighbours match');
+    }
+}
+
+async function runKneeDemo() {
+    await init();
+    await browserFocus();
+    const pixelCount = parseInt($('#pixels-knee').value, 10);
+    const dir = kneeDirection($('#dir-knee').value);
+    const jsceMode = state.simdSupported ? 'int-wasm-simd' : 'int';
+    const inclLcms = state.lcmsAvailable;
+
+    const seriesMap = {};
+    for (const s of KNEE_SERIES) seriesMap[s.id] = [];
+    const noiseMap = {};
+
+    $('#run-knee').disabled = true;
+    $('#knee-insights').hidden = true;
+    renderKneePreviews();
+    renderKneeTable(seriesMap);
+    drawKneeChart(seriesMap, noiseMap);
+
+    const sharedWasmCache = {};
+    const runners = {};
+
+    try {
+        setProgress('knee', 0.02, 'Building transforms…', 'busy');
+        await yieldUi();
+        runners.jsce = makeJsceRunner(dir, jsceMode, pixelCount, sharedWasmCache, 'solid');
+        if (inclLcms) {
+            const wf = dir.lcms;
+            const lcmsWf = {
+                pIn:  state.lcmsProfiles[wf.pIn],
+                fIn:  state.lcmsConsts[wf.fIn],
+                pOut: state.lcmsProfiles[wf.pOut],
+                fOut: state.lcmsConsts[wf.fOut],
+                inCh: wf.inCh, outCh: wf.outCh,
+            };
+            const seed = buildInput(wf.inCh, pixelCount, 'solid');
+            runners.lcms = makeLcmsRunner(
+                state.lcms, state.lcmsConsts, lcmsWf, 0, seed, pixelCount);
+            runners.nocache = makeLcmsRunner(
+                state.lcms, state.lcmsConsts, lcmsWf,
+                state.lcmsConsts.cmsFLAGS_NOCACHE, seed, pixelCount);
+        }
+
+        const engines = inclLcms ? ['jsce', 'lcms', 'nocache'] : ['jsce'];
+        const cells = [];
+        for (const pct of KNEE_PCTS) {
+            for (const base of KNEE_BASES) {
+                for (const engine of engines) {
+                    cells.push({ base: base, pct: pct, engine: engine });
+                }
+            }
+        }
+        for (const engine of engines) {
+            cells.push({ base: 'noise', pct: 100, engine: engine });
+        }
+
+        const warmed = {};
+        let done = 0;
+        for (const cell of cells) {
+            const kind = contentKindFor(cell.base, cell.pct);
+            const runner = runners[cell.engine];
+            runner.setInput(buildInput(dir.js.inCh, pixelCount, kind));
+            const warmup = warmed[cell.engine] ? 16 : 80;
+            warmed[cell.engine] = true;
+            setProgress('knee', done / cells.length,
+                cell.engine + ' · ' + kind +
+                '  (' + (done + 1) + '/' + cells.length + ')', 'busy');
+            await yieldUi();
+            const hotMs = await timeKneeCell(runner.run, warmup, 5, 6);
+            const mpxs = mpxPerSec(hotMs, pixelCount);
+            if (cell.base === 'noise') {
+                noiseMap[cell.engine + '-noise'] = mpxs;
+            } else {
+                seriesMap[cell.engine + '-' + cell.base].push({ pct: cell.pct, mpxs: mpxs });
+            }
+            done++;
+            renderKneeTable(seriesMap);
+            drawKneeChart(seriesMap, noiseMap);
+        }
+
+        renderKneeInsights(seriesMap, noiseMap);
+        setProgress('knee', 1,
+            'Done. jsCE ' + (runners.jsce.actualMode || jsceMode) +
+            ' · ' + dir.id +
+            ' · ' + (pixelCount / 1000).toFixed(0) + ' K px' +
+            (inclLcms ? '' : ' · lcms unavailable'),
+            'done');
+    } catch (err) {
+        console.error(err);
+        setProgress('knee', 1, String(err && err.message || err), 'error');
+    } finally {
+        for (const k of Object.keys(runners)) {
+            if (runners[k] && runners[k].free) runners[k].free();
+        }
+        $('#run-knee').disabled = false;
+    }
+}
+
 // ============================================================ TAB ROUTER
 
 function activateTab(testId) {
     $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.test === testId));
     $$('.test-panel').forEach((p) => { p.hidden = p.id !== ('panel-' + testId); });
+    if (testId === 'knee') renderKneePreviews();
 }
 
 // ============================================================ BOOT
@@ -1814,6 +2719,8 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => activateTab(btn.dataset.test));
     });
 
+    installBrowserFocus();
+
     // Run buttons
     $('#run-full').addEventListener('click',     () => runFullComparison().catch(console.error));
     $('#copy-full').addEventListener('click',    () => copyFullMarkdown());
@@ -1821,6 +2728,13 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#copy-accuracy').addEventListener('click',() => copyAccuracyMarkdown());
     $('#run-warmup').addEventListener('click',   () => runWarmupCurve().catch(console.error));
     $('#run-sweep').addEventListener('click',    () => runPixelSweep().catch(console.error));
+    $('#run-pool').addEventListener('click',     () => runPoolDemo().catch(console.error));
+    const dirPool = $('#dir-pool');
+    const modePool = $('#mode-pool');
+    if (dirPool) dirPool.addEventListener('change', poolComboOk);
+    if (modePool) modePool.addEventListener('change', poolComboOk);
+    poolComboOk();
+    $('#run-knee').addEventListener('click',     () => runKneeDemo().catch(console.error));
 
     // Pre-init so the engine info panel populates immediately on page load
     init().catch(console.error);

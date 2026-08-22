@@ -168,10 +168,9 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
         expect(t.wasmTetra3DSimd.memory).toBeInstanceOf(WebAssembly.Memory);
         expect(t.wasmTetra3DSimd.isSimd).toBe(true);
 
-        // Scalar fallthrough state is also loaded (for future cMax=5+ cases).
-        // On a V8 build that supports SIMD, scalar compile also succeeds.
-        expect(t.wasmTetra3D).not.toBeNull();
-        expect(t.wasmTetra3D.isSimd).toBe(false);
+        // Scalar fallthrough is on demand: SIMD covers cMax ∈ {3, 4}.
+        // RGB→RGB is 3, so the extra Instance is not created.
+        expect(t.wasmTetra3D).toBeNull();
 
         expect(t.lut.intLut).toBeTruthy();
         expect(t.wasmTetra3DSimd.dispatchCount).toBe(0);
@@ -195,6 +194,7 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -229,6 +229,7 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -257,16 +258,15 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
 
         expect(simdT.lutMode).toBe('int-wasm-simd');
         const beforeSimd = simdT.wasmTetra3DSimd.dispatchCount;
-        const beforeScalar = simdT.wasmTetra3D.dispatchCount;
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
-        // Neither the SIMD counter nor the scalar fallthrough counter
-        // advances — below threshold we skip BOTH WASM kernels and go
-        // directly to 'int' JS.
+        // Below threshold we skip WASM and go to JS. Scalar was never loaded
+        // for this narrow RGB pair.
         expect(simdT.wasmTetra3DSimd.dispatchCount).toBe(beforeSimd);
-        expect(simdT.wasmTetra3D.dispatchCount).toBe(beforeScalar);
+        expect(simdT.wasmTetra3D).toBeNull();
         expect(maxAbsDiff(oInt, oSimd).max).toBe(0);
     });
 
@@ -393,12 +393,12 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD dispatcher', () => {
         const t2 = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd', wasmCache: cache});
         t2.create('*srgb', '*adobergb', eIntent.relative);
 
-        // Both SIMD and scalar modules get cached when lutMode=int-wasm-simd
-        // (the scalar one is loaded for future cMax ∉ {3,4} fallthrough).
+        // SIMD Module is cached. Scalar fallthrough is on demand
+        // (cMax ∉ {3,4}); RGB→RGB never instantiates it.
         const simdCacheKey   = '__jsColorEngine_tetra3d_simd_module__';
         const scalarCacheKey = '__jsColorEngine_tetra3d_nch_module__';
         expect(cache[simdCacheKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[scalarCacheKey]).toBeInstanceOf(WebAssembly.Module);
+        expect(cache[scalarCacheKey]).toBeUndefined();
 
         const expect1 = assertSimdRouted(t1);
         const expect2 = assertSimdRouted(t2);

@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -18,6 +18,8 @@
 [Compiled pipeline](./CompiledPipeline.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 This page is the engineering notebook for the hand-written WebAssembly
 kernels that ship under [`src/wasm/`](../../src/wasm/). It covers what each
@@ -191,7 +193,7 @@ The `Tetra3DState` exposed by `wasm_loader.js` carries a `dispatchCount`
 expect(t.lutMode).toBe('int-wasm-scalar');     // no demotion at create()
 expect(t.wasmTetra3D).not.toBeNull();           // instance present
 const before = t.wasmTetra3D.dispatchCount;
-t.transformArray(input, ...);
+t.array(input, ...);
 expect(t.wasmTetra3D.dispatchCount - before).toBe(1);  // WASM actually ran
 ```
 
@@ -223,7 +225,7 @@ a no-op.
 ## WASM SIMD 3D — channel-parallel was the wrong axis, once
 
 The original 1D POC (preserved in the "Historical record" section of
-[Performance.md](../Performance.md)) predicted **no SIMD win** for 3D/4D
+[Performance.md](./Performance.md)) predicted **no SIMD win** for 3D/4D
 LUT kernels because it vectorised *across pixels* and each lane needed
 its own LUT gather — the lane juggling exceeded the parallelism win
 (0.89×, POC finding #2). The resulting plan kept SIMD for matrix-shaper
@@ -313,7 +315,7 @@ kernel (`src/wasm/tetra3d_nch.wat`), 1 Mi pixels × 500 iters, Node
 
 ### What this means relative to native C / lcms2
 
-The [Performance page](../Performance.md) estimates native vanilla lcms2
+The [Performance page](./Performance.md) estimates native vanilla lcms2
 at 33-100 MPx/s on this kind of workflow (wasm × 1.5-2.5). Measured WASM
 SIMD at 210-215 MPx/s puts 3D jsColorEngine **past** the native vanilla
 band on the fast directions, and **into** the lcms2 `fast-float`
@@ -772,5 +774,5 @@ amortised cost is effectively zero.
   kernels implement
 - [JIT inspection](./JitInspection.md) — the op-count and spill analyses
   that predicted the 1.4× scalar gain before we wrote a line of `.wat`
-- [Performance](../Performance.md) — measured throughput in context, plus
+- [Performance](./Performance.md) — measured throughput in context, plus
   the lcms comparison

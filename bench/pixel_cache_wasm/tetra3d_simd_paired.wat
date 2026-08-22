@@ -120,11 +120,13 @@
     (local $vU16         v128)
     (local $vU8          v128)
     (local $vOut         v128)
+    ;;Inject:localsAfter
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     (local.set $outputStride (local.get $cMax))
+    ;;Inject:initAfter
 
     ;; --- Per-pixel loop -------------------------------------------------------
     (block $pixel_exit
@@ -137,6 +139,7 @@
         (local.set $input1 (i32.load8_u offset=1   (local.get $inputPos)))
         (local.set $input2 (i32.load8_u offset=2   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 3)))
+        ;;Inject:probeAfter
 
         (local.set $px (i32.mul (local.get $input0) (local.get $gps)))
         (local.set $py (i32.mul (local.get $input1) (local.get $gps)))
@@ -477,6 +480,7 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
+        ;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_nch.wat) --------------------
         ;; Outer guard collapses the no-alpha hot path (inAlphaSkip==0,
         ;; outAlphaMode==0) to a single i32.or test per pixel — V8's
@@ -529,13 +533,6 @@
     (local $outputPos    i32)
     (local $outputStride i32)   ;; 3 or 4 bytes per pixel
 
-    ;; ---- SINGLE-ENTRY PIXEL CACHE ---------------------------------------
-    ;; Two locals, no memory, no parameters. The signature is unchanged from
-    ;; the uncached export, so enabling this is swapping a function reference.
-    (local $ckey    i32)
-    (local $prevKey i32)
-    (local $prevOut v128)
-
     (local $input0       i32)
     (local $input1       i32)
     (local $input2       i32)
@@ -571,12 +568,17 @@
     (local $vU16         v128)
     (local $vU8          v128)
     (local $vOut         v128)
+    ;;Inject:localsAfter
+
+    (local $ckey    i32)
+    (local $prevKey i32)
+    (local $prevOut v128)
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     (local.set $outputStride (local.get $cMax))
-    ;; A packed RGB key is at most 0x00FFFFFF, so -1 can never collide.
+    ;;Inject:initAfter
     (local.set $prevKey (i32.const -1))
 
     ;; --- Per-pixel loop -------------------------------------------------------
@@ -590,10 +592,9 @@
         (local.set $input1 (i32.load8_u offset=1   (local.get $inputPos)))
         (local.set $input2 (i32.load8_u offset=2   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 3)))
+        ;;Inject:probeAfter
 
         ;; ---- CACHE PROBE -------------------------------------------------
-        ;; "Same bits in as last time?" — one compare. On a hit the previous
-        ;; output vector goes straight back out; its bytes are never examined.
         (local.set $ckey
           (i32.or (i32.or (i32.shl (local.get $input0) (i32.const 16))
                           (i32.shl (local.get $input1) (i32.const 8)))
@@ -946,11 +947,12 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
-        ;; ---- CACHE STORE -------------------------------------------------
+                ;; ---- CACHE STORE -------------------------------------------------
         (local.set $prevKey (local.get $ckey))
         (local.set $prevOut (local.get $vOut))
         )   ;; end $skip_work
 
+;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_nch.wat) --------------------
         ;; Outer guard collapses the no-alpha hot path (inAlphaSkip==0,
         ;; outAlphaMode==0) to a single i32.or test per pixel — V8's

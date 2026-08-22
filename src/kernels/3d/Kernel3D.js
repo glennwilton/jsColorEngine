@@ -16,6 +16,7 @@
 var kernelUtils = require('../kernelUtils.js');
 var table = require('./kernel3D_table.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
+var wasmLoader = require('../../wasm/wasm_loader.js');
 var interp = require('../../interp.js');
 var matrixShaper = require('./matrixShaper/matrixShaperKernel.js');
 var MatrixShaperKernel = require('./matrixShaper/KernelMatrixShaper.js');
@@ -95,16 +96,18 @@ module.exports = {
         // present, lutMode already demoted by create() to what this host can
         // run). The decision itself is the resolve() switch in
         // kernel3D_table.js next to this file.
-        var self = this;
         var keep = function(why){
-            kernelUtils.bindArrayRuns(self);
+            // Bind happens in create(), after this kernel's WASM is loaded.
+            // Yielding first is what stops a matrix-shaper pair compiling
+            // tetrahedral modules it will throw away.
             return { pipeline: pipeline, kernel: null,
                      meta: { name: 'kernel3D', dimensions: 3, claimed: false, why: why } };
         };
 
         if(opts.wasmMatrixShaper === 'off')  return keep('wasmMatrixShaper is off');
-        // A pixel cache makes the batch path memoised, which is a different
-        // execution model — see the cache discussion in Transform.transformArray.
+        // A forced table (1 / N) is a different execution model — keep the
+        // tetra path. 'auto' is not a decision; this kernel leaves it so
+        // Transform injects nothing. 4/5/6 promote auto to 1 from their init.
         if(opts.pixelCacheActive)            return keep('a pixel cache is active');
 
         var verdict;
@@ -196,23 +199,25 @@ module.exports = {
      * a wasmTetra4D* slot, so those compiles were pure cost.
      */
     wasmLadder: {
-        'int-wasm-simd':     { load: 'createTetra3DSimdState',      slot: 'wasmTetra3DSimd',
-                               alsoLoad: 'createTetra3DState',      alsoSlot: 'wasmTetra3D',
+        'int-wasm-simd':     { load: wasmLoader.createTetra3DSimdState,      slot: 'wasmTetra3DSimd',
+                               alsoLoad: wasmLoader.createTetra3DState,      alsoSlot: 'wasmTetra3D',
                                demoteTo: 'int-wasm-scalar' },
-        'int-wasm-scalar':   { load: 'createTetra3DState',          slot: 'wasmTetra3D',
+        'int-wasm-scalar':   { load: wasmLoader.createTetra3DState,          slot: 'wasmTetra3D',
                                demoteTo: 'int' },
-        'int16-wasm-simd':   { load: 'createTetra3DInt16SimdState', slot: 'wasmTetra3DInt16Simd',
-                               alsoLoad: 'createTetra3DInt16State', alsoSlot: 'wasmTetra3DInt16',
+        'int16-wasm-simd':   { load: wasmLoader.createTetra3DInt16SimdState, slot: 'wasmTetra3DInt16Simd',
+                               alsoLoad: wasmLoader.createTetra3DInt16State, alsoSlot: 'wasmTetra3DInt16',
                                demoteTo: 'int16-wasm-scalar' },
-        'int16-wasm-scalar': { load: 'createTetra3DInt16State',     slot: 'wasmTetra3DInt16',
+        'int16-wasm-scalar': { load: wasmLoader.createTetra3DInt16State,     slot: 'wasmTetra3DInt16',
                                demoteTo: 'int16' },
     },
 
     create: function(lutMode){
-        // Load the WASM kernels (3D + 4D families — see wasmLifecycle.js for
-        // why both) and demote lutMode if the host can't run the request.
+        // Load THIS kernel's modules, then bind the image path. init() has
+        // already decided we kept the transform (a yield never reaches here).
         this._variant = null;
-        return wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
+        var settled = wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
+        kernelUtils.bindArrayRuns(this);
+        return settled;
     },
 
     /**

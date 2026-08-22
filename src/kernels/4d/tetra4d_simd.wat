@@ -147,11 +147,13 @@
     (local $vU20_K0      v128)  ;; K0-plane u20 stashed across the K loop
     (local $vU8i         v128)  ;; i32x4 with each lane in [0..255]
     (local $vOut         v128)
+    ;;Inject:localsAfter
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     (local.set $outputStride (local.get $cMax))
+    ;;Inject:initAfter
 
     ;; --- Per-pixel loop -------------------------------------------------------
     (block $pixel_exit
@@ -166,6 +168,7 @@
         (local.set $input1 (i32.load8_u offset=2   (local.get $inputPos)))
         (local.set $input2 (i32.load8_u offset=3   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 4)))
+        ;;Inject:probeAfter
 
         (local.set $pk (i32.mul (local.get $inputK) (local.get $gps)))
         (local.set $px (i32.mul (local.get $input0) (local.get $gps)))
@@ -601,6 +604,7 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
+        ;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_simd.wat) --------------------
         ;; Outer i32.or guard collapses to a single test per pixel on
         ;; the no-alpha hot path. inputPos is sitting on the (optional)

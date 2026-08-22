@@ -35,7 +35,7 @@ const t = new LutBuilder()
     .setChain([virtualRGB('sRGB-like'), eIntent.perceptual, virtualRGB('sRGB-like')])
     .toTransform({ dataFormat: 'int8' });
 
-const out = t.transformArray(new Uint8ClampedArray([255, 0, 0]));
+const out = t.array(new Uint8ClampedArray([255, 0, 0]));
 // out → Uint8ClampedArray [ 255, 0, 0 ]
 ```
 
@@ -50,7 +50,7 @@ fs.writeFileSync('srgb-to-cmyk.json', JSON.stringify(producer));
 // Consumer (runtime, no profiles)
 const consumer = Transform.fromJSON(fs.readFileSync('srgb-to-cmyk.json'),
                                     { dataFormat: 'int8' });
-consumer.transformArray(rgbPixels);   // → CMYK output, full speed, no ICC code path
+consumer.array(rgbPixels);   // → CMYK output, full speed, no ICC code path
 ```
 
 ---
@@ -283,7 +283,7 @@ The signature costs ~1 ms for a 33-pt 3D LUT and ~1.5 ms for a 17-pt 4D LUT. The
 
 | Action | Effect on `originalSignature` |
 |---|---|
-| `Transform.create({ buildLut: true })` | **NOT stamped** — engine create stays fast; LUT is built and ready for `transformArray()` immediately |
+| `Transform.create({ buildLut: true })` | **NOT stamped** — engine create stays fast; LUT is built and ready for `array()` immediately |
 | `transform.toJSON()` | **lazy-stamps** — computes once at export, included in the JSON output |
 | `LutBuilder.fromTransform(t)` | **stamped at extraction** — explicit "I'm extracting this for editing/export" event |
 | `LutBuilder.createFromLCMS(...)` | **stamped** after the lcms fill loop |
@@ -292,7 +292,7 @@ The signature costs ~1 ms for a 33-pt 3D LUT and ~1.5 ms for a 17-pt 4D LUT. The
 | `.clone()` | copied to the clone |
 | `.toJSON()` / `.fromJSON()` | preserved through the JSON round-trip |
 
-The hot path (`new Transform({ buildLut: true }).create(...).transformArray(pixels)`) pays nothing for signatures. If the LUT never gets exported, no hash is ever computed.
+The hot path (`new Transform({ buildLut: true }).create(...).array(pixels)`) pays nothing for signatures. If the LUT never gets exported, no hash is ever computed.
 
 After 5 edits you'll see the same `originalSignature` plus 5 timestamped adjustment entries. Comparing the current data hash to `originalSignature` tells you whether the LUT was edited; `meta.adjustments[]` tells you how often.
 
@@ -346,7 +346,7 @@ Default is `verify: false` — verification costs a u16-bytes pass through the L
 | Method | Returns | When to use |
 |---|---|---|
 | `.toLut()` | Engine LUT object (f64 CLUT) | You want to call `Transform.setLut()` manually |
-| `.toTransform({ dataFormat })` | Ready-to-use `Transform` | The common path — go straight to `transformArray()` |
+| `.toTransform({ dataFormat })` | Ready-to-use `Transform` | The common path — go straight to `array()` |
 | `.toJSON({ dataType })` | Plain object (JSON-compatible) | Save to disk / send over the wire / cache in IndexedDB |
 
 ```js
@@ -397,7 +397,7 @@ const consumer = Transform.fromJSON(
     fs.readFileSync('srgb_to_cmyk.json'),
     { dataFormat: 'int8' },
 );
-consumer.transformArray(rgbPixels);
+consumer.array(rgbPixels);
 ```
 
 ### Why does `toJSON()` throw on a Transform with no LUT?
@@ -533,7 +533,7 @@ try {
         .toTransform({ dataFormat: 'int8' });
 }
 // Either path: same API, same kernel speed
-transform.transformArray(pixels);
+transform.array(pixels);
 ```
 
 ---
@@ -607,7 +607,7 @@ The editor applies the same transformation to both the preview images (visible f
 // In code
 const b = LutBuilder.fromTIFF(fs.readFileSync('edited.tiff'));
 const t = b.toTransform({ dataFormat: 'int8' });
-t.transformArray(pixels);   // full WASM-SIMD speed
+t.array(pixels);   // full WASM-SIMD speed
 ```
 
 ```
@@ -763,7 +763,7 @@ Profile specs: *sRGB *AdobeRGB *ProPhotoRGB *Lab   RGB CMYK GRAY   /path/to.icc
 | `.addAdjustment(str)` | this | Append to edit history |
 | `.setChain([...])` | this | Set profile chain |
 | `.toLut()` | LUT object | f64 CLUT, ready for `setLut()` |
-| `.toTransform(opts)` | `Transform` | Ready for `transformArray()` |
+| `.toTransform(opts)` | `Transform` | Ready for `array()` |
 | `.toJSON(opts)` | plain object | Portable JSON; auto-called by `JSON.stringify()` |
 | `.exportTIFF(opts)` | `Promise<Uint8Array>` | Export as TIFF for visual editing. See [TIFF workflow](#tiff-visual-editing-workflow-stage-3) |
 | `LutBuilder.fromTIFF(data, opts)` | builder | Import from TIFF (synchronous). Reads XMP + tag 32768, detects outCh change, extracts ICC |

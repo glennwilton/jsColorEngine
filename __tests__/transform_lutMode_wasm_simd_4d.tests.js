@@ -26,7 +26,7 @@
  * Why bit-exact:
  *   The SIMD 4D kernel is a channel-parallel rewrite of the same u20
  *   Q16.4 single-rounding math used by the scalar 4D WASM kernel and
- *   (transitively) the JS `_intLut_loop` kernels. See docs/Performance.md
+ *   (transitively) the JS `_intLut_loop` kernels. See docs/deepdive/Performance.md
  *   §1b "4D SIMD — measured".
  *
  * Dispatch-counter insurance:
@@ -128,7 +128,7 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
         t.create(cmykProfile, '*srgb', eIntent.relative);
 
         expect(t.wasmTetra4DSimd).not.toBeNull();
-        expect(t.wasmTetra4D).not.toBeNull();
+        expect(t.wasmTetra4D).toBeNull(); // CMYK→RGB is cMax 3 — no scalar Instance
         expect(t.lutMode).toBe('int-wasm-simd');
         // PHASE 7: a kernel loads only its own dimension's modules, so the
         // other family is null rather than loaded-and-never-fired. That is a
@@ -143,7 +143,6 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
 
         expect(t.lut.intLut).toBeTruthy();
         expect(t.wasmTetra4DSimd.dispatchCount).toBe(0);
-        expect(t.wasmTetra4D.dispatchCount).toBe(0);
     });
 
 
@@ -168,10 +167,11 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel4D');
 
         expectDispatched(1);
-        // Scalar 4D MUST NOT fire when SIMD 4D is eligible.
-        expect(simdT.wasmTetra4D.dispatchCount).toBe(0);
+        // Scalar 4D is not even instantiated for cMax 3.
+        expect(simdT.wasmTetra4D).toBeNull();
 
         const d = maxAbsDiff(oInt, oSimd);
         if(d.max !== 0){
@@ -204,9 +204,10 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel4D');
 
         expectDispatched(1);
-        expect(simdT.wasmTetra4D.dispatchCount).toBe(0);
+        expect(simdT.wasmTetra4D).toBeNull();
         expect(oSimd.length).toBe(nPixels * 4);
         expect(maxAbsDiff(oInt, oSimd).max).toBe(0);
     });
@@ -236,13 +237,13 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
         simdT.create(cmykProfile, '*srgb', eIntent.relative);
 
         const before4DSimd = simdT.wasmTetra4DSimd.dispatchCount;
-        const before4D     = simdT.wasmTetra4D.dispatchCount;
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel4D');
 
         expect(simdT.wasmTetra4DSimd.dispatchCount).toBe(before4DSimd);
-        expect(simdT.wasmTetra4D.dispatchCount).toBe(before4D);
+        expect(simdT.wasmTetra4D).toBeNull();
         expect(maxAbsDiff(oInt, oSimd).max).toBe(0);
     });
 
@@ -386,9 +387,9 @@ describeIfSimd('lutMode=int-wasm-simd — v1.2 WASM SIMD 4D dispatcher (CMYK inp
         const cache3DSimdKey = '__jsColorEngine_tetra3d_simd_module__';
         const cache3DKey     = '__jsColorEngine_tetra3d_nch_module__';
         expect(cache[cache4DSimdKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[cache4DKey]).toBeInstanceOf(WebAssembly.Module);
-        // PHASE 7: 3-D modules are never compiled for a CMYK transform, so
-        // they never reach the shared cache either.
+        // Scalar fallthrough is on demand (cMax ∉ {3, 4}); CMYK→RGB is 3.
+        expect(cache[cache4DKey]).toBeUndefined();
+        // 3-D modules are never compiled for a CMYK transform.
         expect(cache[cache3DSimdKey]).toBeUndefined();
         expect(cache[cache3DKey]).toBeUndefined();
 

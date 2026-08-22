@@ -222,11 +222,13 @@ describe('plugin: identity kernel — RGB→RGB (3D 3ch)', () => {
 
     test('output is byte-identical to input', () => {
         const output = transform.transformArray(input);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         expect(pixelsMatch(input, output)).toBe(true);
     });
 
     test('output has correct length', () => {
         const output = transform.transformArray(input);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         expect(output.length).toBe(input.length);
     });
 
@@ -250,6 +252,7 @@ describe('plugin: identity kernel — CMYK→CMYK (4D 4ch)', () => {
 
     test('output is byte-identical to input', () => {
         const output = transform.transformArray(input);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(pixelsMatch(input, output)).toBe(true);
     });
 
@@ -343,6 +346,7 @@ describe('plugin: identity kernel — alpha handling', () => {
         ]);
         // transformArray(pixels, inputHasAlpha, outputHasAlpha, preserveAlpha)
         const output = transform.transformArray(input, true, true, true);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         // colour channels copied
         expect(output[0]).toBe(255);
         expect(output[1]).toBe(0);
@@ -355,6 +359,7 @@ describe('plugin: identity kernel — alpha handling', () => {
     test('outputHasAlpha && !inputHasAlpha: alpha filled with 255', () => {
         const input = new Uint8ClampedArray([100, 150, 200]);  // 1 pixel, no alpha
         const output = transform.transformArray(input, false, true, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(output[0]).toBe(100);
         expect(output[1]).toBe(150);
         expect(output[2]).toBe(200);

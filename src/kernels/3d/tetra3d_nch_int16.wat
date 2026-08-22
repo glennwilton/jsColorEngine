@@ -134,12 +134,14 @@
         (local $d           i32)
         (local $sum         i32)
         (local $out         i32)   ;; final u16 output value (no bit-stretch)
+        ;;Inject:localsAfter
 
         ;; -- Init ---------------------------------------------------------
         local.get $inputPtr
         local.set $inputPos
         local.get $outputPtr
         local.set $outputPos
+        ;;Inject:initAfter
 
         ;; -- Main per-pixel loop -----------------------------------------
         (block $pixel_exit
@@ -172,6 +174,7 @@
                 i32.const 6
                 i32.add
                 local.set $inputPos
+                ;;Inject:probeAfter
 
                 ;; px = input0 * gps   (Q0.13 grid coordinate; gps is Q0.13)
                 ;; Bit budget: u16 * Q0.13 ≤ 2^29, fits i32 with 3 bits headroom.
@@ -693,6 +696,7 @@
                         br_if $ch_loop_cfb))
                 )))))))))))
 
+                ;;Inject:storeBefore
                 ;; -- Alpha tail (u16 stride: 2 bytes per sample) ---------
                 ;;   if (preserveAlpha)  { output[o] = input[i]; o += 2; i += 2; }
                 ;;   else                { i += inAlphaSkip * 2;

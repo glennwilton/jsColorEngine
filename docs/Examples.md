@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [API: Profile](./Profile.md) ·
@@ -15,6 +15,12 @@
 The [project README](../README.md) has the short tour (single colour,
 image bytes, and a soft-proof chain). This page collects the rest —
 working snippets for scenarios the README doesn't have room for.
+
+`transform.array()` is the batch entry. Native units; the container
+matches `dataFormat`. `transformArray()` is the same call plus an
+optional `outputFormat` via `Transform.reformat`. After either,
+`transform.lastUsedKernel` is the kernel `name`, or `'pipeline'` /
+`'cache'`. See [Transform.md](./Transform.md).
 
 All snippets are real, runnable code. You'll need the relevant ICC
 profile files for examples that load from disk; the
@@ -35,12 +41,13 @@ profile shipped with the repo works for every CMYK example here.
 - [LUT hook — chaining multiple hooks](#lut-hook--chaining-multiple-hooks)
 - [ΔE analysis — measuring colour accuracy of a conversion](#δe-analysis--measuring-colour-accuracy-of-a-conversion)
 - [16-bit Lab helpers — decoding int16 Lab output](#16-bit-lab-helpers--decoding-int16-lab-output)
+- [Which path ran — `lastUsedKernel`](#which-path-ran--lastusedkernel)
 
 ---
 
 ## Canvas round-trip — soft-proof into a `<canvas>`
 
-The trap: `transformArray` returns a raw typed array, not an
+The trap: `array()` returns a raw typed array, not an
 `ImageData`. You can't hand its result directly to `putImageData` —
 you have to allocate a fresh `ImageData` via
 `ctx.createImageData()` and copy the transformed bytes into its
@@ -100,7 +107,7 @@ for the history of this one.
 
     // Input has alpha (RGBA), output also has alpha — preserveAlpha copies
     // it through. The result is a Uint8ClampedArray of the same length.
-    const proofedBytes = proof.transformArray(src.data, true, true);
+    const proofedBytes = proof.array(src.data, true, true);
 
     // You MUST allocate a fresh ImageData; you cannot pass a raw typed
     // array to putImageData.
@@ -200,7 +207,7 @@ xf.create('*srgb', '*adobergb', eIntent.relative);
 // colour-managed inversion — not a naive byte flip, but an
 // inversion that passes through the full profile pipeline.
 const src = new Uint8ClampedArray([255, 0, 0,  0, 128, 255]);
-const out = xf.transformArray(src, false, false, false, 2);
+const out = xf.array(src, false, false, false, 2);
 // out: inverted + gamut-mapped to AdobeRGB
 ```
 
@@ -253,7 +260,7 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
     xf.create('*srgb', cmyk, eIntent.perceptual);
 
     const pixels = new Uint8ClampedArray([10, 20, 30,  200, 100, 50]);
-    const result = xf.transformArray(pixels, false, false, false, 2);
+    const result = xf.array(pixels, false, false, false, 2);
     // result: CMYK bytes with TAC guaranteed ≤ 300%
 })();
 ```
@@ -297,9 +304,9 @@ xf.create('*srgb', '*adobergb', eIntent.relative);
 //   ...
 //   IN  [1.000, 1.000, 1.000] → OUT [1.000, 1.000, 1.000]
 
-// Now transformArray runs at full speed — no hooks involved.
+// Now array() runs at full speed — no hooks involved.
 const img = new Uint8ClampedArray(1024 * 3);
-const out = xf.transformArray(img, false, false, false, 1024);
+const out = xf.array(img, false, false, false, 1024);
 ```
 
 ---
@@ -317,7 +324,7 @@ t.addLutOutputHook(debugLog);    // second: log the clamped result
 
 t.create('*srgb', cmykProfile, eIntent.perceptual);
 // tacLimit ran on every grid cell, then debugLog saw the clamped values.
-// At runtime, transformArray is full speed — hooks are baked in.
+// At runtime, array() is full speed — hooks are baked in.
 ```
 
 Hooks must be added **after** `new Transform()` and **before**
@@ -408,7 +415,7 @@ const { Profile, Transform, eIntent, convert, color } = require('jscolorengine')
 ## 16-bit Lab helpers — decoding int16 Lab output
 
 When you use `dataFormat: 'int16'` with a Lab output profile, the
-`transformArray()` result contains ICC-encoded u16 Lab values — not
+`array()` result contains ICC-encoded u16 Lab values — not
 human-readable `L 0–100, a/b -128..+127`. The `outputInt162Lab()`
 helper on the Transform decodes them back to float Lab, respecting
 whichever PCS encoding (v2 or v4) the profile uses.
@@ -432,7 +439,7 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
         0, 0, 65535,            // blue
         32768, 32768, 32768,    // mid grey
     ]);
-    const labU16 = rgb2lab.transformArray(input, false, false);
+    const labU16 = rgb2lab.array(input, false, false);
 
     // labU16 is a Uint16Array of ICC-encoded Lab values.
     // Decode each pixel to float Lab for human consumption:
@@ -455,7 +462,7 @@ encoding (ICC v2 or v4) the profile uses — you don't have to.
 
 - **`inputLab2Int16(L, a, b)`** — encode float Lab → u16 using the
   *input* profile's PCS. Use when building u16 Lab input values to
-  feed into `transformArray()`.
+  feed into `array()`.
 - **`outputLab2Int16(L, a, b)`** — encode float Lab → u16 using the
   *output* profile's PCS. Use when you need to construct expected
   output values for comparison.
@@ -463,7 +470,7 @@ encoding (ICC v2 or v4) the profile uses — you don't have to.
   the *input* profile's PCS. Use when inspecting u16 input values.
 - **`outputInt162Lab(uL, ua, ub)`** — decode u16 → float Lab using
   the *output* profile's PCS. Use when inspecting u16 output from
-  `transformArray()`, as shown above.
+  `array()`, as shown above.
 
 All four throw if the relevant profile's PCS is not Lab.
 
@@ -472,6 +479,39 @@ through a Transform), see `convert.lab2Int16(L, a, b, encoding)`
 and `convert.int162Lab(uL, ua, ub, encoding)` — these take an
 explicit encoding parameter (`'v2'`, `'v4'`, or an encoding
 object from `convert.labEncoding`).
+
+---
+
+## Which path ran — `lastUsedKernel`
+
+After `array()` (or `transformArray()`), `transform.lastUsedKernel`
+names the route. Null until the first batch.
+
+```js
+const { Transform, eIntent, eColourType } = require('jscolorengine');
+
+const lut = new Transform({ buildLut: true, dataFormat: 'int8' });
+lut.create('*sRGB', '*AdobeRGB', eIntent.relative);
+lut.array(new Uint8ClampedArray([255, 0, 0]), false, false);
+console.log(lut.lastUsedKernel);        // 'kernel3D' or 'matrix-shaper'
+
+const same = new Transform({ dataFormat: 'object' });
+same.create('*sRGB', '*sRGB', eIntent.relative);
+same.array([{ type: eColourType.RGB, R: 12, G: 34, B: 56 }]);
+console.log(same.lastUsedKernel);       // 'kernelIdentity'
+// clones — mutating the output does not write through to the input
+```
+
+| Configuration | `lastUsedKernel` |
+|---|---|
+| Identity (same file twice, any `dataFormat`) | `'kernelIdentity'` |
+| `int8` / `int16` LUT | `'kernel3D'` / `'kernel4D'` / … |
+| Matrix-shaper pair, no LUT | `'matrix-shaper'` |
+| Object colour conversion, or no LUT and no claim | `'pipeline'` |
+| `pixelCache` live | `'cache'` |
+
+`transformArrayViaLUT()` is the same work with a throw if there is no
+table. Use it when a missing LUT must be a hard error (video loops).
 
 ---
 
@@ -484,7 +524,9 @@ we'd love to add it. Open an issue or PR.
 ## Related
 
 - [Project README](../README.md) — install, quick start, the two basic examples
+- [Transform API reference](./Transform.md) — `array()`, `lastUsedKernel`, constructor options
+- [Bench](./Bench.md) / [BenchResults](./BenchResults.md) — current throughput
+- [deepdive/Performance.md](./deepdive/Performance.md) — measurement retrospective
 - [Deep dive](./deepdive/) — how the engine works and why it's fast
-- [Performance](./Performance.md) — benchmark numbers and learnings
-- [Transform API reference](./Transform.md) — full constructor options, method signatures
 - [Profile API reference](./Profile.md) — profile loading, virtual profiles, tag access
+- [Plugin.md](./Plugin.md) — custom `lutMode` and `t.use()`

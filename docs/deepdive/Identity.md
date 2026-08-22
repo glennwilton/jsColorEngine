@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -77,7 +77,7 @@ This has two consequences:
 
 The fix is to detect same-profile pairs at `create()` time and route them to
 a no-op path — both for single-pixel `transform()` calls and for
-`transformArray()` image processing.
+`array()` image processing.
 
 ---
 
@@ -585,6 +585,11 @@ if(this.isIdentity && this.kernel){
 
 `bindTransformArrayFn` is still accepted and ignored, so v1.5 option objects
 keep working.
+
+The bind that *did* belong here is on the kernel. `init()` caches
+`this.arrayFn` from `dataFormat` — typed memcpy, device element-copy, or
+object clone — and `array()` is the trampoline. Transform never sees the
+fn. `arrayFnBig` / `arrayFnSml` stay null: those are LUT dispatch slots.
 
 **Not measurable, and said plainly.** An identity copy runs at 4–5 GPx/s and is
 bounded by memory bandwidth: repeated A/B runs spanned 4020–5280 MPx/s on the

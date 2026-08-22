@@ -1,0 +1,201 @@
+{
+  "tool": "bench/matrix_shaper_kernel/throughput.js",
+  "generated": "2026-08-22T22:45:42.674Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.6.0"
+  },
+  "tables": [
+    {
+      "id": "matrixShaper.throughput.int8",
+      "title": "Matrix-shaper kernel vs CLUT, int8, *prophoto -> *sRGB",
+      "units": "MPx/s",
+      "meta": {
+        "bits": 8,
+        "pixels": 4194304,
+        "reps": 5,
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ],
+        "best": "best of 5"
+      },
+      "columns": [
+        "path",
+        "solid",
+        "noise",
+        "photo"
+      ],
+      "rows": [
+        {
+          "path": "kernel, SIMD",
+          "solid": 334,
+          "noise": 330.6,
+          "photo": 335.1
+        },
+        {
+          "path": "kernel, scalar",
+          "solid": 203.7,
+          "noise": 69.3,
+          "photo": 185.6
+        },
+        {
+          "path": "kernel, plain JS",
+          "solid": 94.2,
+          "noise": 58.5,
+          "photo": 90
+        },
+        {
+          "path": "CLUT (default lutMode)",
+          "solid": 529.9,
+          "noise": 99.1,
+          "photo": 116.7
+        },
+        {
+          "path": "JS stage pipeline",
+          "solid": 10.2,
+          "noise": 8.3,
+          "photo": 8.9
+        }
+      ]
+    },
+    {
+      "id": "matrixShaper.ratios.int8",
+      "title": "Matrix-shaper kernel ratios, int8",
+      "units": "x",
+      "meta": {
+        "bits": 8,
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ]
+      },
+      "columns": [
+        "content",
+        "simdOverClut",
+        "simdOverScalar",
+        "simdOverJs",
+        "jsOverPipeline"
+      ],
+      "rows": [
+        {
+          "content": "solid",
+          "simdOverClut": 0.63,
+          "simdOverScalar": 1.64,
+          "simdOverJs": 3.55,
+          "jsOverPipeline": 9.3
+        },
+        {
+          "content": "noise",
+          "simdOverClut": 3.33,
+          "simdOverScalar": 4.77,
+          "simdOverJs": 5.65,
+          "jsOverPipeline": 7.1
+        },
+        {
+          "content": "photo",
+          "simdOverClut": 2.87,
+          "simdOverScalar": 1.81,
+          "simdOverJs": 3.72,
+          "jsOverPipeline": 10.1
+        }
+      ]
+    },
+    {
+      "id": "matrixShaper.throughput.int16",
+      "title": "Matrix-shaper kernel vs CLUT, int16, *prophoto -> *sRGB",
+      "units": "MPx/s",
+      "meta": {
+        "bits": 16,
+        "pixels": 4194304,
+        "reps": 5,
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ],
+        "best": "best of 5"
+      },
+      "columns": [
+        "path",
+        "solid",
+        "noise",
+        "photo"
+      ],
+      "rows": [
+        {
+          "path": "kernel, SIMD",
+          "solid": 231.4,
+          "noise": 205.9,
+          "photo": 220.5
+        },
+        {
+          "path": "kernel, scalar",
+          "solid": 102.7,
+          "noise": 63.5,
+          "photo": 99.9
+        },
+        {
+          "path": "kernel, plain JS",
+          "solid": 79.6,
+          "noise": 38.9,
+          "photo": 59.1
+        },
+        {
+          "path": "CLUT (default lutMode)",
+          "solid": 195.9,
+          "noise": 103.1,
+          "photo": 121.6
+        },
+        {
+          "path": "JS stage pipeline",
+          "solid": 10,
+          "noise": 8.3,
+          "photo": 8.7
+        }
+      ]
+    },
+    {
+      "id": "matrixShaper.ratios.int16",
+      "title": "Matrix-shaper kernel ratios, int16",
+      "units": "x",
+      "meta": {
+        "bits": 16,
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ]
+      },
+      "columns": [
+        "content",
+        "simdOverClut",
+        "simdOverScalar",
+        "simdOverJs",
+        "jsOverPipeline"
+      ],
+      "rows": [
+        {
+          "content": "solid",
+          "simdOverClut": 1.18,
+          "simdOverScalar": 2.25,
+          "simdOverJs": 2.91,
+          "jsOverPipeline": 7.9
+        },
+        {
+          "content": "noise",
+          "simdOverClut": 2,
+          "simdOverScalar": 3.24,
+          "simdOverJs": 5.29,
+          "jsOverPipeline": 4.7
+        },
+        {
+          "content": "photo",
+          "simdOverClut": 1.81,
+          "simdOverScalar": 2.21,
+          "simdOverJs": 3.73,
+          "jsOverPipeline": 6.8
+        }
+      ]
+    }
+  ]
+}

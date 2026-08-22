@@ -242,7 +242,7 @@ efficiency, and specifically about what's *not* in this WASM build
 ## What this means for the engine
 
 It validates the core v1.1 story (see
-[`docs/Performance.md`](../../docs/Performance.md)):
+[`docs/deepdive/Performance.md`](../../docs/deepdive/Performance.md)):
 
 * We are measurably at the JS optimisation ceiling for this problem.
 * The path from here is **not** "rewrite hot kernels in WASM to catch

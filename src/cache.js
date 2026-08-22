@@ -449,8 +449,10 @@
             if(this._pcOutputFirst){
                 storeAt = pipeline.indexOf(this._pcOutputFirst);
                 if(storeAt === -1){
-                    console.warn('jsColorEngine: pixelCache disabled — output boundary was replaced by the optimiser');
-                    return false;
+                    // LUT + stage_device_to_int is a legal fusion — the
+                    // interpolator now emits the output encoding itself.
+                    // Store at the end; the hit path must copy.
+                    storeAt = length;
                 }
             }
 

@@ -378,6 +378,7 @@ describe('toTransform() — identity round-trip', () => {
 
         const input  = new Uint8ClampedArray([0, 0, 0, 128, 128, 128, 255, 255, 255]);
         const output = transform.transformArray(input);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
 
         expect(output).toBeInstanceOf(Uint8ClampedArray);
         // At grid corners the identity is exact; allow ±1 for interpolation

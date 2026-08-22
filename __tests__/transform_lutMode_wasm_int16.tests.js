@@ -157,6 +157,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -195,6 +196,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -227,6 +229,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         // Counter MUST NOT have advanced — proves the gate fired
         expect(wasmT.wasmTetra3DInt16.dispatchCount).toBe(before);
@@ -266,6 +269,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         // The 4D u16 WASM kernel WAS invoked for CMYK input...
         expect(wasmT.wasmTetra4DInt16.dispatchCount).toBe(before4D + 1);
@@ -311,6 +315,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         // Counter MUST NOT have advanced — proves the threshold gate fired
         // and the JS int16 4D kernel handled the call.
@@ -372,7 +377,7 @@ describeIfWasm('lutMode=int16-wasm-scalar — v1.3 WASM int16 dispatcher', () =>
         t.create('*srgb', '*adobergb', eIntent.relative);
         expect(t.lutMode).toBe('int16-wasm-simd');
         expect(t.wasmTetra3DInt16Simd).not.toBeNull();
-        expect(t.wasmTetra3DInt16).not.toBeNull();    // scalar fallthrough loaded too
+        expect(t.wasmTetra3DInt16).toBeNull(); // RGB→RGB is cMax 3 — no scalar Instance
     });
 
 });

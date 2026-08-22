@@ -117,7 +117,7 @@ concatenation** left 165 of 225 conversions unreachable
 ([below](#the-165-of-225-finding)).
 
 The wider surface also settled two smaller questions about what
-`transformArray()` returns — a typed array matching `dataFormat` rather than
+`array()` returns — a typed array matching `dataFormat` rather than
 one that depends on whether a LUT was built, and an output sized for an alpha
 slot whenever one gets written.
 
@@ -425,8 +425,24 @@ useful half. A LUT-backed `array()` against the pipeline walk:
 array loop only skips the other seven pipeline stages, which is the ~0.2 µs/px
 measured [above](#where-the-time-actually-goes) arriving from the other
 direction. Break-even is 0.3–0.9 MPx, so it would pay back on a large image;
-against `grid^n` memory and a 20–97 ms build for that much, declining is the
-right answer. Now with a measurement behind it rather than an assumption.
+against `grid^n` memory and a 20–97 ms build for that much, declining was the
+right answer **while the interpolator was the same**. That measurement is why
+KernelND (7–15) still returns `false`.
+
+5/6 now have a *different* interpolator. `bench/nch_56/run.js` (photo RGB +
+derived extras + 5 % grain, 65 536 px, median of 5, Node on this machine):
+
+| in | pipeline | float LUT | int8 JS | int8 WASM | WASM / JS | WASM / pipeline |
+|---|---|---|---|---|---|---|
+| 5 | 2.99 | 4.61 | 9.71 | **16.4** | **1.69×** | 5.5× |
+| 6 | 2.06 | 2.68 | 4.84 | **7.66** | **1.58×** | 3.7× |
+
+So baking at the profile A2B density is worth it once WASM replaces the
+walk. int16 is the same peel with Q0.13 two-rounding (the 4D contract —
+u20 cannot carry the extra planes in i32). That clone is justified by
+the 1.6×; it is not a find-replace of `tetra5d_nch.wat`. No SIMD this
+pass. Do not quote these MPx/s as a release number — one machine, one
+content kind.
 
 ---
 
@@ -515,6 +531,68 @@ actually contain and because it exercises `Kernel3D`'s wide-output runs
 (`fl_3_n`, `i_3_n`) — the same code path where the u16 wide-output gap was
 found during the v1.6 kernel work.
 
+<a id="what-real-profiles-actually-use"></a>
+
+## What real profiles actually use
+
+`Profile.gridFor` is a **committed-file budget**, not an ICC rule and not
+what Hexachrome / 7-ink builders ship. The 2–3 points/axis we use at 9+
+channels is ours — `3^15` is 43 million cells, and a 6 MB fixture is its
+own problem. Industry practice is different, and it is worth writing down
+so the fixture table does not get quoted as a guideline.
+
+**The spec does not recommend a size.** ICC.1 `lut16Type` stores one
+`gridPoints` byte (same on every axis); `lutAToBType` stores a per-axis
+`uint8` (2–255). There is no “above 6 channels, collapse the table.”
+Memory is left to the profile maker because `grid^N × outputs × bytes`
+grows so fast.
+
+**Argyll `colprof` does not thin A2B as channels increase.** For every
+device with 4 or more channels, `-q l/m/h/u` writes **5 / 9 / 17 / 23**
+on A2B and **9 / 17 / 33 / 45** on B2A (`profile/profout.c`; RGB 2–3 ch
+uses the denser 9 / 17 / 33 / 45 on both sides). Default `-qm` is
+therefore **9 points on every A2B axis**. Argyll will not *build*
+CMYK+N — `colprof` only accepts Gray / RGB / CMY / CMYK, and the reverse
+interpolator is compiled with `MXRI 4` — so those constants are the
+authority on CMYK / RGB grids, not on Hexachrome builders.
+
+**Commercial practice thins A2B because of N^d.** X-Rite says it
+outright: a 33-step CMYK A2B is 1.18 million nodes versus 36 k for RGB,
+“the primary reason profiles typically have fewer steps per axis on the
+A2B side.” Their published numbers:
+
+- Adobe `USWebCoatedSWOP`: **9^4** A2B, 8-bit B2A
+- i1Profiler / MonacoPROFILER CMYK: **17^4** A2B, **33³** B2A
+- B2A stays dense (17³ or 33³) no matter how many inks — Lab is always 3-D
+
+A 1998 ICC HiFi paper already warned that A2B at 6 / 7 / 8 colours was
+~186 KB / 1.2 MB / 8.4 MB and “could become prohibitive.” They were
+already in the 5–6 pts/axis band for 7–8ch.
+
+**A real 7CLR we already have** (`testbed/profiles/6col/…STRAIGHT
+BLACK.icm`): **5 points on each of 7 A2B axes, 33³ B2A.** That is a
+vendor press profile, not a synthetic. 5^7 = 78 k cells — coarse, but
+it has an interior.
+
+Putting that next to `gridFor` (16-bit, 3 outputs ≈ 6 bytes/node):
+
+| input | typical real A2B | nodes | table | our `gridFor` |
+|---|---|---|---|---|
+| RGB | 17 or 33 | 4.9 k–36 k | 30–210 KB | 33 |
+| CMYK | 9 (Adobe) or 17 (i1P); Argyll 5/9/17/23 | 6.6 k–84 k | 40–500 KB | 17 |
+| 5CLR | **9–11** | 59 k–161 k | 0.4–1 MB | **9** |
+| 6CLR | **7–9** | 118 k–531 k | 0.7–3 MB | **7** |
+| 7CLR | **5** (the press file above); 9 would be 4.8 M | 78 k | ~0.5 MB | **5** |
+| 8CLR | 4–6 if A2B exists | 66 k–1.7 M | 0.4–10 MB | 4 |
+| 9–10 | 3–4, uncommon | — | — | 3 |
+| 11–15 | almost never an A2B; B2A only | — | — | **2** (no interior) |
+
+So the 5/6 kernels bake at a density people actually ship (9^5, 7^6).
+7 is not 2–3 points — the press profile on disk is 5^7. “Not worth a
+WASM kernel” at 7+ is a product call (16 tetras/pixel, RIP / preview),
+not because the table vanished. 2-point fixtures at 11+ exist to
+exercise decode; they are not interpolators.
+
 ---
 
 ## Reproducing
@@ -551,5 +629,7 @@ profile*, *not for production*.
 
 - [KernelContract.md](./KernelContract.md) — the kernel boundary these test
 - `bench/channel_matrix/run.js` — the 225-combination throughput map
+- `bench/nch_56/run.js` — 5CLR / 6CLR int8 JS vs WASM vs float
 - [LcmsComparison.md](../LcmsComparison.md) — the RGB/CMYK oracle
 - `__tests__/encodeICC.tests.js` — what the writer guarantees on its own
+- [`Profile.gridFor`](../../src/Profile.js) — the fixture table above; not an industry recommendation

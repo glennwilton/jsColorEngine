@@ -8,7 +8,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jsColorEngine &middot; The Good, The Bad and The Ugly</title>
-<link rel="stylesheet" href="styles/styles.css">
+<link rel="stylesheet" href="../../../samples/styles/styles.css">
 <style>
     .hero {
         display: grid;
@@ -189,8 +189,8 @@
         margin-left: 8px;
     }
 </style>
-<script src="lib/devtools-warn.js"></script>
-<script src="browser/jsColorEngineWeb.js"></script>
+<script src="../../../samples/lib/devtools-warn.js"></script>
+<script src="../../../samples/browser/jsColorEngineWeb.js"></script>
 </head>
 <body>
 
@@ -201,19 +201,26 @@
             <span class="brand-tag">performance shape demo</span>
         </div>
         <nav class="nav" aria-label="Site">
-            <a href="index.html">Home</a>
-            <a href="samples.html" class="is-active">Samples</a>
-            <a href="bench/">Bench</a>
+            <a href="../../../samples/index.html">Home</a>
+            <a href="../../../samples/samples.html">Samples</a>
+            <a href="../../../samples/bench/">Bench</a>
+            <a href="../benchmark.md">benchmark.md</a>
         </nav>
     </div>
-    <nav class="nav nav--secondary" aria-label="Sample demos">
-        <a href="samples.html">Samples</a>
-        <a href="the-good-the-bad-and-the-ugly.html" class="is-active">Good / Bad / Ugly</a>
-        <a href="benchmark/bench.html">Benchmark</a>
-    </nav>
 </header>
 
 <main>
+
+<section class="card" style="border-color: var(--warn)">
+    <p class="lead" style="margin:0">
+        <strong>Archived.</strong> Hidden from the samples index.
+        Schrödinger's Bench lesson still stands
+        (<a href="../benchmark.md">benchmark.md §20</a>);
+        the numbers here are not.
+        Input is the old 256-colour LCG — L1-resident, labelled noise —
+        so MPx/s are not comparable to the photo&nbsp;+&nbsp;5&nbsp;% headline bench.
+    </p>
+</section>
 
 <section class="card hero">
     <div>
@@ -227,7 +234,7 @@
             Same engine. Same transform. Same pixels. Three different call
             shapes. We expected to see roughly 100 / 175 / 200 MPx/s — the same
             split the registered framework in
-            <a href="benchmark/bench.html">samples/benchmark/</a> actually shows.
+            <a href="../../../samples/benchmark/bench.html">samples/benchmark/</a> actually shows.
         </p>
         <p class="lead">
             <strong>Spoiler:</strong> we couldn't reproduce it. V8 keeps
@@ -376,7 +383,7 @@
         So the practical takeaway flips: <strong>your production code is probably
         fine.</strong> A polymorphic wrapper, a route registry, a plugin pipeline —
         all routinely run at full kernel throughput because V8 can see the hot
-        callee. The numbers in <a href="docs/deepdive/benchmark.md"><code>benchmark.md</code></a>
+        callee. The numbers in <a href="../benchmark.md"><code>benchmark.md</code></a>
         still stand: 104 vs 175 vs 203 MPx/s is real, measured, and reproducible
         inside the actual framework. But it is mostly an
         <em>observing-machinery</em> problem, not a production-code problem.
@@ -427,7 +434,7 @@
         monomorphic per route. Bind one Transform per route object, give each
         route its own narrow loop, or use <code>Transform.compile()</code> to
         generate a fresh function for that route. See
-        <a href="docs/deepdive/benchmark.md">benchmark.md §19</a> for the full
+        <a href="../benchmark.md">benchmark.md §19</a> for the full
         escape-hatch hierarchy.
     </p>
     <p class="muted" id="info-ua">-</p>
@@ -436,11 +443,11 @@
 </main>
 
 <footer class="footer">
-    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="LICENSE">MIT License</a></span>
+    <span>&copy; 2026 Glenn Wilton, O2 Creative Limited &middot; <a href="../../../samples/LICENSE">MIT License</a></span>
     <span>
-        <a href="samples.html">Samples</a>
+        <a href="../benchmark.md">benchmark.md</a>
         &middot;
-        <a href="benchmark/bench.html">Benchmark</a>
+        <a href="../../../samples/benchmark/bench.html">Old framework</a>
     </span>
 </footer>
 

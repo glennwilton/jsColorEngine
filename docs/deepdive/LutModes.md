@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -18,6 +18,8 @@
 [Compiled pipeline](./CompiledPipeline.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 When the image hot-path is active (`buildLut: true, dataFormat: 'int8'`),
 the `lutMode` constructor option picks which inner-loop kernel runs. Five
@@ -36,6 +38,11 @@ All four runtime kernels produce bit-identical output for 8-bit input
 within their respective kernel families. The SIMD and scalar WASM kernels
 are verified bit-exact against the JS `'int'` reference across a 12-config
 matrix in [`bench/wasm_poc/`](../../bench/wasm_poc).
+
+Which input × output × format actually has a custom kernel (and what
+ships) is the coverage matrix in
+[KernelContract.md § Coverage](./KernelContract.md#coverage--what-exists-per-kernel).
+5/6 have int8 WASM scalar only; int16 / SIMD 5/6 are not planned.
 
 ## How `lutMode` is chosen
 
@@ -107,7 +114,7 @@ const t = new Transform({
     lutMode:    'int'
 });
 t.create('*srgb', cmykProfile, eIntent.relative);
-const out = t.transformArray(rgbBuf);
+const out = t.array(rgbBuf);
 ```
 
 ### What it actually does
@@ -237,7 +244,7 @@ SIMD across *pixels* doesn't help LUT interpolation — each pixel's
 tetrahedron corners are at different grid coordinates, so the LUT gather
 degenerates to four scalar loads with the results packed into a v128
 (sequential dependency chain, lots of lane-shuffling). The
-[Performance page](../Performance.md) has the original 1D POC that showed
+[Performance page](./Performance.md) has the original 1D POC that showed
 this ceiling (**SIMD with LUT gather: 0.89× — actually slower than
 scalar**). What *does* work is SIMD across *channels*: the four output
 channels of one pixel can be computed as four lanes of one v128, because
@@ -291,5 +298,5 @@ colour-measurement code that must run the float path.
   already near the TurboFan ceiling
 - [WASM kernels](./WasmKernels.md) — the hand-written `.wat` design
   for scalar and SIMD
-- [Performance](../Performance.md) — full numbers across kernels and
+- [Performance](./Performance.md) — full numbers across kernels and
   configurations

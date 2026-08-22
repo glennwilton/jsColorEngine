@@ -26,7 +26,7 @@ const dl = new Profile();
 dl.load('MyDeviceLink.icc', () => {
     const t = new Transform({ dataFormat: 'int8', buildLut: true });
     t.create(dl);                       // the DeviceLink alone — nothing else
-    const out = t.transformArray(pixels, false, false);
+    const out = t.array(pixels, false, false);
 });
 ```
 

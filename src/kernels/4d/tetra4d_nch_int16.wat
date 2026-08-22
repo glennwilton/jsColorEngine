@@ -143,12 +143,14 @@
         (local $u16         i32)   ;; Q0.13: per-channel rounded u16 result
         (local $k0_u16      i32)   ;; K0-plane u16 from scratch (K1 pass)
         (local $out         i32)   ;; final u16 output
+        ;;Inject:localsAfter
 
         ;; -- Init ---------------------------------------------------------
         local.get $inputPtr
         local.set $inputPos
         local.get $outputPtr
         local.set $outputPos
+        ;;Inject:initAfter
 
         ;; -- Main per-pixel loop -----------------------------------------
         (block $pixel_exit
@@ -187,6 +189,7 @@
                 i32.const 8
                 i32.add
                 local.set $inputPos
+                ;;Inject:probeAfter
 
                 ;; pk, px, py, pz = input * gps_u16  (Q0.13 grid coords)
                 local.get $inputK local.get $gps i32.mul local.set $pk
@@ -945,6 +948,7 @@
 
                         br $k_exit))
 
+                ;;Inject:storeBefore
                 ;; -- Alpha tail (u16 stride: 2 bytes per sample) --------
                 (if (i32.eq (local.get $outAlphaMode) (i32.const 2))
                     (then

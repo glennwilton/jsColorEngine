@@ -75,6 +75,12 @@ function preflight() {
             '  Build it:     npm run browser\n'
         );
     }
+    const worker = path.join(REPO_ROOT, 'browser', 'jsColorEngineWorker.js');
+    if (!fs.existsSync(worker)) {
+        console.log(' worker bundle    : missing (Pool demo needs `npm run browser`)');
+    } else {
+        console.log(' worker bundle    : jsColorEngineWorker.js');
+    }
     const profileDir = path.join(REPO_ROOT, 'samples', 'profiles');
     const profiles = fs.existsSync(profileDir)
         ? fs.readdirSync(profileDir).filter(f => /\.icc$/i.test(f))
@@ -184,7 +190,8 @@ server.listen(port, () => {
     console.log('================================================================');
     console.log(' serving repo root: ' + REPO_ROOT);
     console.log(' samples          : http://localhost:' + port + '/samples/');
-    console.log(' bench            : http://localhost:' + port + '/samples/bench/');
+    console.log(' bench            : http://localhost:' + port + '/samples/benchmark/bench.html');
+    console.log(' bench (vs lcms)  : http://localhost:' + port + '/samples/bench/');
     console.log(' stop server      : Ctrl+C');
     console.log('');
 });

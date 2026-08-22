@@ -28,6 +28,8 @@
         <button class="tab"           data-test="accuracy">Accuracy sweep</button>
         <button class="tab"           data-test="warmup">JIT warmup curve</button>
         <button class="tab"           data-test="sweep">Pixel-count sweep</button>
+        <button class="tab"           data-test="pool">Pool demo</button>
+        <button class="tab"           data-test="knee">Speed vs Noise</button>
         <button class="tab"           data-test="about">About this bench</button>
     </nav>
 </header>
@@ -46,6 +48,7 @@
         <div class="info-cell"><span class="lbl">User agent</span>   <span class="val" id="info-ua">&mdash;</span></div>
         <div class="info-cell"><span class="lbl">CPU cores</span>    <span class="val" id="info-cores">&mdash;</span></div>
         <div class="info-cell"><span class="lbl">Page</span>         <span class="val" id="info-secure">&mdash;</span></div>
+        <div class="info-cell"><span class="lbl">Worker pool</span>  <span class="val" id="info-pool">&mdash;</span></div>
     </div>
 </section>
 
@@ -69,6 +72,10 @@
         Per cell measures <em>LUT build time</em>,
         <em>cold first transform</em>, and the <em>hot run median
         ms/iter</em>.
+        Tick <strong>include identity</strong> to also run
+        sRGB&rarr;sRGB and GRACoL&rarr;GRACoL &mdash; both engines
+        collapse those to a copy, so the numbers are a memory-bandwidth
+        ceiling, not a colour transform. They stay out of the summary cards.
     </p>
     <p class="muted" style="font-size:12px; margin-top:-8px">
         ⚠ <strong>Throughput varies with hardware and conditions.</strong>
@@ -145,35 +152,62 @@
     </div>
 
     <div class="controls">
-        <label>Pixels per iter
-            <select id="pixels-full">
-                <option value="16384">16 K  (128&times;128)</option>
-                <option value="65536" selected>65 K  (256&times;256)</option>
-                <option value="262144">262 K (512&times;512)</option>
-                <option value="1048576">1 M  (1024&times;1024)</option>
-            </select>
-        </label>
-        <label>Warmup iters
-            <select id="warmup-full">
-                <option value="50">50 (fast)</option>
-                <option value="200" selected>200 (recommended)</option>
-                <option value="500">500 (thorough)</option>
-                <option value="1000">1000</option>
-            </select>
-        </label>
-        <label>Hot iters per batch (&times; 5 batches)
-            <select id="hot-full">
-                <option value="20">20  (~100 iters)</option>
-                <option value="50" selected>50  (~250 iters)</option>
-                <option value="200">200 (~1000 iters)</option>
-            </select>
-        </label>
-        <label class="check">
-            <input type="checkbox" id="incl-lcms-full" checked>
-            include lcms-wasm
-        </label>
-        <button class="btn-primary" id="run-full">Run benchmark</button>
-        <button class="btn-secondary" id="copy-full" disabled>Copy markdown</button>
+        <div class="controls-row">
+            <label>Content
+                <select id="content-full">
+                    <option value="solid">solid (one colour — algorithm)</option>
+                    <option value="photo-5" selected>photo with 5% noise added (plateau)</option>
+                    <option value="photo-15">photo with 15% noise added (deep plateau)</option>
+                    <option value="photo">photo (clean strawberries)</option>
+                    <option value="noise">noise (high-bit LCG)</option>
+                    <option value="legacy">legacy 256-colour LCG (do not quote)</option>
+                </select>
+            </label>
+            <label>Pixels per iter
+                <select id="pixels-full">
+                    <option value="16384">16 K  (128&times;128)</option>
+                    <option value="65536" selected>65 K  (256&times;256)</option>
+                    <option value="262144">262 K (512&times;512)</option>
+                    <option value="1048576">1 M  (1024&times;1024)</option>
+                </select>
+            </label>
+            <label>Warmup iters
+                <select id="warmup-full">
+                    <option value="50">50 (fast)</option>
+                    <option value="200" selected>200 (recommended)</option>
+                    <option value="500">500 (thorough)</option>
+                    <option value="1000">1000</option>
+                </select>
+            </label>
+            <label>Hot iters per batch (&times; 5 batches)
+                <select id="hot-full">
+                    <option value="20">20  (~100 iters)</option>
+                    <option value="50" selected>50  (~250 iters)</option>
+                    <option value="200">200 (~1000 iters)</option>
+                </select>
+            </label>
+            <div class="controls-actions">
+                <button class="btn-primary" id="run-full">Run benchmark</button>
+                <button class="btn-secondary" id="copy-full" disabled>Copy markdown</button>
+            </div>
+        </div>
+        <div class="controls-checks">
+            <label class="check" title="Adds LittleCMS wasm rows next to jsCE.">
+                <input type="checkbox" id="incl-lcms-full" checked>
+                include lcms-wasm
+                <span class="check-hint">compare vs LittleCMS</span>
+            </label>
+            <label class="check" title="Adds sRGB→sRGB and GRACoL→GRACoL. Both engines collapse those to a copy — a memory-bandwidth ceiling, not a colour transform. Off by default so headline numbers stay honest.">
+                <input type="checkbox" id="incl-identity-full">
+                include identity
+                <span class="check-hint">memcpy ceiling, not a transform</span>
+            </label>
+            <label class="check" title="Off by default so photos with 5 % / 15 % noise added stay honest (cache tax on grain). On binds pixelCache:'auto' — in-kernel last-pixel on WASM 3–6, accuracy-path inject on 4/5/6 transform(). Solids and logos win; noise does not.">
+                <input type="checkbox" id="pixel-cache-full">
+                pixel cache
+                <span class="check-hint">last-pixel memo; wins on solids, tax on grain</span>
+            </label>
+        </div>
     </div>
 
     <div class="progress" id="progress-full">
@@ -422,6 +456,7 @@
         <label>Mode
             <select id="mode-warmup">
                 <option value="no-lut">jsColorEngine no-LUT (f64)</option>
+                <option value="matrix-shaper">jsColorEngine matrix-shaper</option>
                 <option value="float">jsColorEngine float</option>
                 <option value="int" selected>jsColorEngine int (u8 I/O)</option>
                 <option value="int16">jsColorEngine int16 (u16 I/O)</option>
@@ -487,6 +522,7 @@
         <label>Mode
             <select id="mode-sweep">
                 <option value="no-lut">jsColorEngine no-LUT (f64)</option>
+                <option value="matrix-shaper">jsColorEngine matrix-shaper</option>
                 <option value="float">jsColorEngine float</option>
                 <option value="int" selected>jsColorEngine int (u8 I/O)</option>
                 <option value="int16">jsColorEngine int16 (u16 I/O)</option>
@@ -526,6 +562,141 @@
                 </tr>
             </thead>
             <tbody><!-- populated by main.js --></tbody>
+        </table>
+    </div>
+</section>
+
+<!-- ===== TEST: POOL DEMO ================================================== -->
+<section class="card test-panel" id="panel-pool" hidden>
+    <h2>Pool demo &mdash; 15-image queue, one fragment queue</h2>
+    <p class="lead">
+        Three photographs at different sizes, queued
+        <strong>1, 2, 3, 1, 2, 3 &hellip;</strong> five times (15 images).
+        Workers pull fragments from one queue, so mixed sizes keep every core
+        busy. Per-image MPx/s is the kernel; the headline
+        <strong>total MPx/s</strong> is the parallelism.
+    </p>
+
+    <div class="controls">
+        <label>Direction
+            <select id="dir-pool">
+                <option value="rgb-cmyk" selected>RGB &rarr; CMYK (sRGB &rarr; GRACoL)</option>
+                <option value="rgb-rgb">RGB &rarr; RGB (sRGB &rarr; AdobeRGB)</option>
+            </select>
+        </label>
+        <label>Mode
+            <select id="mode-pool">
+                <option value="int" selected>int (u8 LUT)</option>
+                <option value="int-wasm-simd">int-wasm-simd</option>
+                <option value="float">float</option>
+                <option value="matrix-shaper">matrix-shaper (RGB&rarr;RGB only)</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="run-pool">Run pool</button>
+    </div>
+
+    <div class="bench-error" id="pool-error" hidden role="alert"></div>
+
+    <div class="progress" id="progress-pool">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <div class="pool-summary" id="pool-summary"></div>
+    <div class="pool-thumbs" id="pool-thumbs"></div>
+    <div class="results-wrap">
+        <table class="results" id="results-pool">
+            <thead>
+                <tr>
+                    <th>Image</th>
+                    <th class="num">Size</th>
+                    <th class="num">Pixels</th>
+                    <th class="num">Fragments</th>
+                    <th class="num">Wall ms</th>
+                    <th class="num">Avg compute ms</th>
+                    <th class="num">MPx/s</th>
+                    <th>Finished</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <pre class="pool-log" id="pool-log" hidden></pre>
+</section>
+
+<!-- ===== TEST: NOISE KNEE ================================================= -->
+<section class="card test-panel" id="panel-knee" hidden>
+    <h2>Speed vs Noise &mdash; why we add grain</h2>
+    <p class="lead">
+        A clean photograph and a solid colour do not give the same MPx/s,
+        and they do not travel: the same image is fast on one machine
+        and slower on another because neighbours stay in cache. <strong>A
+        pinch of noise stabilises the numbers.</strong> After a few
+        percent of grain, every starting picture collapses onto the same
+        plateau &mdash; that is why the other tabs default to
+        <strong>photo with 5&nbsp;% noise added</strong>.
+        A solid still flies (one colour, one lookup). A clean photo is
+        in between. <strong>Pure noise is the worst case</strong>
+        &mdash; almost every pixel is a new colour.
+    </p>
+    <p class="muted">
+        The lines are not a jsCE-versus-lcms contest. They are how
+        <em>this</em> machine treats three kernels as grain rises.
+        A Mac will draw a different shape. The interesting region is
+        0&ndash;3&nbsp;%: after that this computer is already on the
+        plateau. Dashed horizontals are pure noise. lcms&rsquo;s extra
+        1-pixel memo only helps when neighbours match &mdash; that is
+        why its solid line can fall off a cliff; <code>NOCACHE</code>
+        does not. Default direction is RGB&rarr;Lab
+        (<a href="../../docs/deepdive/benchmark.md">the published sweep</a>).
+    </p>
+
+    <div class="knee-previews" id="knee-previews" aria-label="Photo at rising noise"></div>
+
+    <div class="controls">
+        <label>Direction
+            <select id="dir-knee">
+                <option value="rgb-lab" selected>RGB &rarr; Lab (sRGB &rarr; PCS Lab)</option>
+                <option value="rgb-cmyk">RGB &rarr; CMYK (sRGB &rarr; GRACoL)</option>
+                <option value="rgb-rgb">RGB &rarr; RGB (sRGB &rarr; AdobeRGB)</option>
+            </select>
+        </label>
+        <label>Pixels
+            <select id="pixels-knee">
+                <option value="65536">65 K</option>
+                <option value="262144" selected>262 K</option>
+                <option value="1048576">1 M (slow, published size)</option>
+            </select>
+        </label>
+        <button class="btn-primary" id="run-knee">Run Speed vs Noise</button>
+    </div>
+
+    <div class="progress" id="progress-knee">
+        <div class="progress-bar"></div>
+        <div class="progress-text">idle</div>
+    </div>
+
+    <div class="knee-insights" id="knee-insights" hidden></div>
+
+    <div class="chart-wrap">
+        <canvas id="chart-knee" width="900" height="380"></canvas>
+        <div class="legend" id="legend-knee"></div>
+    </div>
+
+    <div class="results-wrap">
+        <table class="results" id="results-knee">
+            <thead>
+                <tr>
+                    <th>Noise %</th>
+                    <th class="num">jsCE solid</th>
+                    <th class="num">jsCE photo</th>
+                    <th class="num">lcms solid</th>
+                    <th class="num">lcms photo</th>
+                    <th class="num">NOCACHE solid</th>
+                    <th class="num">NOCACHE photo</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
         </table>
     </div>
 </section>
@@ -607,7 +778,8 @@
         rows below are what <code>'auto'</code> is choosing from.
     </p>
     <ul class="explain">
-        <li><strong>jsColorEngine no-LUT (f64)</strong> &mdash; <code>buildLut: false</code>. No CLUT is built; every pixel walks the full per-stage pipeline (curves &rarr; matrix &rarr; LUT &rarr; PCS &rarr; inverse&hellip;) in 64-bit float. <em>This is the accuracy configuration</em> &mdash; use it when you need the most faithful math jsColorEngine can produce. Slowest by design; roughly comparable to <code>lcms-wasm NOOPTIMIZE</code>.</li>
+        <li><strong>jsColorEngine no-LUT (f64)</strong> &mdash; <code>buildLut: false</code> + <code>wasmMatrixShaper: false</code>. No CLUT; every pixel walks the full per-stage pipeline in 64-bit float. <em>This is the accuracy configuration.</em> The matrix-shaper is forced off so this row stays the slow faithful path, not the 300&nbsp;MPx/s fused kernel.</li>
+        <li><strong>jsColorEngine matrix-shaper</strong> &mdash; RGB&rarr;RGB only (<code>sRGB&rarr;AdobeRGB</code>). Same pair, no CLUT: Kernel3D yields the fused curve + 3&times;3 + curve WASM kernel (JS fallback if the host has no WASM). This used to hide inside the no-LUT row whenever <code>wasmMatrixShaper</code> defaulted to <code>auto</code>.</li>
         <li><strong>jsColorEngine float</strong> &mdash; <code>buildLut: true</code> + <code>lutMode: 'float'</code>. Float64Array CLUT (grid size shown in the <em>LUT</em> column, typically 33<sup>3</sup> for RGB and 33<sup>4</sup> for CMYK), tetrahedral interp in f64. Same float math as <em>no-LUT</em> for the interp step, but the pipeline is pre-collapsed to a LUT so it's much faster. If you want "float accuracy without the f64-pipeline tax", this is it.</li>
         <li><strong>jsColorEngine int</strong> &mdash; Uint16Array CLUT (Q0.16 weights), int32-specialised tetrahedral kernel via <code>Math.imul</code>. 8-bit I/O, bit-exact vs the float path. Added in v1.1 as the first non-float kernel.</li>
         <li><strong>jsColorEngine int16 (u16 I/O)</strong> &mdash; v1.3 16-bit-I/O JS kernel: <code>Uint16Array</code> CLUT scaled to the full [0..0xFFFF] range with Q0.13 fractional weights. Identity transforms round-trip to within &le;1 LSB of u16. Triggered by <code>{ dataFormat: 'int16', buildLut: true, lutMode: 'int16' }</code>; with no explicit <code>lutMode</code> the auto-resolver demotes through <code>int16-wasm-simd</code> &rarr; <code>int16-wasm-scalar</code> &rarr; <code>int16</code> based on host capability. Targeted at HDR / 16-bit TIFF / measurement workflows where banding from u8 quantisation is unacceptable.</li>
@@ -618,6 +790,30 @@
         <li><strong>lcms-wasm default / HIGHRES / NOOPT (8-bit)</strong> &mdash; LittleCMS 2.16 with <code>TYPE_*_8</code> formats. Pinned heap buffers via <code>_cmsDoTransform</code>. <code>default</code>=<code>flags=0</code>; <code>HIGHRES</code>=<code>cmsFLAGS_HIGHRESPRECALC</code> (49 RGB / 23 CMYK grid &mdash; LUT-path accuracy ceiling); <code>NOOPT</code>=<code>cmsFLAGS_NOOPTIMIZE</code> (no precalc LUT; the wasm build does not expose the f64 paths, so we run the <strong>u16</strong> pipeline on NOOPT path, not f64 like stock native lcms, so the Type column shows <code>u16</code> and the jsce <code>no-LUT</code> row stays the f64 accuracy reference).</li>
         <li><strong>lcms-wasm default / HIGHRES / NOOPT (16-bit)</strong> &mdash; same three flag variants but with <code>TYPE_*_16</code> formats. The lcms <em>precalc-LUT grid</em> is identical to the corresponding 8-bit row (lcms picks grid by colourspace, not by I/O bit depth), but the format converters at the pipeline edges flip from u8 to u16. Headline MPx/s typically drops ~10&ndash;15% vs the 8-bit row purely from the wider buffers. The <code>NOOPT</code> row shares the same u16 pipeline note as 8-bit NOOPT. The apples-to-apples row to read jsce <code>int16</code> against is the lcms <strong>default / HIGHRES</strong> 16-bit rows, not <code>NOOPT</code>.</li>
     </ul>
+
+    <h3>Content</h3>
+    <p>
+        Default is <strong>photo with 5&nbsp;% noise added</strong> &mdash; the
+        strawberries frame tiled to the buffer, then 5&nbsp;% high-bit grain.
+        Past ~3&nbsp;% grain every starting content collapses onto the same
+        plateau; 5&nbsp;% sits on it without walking as far into noise.
+        The dropdown also has <strong>photo with 15&nbsp;% noise added</strong> (deep plateau),
+        <strong>solid</strong> (one colour &mdash; algorithm bound),
+        <strong>photo</strong> (clean strawberries &mdash; locality),
+        <strong>noise</strong> (high-bit LCG), and
+        <strong>legacy</strong> (do not quote). CMYK workflows use a GRACoL
+        separation of the same frame, not RGB stuffed into four channels.
+        The <em>Speed vs Noise</em> tab graphs that on <em>this</em> computer:
+        same colour stays in L1, more random colours pull more of the
+        profile through L2 / RAM, pure noise is the worst case. A Mac
+        will draw a different shape.
+        <strong>pixel cache</strong> is off by default so photos with 5&nbsp;% /
+        15&nbsp;% noise added stay honest (last-pixel compare taxes grain). Tick it
+        for <code>pixelCache: 'auto'</code> &mdash; WASM 3&ndash;6 bind
+        the in-kernel export; 4/5/6 also inject the accuracy-path stage.
+        Solids and logos win; do not quote a cached photo with 15&nbsp;%
+        noise added row as the headline.
+    </p>
 
     <h3>The four benchmark directions, and why RGB&rarr;RGB is
         sRGB&rarr;<em>AdobeRGB</em></h3>
@@ -642,9 +838,12 @@
             Matrix-shaper collapse is a legitimate lcms optimisation on RGB&rarr;RGB;
             jsColorEngine also has identity detection as of v1.5 (same-binary-hash
             or same virtual-name profiles resolve to a direct pixel copy — no LUT
-            built, no pipeline run). <em>All four directions in this bench use
-            different profiles on input and output, so no identity fast-path fires
-            in either engine.</em> Firefox drops from
+            built, no pipeline run). <em>The four default directions use
+            different profiles, so no identity fast-path fires.</em>
+            Tick <strong>include identity</strong> on Full comparison to
+            add sRGB&rarr;sRGB and GRACoL&rarr;GRACoL as extra blocks
+            &mdash; those are the memcpy ceiling, kept out of the summary cards.
+            Firefox drops from
             165 &rarr; 91&nbsp;MPx/s on lcms moving from sRGB&rarr;sRGB to sRGB&rarr;AdobeRGB &mdash;
             that&apos;s the size of the passthrough boost, and exactly why this bench
             uses distinct profiles throughout.
@@ -819,6 +1018,17 @@
         <code>samples/lcms-wasm-dist/lcms.wasm</code>.
     </p>
 
+    <h3>Pool demo</h3>
+    <p>
+        The <em>Pool demo</em> tab is the in-browser check that
+        <code>transformImages()</code> actually uses Web Workers. It loads
+        three photographs at different sizes, slices them into fragments, and
+        reports wall time, per-image compute time, fragment counts, finish
+        order, and the sequential baseline. A browser needs
+        <code>browser/jsColorEngineWorker.js</code> (built by
+        <code>npm run browser</code>).
+    </p>
+
     <h3>How to read the result</h3>
     <p>
         The right-hand bar in the results table is normalised per direction so
@@ -827,12 +1037,12 @@
         <code>int</code> for the same direction &mdash; this is the
         apples-to-apples "how much does the WASM/SIMD port buy us" number,
         and the one most directly comparable to the figures in
-        <code>docs/Performance.md</code>.
+        <code>docs/deepdive/Performance.md</code>.
     </p>
 
     <h3>Caveats</h3>
     <ul class="explain">
-        <li>Run with the browser tab focused. Background tabs throttle <code>setTimeout</code> and (sometimes) <code>performance.now()</code> precision.</li>
+        <li>Run with the browser tab focused. Background tabs throttle <code>setTimeout</code> and (sometimes) <code>performance.now()</code> precision. If this tab loses focus mid-run, the bench pauses and asks you to resume so a background sample cannot poison the numbers.</li>
         <li>Close other heavy tabs / apps. CPU contention shows up directly in MPx/s.</li>
         <li>First run after page load includes WASM compile + profile decode &mdash; hit "Run benchmark" twice for stable numbers.</li>
         <li>Numbers in the same browser are highly reproducible (&plusmn;5%); cross-browser they can swing 30%+. Use a single browser when comparing modes.</li>
@@ -853,6 +1063,15 @@
     <span>jsColorEngine v<span id="info-version">?</span> &middot; samples/bench</span>
     <span>Profiles: CoatedGRACoL2006.icc + ISOcoated_v2_eci.icc + AdobeRGB1998.icc (under samples/profiles/)</span>
 </footer>
+
+<div id="bench-pause" class="bench-pause" hidden>
+    <div class="bench-pause-card" role="alertdialog" aria-labelledby="bench-pause-title" aria-describedby="bench-pause-body">
+        <h2 id="bench-pause-title">Bench paused</h2>
+        <p id="bench-pause-body">This tab lost focus. Background tabs get throttled, so a hidden-tab sample is not trustworthy.</p>
+        <p class="muted">Bring this tab back to the front, then resume.</p>
+        <button type="button" id="bench-pause-resume" class="btn-primary">Resume</button>
+    </div>
+</div>
 
 <script type="module" src="main.js"></script>
 </body>

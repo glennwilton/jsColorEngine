@@ -720,10 +720,16 @@
         stage_gammaTable(device, data){
             var lut    = data.lut;
             var lutMax = data.lutMax;
+            // Same clamp as stage_Gamma / stage_Gamma_Inverse. A matrix can
+            // push a channel just past 1.0; without this the index walks off
+            // the table and the channel comes back 0 (255 LSB at int8).
+            var i0 = Math.min(Math.max(device[0], 0.0), 1.0);
+            var i1 = Math.min(Math.max(device[1], 0.0), 1.0);
+            var i2 = Math.min(Math.max(device[2], 0.0), 1.0);
             return [
-                lut[(device[0] * lutMax + 0.5) | 0],
-                lut[(device[1] * lutMax + 0.5) | 0],
-                lut[(device[2] * lutMax + 0.5) | 0],
+                lut[(i0 * lutMax + 0.5) | 0],
+                lut[(i1 * lutMax + 0.5) | 0],
+                lut[(i2 * lutMax + 0.5) | 0],
             ];
         }
 

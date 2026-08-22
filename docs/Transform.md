@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [Examples](./Examples.md) ·
@@ -11,6 +11,8 @@
 [Loader](./Loader.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](./Bench.md). Canonical tables: [BenchResults.md](./BenchResults.md).
 
 The `Transform` class is the colour-conversion engine. You give it a
 source [`Profile`](./Profile.md) and a destination `Profile` (and
@@ -35,6 +37,7 @@ colours / pixels as you like.
 * [Constructor options](#constructor-options)
 * [Gamut warning modes](#gamut-warning-modes)
 * [Methods](#methods)
+  * [`array` / `transformArray` / `transformArrayViaLUT`](#transformarrayinputarray-inputhasalpha-outputhasalpha-preservealpha-pixelcount-outputarray)
   * [Pipeline validation — `validatePipeline`](#transformvalidatepipelineformatoverride)
   * [Batches and the worker pool — `transformImages`](#transformtransformimagesimages-options)
   * [Pool control — `enablePool` / `disablePool` / `restartPool`](#pool-control--enablepool--disablepool--restartpool)
@@ -56,14 +59,13 @@ one matters more than any other choice you'll make:
 | Use case | Method | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calcs, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` with `{ buildLut: true, dataFormat: 'int8' }` | ~120 MPx/s on photographs (WASM SIMD, one core); ~330 where the matrix-shaper kernel takes over | Slightly less accurate (LUT is finite resolution) — except on the matrix-shaper kernel, which has no interpolation error | Soft-proofing, image conversion, video, any pixel-bulk |
+| **Image / array processing** | `transform.array(...)` — container matches `dataFormat`. Fast path: `{ buildLut: true, dataFormat: 'int8' }` (or `'int16'`) | ~120 MPx/s on photographs (WASM SIMD, one core); ~330 where the matrix-shaper kernel takes over | Slightly less accurate (LUT is finite resolution) — except on the matrix-shaper kernel, which has no interpolation error | Soft-proofing, image conversion, video, any pixel-bulk |
 | **Batches of images** | `await transform.transformImages(images, {multicore: true, onImage})` | 6.2× peak, 787 MPx/s across 8 workers | Byte-identical to the sequential path | Whole folders, servers, RIPs — see [docs/pool.md](./pool.md) |
 
 The library is deliberately split this way so single-colour conversion
 is exact and image conversion is fast — the optimisations needed for
-the hot path (unrolled loops, skipped bounds checks, typed-array-only IO,
-monomorphic JIT shapes) actively hurt single-colour readability and
-correctness.
+the hot path (unrolled loops, skipped bounds checks, monomorphic JIT
+shapes) actively hurt single-colour readability and correctness.
 
 ---
 
@@ -114,15 +116,20 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
 
     // imageData.data is a Uint8ClampedArray of [R, G, B, A, R, G, B, A, ...]
     // hasInputAlpha=true, hasOutputAlpha=false → alpha is dropped on the way out.
-    const cmykBytes = rgb2cmyk.transformArray(imageData.data, true, false);
+    const cmykBytes = rgb2cmyk.array(imageData.data, true, false);
 
     // cmykBytes is now [C, M, Y, K, C, M, Y, K, ...]
 })();
 ```
 
-`transformArray()` automatically routes to the fast `transformArrayViaLUT()`
-path when `dataFormat === 'int8'` and a LUT is built. You can also call
-`transformArrayViaLUT()` directly when you want to be explicit.
+`transform.array()` is the batch entry (native units). `transformArray()`
+is the same call plus an optional `outputFormat` applied afterwards via
+`Transform.reformat`. After either, `transform.lastUsedKernel` is the
+kernel name that ran, or `'pipeline'` / `'cache'`.
+
+`transformArrayViaLUT()` is the loud cousin: same work, but throws
+`'No LUT loaded'` instead of walking the pipeline. Use it when a missing
+table must be a hard error.
 
 ---
 
@@ -144,7 +151,7 @@ proof.createMultiStage([
     '*sRGB'
 ]);
 
-const proofedRGB = proof.transformArray(rgbBytes, false, false);
+const proofedRGB = proof.array(rgbBytes, false, false);
 ```
 
 `BPC` accepts either a boolean (applies to all stages) or an array of
@@ -169,7 +176,7 @@ await dl.loadPromise('MyDeviceLink.icc');
 
 const t = new Transform({ dataFormat: 'int8', buildLut: true });
 t.create(dl);                       // just the link — no second profile
-const out = t.transformArray(cmykPixels, false, false);
+const out = t.array(cmykPixels, false, false);
 ```
 
 - The **rendering intent comes from the profile header** (per spec the
@@ -252,7 +259,7 @@ new Transform(options)
 |---|---|---|---|
 | `buildLut` | Boolean | `false` | Pre-bake the pipeline into a CLUT. Required for the fast image path. Slight accuracy loss vs. running the full pipeline (LUT quantisation), but typically invisible to the eye and 20–40× faster. *(Legacy spelling `builtLut` is also accepted.)* |
 | `lutMode` | String | `'auto'` | **Image hot-path kernel selector.** Five values in v1.2: `'auto'` (default — picks the fastest kernel for the current `(dataFormat, buildLut)` combination), `'float'`, `'int'`, `'int-wasm-scalar'`, `'int-wasm-simd'`. `'auto'` resolves at construction time: `dataFormat: 'int8'` + `buildLut: true` → `'int-wasm-simd'` (with the automatic **SIMD → scalar WASM → JS `'int'`** demotion chain running at `create()` time for hosts that lack WASM or SIMD); anything else → `'float'`. Inspect `xform.lutMode` after construction to see the resolved value. Pin an explicit mode when you want determinism: `'float'` for bit-stable f64 LUT interp across releases, `'int'` for JS-only (no WASM), or `'int-wasm-*'` to fail loudly on hosts that can't run that specific kernel. Unknown values (typos, forward-written code referencing modes added in later versions) auto-resolve the same way `'auto'` does, so code never crashes on upgrade. Don't pin `'int'` / `'int-wasm-*'` for color-measurement workflows that need bit-exact reference output against a float path — pin `'float'` or set `buildLut: false`. See the "lutMode" section below and [deep dive / LUT modes](./deepdive/LutModes.md) for full kernel details. |
-| `dataFormat` | String | `'object'` | `'object'`, `'objectFloat'`, `'int8'`, `'int16'`, `'device'`. Determines the input/output shape of `transform()` / `transformArray()`. The fast LUT path requires `'int8'`. |
+| `dataFormat` | String | `'object'` | `'object'`, `'objectFloat'`, `'int8'`, `'int16'`, `'device'`. Determines the input/output shape of `transform()` / `array()`. The fast LUT path is `'int8'` or `'int16'`. |
 | `BPC` | Boolean \| Boolean[] | `false` | Black Point Compensation. Boolean enables for all stages; array enables per-stage by stage index (0, 1, 2…). |
 | `roundOutput` | Boolean | `true` | Round numeric output. Set `false` to keep raw floats (e.g. `243.20100198…`). |
 | `precision` | Number | `0` | Decimal places to round to when `roundOutput=true`. *(Legacy spelling `precession` is also accepted.)* |
@@ -269,9 +276,9 @@ new Transform(options)
 | `optimise` | Boolean | `true` | Run the pipeline optimiser to remove redundant conversions (e.g. matched encode/decode pairs). |
 | `clipRGBinPipeline` | Boolean | `false` | Clip RGB values to 0..1 inside the pipeline (useful for extreme abstract profiles). |
 | `validateOnCreate` | Boolean | `true` | Run a single-pixel smoke test through the pipeline at the end of `create()`. If the test colour produces `NaN`, `undefined`, or the wrong output type the call throws immediately with a clear message. Adds ~1 µs to `create()` time — negligible. Set `false` to disable (e.g. when loading a pre-validated profile that you already trust). Has no effect when a cached LUT is loaded via `setLut()` / `fromJSON()` — validation is skipped for pre-built LUTs. |
-| `pixelCache` | Number | `0` | **BETA — semantics may change.** Memoise the accuracy path: `0`/`false` off, `1` a single entry, or a table size (rounded down to a power of two). **Off by default and worth measuring before enabling — and the bar depends on input width.** For 3- and 4-channel input, break-even is around a 40 % hit rate, which flat graphic content clears easily and photographs generally do not (a landscape photo measured 3 % and 0.84×; a flat-colour poster 67 % and 1.22×). **Above 4 input channels it falls to roughly 6–15 %**, because `KernelND` declines the CLUT and every pixel walks the pipeline — a miss costs so much more that the lookup barely registers, and a hit skips ~29× the work instead of ~5×. At 8 channels, flat content measured 21–26×. Pure noise still never pays at any width. If you do enable it, **prefer a large table** — `256`–`1024` — because the cost is the lookup itself, not the table: 4096 slots measured no slower than 32, while hit rate keeps climbing. Use `getPixelCacheStats()` → `{hits, misses, lookups, hitRate}` on your own content to decide. No effect on the LUT image path. Declines silently (leaving a correct, uncached pipeline) when `pipelineDebug` is on or custom stages are present. See [deepdive/PixelCache.md](./deepdive/PixelCache.md). |
+| `pixelCache` | Number \| `'auto'` | `'auto'` | **BETA — semantics may change.** One hint, two implementations. **Accuracy path:** `'auto'` is ignored by Transform — the kernel may change it to `1` from `init()` (4/5/6 do; 3D and everything else leave it). `0`/`false` off, `1` a single entry, or a table size (rounded down to a power of two). `pixelCacheUsed` is what the pipeline ran. **Image path:** WASM 3–6 kernels bind `interp_*_cached` (single-entry) when the hint is not `0`; `kernelInfo().cache` is `1` when that export ran. Matrix-shaper / JS fallback decline. Use `getPixelCacheStats()` on `transform()` content to decide a table size. Declines silently when `pipelineDebug` is on or custom stages are present. See [deepdive/PixelCache.md](./deepdive/PixelCache.md). |
 | `wasmMatrixShaper` | Boolean \| String | `true` | Use the fused WASM matrix-shaper kernel when the built pipeline is a matrix-shaper pair (curve → 3×3 → curve). `true` takes it only when there is no LUT to displace; `'prefer'` also displaces a CLUT that would otherwise be built, which is both faster and more accurate; `false` disables it. Declines silently — and correctly — for per-channel TRCs, non-RGB spaces, and `dataFormat` values other than `'int8'` / `'int16'`. Ask `transform.kernelInfo()` what actually happened. See [deepdive/MatrixShaperKernel.md](./deepdive/MatrixShaperKernel.md). |
-| `multicore` | Boolean \| Object | `false` | Default for `transformImages()` when the call does not pass its own. `true` uses the pool as configured; an object carries pool options for this transform. Ignored by `transform()` and `transformArray()`, which are always single-threaded. |
+| `multicore` | Boolean \| Object | `false` | Default for `transformImages()` when the call does not pass its own. `true` uses the pool as configured; an object carries pool options for this transform. Ignored by `transform()` and `array()`, which are always single-threaded. |
 | `verbose` | Boolean | `false` | Log pipeline construction info to console. |
 | `verboseTiming` | Boolean | `false` | Log build timings to console. |
 | `lutGamutMode` | String | `'none'` | Baked gamut check during LUT build. See [Gamut warning modes](#gamut-warning-modes) below. |
@@ -370,14 +377,14 @@ place where a broken profile surfaces as an exception:
 try {
     const xf = new Transform();
     xf.create(inputProfile, outputProfile, eIntent.relative);
-    // If we get here, xf.transform() and xf.transformArray() are safe to
+    // If we get here, xf.transform() and xf.array() are safe to
     // call without a try/catch on every pixel / every array.
 } catch (err) {
     console.error('Pipeline failed to build:', err.message);
 }
 ```
 
-Once `create()` succeeds, `transform()` and `transformArray()` will
+Once `create()` succeeds, `transform()` and `array()` will
 not throw on well-formed input. The only remaining failure mode is
 a caller error (wrong array length, wrong channel count), which the
 existing guards already report with a clear message. Wrapping every
@@ -391,16 +398,27 @@ colour object (e.g. `{ L, a, b }`, `{ R, G, B }`, `{ C, M, Y, K }`).
 Returns a typed colour object in the destination space. Every stage of
 the pipeline runs at full 64-bit precision.
 
-### `transform.transformArray(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?, outputFormat?)`
+### `transform.array(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?, outputArray?)`
 
-The recommended array entry point. Routes to the fastest legitimate
-path based on `dataFormat` and whether a LUT was prebuilt:
+The batch entry. Native units; the container matches `dataFormat`.
+Hands the kernel the batch when `kernel.enableForArrays` is set
+(identity in any `dataFormat`, a claimed kernel, or an int8/int16
+CLUT). Otherwise walks the pipeline. Sets `transform.lastUsedKernel`
+to the kernel `name`, or `'pipeline'` / `'cache'`.
 
-| Configuration | Path used |
+### `transform.transformArray(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?, outputFormat?, outputArray?)`
+
+Same as `array()`, plus `outputFormat`. If that differs from
+`dataFormat`, the native result is passed through `Transform.reformat`.
+Sixth argument is the format; seventh is the reformat destination.
+
+| Configuration | `lastUsedKernel` |
 |---|---|
-| `dataFormat: 'int8'` and LUT built | `transformArrayViaLUT()` — image fast path |
-| `dataFormat: 'object'` / `'objectFloat'` | Per-pixel accuracy path, walking the full pipeline |
-| `dataFormat: 'int8'` / `'int16'` / `'device'` and no LUT | Per-pixel accuracy path over a flat numeric array |
+| Identity (same file twice, any `dataFormat`) | `'kernelIdentity'` |
+| `dataFormat: 'int8'`/`'int16'` and LUT built | `'kernel3D'` / `'kernel4D'` / … |
+| Matrix-shaper pair, no LUT | `'matrix-shaper'` |
+| Object formats on a colour conversion, or int/device with no LUT and no claim | `'pipeline'` |
+| `pixelCache` live | `'cache'` |
 
 Parameters:
 
@@ -413,24 +431,24 @@ Parameters:
 * `preserveAlpha` — copy alpha from input to output verbatim. Requires
   `inputHasAlpha=true`. Defaults to `(inputHasAlpha && outputHasAlpha)`.
 * `pixelCount` — if not specified, derived from `inputArray.length`.
-* `outputFormat` — output container type. `'int8'` →
-  `Uint8ClampedArray`, `'int16'` → `Uint16Array`, `'float32'` →
-  `Float32Array`, `'float64'` → `Float64Array`. Defaults to a plain
-  `Array`. Ignored on the LUT path (which always returns
-  `Uint8ClampedArray`).
+* `outputFormat` — rescaled via `Transform.reformat` when it differs
+  from `dataFormat`. `'int8'` / `'int16'` / `'float32'` / `'float64'` /
+  `'device'`.
+* `outputArray` — optional destination for the remapped result.
 
 ### `transform.transformArrayViaLUT(inputArray, inputHasAlpha?, outputHasAlpha?, preserveAlpha?, pixelCount?, outputArray?)`
 
-The fast image path explicitly. Requires `buildLut: true,
-dataFormat: 'int8'` (or `'int16'`) at construction time.
+Same work as `array()`, but throws `'No LUT loaded'` instead of walking
+the pipeline. Requires `buildLut: true` and a table. Cost is one `if`.
 
-* `outputArray` — optional pre-allocated `Uint8ClampedArray` (or
-  `Uint16Array` for int16 modes) to write into. Must be at least
-  `pixelCount × outputBPP` long. When provided, the same instance is
-  returned — no allocation, no GC pressure. Ideal for real-time
-  loops (video soft-proofing, animation).
+* `outputArray` — optional pre-allocated buffer matching `dataFormat`.
+  Must be at least `pixelCount × outputBPP` long. When provided, the
+  same instance is returned — no allocation, no GC pressure. Ideal for
+  real-time loops (video soft-proofing, animation).
 
-Returns a `Uint8ClampedArray` (or `Uint16Array` for int16 modes).
+Returns the same container `array()` would: `Uint8ClampedArray` for
+`int8`, `Uint16Array` for `int16`, a plain `Array` for `device` /
+object formats.
 
 **WASM memory retention:** when `lutMode` is a WASM variant, each call
 may grow WASM linear memory to fit the current image. This memory
@@ -461,7 +479,7 @@ const { images, workersUsed } = await t.transformImages([
 
 - **Always callable.** With no `worker_threads`, a restrictive CSP, `cores: 1`,
   or too little work to be worth splitting, it runs the images sequentially
-  through `transformArray()` and returns the identical bytes. `onImage` fires
+  through `array()` and returns the identical bytes. `onImage` fires
   either way, so a caller never feature-detects. `workersUsed` is what was
   actually used — `0` means it ran on the calling thread.
 - **Images finish out of order.** Slices are dispatched longest-first and
@@ -496,8 +514,17 @@ What actually took this transform, after `create()` has resolved everything:
 
 ```js
 t.kernelInfo();
-// { name: 'matrixShaper', variant: 'simd', bits: 8, perChannel: false, … }
+// { name: 'matrix-shaper', variant: '8-simd', bits: 8, cache: 'not-supported', … }
 ```
+
+`cache` is the pixel-cache **hint** result, not a contract:
+
+| Value | Meaning |
+|---|---|
+| `'not-supported'` | This kernel has no cached export (matrix-shaper, identity, 1D/2D, ND). The fast path ran as-is. |
+| `'off'` | 3D/4D CLUT kernel can take a cache; the hint was off or nothing was bound. |
+| `1` | Single-entry array cache bound — same bits as last pixel skip the gather. |
+| `N` | Array table bound, `N` slots (power of two). |
 
 Worth calling when a `wasmMatrixShaper` transform is slower than expected — the
 kernel declines silently by design, and this is the only place that says so.
@@ -678,7 +705,7 @@ fs.writeFileSync('lut.json', JSON.stringify(t));   // calls t.toJSON() automatic
 
 // Consumer (runtime — no profiles, no lcms)
 const t = Transform.fromJSON(fs.readFileSync('lut.json'), { dataFormat: 'int8' });
-t.transformArray(pixels);
+t.array(pixels);
 ```
 
 **Instance method**
@@ -737,9 +764,10 @@ Every LUT produced by `buildLut: true` carries `lut.originalSignature` (`"FNV1A:
 | `usesBPC` | Boolean | True if any stage applies Black Point Compensation. |
 | `usesAdaptation` | Boolean | True if chromatic adaptation runs across the PCS. |
 | `chain` | Array | Profile chain — describes how the pipeline was constructed. |
-| `pipelineCreated` | Boolean | True after a successful `create*` call. `transform()` / `transformArray()` will throw `'No Pipeline'` if this is false. |
+| `pipelineCreated` | Boolean | True after a successful `create*` call. `transform()` / `array()` will throw `'No Pipeline'` if this is false. |
 | `builtLut` | Boolean | True if a LUT has been prebuilt. |
 | `lut` | Object \| `false` | The prebuilt CLUT, or `false` if none. |
+| `lastUsedKernel` | String \| `null` | What `array()` actually ran last: the kernel `name`, or `'pipeline'` / `'cache'`. Null until the first batch. `transformArrayViaLUT` throws before `array()`, so a missing table leaves this unchanged. |
 
 ---
 
@@ -890,7 +918,7 @@ throughput is unchanged.
 kernels in the same container (both methods or both free-standing)
 before comparing.** This is easy to get wrong and produces very
 confident-looking false positives. Full discussion and rules of
-thumb in `docs/Performance.md` under "Caution — benchmark context
+thumb in `docs/deepdive/Performance.md` under "Caution — benchmark context
 matters".
 
 The ~1.05–1.25× engine speedup plus the 4× LUT memory reduction is
@@ -934,10 +962,11 @@ both its rounding error AND its instruction count.
 - The mirror LUT is built in `Transform.buildIntLut(lut)`, called from
   `create()` after the optimiser has finalised the float pipeline.
   Shape gating happens in there — adding a new supported shape means
-  adding the kernel loop, adding its row to `src/lutKernelTable.js`
-  (the kernel instance resolves run refs from it at create() time —
-  see [deepdive/KernelModules.md](./deepdive/KernelModules.md)),
-  and extending `buildIntLut`'s `supported3D` / `supported4D` test.
+  adding the kernel loop, adding its row to that dimension's table
+  (`src/kernels/3d/kernel3D_table.js` or
+  `src/kernels/4d/kernel4D_table.js`), and extending `buildIntLut`'s
+  `supported3D` / `supported4D` test. The kernel binds its own image
+  path in `init()` — see [deepdive/KernelContract.md](./deepdive/KernelContract.md).
 - The `input === 255` boundary patches (one per axis) are **non-optional**.
   Without them, pure-channel inputs land one grid below the top with
   weight ~0.875 instead of on the top with weight 0, producing a `max

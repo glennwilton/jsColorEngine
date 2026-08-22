@@ -103,7 +103,7 @@ proven the v1.6 framework upgrade path is real.
 
 ### 4. Document the findings publicly
 
-- [ ] Update `docs/Performance.md` to reference the scenario file as
+- [ ] Update `docs/deepdive/Performance.md` to reference the scenario file as
   the way to reproduce the README's 210 MPx/s claim
 - [ ] Add a short section: "Why your numbers might differ from the
   README" — points at §16–19 of `benchmark.md`

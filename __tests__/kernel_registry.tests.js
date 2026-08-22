@@ -3,7 +3,7 @@
  *
  * `Transform.kernels` is an array indexed by INPUT CHANNEL COUNT over the full
  * ICC range 1..15 (FCLR is 15 channels). There is no 'nd' key and no
- * `inputChannels > 4` special case: KernelND simply occupies slots 5..15.
+ * `inputChannels > 4` special case: Kernel5D/6D occupy 5 and 6; KernelND occupies 7..15.
  *
  * The point of eleven slots holding one descriptor is that any single
  * dimension can be replaced — a tuned Kernel7D, or a test probe — without
@@ -11,7 +11,7 @@
  * thing the rest of the contract's testability rests on.
  *
  * Coverage:
- *   1. Shape          — dense 1..15, slots 5..15 share one object, named
+ *   1. Shape          — dense 1..15, slots 7..15 share KernelND, named
  *   2. registerKernel — number, [from,to] range, legacy 'ND', range validation
  *   3. Isolation      — a probe at one dimension disturbs no other
  *   4. Routing        — setKernel() indexes the array; instances are per-Transform
@@ -60,22 +60,25 @@ describe('kernel registry — dense 1..15', () => {
         }
     });
 
-    test('1..4 are the dimensional kernels, and they are named', () => {
+    test('1..6 are the dimensional kernels, and they are named', () => {
         expect(Transform.kernels[1].name).toBe('kernel1D');
         expect(Transform.kernels[2].name).toBe('kernel2D');
         expect(Transform.kernels[3].name).toBe('kernel3D');
         expect(Transform.kernels[4].name).toBe('kernel4D');
+        expect(Transform.kernels[5].name).toBe('kernel5D');
+        expect(Transform.kernels[6].name).toBe('kernel6D');
     });
 
-    test('slots 5..15 hold ONE shared descriptor object', () => {
-        // Identity, not equality. Sharing the object is what keeps eleven
-        // slots free: Object.create() in setKernel() then produces a single
-        // hidden class across the whole span rather than eleven.
-        const nd = Transform.kernels[5];
+    test('slots 7..15 hold ONE shared descriptor object', () => {
+        const nd = Transform.kernels[7];
         expect(nd.name).toBe('kernelND');
-        for(let d = 6; d <= MAX; d++){
+        for(let d = 8; d <= MAX; d++){
             expect(Transform.kernels[d]).toBe(nd);
         }
+        expect(Transform.kernels[5].name).toBe('kernel5D');
+        expect(Transform.kernels[6].name).toBe('kernel6D');
+        expect(Transform.kernels[5]).not.toBe(nd);
+        expect(Transform.kernels[6]).not.toBe(nd);
     });
 
     test('the 3-channel slot holds Kernel3D, which yields when it wants to', () => {
@@ -95,7 +98,7 @@ describe('registerKernel — dimensions forms', () => {
         try {
             Transform.registerKernel(probe('test-k7', 7));
             expect(Transform.kernels[7].name).toBe('test-k7');
-            expect(Transform.kernels[6].name).toBe('kernelND');
+            expect(Transform.kernels[6].name).toBe('kernel6D');
             expect(Transform.kernels[8].name).toBe('kernelND');
         } finally { restore(); }
     });
@@ -203,7 +206,8 @@ describe('setKernel — routing by input channel count', () => {
         const t = new Transform({ dataFormat: 'int8' });
         for(const [n, expected] of [[1, 'kernel1D'], [2, 'kernel2D'],
                                     [3, 'kernel3D'], [4, 'kernel4D'],
-                                    [5, 'kernelND'], [15, 'kernelND']]){
+                                    [5, 'kernel5D'], [6, 'kernel6D'],
+                                    [7, 'kernelND'], [15, 'kernelND']]){
             t.setKernel(n);
             expect(t.kernel).toBeTruthy();
             expect(t.kernel.name).toBe(expected);
@@ -245,6 +249,24 @@ describe('kernelInfo — names come from the descriptor', () => {
         expect(info.name).toBe('kernel3D');       // 3-channel input
         expect(info.dimensions).toBe(3);
         expect(info.claimed).toBe(false);
+        // 'auto' binds interp_*_cached on WASM CLUT kernels. JS fallback stays off.
+        if(String(t.lutMode).indexOf('wasm') >= 0){
+            expect(info.cache).toBe(1);
+        } else {
+            expect(info.cache).toBe('off');
+        }
+    });
+
+    test('matrix-shaper reports cache not-supported', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false });
+        t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+        expect(t.kernelInfo().cache).toBe('not-supported');
+    });
+
+    test('identity reports cache not-supported', () => {
+        const t = new Transform({ dataFormat: 'int8' });
+        t.create('*sRGB', '*sRGB', eIntent.relative);
+        expect(t.kernelInfo().cache).toBe('not-supported');
     });
 });
 
@@ -304,6 +326,7 @@ describe('floatFor — the kernel owns its single-colour stage function', () => 
                 for(let i = 0; i < PX; i++) inp[i] = (i * 37) & 255;
 
                 const got = t.transformArrayViaLUT(inp, false, false);
+                expect(t.lastUsedKernel).toBe('kernel1D');
 
                 // Through the SAME container, so the rounding is identical —
                 // Uint8ClampedArray rounds half-to-even, Math.round does not.
@@ -511,15 +534,15 @@ describe('each kernel owns its dispatch', () => {
     // lookup structure, it knows its variants. What is left is a switch per
     // kernel, reached through kernel.table.resolve().
 
-    test('3D and 4D expose their own resolver; nobody else needs one', () => {
-        for(const dim of [3, 4]){
+    test('3D–6D expose their own resolver; 1D/2D/ND do not', () => {
+        for(const dim of [3, 4, 5, 6]){
             const k = Transform.kernels[dim];
             expect(typeof k.table).toBe('object');
             expect(typeof k.table.resolve).toBe('function');
         }
         // 1D, 2D and ND have a single implementation their array() calls
         // directly, so they have no dispatch to resolve.
-        for(const dim of [1, 2, 5, 15]){
+        for(const dim of [1, 2, 7, 15]){
             expect(Transform.kernels[dim].table).toBeUndefined();
         }
     });
@@ -588,11 +611,12 @@ describe('WASM state belongs to the kernel', () => {
         const t = new Transform({ dataFormat: 'int8', buildLut: true, lutMode: 'int-wasm-simd' });
         t.create('*sRGB', cmyk, eIntent.relative);
 
-        expect(t.wasmTetra3D).not.toBeNull();
+        expect(t.wasmTetra3DSimd).not.toBeNull();
+        expect(t.wasmTetra3D).toBeNull(); // narrow output — no scalar fallthrough
         expect(t.wasmMemoryBytes()).toBeGreaterThan(0);
 
         t.releaseWasmMemory();
-        expect(t.wasmTetra3D).toBeNull();
+        expect(t.wasmTetra3DSimd).toBeNull();
         expect(t.kernel.wasmTetra3D).toBeNull();
         expect(t.wasmMemoryBytes()).toBe(0);
     });
@@ -612,7 +636,7 @@ describe('WASM state belongs to the kernel', () => {
         cmykT.create(cmyk, '*sRGB', eIntent.relative);
         expect(cmykT.kernelInfo().name).toBe('kernel4D');
         expect(cmykT.kernel.wasmTetra4DSimd).not.toBeNull();
-        expect(cmykT.kernel.wasmTetra4D).not.toBeNull();
+        expect(cmykT.kernel.wasmTetra4D).toBeNull(); // CMYK→RGB is cMax 3 — SIMD is enough
         expect(cmykT.kernel.wasmTetra3DSimd).toBeNull();
         expect(cmykT.kernel.wasmTetra3D).toBeNull();
 
@@ -620,7 +644,7 @@ describe('WASM state belongs to the kernel', () => {
         rgbT.create('*sRGB', cmyk, eIntent.relative);
         expect(rgbT.kernelInfo().name).toBe('kernel3D');
         expect(rgbT.kernel.wasmTetra3DSimd).not.toBeNull();
-        expect(rgbT.kernel.wasmTetra3D).not.toBeNull();
+        expect(rgbT.kernel.wasmTetra3D).toBeNull(); // RGB→CMYK is cMax 4 — SIMD is enough
         expect(rgbT.kernel.wasmTetra4DSimd).toBeNull();
         expect(rgbT.kernel.wasmTetra4D).toBeNull();
     });
@@ -637,7 +661,7 @@ describe('WASM state belongs to the kernel', () => {
         // NOTE create(lutMode) ignores its argument and reads
         // transform.lutMode -- longstanding, and why this sets the field
         // rather than passing a value.
-        for(const dims of [1, 2, 5, 15]){
+        for(const dims of [1, 2, 7, 15]){
             for(const [asked, landed] of [['int-wasm-simd', 'int'],
                                           ['int-wasm-scalar', 'int'],
                                           ['int16-wasm-simd', 'int16'],
@@ -755,7 +779,7 @@ describe('the image path — resolved in init(), kept inside the kernel', () => 
         // 1-D, 2-D and N-D call their single loop straight from array().
         // Nothing to choose between means no init(), no resolution, and the
         // fields stay null -- the split is not a tax every kernel pays.
-        for(const dims of [1, 2, 5, 15]){
+        for(const dims of [1, 2, 7, 15]){
             const k = Transform.kernels[dims];
             expect(k.init).toBeUndefined();
             expect(typeof k.array).toBe('function');
@@ -834,7 +858,8 @@ describe('init() — a kernel settles its own dimension, and may yield', () => {
 
             expect(seen.isArray).toBe(true);
             for(const key of ['transform', 'lutMode', 'dataFormat', 'verbose',
-                              'wasmMatrixShaper', 'pixelCacheActive', 'kernelOptions']){
+                              'wasmMatrixShaper', 'pixelCache', 'pixelCacheActive',
+                              'kernelOptions']){
                 expect(seen.keys).toContain(key);
             }
         } finally { restore(); }
@@ -947,6 +972,7 @@ describe('KernelIdentity — identity is a kernel, not a branch', () => {
         const px = new Uint8ClampedArray([10, 20, 30, 200, 150, 100]);
         expect(Array.from(t.transformArray(px, false, false, false, 2)))
             .toEqual([10, 20, 30, 200, 150, 100]);
+        expect(t.lastUsedKernel).toBe('kernelIdentity');
         expect(t.transform([10, 20, 30], false)).toEqual([10, 20, 30]);
     });
 
@@ -986,7 +1012,8 @@ describe('KernelIdentity — identity is a kernel, not a branch', () => {
     test('release() is safe and holds nothing', () => {
         const t = identity();
         expect(() => t.kernel.release()).not.toThrow();
-        expect(t.kernel.arrayFnBig).toBeNull();   // never resolves a run
+        expect(t.kernel.arrayFnBig).toBeNull();   // never resolves a LUT run
+        expect(typeof t.kernel.arrayFn).toBe('function');  // format-specific copy
     });
 });
 

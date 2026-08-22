@@ -44,6 +44,7 @@ describeIfWasm('WASM memory management', () => {
         var t = createWasmTransform();
         var bigInput = makeInput(100000);
         t.transformArrayViaLUT(bigInput, false, false, false);
+        expect(t.lastUsedKernel).toBe('kernel3D');
 
         var beforeBytes = t.wasmMemoryBytes();
         expect(beforeBytes).toBeGreaterThan(65536);

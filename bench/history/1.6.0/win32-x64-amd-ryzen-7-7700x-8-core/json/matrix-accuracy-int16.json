@@ -1,0 +1,93 @@
+{
+  "tool": "bench/matrix_shaper_kernel/accuracy.js",
+  "generated": "2026-08-22T22:46:06.234Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.6.0"
+  },
+  "tables": [
+    {
+      "id": "matrixShaper.accuracy.int16",
+      "title": "Matrix-shaper kernel vs CLUT, accuracy against the exact pipeline, int16",
+      "units": "LSB",
+      "meta": {
+        "bits": 16,
+        "coloursPerPair": 113157,
+        "reference": "buildLut:false, wasmMatrixShaper:false"
+      },
+      "columns": [
+        "pair",
+        "variant",
+        "kernelMaxLsb",
+        "kernelMeanLsb",
+        "kernelOver1Pct",
+        "clutMaxLsb",
+        "clutMeanLsb",
+        "clutOver1Pct"
+      ],
+      "rows": [
+        {
+          "pair": "*sRGB -> *AdobeRGB",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.1859,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 1199,
+          "clutMeanLsb": 19.7007,
+          "clutOver1Pct": 41.544
+        },
+        {
+          "pair": "*AdobeRGB -> *sRGB",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.1132,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 3934,
+          "clutMeanLsb": 26.2584,
+          "clutOver1Pct": 61.949
+        },
+        {
+          "pair": "*sRGB -> *prophoto",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.176,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 492,
+          "clutMeanLsb": 9.9191,
+          "clutOver1Pct": 89.242
+        },
+        {
+          "pair": "*prophoto -> *sRGB",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.1105,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 6668,
+          "clutMeanLsb": 54.3403,
+          "clutOver1Pct": 65.499
+        },
+        {
+          "pair": "*sRGB -> *applergb",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.1465,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 2770,
+          "clutMeanLsb": 33.2346,
+          "clutOver1Pct": 29.278
+        },
+        {
+          "pair": "*sRGB -> *colormatch",
+          "variant": "16-simd",
+          "kernelMaxLsb": 1,
+          "kernelMeanLsb": 0.1586,
+          "kernelOver1Pct": 0,
+          "clutMaxLsb": 1836,
+          "clutMeanLsb": 20.1627,
+          "clutOver1Pct": 65.86
+        }
+      ]
+    }
+  ]
+}

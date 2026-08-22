@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Examples](./Examples.md) ·
 [API: Profile](./Profile.md) ·
@@ -35,8 +35,10 @@ new Transform({ lutMode: 'customLut' }) → plugin descriptor.initialise(transfo
 t.use('ink-limit')                    → behaviour descriptor.apply(transform, mergedOpts)
 t.create(src, dst, intent)            → descriptor.builder(transform)  [if provided]
                                         createLut() samples pipeline, hooks fire per cell
-                                        descriptor.kernel cached on transform
-t.transformArray(pixels)              → kernel called, zero selection overhead
+                                        kernel.init() binds plugin.kernel onto arrayFnBig
+t.array(pixels)                       → kernel.array() calls the bound run
+                                        lastUsedKernel is the dimensional kernel name
+                                        (kernel3D / kernel4D), not the plugin lutMode
 ```
 
 **Key timing rules:**
@@ -47,7 +49,7 @@ t.transformArray(pixels)              → kernel called, zero selection overhead
 | behaviour `initialise()` | `Transform.behaviour()` call | ✗ | process |
 | behaviour `apply(transform, opts)` | `t.use()` | ✓ | call |
 | `builder(transform)` | `t.create()` build path | ✓ | LUT build |
-| `kernel(...)` | `t.transformArray()` | ✓ | array call |
+| `kernel(...)` | `t.array()` via `kernel.arrayFnBig` | ✓ | array call |
 
 ---
 
@@ -219,7 +221,8 @@ always see current values. Snapshot closures over `opts` would break this.
 ## Kernel run-closure signature
 
 All three kernel variants (`kernel`, `wasmKernel`, `simdKernel`) share this
-exact signature — the same as every built-in kernel in `src/lutKernelTable.js`:
+exact signature — the same run the built-in 3D/4D loops present to
+`kernel.array()`:
 
 ```js
 function myKernel(
@@ -234,16 +237,24 @@ function myKernel(
 ) { ... }
 ```
 
-**Kernel selection** (`simdKernel > wasmKernel > kernel`) is resolved once at
-`create()` time and cached — zero selection overhead in `transformArray()`.
+**Kernel selection** (`simdKernel > wasmKernel > kernel`) is resolved once
+in `kernel.init()` via `kernelUtils.bindArrayRuns()` and cached on
+`arrayFnBig` / `arrayFnSml` (threshold 0 — no WASM pixel-count split).
+`transform.array()` calls `kernel.array()`; that is the trampoline.
+`lastUsedKernel` is `'kernel3D'` or `'kernel4D'`, not the plugin name.
 
 `isSupported(variant)` is called once per variant at `create()` time.  Variant
 strings are `'kernel'`, `'wasmKernel'`, `'simdKernel'`.  Defaults to
 `() => true`. If WASM is initialised synchronously before `Transform.register()`,
 flags will be set correctly when `isSupported` is queried.
 
-**Note:** the kernel only fires for 3D and 4D inputs.  Gray (1D) and duotone
-(2D) inputs bypass registered kernels and route to built-in paths.
+**Note:** the plugin run only fires on **3D and 4D** kernels — those are
+the ones that call `bindArrayRuns()`. Gray (1D), duotone (2D), and
+n-channel (5–15) call their own loops and never ask the plugin
+registry. Same-file pairs with `detectIdentity` on (the default)
+collapse to `kernelIdentity` and never build a LUT, so the plugin
+builder and kernel do not run. Use `detectIdentity: false` when the
+point of the Transform is the plugin.
 
 ---
 
@@ -377,9 +388,14 @@ const IdentityPlugin = require('./my-plugin');
 
 Transform.register(IdentityPlugin);
 
-const t = new Transform({ buildLut: true, lutMode: 'identity' });
+const t = new Transform({
+    buildLut: true,
+    lutMode: 'identity',
+    dataFormat: 'int8',
+    detectIdentity: false,   // otherwise kernelIdentity takes same-file pairs
+});
 t.create(src, dst, eIntent.relative);
-t.transformArray(pixels);
+t.array(pixels);
 ```
 
 ---
@@ -420,7 +436,7 @@ require('jscolorengine-customlut');   // self-registers
 
 const t = new Transform({ buildLut: true, lutMode: 'customLut', gridMode: 'accuracy' });
 t.create(srgb, cmyk, eIntent.relative);
-t.transformArray(pixels);
+t.array(pixels);
 ```
 
 ---
@@ -435,8 +451,13 @@ warning.
 `false` on duplicate — the original is kept. Create a new Transform to use a
 different plugin.
 
-**1D/2D inputs bypass registered kernels.** Gray (1D) and duotone (2D) inputs
-route to built-in kernels before the plugin dispatch is reached.
+**1D / 2D / N-D inputs bypass registered kernels.** Only Kernel3D and
+Kernel4D resolve a plugin run. Gray, duotone, and 5–15 channel inputs
+keep their built-in loops.
+
+**`detectIdentity` wins.** Same-profile pairs collapse to
+`kernelIdentity` unless you pass `detectIdentity: false`. The identity
+plugin tests do this; the sample does too.
 
 **No `buildIntLut` for registered modes.** Call `transform.buildIntLut(lut)`
 yourself in the builder and attach the result if your kernel needs it.
@@ -458,6 +479,6 @@ needed.
 
 ## Related
 
-- [Transform API](./Transform.md) — `buildLut`, `lutMode`, `transformArray`
+- [Transform API](./Transform.md) — `buildLut`, `lutMode`, `array()` / `lastUsedKernel`
 - [LUT modes deep dive](./deepdive/LutModes.md) — built-in kernel dispatch
 - [Roadmap](./Roadmap.md) — future plans

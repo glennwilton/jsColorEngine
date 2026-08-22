@@ -95,11 +95,9 @@
 //     correctness requirement, not a perf trade-off. Falls through
 //     transparently to the scalar WASM sibling above.
 //
-//   • JS INTEGER (i_*_n, i16_*_n) → ✗ NOT IMPLEMENTED. The JS NCh
-//     kernels (`tetrahedralInterp3DArray_NCh_loop` and 4D sibling)
-//     don't have `intLut` variants because 6+ channel CLUTs are
-//     comparatively rare and the WASM scalar path already covers
-//     them well. Falls through to `fl_*_n` (per-pixel JS NCh loop).
+//   • JS INTEGER (i_*_n, i16_*_n) → 5D/6D have i_5_n / i_6_n (int8).
+//     3D/4D wide output still falls through to fl_*_n. int16 nCh is
+//     a later clone.
 //
 // ============================================================================
 

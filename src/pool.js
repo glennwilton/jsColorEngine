@@ -49,7 +49,8 @@
  */
 'use strict';
 
-var path = require('path');
+var path = null;
+try { path = require('path'); } catch(e){ /* browser bundle — path is unused there */ }
 var settings = require('./settings.js');
 
 // ---- measured defaults -------------------------------------------------
@@ -80,12 +81,23 @@ var DEFAULTS = {
     debug: false
 };
 
-function idealWorkers(cores){
-    var logical = 4;
+function logicalCores(){
     try {
         var os = require('os');
-        logical = (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 4;
-    } catch(e){ /* non-node host: fall through to the default */ }
+        if(os && (os.availableParallelism || os.cpus)){
+            return (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 4;
+        }
+    } catch(e){ /* browser bundle, or os stubbed */ }
+    try {
+        if(typeof navigator !== 'undefined' && navigator.hardwareConcurrency){
+            return navigator.hardwareConcurrency;
+        }
+    } catch(e){ /* no navigator */ }
+    return 4;
+}
+
+function idealWorkers(cores){
+    var logical = logicalCores();
 
     if(cores === 'max') return logical;
     if(cores === 'auto' || cores === undefined || cores === null){
@@ -176,14 +188,12 @@ Pool.prototype.start = function(){
     var self = this;
 
     this.starting = new Promise(function(resolve, reject){
-        var workerThreads;
-        try {
-            workerThreads = require('worker_threads');
-        } catch(e){
-            return reject(new Error('worker_threads unavailable'));
+        var backend = resolveBackend(self.opts);
+        if(!backend){
+            return reject(new Error(unavailableReason()));
         }
+        self.host = backend.host;
 
-        var file = path.join(__dirname, 'poolWorker.js');
         var pending = self.workers;
         var failed = false;
 
@@ -191,14 +201,15 @@ Pool.prototype.start = function(){
             (function(index){
                 var w;
                 try {
-                    w = new workerThreads.Worker(file);
+                    w = backend.spawn();
                 } catch(e){
                     if(!failed){ failed = true; reject(e); }
                     return;
                 }
                 // An unref'd worker does not hold the event loop open, so a
                 // caller who never releases gets a clean exit instead of a
-                // hang. Re-ref'd while tasks are in flight.
+                // hang. Re-ref'd while tasks are in flight. Browser workers
+                // have no ref/unref — the wrapper no-ops them.
                 if(w.unref) w.unref();
 
                 // A DEAD WORKER RETIRES THE POOL. Eviction, forget and idle
@@ -512,10 +523,14 @@ Pool.prototype._runBatch = function(tasks, images, makeOutputs, signature, paylo
         var outstanding = new Array(images.length);
         var computeMs   = new Array(images.length);
         var cancelled   = new Array(images.length);
+        var fragments   = new Array(images.length);
         for(var im = 0; im < images.length; im++){
-            outstanding[im] = 0; computeMs[im] = 0; cancelled[im] = false;
+            outstanding[im] = 0; computeMs[im] = 0; cancelled[im] = false; fragments[im] = 0;
         }
-        for(var tk = 0; tk < tasks.length; tk++) outstanding[tasks[tk].imageIndex] += 1;
+        for(var tk = 0; tk < tasks.length; tk++){
+            outstanding[tasks[tk].imageIndex] += 1;
+            fragments[tasks[tk].imageIndex] += 1;
+        }
 
         // The generation this batch was SUBMITTED in (see run()). cancelAll()
         // moves the counter, so everything submitted before the call is
@@ -537,7 +552,8 @@ Pool.prototype._runBatch = function(tasks, images, makeOutputs, signature, paylo
             if(!onImage) return;
             onImage(imageIndex,
                     wasCancelled ? null : outputs[imageIndex],
-                    {computeMs: computeMs[imageIndex], cancelled: !!wasCancelled});
+                    {computeMs: computeMs[imageIndex], cancelled: !!wasCancelled,
+                     fragments: fragments[imageIndex]});
         }
 
         var finished = false;
@@ -771,12 +787,10 @@ Pool.prototype.destroy = function(){
  * Set them as environment variables in Node, or on `globalThis` in a browser —
  * same names either way, `globalThis` wins. See src/settings.js.
  *
- * WHY ENV IS RIGHT HERE AND NOT FOR COLOUR BEHAVIOUR. The pool is a Node-only
- * subsystem — it requires `worker_threads` and refuses to start without it —
- * so there is no browser to leave behind, and worker counts are a property of
- * the MACHINE rather than of the conversion. Nothing here can change a pixel:
- * every one of these settings only moves work between threads, and the
- * sequential path is always available and always correct.
+ * WHY ENV IS RIGHT HERE AND NOT FOR COLOUR BEHAVIOUR. Worker counts are a
+ * property of the MACHINE rather than of the conversion. Nothing here can
+ * change a pixel: every one of these settings only moves work between threads,
+ * and the sequential path is always available and always correct.
  *
  * The motivating case is real. `cores: 'auto'` asks
  * `os.availableParallelism()`, which inside a cgroup-limited container
@@ -865,16 +879,8 @@ function acquire(options){
 function enable(options){
     options = options || {};
 
-    if(typeof require !== 'function' || !hasWorkerThreads()){
-        // A browser, or a host without worker_threads. The message names the
-        // missing piece rather than saying "unavailable" — the caller can act
-        // on "no browser bundle yet", not on a shrug.
-        return Promise.reject(new Error(
-            'jsColorEngine: no worker backend. The pool runs on Node ' +
-            'worker_threads; the browser build stubs that out and the Web ' +
-            'Worker backend is not implemented yet (see docs/Roadmap.md). ' +
-            'transformImages() still works — it converts sequentially, with ' +
-            'the same bytes and the same per-image callbacks.'));
+    if(!hasWorkerBackend(options)){
+        return Promise.reject(new Error(unavailableReason()));
     }
 
     var pool = acquire(options);
@@ -885,7 +891,7 @@ function enable(options){
             '(default 2) — one worker is measurably slower than none.'));
     }
     return pool.start()
-        .then(function(){ return {workers: pool.workers, host: 'worker_threads'}; })
+        .then(function(){ return {workers: pool.workers, host: pool.host}; })
         .catch(function(e){ release(pool); throw e; });
 }
 
@@ -894,24 +900,23 @@ function enable(options){
  * the browser case names the missing piece rather than shrugging.
  */
 function unavailableReason(){
-    if(!hasWorkerThreads()){
-        // Name the missing piece AND what to do about it. In a browser today
-        // the honest answer is "nothing yet" — which is still more useful than
-        // a shrug, because it stops the reader hunting for a flag that does
-        // not exist. When the Web Worker backend lands this becomes
-        // "call Transform.enablePool('/path/to/jsColorEngineWorker.js')".
-        return 'No worker backend on this host. The pool runs on Node ' +
-               'worker_threads, and the browser build stubs that out — the Web ' +
-               'Worker backend is not implemented yet (docs/Roadmap.md), so ' +
-               'there is nothing to enable and nothing you need to change. ' +
-               'Everything else, including the WASM SIMD kernels, runs at full ' +
-               'speed in the browser.';
+    if(hasWorkerThreads()){
+        if(settings.readFlag('JSCE_POOL_DISABLE')){
+            return 'JSCE_POOL_DISABLE is set.';
+        }
+        return 'the resolved worker count is below minThreads (default 2) — one ' +
+               'worker is measurably slower than none, so the pool declined.';
     }
-    if(settings.readFlag('JSCE_POOL_DISABLE')){
-        return 'JSCE_POOL_DISABLE is set.';
+    if(typeof Worker !== 'function'){
+        return 'No worker backend on this host. Under Node the pool needs ' +
+               'worker_threads; in a browser it needs the Worker constructor.';
     }
-    return 'the resolved worker count is below minThreads (default 2) — one ' +
-           'worker is measurably slower than none, so the pool declined.';
+    if(!resolveWorkerUrl()){
+        return 'No worker URL. Call Transform.enablePool({workerUrl: ' +
+               "'/path/to/jsColorEngineWorker.js'}) or set " +
+               'globalThis.JSCE_WORKER_URL to the worker bundle.';
+    }
+    return 'Worker backend is available but the pool declined to start.';
 }
 
 /** Is a real worker_threads module reachable? The browser build stubs it. */
@@ -920,6 +925,93 @@ function hasWorkerThreads(){
         var wt = require('worker_threads');
         return !!(wt && typeof wt.Worker === 'function');
     } catch(e){ return false; }
+}
+
+function resolveWorkerUrl(options){
+    if(options && options.workerUrl) return options.workerUrl;
+    return settings.raw('JSCE_WORKER_URL');
+}
+
+function hasWorkerBackend(options){
+    if(hasWorkerThreads()) return true;
+    return !!(resolveWorkerUrl(options) && typeof Worker === 'function');
+}
+
+/**
+ * Pick a spawn function. Node uses worker_threads and the source file next
+ * to this module. A browser needs the worker *bundle* URL — a library cannot
+ * know where the app put it, so the app says via workerUrl / JSCE_WORKER_URL.
+ */
+function resolveBackend(opts){
+    if(hasWorkerThreads()){
+        return {
+            host: 'worker_threads',
+            spawn: function(){
+                var workerThreads = require('worker_threads');
+                var file = path.join(__dirname, 'poolWorker.js');
+                return new workerThreads.Worker(file);
+            }
+        };
+    }
+    var url = resolveWorkerUrl(opts);
+    if(url && typeof Worker === 'function'){
+        return {
+            host: 'web_worker',
+            spawn: function(){ return wrapBrowserWorker(new Worker(url)); }
+        };
+    }
+    return null;
+}
+
+/**
+ * Present a Web Worker as the Node worker_threads.Worker surface the rest
+ * of this file already talks to: on/once/off, removeAllListeners, postMessage
+ * with a transfer list, terminate. Event payloads are the data object, not
+ * the MessageEvent. ref/unref are no-ops — browsers have no equivalent.
+ */
+function wrapBrowserWorker(w){
+    var listeners = {message: [], error: [], exit: []};
+
+    function emit(type, arg){
+        var list = listeners[type].slice();
+        for(var i = 0; i < list.length; i++){
+            list[i].fn(arg);
+        }
+        listeners[type] = listeners[type].filter(function(x){ return !x.once; });
+    }
+
+    w.addEventListener('message', function(ev){ emit('message', ev.data); });
+    w.addEventListener('error', function(ev){
+        emit('error', ev.error || new Error(ev.message || 'worker error'));
+    });
+
+    function add(type, fn, once){
+        if(!listeners[type]) listeners[type] = [];
+        listeners[type].push({fn: fn, once: !!once});
+        return api;
+    }
+    function remove(type, fn){
+        if(!listeners[type]) return api;
+        listeners[type] = listeners[type].filter(function(x){ return x.fn !== fn; });
+        return api;
+    }
+
+    var api = {
+        postMessage: function(msg, xfer){ w.postMessage(msg, xfer || []); },
+        terminate: function(){ w.terminate(); },
+        on: function(type, fn){ return add(type, fn, false); },
+        once: function(type, fn){ return add(type, fn, true); },
+        off: function(type, fn){ return remove(type, fn); },
+        removeListener: function(type, fn){ return remove(type, fn); },
+        removeAllListeners: function(type){
+            if(type) listeners[type] = [];
+            else { listeners.message = []; listeners.error = []; listeners.exit = []; }
+            return api;
+        },
+        ref: function(){},
+        unref: function(){}
+    };
+    return api;
 }
 
 function release(pool){

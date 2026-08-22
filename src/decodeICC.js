@@ -1228,15 +1228,18 @@ module.exports = {
             lut.g2 = lut.g1 * lut.gridPoints[1];
             lut.g3 = lut.g2 * lut.gridPoints[2];
             lut.g4 = lut.g3 * lut.gridPoints[3];
+            lut.g5 = lut.g4 * lut.gridPoints[4];
 
             lut.go0 = lut.outputChannels;
             lut.go1 = lut.g1 * lut.outputChannels;
             lut.go2 = lut.g2 * lut.outputChannels;
             lut.go3 = lut.g3 * lut.outputChannels;
+            lut.go4 = lut.g4 * lut.outputChannels;
+            lut.go5 = lut.g5 * lut.outputChannels;
         } else {
             lut.gridPoints = [];
-            lut.g1 = lut.g2 = lut.g3 = lut.g4 = 0;
-            lut.go0 = lut.go1 = lut.go2 = lut.go3 = 0;
+            lut.g1 = lut.g2 = lut.g3 = lut.g4 = lut.g5 = 0;
+            lut.go0 = lut.go1 = lut.go2 = lut.go3 = lut.go4 = lut.go5 = 0;
         }
         return lut;
 

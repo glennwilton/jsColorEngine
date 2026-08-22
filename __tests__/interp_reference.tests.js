@@ -488,6 +488,8 @@ describe('single colour and batch agree on a real profile pair', () => {
                 const flat = new Uint8ClampedArray(inCh);
                 flat.set(px);
                 const batch = Array.from(t.transformArray(flat, false, false, false, 1));
+                const route = label.indexOf('CMYK→') === 0 ? 'kernel4D' : 'kernel3D';
+                expect(t.lastUsedKernel).toBe(route);
 
                 // 1 LSB, because the batch path rounds through a
                 // Uint8ClampedArray (half-to-even) and transform() does not.

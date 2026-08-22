@@ -64,7 +64,7 @@
 // carries a small scratch region (64 B) the kernel uses to pass u20
 // intermediates from the K0 plane pass to the K1 plane pass. Bit-exact
 // against the JS `_intLut_loop` 4D kernels; measured ~1.22× faster. See
-// bench/wasm_poc/tetra4d_nch_run.js and docs/Performance.md §1b
+// bench/wasm_poc/tetra4d_nch_run.js and docs/deepdive/Performance.md §1b
 // "4D scalar — measured".
 //
 // The 4D SIMD state is the vectorized companion to 4D scalar. Same
@@ -73,7 +73,7 @@
 // cMax ∈ {3, 4}; other cMax must use the scalar 4D state. Bit-exact
 // against the scalar 4D kernel; measured avg 2.39× faster than JS int
 // and 1.98× faster than 4D scalar WASM. See tetra4d_simd_run.js and
-// docs/Performance.md §1b "4D SIMD — measured".
+// docs/deepdive/Performance.md §1b "4D SIMD — measured".
 //
 // Design:
 //
@@ -109,10 +109,13 @@
 
 'use strict';
 
-// Compiled WASM bytes live beside the kernel module that owns them
-// (src/kernels/3d, src/kernels/4d) as of v1.7 phase B — co-located with the
-// .wat sources they are generated from. This loader stays in src/wasm/ as the
-// shared compile/instantiate/memory utility.
+// Compiled WASM bytes live beside the kernel that owns them. Compile and
+// instantiate go through src/wasm/instantiate.js — the same helper the
+// matrix-shaper uses. This file is the tetra State classes plus eight
+// thin factories (bytes + export + State).
+var instantiateMod          = require('./instantiate.js');
+var instantiate             = instantiateMod.instantiate;
+var hasWebAssembly          = instantiateMod.hasWebAssembly;
 var tetra3dNchBytes         = require('../kernels/3d/tetra3d_nch.wasm.js');
 var tetra3dNchInt16Bytes    = require('../kernels/3d/tetra3d_nch_int16.wasm.js');
 var tetra3dSimdBytes        = require('../kernels/3d/tetra3d_simd.wasm.js');
@@ -121,6 +124,8 @@ var tetra4dNchBytes         = require('../kernels/4d/tetra4d_nch.wasm.js');
 var tetra4dNchInt16Bytes    = require('../kernels/4d/tetra4d_nch_int16.wasm.js');
 var tetra4dSimdBytes        = require('../kernels/4d/tetra4d_simd.wasm.js');
 var tetra4dSimdInt16Bytes   = require('../kernels/4d/tetra4d_simd_int16.wasm.js');
+var tetra5dNchBytes         = require('../kernels/5d/tetra5d_nch.wasm.js');
+var tetra6dNchBytes         = require('../kernels/6d/tetra6d_nch.wasm.js');
 
 var SCALAR_CACHE_KEY         = '__jsColorEngine_tetra3d_nch_module__';
 var SCALAR_INT16_CACHE_KEY   = '__jsColorEngine_tetra3d_nch_int16_module__';
@@ -130,22 +135,41 @@ var SCALAR4D_CACHE_KEY       = '__jsColorEngine_tetra4d_nch_module__';
 var SCALAR4D_INT16_CACHE_KEY = '__jsColorEngine_tetra4d_nch_int16_module__';
 var SIMD4D_CACHE_KEY         = '__jsColorEngine_tetra4d_simd_module__';
 var SIMD4D_INT16_CACHE_KEY   = '__jsColorEngine_tetra4d_simd_int16_module__';
+var SCALAR5D_CACHE_KEY       = '__jsColorEngine_tetra5d_nch_module__';
+var SCALAR6D_CACHE_KEY       = '__jsColorEngine_tetra6d_nch_module__';
 
-function hasWebAssembly() {
-    return typeof WebAssembly !== 'undefined'
-        && typeof WebAssembly.Module === 'function'
-        && typeof WebAssembly.Instance === 'function';
+function bindKernelExports(state, exports, exportName){
+    state.kernelPlain  = (exports && typeof exports[exportName] === 'function')
+        ? exports[exportName] : state.kernel;
+    state.kernelCached = (exports && typeof exports[exportName + '_cached'] === 'function')
+        ? exports[exportName + '_cached'] : null;
+    state.kernel = (state.pixelCacheOn && state.kernelCached)
+        ? state.kernelCached
+        : state.kernelPlain;
 }
 
-function getCompiledModule(cache, cacheKey, bytes) {
-    if (cache && cache[cacheKey]) {
-        return cache[cacheKey];
+function setPixelCache(on){
+    if(!this.kernelCached){
+        this.pixelCacheOn = false;
+        if(this.kernelPlain) this.kernel = this.kernelPlain;
+        return false;
     }
-    var mod = new WebAssembly.Module(bytes);
-    if (cache) {
-        cache[cacheKey] = mod;
-    }
-    return mod;
+    this.pixelCacheOn = !!on;
+    this.kernel = this.pixelCacheOn ? this.kernelCached : this.kernelPlain;
+    return this.pixelCacheOn;
+}
+
+function loadState(bytes, cacheKey, exportName, State, isSimd, options){
+    var loaded = instantiate(bytes, {
+        cache: options && options.wasmCache,
+        cacheKey: cacheKey,
+        exportName: exportName,
+    });
+    if(!loaded) return null;
+    var state = new State(loaded.exports, loaded.kernel, !!isSimd, loaded.module, exportName);
+    state.pixelCacheOn = false;
+    bindKernelExports(state, loaded.exports, exportName);
+    return state;
 }
 
 /**
@@ -162,22 +186,8 @@ function getCompiledModule(cache, cacheKey, bytes) {
  * @returns {Tetra3DState|null}
  */
 function createTetra3DState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SCALAR_CACHE_KEY, tetra3dNchBytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra3d_nCh !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra3DState(exports, exports.interp_tetra3d_nCh, false, mod, 'interp_tetra3d_nCh');
+    return loadState(tetra3dNchBytes, SCALAR_CACHE_KEY, 'interp_tetra3d_nCh',
+        Tetra3DState, false, options);
 }
 
 /**
@@ -202,22 +212,8 @@ function createTetra3DState(options) {
  * @returns {Tetra3DInt16State|null}
  */
 function createTetra3DInt16State(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SCALAR_INT16_CACHE_KEY, tetra3dNchInt16Bytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra3d_nCh_int16 !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra3DInt16State(exports, exports.interp_tetra3d_nCh_int16, false, mod, 'interp_tetra3d_nCh_int16');
+    return loadState(tetra3dNchInt16Bytes, SCALAR_INT16_CACHE_KEY, 'interp_tetra3d_nCh_int16',
+        Tetra3DInt16State, false, options);
 }
 
 /**
@@ -248,22 +244,8 @@ function createTetra3DInt16State(options) {
  * @returns {Tetra3DInt16State|null}
  */
 function createTetra3DInt16SimdState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SIMD_INT16_CACHE_KEY, tetra3dSimdInt16Bytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra3d_simd_int16 !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra3DInt16State(exports, exports.interp_tetra3d_simd_int16, true, mod, 'interp_tetra3d_simd_int16');
+    return loadState(tetra3dSimdInt16Bytes, SIMD_INT16_CACHE_KEY, 'interp_tetra3d_simd_int16',
+        Tetra3DInt16State, true, options);
 }
 
 /**
@@ -283,25 +265,8 @@ function createTetra3DInt16SimdState(options) {
  * @returns {Tetra3DState|null}
  */
 function createTetra3DSimdState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SIMD_CACHE_KEY, tetra3dSimdBytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        // Compile throws on hosts that don't support WASM SIMD; this is
-        // the canonical feature-detect path (no need for a separate
-        // WebAssembly.validate(SIMD_PROBE_BYTES) dance).
-        return null;
-    }
-    if (typeof exports.interp_tetra3d_simd !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra3DState(exports, exports.interp_tetra3d_simd, true, mod, 'interp_tetra3d_simd');
+    return loadState(tetra3dSimdBytes, SIMD_CACHE_KEY, 'interp_tetra3d_simd',
+        Tetra3DState, true, options);
 }
 
 /**
@@ -313,7 +278,7 @@ function createTetra3DSimdState(options) {
  *
  * Supports any cMax >= 1; same rolled n-channel kernel as tetra3d_nch
  * with the K-axis setup hoisted and a flag-gated K-plane loop. See
- * docs/Performance.md §1b "4D scalar — measured" for design notes.
+ * docs/deepdive/Performance.md §1b "4D scalar — measured" for design notes.
  *
  * @param {Object} [options]
  * @param {Object} [options.wasmCache]  Optional shared cache bag, as
@@ -324,22 +289,8 @@ function createTetra3DSimdState(options) {
  * @returns {Tetra4DState|null}
  */
 function createTetra4DState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SCALAR4D_CACHE_KEY, tetra4dNchBytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra4d_nCh !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra4DState(exports, exports.interp_tetra4d_nCh, false, mod, 'interp_tetra4d_nCh');
+    return loadState(tetra4dNchBytes, SCALAR4D_CACHE_KEY, 'interp_tetra4d_nCh',
+        Tetra4DState, false, options);
 }
 
 /**
@@ -362,22 +313,8 @@ function createTetra4DState(options) {
  * @returns {Tetra4DInt16State|null}
  */
 function createTetra4DInt16State(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SCALAR4D_INT16_CACHE_KEY, tetra4dNchInt16Bytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra4d_nCh_int16 !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra4DInt16State(exports, exports.interp_tetra4d_nCh_int16, false, mod, 'interp_tetra4d_nCh_int16');
+    return loadState(tetra4dNchInt16Bytes, SCALAR4D_INT16_CACHE_KEY, 'interp_tetra4d_nCh_int16',
+        Tetra4DInt16State, false, options);
 }
 
 /**
@@ -407,22 +344,8 @@ function createTetra4DInt16State(options) {
  * @returns {Tetra4DInt16State|null}
  */
 function createTetra4DInt16SimdState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SIMD4D_INT16_CACHE_KEY, tetra4dSimdInt16Bytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        return null;
-    }
-    if (typeof exports.interp_tetra4d_simd_int16 !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra4DInt16State(exports, exports.interp_tetra4d_simd_int16, true, mod, 'interp_tetra4d_simd_int16');
+    return loadState(tetra4dSimdInt16Bytes, SIMD4D_INT16_CACHE_KEY, 'interp_tetra4d_simd_int16',
+        Tetra4DInt16State, true, options);
 }
 
 /**
@@ -445,23 +368,8 @@ function createTetra4DInt16SimdState(options) {
  * @returns {Tetra4DState|null}
  */
 function createTetra4DSimdState(options) {
-    if (!hasWebAssembly()) {
-        return null;
-    }
-    var cache = options && options.wasmCache;
-    var mod, instance, exports;
-    try {
-        mod = getCompiledModule(cache, SIMD4D_CACHE_KEY, tetra4dSimdBytes);
-        instance = new WebAssembly.Instance(mod, {});
-        exports = instance.exports;
-    } catch (e) {
-        // Compile throws on hosts without WASM SIMD support.
-        return null;
-    }
-    if (typeof exports.interp_tetra4d_simd !== 'function' || !exports.memory) {
-        return null;
-    }
-    return new Tetra4DState(exports, exports.interp_tetra4d_simd, true, mod, 'interp_tetra4d_simd');
+    return loadState(tetra4dSimdBytes, SIMD4D_CACHE_KEY, 'interp_tetra4d_simd',
+        Tetra4DState, true, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +439,7 @@ Tetra3DState.prototype.compact = function () {
     var instance = new WebAssembly.Instance(this.module, {});
     this.exports     = instance.exports;
     this.memory      = instance.exports.memory;
-    this.kernel      = instance.exports[this.kernelName];
+    bindKernelExports(this, instance.exports, this.kernelName);
     this.boundIntLut = null;
     this.lutBytes    = 0;
     this.reservedCap = 0;
@@ -539,6 +447,8 @@ Tetra3DState.prototype.compact = function () {
     this.inputPtr    = 0;
     this.outputPtr   = 0;
 };
+
+Tetra3DState.prototype.setPixelCache = setPixelCache;
 
 /**
  * Ensure linear memory is big enough for this (intLut, pixelCount, cMax,
@@ -853,7 +763,7 @@ Tetra4DState.prototype.compact = function () {
     var instance = new WebAssembly.Instance(this.module, {});
     this.exports     = instance.exports;
     this.memory      = instance.exports.memory;
-    this.kernel      = instance.exports[this.kernelName];
+    bindKernelExports(this, instance.exports, this.kernelName);
     this.boundIntLut = null;
     this.lutBytes    = 0;
     this.reservedCap = 0;
@@ -862,6 +772,8 @@ Tetra4DState.prototype.compact = function () {
     this.outputPtr   = 0;
     this.scratchPtr  = 0;
 };
+
+Tetra4DState.prototype.setPixelCache = setPixelCache;
 
 Tetra4DState.prototype.compactIfNeeded = Tetra3DState.prototype.compactIfNeeded;
 Tetra4DState.SCRATCH_BYTES = 64;
@@ -1118,8 +1030,159 @@ Tetra4DInt16State.prototype.runTetra4D = function (
     }
 };
 
+// ---------------------------------------------------------------------------
+// Tetra5DState / Tetra6DState — extra peel planes, same bind/run as 4D scalar
+// ---------------------------------------------------------------------------
+
+function Tetra5DState(exports, kernel, isSimd, module, kernelName) {
+    Tetra4DState.call(this, exports, kernel, isSimd, module, kernelName);
+}
+Tetra5DState.prototype = Object.create(Tetra4DState.prototype);
+Tetra5DState.prototype.constructor = Tetra5DState;
+Tetra5DState.SCRATCH_BYTES = 64;
+
+Tetra5DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
+    if (inBPP  === undefined) inBPP  = 5;
+    if (outBPP === undefined) outBPP = cMax;
+    var scratchBytes = Math.max(Tetra5DState.SCRATCH_BYTES, cMax * 8);
+    return bindNd(this, intLut, pixelCount, cMax, inBPP, outBPP, scratchBytes);
+};
+
+Tetra5DState.prototype.runTetra5D = function (
+    input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+    inputHasAlpha, outputHasAlpha, preserveAlpha
+) {
+    runNd(this, input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+        inputHasAlpha, outputHasAlpha, preserveAlpha, 5, function (self, inAlphaSkip, outAlphaMode) {
+            self.kernel(
+                self.inputPtr, self.outputPtr, self.lutPtr,
+                pixelCount, cMax,
+                intLut.go0, intLut.go1, intLut.go2, intLut.go3,
+                intLut.gridPointsScale_fixed,
+                intLut.maxX, intLut.maxY, intLut.maxZ, intLut.maxK,
+                intLut.go4, intLut.maxE,
+                self.scratchPtr,
+                inAlphaSkip, outAlphaMode
+            );
+        });
+};
+
+function Tetra6DState(exports, kernel, isSimd, module, kernelName) {
+    Tetra4DState.call(this, exports, kernel, isSimd, module, kernelName);
+}
+Tetra6DState.prototype = Object.create(Tetra4DState.prototype);
+Tetra6DState.prototype.constructor = Tetra6DState;
+Tetra6DState.SCRATCH_BYTES = 64;
+
+Tetra6DState.prototype.bind = function (intLut, pixelCount, cMax, inBPP, outBPP) {
+    if (inBPP  === undefined) inBPP  = 6;
+    if (outBPP === undefined) outBPP = cMax;
+    var scratchBytes = Math.max(Tetra6DState.SCRATCH_BYTES, cMax * 12);
+    return bindNd(this, intLut, pixelCount, cMax, inBPP, outBPP, scratchBytes);
+};
+
+Tetra6DState.prototype.runTetra6D = function (
+    input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+    inputHasAlpha, outputHasAlpha, preserveAlpha
+) {
+    runNd(this, input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+        inputHasAlpha, outputHasAlpha, preserveAlpha, 6, function (self, inAlphaSkip, outAlphaMode) {
+            self.kernel(
+                self.inputPtr, self.outputPtr, self.lutPtr,
+                pixelCount, cMax,
+                intLut.go0, intLut.go1, intLut.go2, intLut.go3,
+                intLut.gridPointsScale_fixed,
+                intLut.maxX, intLut.maxY, intLut.maxZ, intLut.maxK,
+                intLut.go4, intLut.maxE,
+                intLut.go5, intLut.maxF,
+                self.scratchPtr,
+                inAlphaSkip, outAlphaMode
+            );
+        });
+};
+
+function bindNd(state, intLut, pixelCount, cMax, inBPP, outBPP, scratchBytes) {
+    var lutBytes    = intLut.CLUT.byteLength;
+    var inputBytes  = pixelCount * inBPP;
+    var outputBytes = pixelCount * outBPP;
+
+    var lutPtr      = 0;
+    var lutAligned  = (lutBytes + 7) & ~7;
+    var inputPtr    = lutPtr + lutAligned;
+    var inputEnd    = inputPtr + ((inputBytes + 7) & ~7);
+    var outputPtr   = inputEnd;
+    var outputEnd   = outputPtr + ((outputBytes + 3) & ~3);
+    var scratchPtr  = outputEnd;
+    var totalBytes  = scratchPtr + scratchBytes;
+
+    var pagesNeeded = Math.ceil(totalBytes / 65536);
+    var pagesHave   = (state.memory.buffer.byteLength / 65536) | 0;
+    if (pagesHave < pagesNeeded) {
+        state.memory.grow(pagesNeeded - pagesHave);
+    }
+    if (state.boundIntLut !== intLut || state.lutBytes !== lutBytes) {
+        var memU16 = new Uint16Array(state.memory.buffer);
+        memU16.set(intLut.CLUT, lutPtr >> 1);
+        state.boundIntLut = intLut;
+        state.lutBytes    = lutBytes;
+    }
+    state.lutPtr      = lutPtr;
+    state.inputPtr    = inputPtr;
+    state.outputPtr   = outputPtr;
+    state.scratchPtr  = scratchPtr;
+    state.reservedCap = inputBytes + outputBytes;
+};
+
+function runNd(state, input, inputPos, output, outputPos, pixelCount, intLut, cMax,
+    inputHasAlpha, outputHasAlpha, preserveAlpha, inCh, callKernel
+) {
+    var inAlphaSkip  = inputHasAlpha ? 1 : 0;
+    var outAlphaMode = 0;
+    if (preserveAlpha) outAlphaMode = 2;
+    else if (outputHasAlpha) outAlphaMode = 1;
+
+    var inBPP       = inputHasAlpha  ? inCh + 1 : inCh;
+    var outBPP      = outputHasAlpha ? cMax + 1 : cMax;
+    var inputBytes  = pixelCount * inBPP;
+    var outputBytes = pixelCount * outBPP;
+    var buf         = state.memory.buffer;
+
+    var memU8 = new Uint8Array(buf);
+    if (input instanceof Uint8Array || input instanceof Uint8ClampedArray) {
+        memU8.set(input.subarray(inputPos, inputPos + inputBytes), state.inputPtr);
+    } else {
+        for (var i = 0; i < inputBytes; i++) {
+            memU8[state.inputPtr + i] = input[inputPos + i] & 0xFF;
+        }
+    }
+
+    callKernel(state, inAlphaSkip, outAlphaMode);
+    state.dispatchCount++;
+
+    var outView = new Uint8Array(state.memory.buffer, state.outputPtr, outputBytes);
+    if (output instanceof Uint8Array || output instanceof Uint8ClampedArray) {
+        output.set(outView, outputPos);
+    } else {
+        for (var j = 0; j < outputBytes; j++) {
+            output[outputPos + j] = outView[j];
+        }
+    }
+}
+
+function createTetra5DState(options) {
+    return loadState(tetra5dNchBytes, SCALAR5D_CACHE_KEY, 'interp_tetra5d_nCh',
+        Tetra5DState, false, options);
+}
+
+function createTetra6DState(options) {
+    return loadState(tetra6dNchBytes, SCALAR6D_CACHE_KEY, 'interp_tetra6d_nCh',
+        Tetra6DState, false, options);
+}
+
 module.exports = {
     hasWebAssembly: hasWebAssembly,
+    instantiate: instantiateMod.instantiate,
+    compile: instantiateMod.compile,
     createTetra3DState: createTetra3DState,
     createTetra3DInt16State: createTetra3DInt16State,
     createTetra3DSimdState: createTetra3DSimdState,
@@ -1128,4 +1191,6 @@ module.exports = {
     createTetra4DInt16State: createTetra4DInt16State,
     createTetra4DSimdState: createTetra4DSimdState,
     createTetra4DInt16SimdState: createTetra4DInt16SimdState,
+    createTetra5DState: createTetra5DState,
+    createTetra6DState: createTetra6DState,
 };

@@ -1373,6 +1373,9 @@ describe('multicore — image ids, timing and metadata', () => {
         // one image's slices run on many workers at once. That is the point of
         // reporting both.
         expect(typeof big.ms).toBe('number');
+        expect(big.fragments).toBeGreaterThan(small.fragments);
+        expect(small.fragments).toBeGreaterThan(0);
+        expect(res.tasks).toBe(big.fragments + small.fragments);
     });
 
     test('imageInfo comes back on the sequential path too', async () => {
@@ -1386,6 +1389,7 @@ describe('multicore — image ids, timing and metadata', () => {
         expect(res.imageInfo[0].id).toBe('seq');
         expect(res.imageInfo[0].computeMs).not.toBeNull();
         expect(res.imageInfo[0].outputChannels).toBe(t.outputChannels);
+        expect(res.imageInfo[0].fragments).toBe(1);
     });
 
     test('res.images keeps its shape — imageInfo is additive', async () => {

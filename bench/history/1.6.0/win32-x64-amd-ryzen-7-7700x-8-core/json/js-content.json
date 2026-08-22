@@ -1,0 +1,485 @@
+{
+  "tool": "run.js",
+  "generated": "2026-08-22T22:31:23.742Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.6.0"
+  },
+  "tables": [
+    {
+      "id": "js.content.rgb-rgb-matrix.1024k",
+      "title": "RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1016892,
+          "coverX": 28.3,
+          "jsceInt": 47.7,
+          "jsceSimd": 96.7,
+          "lcmsWasm": 64.7,
+          "lcmsWasmNoCache": 64.2,
+          "ratioVsLcms": 1.5
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0.01,
+          "jsceInt": 62.3,
+          "jsceSimd": 326.4,
+          "lcmsWasm": 66.7,
+          "lcmsWasmNoCache": 65,
+          "ratioVsLcms": 4.9
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4095,
+          "coverX": 0.11,
+          "jsceInt": 60.4,
+          "jsceSimd": 432.6,
+          "lcmsWasm": 59,
+          "lcmsWasmNoCache": 66.7,
+          "ratioVsLcms": 7.33
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 62.5,
+          "jsceSimd": 480.7,
+          "lcmsWasm": 68.5,
+          "lcmsWasmNoCache": 71.7,
+          "ratioVsLcms": 7.01
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.2,
+          "distinct": 41077,
+          "coverX": 1.14,
+          "jsceInt": 54.4,
+          "jsceSimd": 113,
+          "lcmsWasm": 66.1,
+          "lcmsWasmNoCache": 66.4,
+          "ratioVsLcms": 1.71
+        }
+      ]
+    },
+    {
+      "id": "js.content.rgb-lab.1024k",
+      "title": "RGB -> Lab — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1016892,
+          "coverX": 28.3,
+          "jsceInt": 47,
+          "jsceSimd": 95.3,
+          "lcmsWasm": 31.5,
+          "lcmsWasmNoCache": 37,
+          "ratioVsLcms": 3.03
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0.01,
+          "jsceInt": 60.8,
+          "jsceSimd": 313.9,
+          "lcmsWasm": 64.6,
+          "lcmsWasmNoCache": 48.3,
+          "ratioVsLcms": 4.86
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4095,
+          "coverX": 0.11,
+          "jsceInt": 60.9,
+          "jsceSimd": 428.3,
+          "lcmsWasm": 76.5,
+          "lcmsWasmNoCache": 49.5,
+          "ratioVsLcms": 5.59
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 62.7,
+          "jsceSimd": 484.5,
+          "lcmsWasm": 93.1,
+          "lcmsWasmNoCache": 51.4,
+          "ratioVsLcms": 5.21
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.2,
+          "distinct": 41077,
+          "coverX": 1.14,
+          "jsceInt": 53.9,
+          "jsceSimd": 112.9,
+          "lcmsWasm": 34.6,
+          "lcmsWasmNoCache": 41.9,
+          "ratioVsLcms": 3.26
+        }
+      ]
+    },
+    {
+      "id": "js.content.rgb-cmyk.1024k",
+      "title": "RGB -> CMYK — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1016892,
+          "coverX": 28.3,
+          "jsceInt": 43.8,
+          "jsceSimd": 98,
+          "lcmsWasm": 31.9,
+          "lcmsWasmNoCache": 36.1,
+          "ratioVsLcms": 3.08
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0.01,
+          "jsceInt": 53.9,
+          "jsceSimd": 318.6,
+          "lcmsWasm": 63.9,
+          "lcmsWasmNoCache": 48.4,
+          "ratioVsLcms": 4.99
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4095,
+          "coverX": 0.11,
+          "jsceInt": 51.9,
+          "jsceSimd": 407.7,
+          "lcmsWasm": 77.3,
+          "lcmsWasmNoCache": 45.9,
+          "ratioVsLcms": 5.27
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 54.1,
+          "jsceSimd": 455.9,
+          "lcmsWasm": 84.3,
+          "lcmsWasmNoCache": 48.5,
+          "ratioVsLcms": 5.41
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.2,
+          "distinct": 41077,
+          "coverX": 1.14,
+          "jsceInt": 47.3,
+          "jsceSimd": 114.3,
+          "lcmsWasm": 35.3,
+          "lcmsWasmNoCache": 39.3,
+          "ratioVsLcms": 3.24
+        }
+      ]
+    },
+    {
+      "id": "js.content.cmyk-rgb.1024k",
+      "title": "CMYK -> RGB — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "17x17x17x17",
+        "clutCells": 83521
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1048576,
+          "coverX": 12.55,
+          "jsceInt": 32.2,
+          "jsceSimd": 67.4,
+          "lcmsWasm": 21.6,
+          "lcmsWasmNoCache": 22.1,
+          "ratioVsLcms": 3.12
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0,
+          "jsceInt": 38.4,
+          "jsceSimd": 224.8,
+          "lcmsWasm": 50.4,
+          "lcmsWasmNoCache": 25.7,
+          "ratioVsLcms": 4.46
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4096,
+          "coverX": 0.05,
+          "jsceInt": 38.3,
+          "jsceSimd": 354.6,
+          "lcmsWasm": 69.3,
+          "lcmsWasmNoCache": 25.3,
+          "ratioVsLcms": 5.12
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 38.9,
+          "jsceSimd": 451.5,
+          "lcmsWasm": 93.8,
+          "lcmsWasmNoCache": 26.2,
+          "ratioVsLcms": 4.82
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.3,
+          "distinct": 35074,
+          "coverX": 0.42,
+          "jsceInt": 44.4,
+          "jsceSimd": 80.7,
+          "lcmsWasm": 25.6,
+          "lcmsWasmNoCache": 24.1,
+          "ratioVsLcms": 3.15
+        }
+      ]
+    },
+    {
+      "id": "js.content.cmyk-cmyk.1024k",
+      "title": "CMYK -> CMYK — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "17x17x17x17",
+        "clutCells": 83521
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1048576,
+          "coverX": 12.55,
+          "jsceInt": 26.7,
+          "jsceSimd": 67.5,
+          "lcmsWasm": 19.3,
+          "lcmsWasmNoCache": 20.5,
+          "ratioVsLcms": 3.49
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0,
+          "jsceInt": 32.4,
+          "jsceSimd": 222,
+          "lcmsWasm": 47.7,
+          "lcmsWasmNoCache": 24.4,
+          "ratioVsLcms": 4.65
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4096,
+          "coverX": 0.05,
+          "jsceInt": 32.1,
+          "jsceSimd": 343.3,
+          "lcmsWasm": 68.5,
+          "lcmsWasmNoCache": 24.2,
+          "ratioVsLcms": 5.01
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 32.4,
+          "jsceSimd": 426.3,
+          "lcmsWasm": 85,
+          "lcmsWasmNoCache": 25.1,
+          "ratioVsLcms": 5.02
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.3,
+          "distinct": 35074,
+          "coverX": 0.42,
+          "jsceInt": 37.1,
+          "jsceSimd": 81.2,
+          "lcmsWasm": 23.3,
+          "lcmsWasmNoCache": 23.9,
+          "ratioVsLcms": 3.49
+        }
+      ]
+    },
+    {
+      "id": "js.content.rgb-rgb-softproof.1024k",
+      "title": "RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 1024K px",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "distinct": 1016892,
+          "coverX": 28.3,
+          "jsceInt": 48.9,
+          "jsceSimd": 97,
+          "lcmsWasm": 33.1,
+          "lcmsWasmNoCache": 37.3,
+          "ratioVsLcms": 2.92
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "distinct": 256,
+          "coverX": 0.01,
+          "jsceInt": 62.5,
+          "jsceSimd": 329.2,
+          "lcmsWasm": 58.6,
+          "lcmsWasmNoCache": 47.8,
+          "ratioVsLcms": 5.62
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "distinct": 4095,
+          "coverX": 0.11,
+          "jsceInt": 57.2,
+          "jsceSimd": 428.2,
+          "lcmsWasm": 75.7,
+          "lcmsWasmNoCache": 45.6,
+          "ratioVsLcms": 5.66
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "distinct": 1,
+          "coverX": 0,
+          "jsceInt": 58.5,
+          "jsceSimd": 471.8,
+          "lcmsWasm": 92.6,
+          "lcmsWasmNoCache": 48.4,
+          "ratioVsLcms": 5.1
+        },
+        {
+          "content": "photo",
+          "adjPct": 13.2,
+          "distinct": 41077,
+          "coverX": 1.14,
+          "jsceInt": 54,
+          "jsceSimd": 113.6,
+          "lcmsWasm": 34.6,
+          "lcmsWasmNoCache": 39.9,
+          "ratioVsLcms": 3.28
+        }
+      ]
+    }
+  ]
+}

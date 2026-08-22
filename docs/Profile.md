@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../README.md) ·
 [Bench](./Bench.md) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Roadmap](./Roadmap.md) ·
 [Deep dive](./deepdive/) ·
 [Examples](./Examples.md) ·

@@ -22,11 +22,15 @@
  *     13. RGB object: input values exactly preserved
  *     14. CMYK object: input values exactly preserved (no separation change)
  *     15. Lab object: input values exactly preserved
+ *     15b. array() of objects clones via kernelIdentity (no alias)
+ *     15c. objectFloat array() clones via kernelIdentity
  *
- *   Correctness — int8 array
+ *   Correctness — int8 / int16 / device array
  *     16. transformArray copies pixel values exactly
  *     17. transformArray with inputHasAlpha + outputHasAlpha + preserveAlpha
  *     18. transformArray with outputHasAlpha=true, no input alpha → fills 255
+ *     23. device array() copies 0..1 into a plain Array
+ *     24. device outputHasAlpha fills 1
  *
  *   detectIdentity:false falls through to real pipeline
  *     19. sRGB→sRGB with detectIdentity:false runs the full pipeline (no copy)
@@ -228,6 +232,46 @@ describe('identity correctness — object format', () => {
         expect(output.type).toBe(eColourType.CMYK);
     });
 
+    test('15b. array() of objects clones through kernelIdentity — it does not alias', () => {
+        // Identity binds a format-specific copy at init(). Object format
+        // gets a shallow clone into a new Array, not the typed-buffer
+        // memcpy and not the per-pixel pipeline walk.
+        const transform = new Transform({ dataFormat: 'object' });
+        transform.create('*sRGB', '*sRGB', eIntent.relative);
+        expect(transform.kernel.enableForArrays).toBe(true);
+        expect(typeof transform.kernel.arrayFn).toBe('function');
+        const batch = [
+            { type: eColourType.RGB, R: 123, G: 45, B: 210 },
+            { type: eColourType.RGB, R: 0, G: 0, B: 0 },
+        ];
+        const out = transform.array(batch);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
+        expect(out).toBeInstanceOf(Array);
+        expect(out.length).toBe(2);
+        expect(out[0]).not.toBe(batch[0]);
+        expect(out[0].R).toBe(123);
+        expect(out[0].G).toBe(45);
+        expect(out[0].B).toBe(210);
+        out[0].R = 1;
+        expect(batch[0].R).toBe(123);
+    });
+
+    test('15c. objectFloat array() clones through kernelIdentity', () => {
+        const transform = new Transform({ dataFormat: 'objectFloat' });
+        transform.create('*sRGB', '*sRGB', eIntent.relative);
+        const batch = [
+            { type: eColourType.RGBf, Rf: 0.5, Gf: 0.25, Bf: 0.125 },
+        ];
+        const out = transform.array(batch);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
+        expect(out[0]).not.toBe(batch[0]);
+        expect(out[0].Rf).toBe(0.5);
+        expect(out[0].Gf).toBe(0.25);
+        expect(out[0].Bf).toBe(0.125);
+        out[0].Rf = 0;
+        expect(batch[0].Rf).toBe(0.5);
+    });
+
     test('15. Lab object: input values exactly preserved', () => {
         // labInputAdaptation:false avoids the whitePoint-required adaptation stage.
         // The identity two-stage codec (Lab→device→Lab) is lossless at f64 precision.
@@ -252,6 +296,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create('*sRGB', '*sRGB', eIntent.relative);
         const input  = new Uint8ClampedArray([255, 128, 0,   0, 200, 50]);
         const output = transform.transformArray(input, false, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(Array.from(output)).toEqual([255, 128, 0, 0, 200, 50]);
     });
 
@@ -261,6 +306,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create('*sRGB', '*sRGB', eIntent.relative);
         const input  = new Uint8ClampedArray([255, 0, 0, 200,   0, 255, 0, 128]);
         const output = transform.transformArray(input, true, true, true);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(output[0]).toBe(255);  expect(output[3]).toBe(200);
         expect(output[4]).toBe(0);    expect(output[7]).toBe(128);
     });
@@ -271,6 +317,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create('*sRGB', '*sRGB', eIntent.relative);
         const input  = new Uint8ClampedArray([100, 150, 200,   50, 75, 100]);
         const output = transform.transformArray(input, false, true, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(output.length).toBe(8);
         expect(output[0]).toBe(100); expect(output[3]).toBe(255);
         expect(output[4]).toBe(50);  expect(output[7]).toBe(255);
@@ -282,6 +329,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create('*sRGB', '*sRGB', eIntent.relative);
         const input  = new Uint8ClampedArray([255, 128, 0, 200,   10, 20, 30, 99]);
         const output = transform.transformArray(input, true, false, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(output.length).toBe(6);
         expect(Array.from(output)).toEqual([255, 128, 0, 10, 20, 30]);
     });
@@ -292,6 +340,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create(makeCMYK(), makeCMYK(), eIntent.relative);
         const input  = new Uint8ClampedArray([40, 30, 20, 10,   0, 0, 0, 255]);
         const output = transform.transformArray(input, false, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(Array.from(output)).toEqual([40, 30, 20, 10, 0, 0, 0, 255]);
     });
 
@@ -301,6 +350,7 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         transform.create('*sRGB', '*sRGB', eIntent.relative);
         const input  = new Uint16Array([60000, 30000, 0,   100, 200, 65535]);
         const output = transform.transformArray(input, false, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(output).toBeInstanceOf(Uint16Array);
         expect(Array.from(output)).toEqual([60000, 30000, 0, 100, 200, 65535]);
     });
@@ -312,8 +362,33 @@ describe('identity correctness — transformArray (kernelCopy)', () => {
         const input     = new Uint8ClampedArray([10, 20, 30,   40, 50, 60]);
         const preBuf    = new Uint8ClampedArray(6);
         const returned  = transform.transformArray(input, false, false, false, 2, null, preBuf);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
         expect(returned).toBe(preBuf);                         // same reference
         expect(Array.from(preBuf)).toEqual([10, 20, 30, 40, 50, 60]);
+    });
+
+    // device is 0..1 floats in a plain Array. The typed memcpy would
+    // allocate Uint8ClampedArray and clamp every channel to 0 or 1.
+    test('23. device — 0..1 values copied into a plain Array', () => {
+        const transform = new Transform({ dataFormat: 'device' });
+        transform.create('*sRGB', '*sRGB', eIntent.relative);
+        const input  = [1, 0.5, 0,   0.25, 0.125, 0.0625];
+        const output = transform.array(input, false, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
+        expect(output).toBeInstanceOf(Array);
+        expect(output).not.toBeInstanceOf(Uint8ClampedArray);
+        expect(output).toEqual([1, 0.5, 0, 0.25, 0.125, 0.0625]);
+        output[1] = 0;
+        expect(input[1]).toBe(0.5);
+    });
+
+    test('24. device — outputHasAlpha with no input alpha fills 1', () => {
+        const transform = new Transform({ dataFormat: 'device' });
+        transform.create('*sRGB', '*sRGB', eIntent.relative);
+        const input  = [0.2, 0.4, 0.6];
+        const output = transform.array(input, false, true, false);
+        expect(transform.lastUsedKernel).toBe('kernelIdentity');
+        expect(output).toEqual([0.2, 0.4, 0.6, 1]);
     });
 
 });

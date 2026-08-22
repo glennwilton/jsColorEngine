@@ -26,6 +26,7 @@ test('sRGB to CMYK via LUT ', async () => {
     ];
 
     let output = rgb2CMYK.transformArrayViaLUT(input);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
     expect(output).toEqual(  new Uint8ClampedArray([
             94, 157, 243, 40,
@@ -59,6 +60,7 @@ test('sRGB+Alpha to CMYK via LUT ', async () => {
     ];
 
     let output = rgb2CMYK.transformArrayViaLUT(input, true, false);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
     expect(output).toEqual( new Uint8ClampedArray([
         94, 157, 243, 40,
@@ -90,6 +92,7 @@ test('sRGB+Alpha to CMYK+Alpha via LUT ', async () => {
     ];
 
     let output = rgb2CMYK.transformArrayViaLUT(input, true, true, false);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
     expect(output).toEqual(  new Uint8ClampedArray([
         94, 157, 243, 40,       255,
@@ -121,6 +124,7 @@ test('sRGB+Alpha to CMYK+Alpha via LUT with PRESERVE Alpha ', async () => {
     ];
 
     let output = rgb2CMYK.transformArrayViaLUT(input, true, true, true);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
     expect(output).toEqual(  new Uint8ClampedArray([
         94, 157, 243, 40,       200,
@@ -152,6 +156,7 @@ test('sRGB+Alpha to CMYK+Alpha via LUT with PRESERVE Alpha with length of 3', as
     ];
 
     let output = rgb2CMYK.transformArrayViaLUT(input, true, true, true, 3);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
     expect(output).toEqual(  new Uint8ClampedArray([
         94, 157, 243, 40,       200,
@@ -180,6 +185,7 @@ test('transformArrayViaLUT supports reusable output buffer', async () => {
     let out = new Uint8ClampedArray(20);
 
     let output = rgb2CMYK.transformArrayViaLUT(input, false, false, false, 3, out);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBe(out);
     expect(output.slice(0, 12)).toEqual(new Uint8ClampedArray([
         94, 157, 243, 40,
@@ -208,6 +214,7 @@ test('transformArray forwards reusable output buffer on LUT route', async () => 
     let out = new Uint8ClampedArray(20);
 
     let output = rgb2CMYK.transformArray(input, false, false, false, 3, undefined, out);
+    expect(rgb2CMYK.lastUsedKernel).toBe('kernel3D');
     expect(output).toBe(out);
     expect(output.slice(0, 12)).toEqual(new Uint8ClampedArray([
         94, 157, 243, 40,

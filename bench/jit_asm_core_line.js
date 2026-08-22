@@ -32,7 +32,7 @@
  *
  * SCOPE NOTE — what this microbench can and cannot tell you:
  *
- * This is a COMPANION data point for §1b of docs/Performance.md. It
+ * This is a COMPANION data point for §1b of docs/deepdive/Performance.md. It
  * reinforces what V8 emits for the core expression in isolation, so we
  * can point at concrete x64 when discussing the kernel. It does NOT
  * reproduce the full kernel's register pressure (14+ simultaneous live
@@ -46,7 +46,7 @@
  *
  * In particular: the finding that named-temps variants are slightly
  * faster HERE does not mean they are faster in the real kernel. See
- * the "named temps hurt" section in docs/Performance.md for the full
+ * the "named temps hurt" section in docs/deepdive/Performance.md for the full
  * argument and the proper full-kernel experiment that would actually
  * answer the question.
  */

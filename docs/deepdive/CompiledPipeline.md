@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -18,6 +18,8 @@
 [WASM kernels](./WasmKernels.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 > **Status: proof of concept — paused after v1.3 framing review
 > (Apr 2026), no harm in current shape.** The code lives at
@@ -927,5 +929,5 @@ the bigger sample size for stable attribution.
 - [Architecture](./Architecture.md) — pipeline model, runtime walker
 - [JIT inspection](./JitInspection.md) — TurboFan-emitted x64 for
   the related kernel work; same JIT, same techniques
-- [Performance](../Performance.md) — overall throughput numbers
+- [Performance](./Performance.md) — overall throughput numbers
   across all kernel modes

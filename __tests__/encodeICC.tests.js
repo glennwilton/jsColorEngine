@@ -179,6 +179,7 @@ describe('Profile.createGrayICC — a profile the engine wrote', () => {
 
         const input = new Uint8ClampedArray([0, 64, 128, 255]);
         const out = t.transformArray(input, false, false, false, 4);
+        expect(t.lastUsedKernel).toBe('kernel1D');
         expect(out.length).toBe(12);
         expect(Array.from(out.slice(0, 3))).toEqual([0, 0, 0]);
         expect(Array.from(out.slice(9))).toEqual([255, 255, 255]);

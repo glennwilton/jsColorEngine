@@ -138,12 +138,14 @@
         (local $sum         i32)   ;; sum of three products (signed)
         (local $u16         i32)   ;; c + rounded term (pre-clamp)
         (local $u8          i32)   ;; clamped u8 output
+        ;;Inject:localsAfter
 
         ;; -- Init ----------------------------------------------------------
         local.get $inputPtr
         local.set $inputPos
         local.get $outputPtr
         local.set $outputPos
+        ;;Inject:initAfter
 
         ;; -- Main per-pixel loop ------------------------------------------
         (block $pixel_exit
@@ -176,6 +178,7 @@
                 i32.const 3
                 i32.add
                 local.set $inputPos
+                ;;Inject:probeAfter
 
                 ;; px = input0 * gps   (Q8.16 grid coordinate)
                 local.get $input0
@@ -838,6 +841,7 @@
                         br_if $ch_loop_cfb))
                 )))))))))))
 
+                ;;Inject:storeBefore
                 ;; -- Alpha tail ------------------------------------------
                 ;; Mirrors the JS alpha block:
                 ;;   if (preserveAlpha)  { output[o++] = input[i++]; }

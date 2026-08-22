@@ -26,7 +26,7 @@
  *   The WASM 4D kernel is a line-by-line port of the JS
  *   `tetrahedralInterp4DArray_{3,4}Ch_intLut_loop` — same u20 Q16.4
  *   single-rounding design, same u16 CLUT, same K-axis LERP.
- *   See docs/Performance.md §1b "4D scalar — measured".
+ *   See docs/deepdive/Performance.md §1b "4D scalar — measured".
  */
 
 const {Transform, eIntent} = require('../src/main');
@@ -138,6 +138,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         expectDispatched(1);
 
@@ -172,6 +173,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         expectDispatched(1);
         expect(oWasm.length).toBe(nPixels * 4);
@@ -208,6 +210,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         // Counter MUST NOT have advanced — threshold gate is working.
         expect(wasmT.wasmTetra4D.dispatchCount).toBe(before);
@@ -425,7 +428,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
 
         // SIMD leads, scalar loads behind it for output widths SIMD skips.
         expect(simdT.wasmTetra4DSimd).not.toBeNull();
-        expect(simdT.wasmTetra4D).not.toBeNull();
+        expect(simdT.wasmTetra4D).toBeNull(); // CMYK→RGB is cMax 3 — SIMD is enough
         // PHASE 7: a kernel loads only its own dimension's modules, so the
         // other family is null rather than loaded-and-never-fired. That is a
         // stronger guarantee than a dispatch counter staying flat -- there is
@@ -438,13 +441,12 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM 4D dispatcher (CMYK input)
         const input = buildLargeInputCMYK(nPixels);
 
         const before4DSimd = simdT.wasmTetra4DSimd.dispatchCount;
-        const before4D     = simdT.wasmTetra4D.dispatchCount;
 
         const oSimd = simdT.transformArray(input, false, false, false);
 
-        // cMax=3 is a SIMD sweet spot — 4D SIMD fires, everything else sits.
+        // cMax=3 is a SIMD sweet spot — 4D SIMD fires. Scalar was never loaded.
         expect(simdT.wasmTetra4DSimd.dispatchCount).toBe(before4DSimd + 1);
-        expect(simdT.wasmTetra4D.dispatchCount).toBe(before4D);
+        expect(simdT.wasmTetra4D).toBeNull();
 
         // Bit-exact vs lutMode='int'.
         const intT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});

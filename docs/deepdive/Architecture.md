@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -37,7 +37,7 @@ host JavaScript engine will let us.
 ```
 
 There are two very different execution paths a `Transform` can take once it's
-built — `transform()` for one colour at a time, and `transformArray()` for
+built — `transform()` for one colour at a time, and `array()` for
 bulk pixel data — and picking the right one is the single biggest performance
 lever in the library. We'll walk through both.
 
@@ -87,7 +87,7 @@ are dropped, matrix + matrix pairs could be premultiplied (future work).
 
 | | Accuracy path | Image path |
 |---|---|---|
-| **API** | `transform.transform(obj)` / `transformArray(objs)` with `dataFormat: 'object'` or `'objectFloat'` | `transform.transformArray(typedArray, ...)` with `dataFormat: 'int8'` and `buildLut: true` |
+| **API** | `transform.transform(obj)` / `array(objs)` with `dataFormat: 'object'` or `'objectFloat'` | `transform.array(typedArray, ...)` with `dataFormat: 'int8'` and `buildLut: true` |
 | **Per pixel** | Walks the *entire* pipeline, stage by stage, in f64 | Single n-D LUT interpolation |
 | **Typical cost** | ~µs/pixel (micro seconds) | ~ns/pixel (nano seconds) |
 | **Allocations** | One small object per pixel, fine for thousands | Zero in the hot loop (typed arrays, pre-baked LUT) |
@@ -108,10 +108,10 @@ for (let i = 0; i < pixelCount; i++) {
 
 That call bypasses the LUT entirely, allocates ~6 arrays per pixel, and
 dispatches every stage via `.call(this, ...)`. On a 4 MP image you're
-roughly 30× slower than `transformArrayViaLUT` and you will GC-thrash
+roughly 30× slower than `array()` and you will GC-thrash
 the host. The accuracy path is correct; it is not a fast loop. If you
 have > ~10 k pixels, always set `{ buildLut: true, dataFormat: 'int8' }`
-and call `transformArray`.
+and call `array()`.
 
 ## LUT pre-baking — what it is, what it costs
 
@@ -143,7 +143,7 @@ hypercube into 24. The tetrahedral scheme is both *faster* and *more
 accurate* than trilinear for device-space LUTs — fewer grid fetches,
 no "stripe" artefacts at the cube boundaries. LittleCMS uses the same
 scheme for the same reasons; see the
-[lessons from reading lcms2's `cmsintrp.c`](../Performance.md) section
+[lessons from reading lcms2's `cmsintrp.c`](./Performance.md) section
 in the Performance doc.
 
 (The one exception: for 3-channel PCS-to-device LUTs, `addStageLUT()`
@@ -213,5 +213,5 @@ Key callouts from that header that matter architecturally:
   speeds it does
 - [WASM kernels](./WasmKernels.md) — how the `.wat` files are laid out
   and the SIMD channel-parallel design
-- [Performance](../Performance.md) — measured numbers across modes
+- [Performance](./Performance.md) — measured numbers across modes
 - [API: Transform](../Transform.md) — the constructor options reference

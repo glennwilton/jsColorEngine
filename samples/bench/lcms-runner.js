@@ -104,6 +104,10 @@ export async function loadLcms() {
         cmsFLAGS_HIGHRESPRECALC:      mod.cmsFLAGS_HIGHRESPRECALC,
         cmsFLAGS_LOWRESPRECALC:       mod.cmsFLAGS_LOWRESPRECALC,
         cmsFLAGS_NOOPTIMIZE:          mod.cmsFLAGS_NOOPTIMIZE,
+        // Inhibit the 1-pixel memo cache. 0x0040 is the lcms2 value
+        // (cmsplugin.h); keep the literal so a stripped export still works.
+        cmsFLAGS_NOCACHE:             (mod.cmsFLAGS_NOCACHE != null)
+            ? mod.cmsFLAGS_NOCACHE : 0x0040,
         cmsInfoDescription:           mod.cmsInfoDescription || 0,
         LCMS_VERSION:                 mod.LCMS_VERSION,
     };
@@ -199,6 +203,7 @@ export function freeProfiles(lcms, profiles) {
  * Returns:
  *   {
  *     run:         () => void          // hot-path: single _cmsDoTransform call
+ *     setInput:    (typedArray) => void // recopy input into the pinned heap
  *     free:        () => void          // free heap buffers + transform handle
  *     lutBuildMs:  number              // wall-clock of cmsCreateTransform
  *     outputBytes: () => Uint8Array    // result buffer (raw bytes, heap-backed)
@@ -257,6 +262,15 @@ export function makeLcmsRunner(lcms, consts, wf, flags, input, pixelCount) {
         lcms._cmsDoTransform(xf, inPtr, outPtr, pixelCount);
     }
 
+    function setInput(next) {
+        if (inBpC === 2) {
+            new Uint16Array(lcms.HEAPU8.buffer, inPtr, pixelCount * wf.inCh)
+                .set(next.subarray(0, pixelCount * wf.inCh));
+        } else {
+            lcms.HEAPU8.set(next.subarray(0, inBytes), inPtr);
+        }
+    }
+
     function free() {
         lcms.cmsDeleteTransform(xf);
         lcms._free(inPtr);
@@ -268,7 +282,7 @@ export function makeLcmsRunner(lcms, consts, wf, flags, input, pixelCount) {
         return new Uint8Array(lcms.HEAPU8.buffer, outPtr, outBytes).slice();
     }
 
-    return { run, free, lutBuildMs, outputBytes };
+    return { run, free, setInput, lutBuildMs, outputBytes };
 }
 
 /**
@@ -278,6 +292,7 @@ export function lcmsFlagLabel(consts, flags) {
     if (flags === consts.cmsFLAGS_HIGHRESPRECALC) return 'lcms-wasm HIGHRES';
     if (flags === consts.cmsFLAGS_LOWRESPRECALC)  return 'lcms-wasm LOWRES';
     if (flags === consts.cmsFLAGS_NOOPTIMIZE)     return 'lcms-wasm NOOPT';
+    if (flags === consts.cmsFLAGS_NOCACHE)        return 'lcms-wasm NOCACHE';
     if (flags === 0)                              return 'lcms-wasm default';
     return 'lcms-wasm 0x' + flags.toString(16);
 }

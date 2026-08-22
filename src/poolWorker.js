@@ -15,9 +15,11 @@
 /**
  * poolWorker.js — the worker end of the multicore image path.
  *
- * Node `worker_threads` entry point. Nothing here is imported by the main
- * bundle; it is loaded by filename when the pool spins up, so the browser
- * build never sees it.
+ * Worker entry for the multicore image path.
+ *
+ * Node loads this file via `worker_threads`. The browser build bundles it
+ * (plus the engine) as `browser/jsColorEngineWorker.js` and the app passes
+ * that URL to `Transform.enablePool({workerUrl})`. Same protocol either way.
  *
  * PROTOCOL
  * --------
@@ -40,10 +42,35 @@
  */
 'use strict';
 
-var workerThreads = require('worker_threads');
-var parentPort = workerThreads.parentPort;
-var Transform = require('./Transform.js');
-var Profile   = require('./Profile.js');
+var parentPort, Transform, Profile, nowMs, workerExit;
+
+function isBrowserWorker(){
+    return (typeof WorkerGlobalScope !== 'undefined')
+        && (typeof self !== 'undefined')
+        && (self instanceof WorkerGlobalScope);
+}
+
+if(isBrowserWorker()){
+    parentPort = {
+        on: function(type, fn){
+            self.addEventListener(type, function(ev){ fn(ev.data); });
+        },
+        postMessage: function(msg, xfer){
+            self.postMessage(msg, xfer || []);
+        }
+    };
+    Transform = require('./Transform.js');
+    Profile   = require('./Profile.js');
+    nowMs = function(){ return performance.now(); };
+    workerExit = function(){ self.close(); };
+} else {
+    var workerThreads = require('worker_threads');
+    parentPort = workerThreads.parentPort;
+    Transform = require('./Transform.js');
+    Profile   = require('./Profile.js');
+    nowMs = function(){ return Number(process.hrtime.bigint()) / 1e6; };
+    workerExit = function(){ process.exit(0); };
+}
 
 // signature -> ready Transform. One entry per distinct transform the caller
 // actually uses, which is what lets ONE pool serve MANY Transforms: every
@@ -144,7 +171,7 @@ parentPort.on('message', function(msg){
     if(msg && msg.maxTransforms > 0) MAX_LUTS = msg.maxTransforms;
 
     if(msg.type === 'exit'){
-        process.exit(0);
+        workerExit();
         return;
     }
 
@@ -232,11 +259,11 @@ parentPort.on('message', function(msg){
             target = new Uint8ClampedArray(outBuffer, 0, msg.outByteLength);
         }
 
-        var t0 = process.hrtime.bigint();
+        var t0 = nowMs();
         var out = transform.transformArray(input, msg.inputHasAlpha, msg.outputHasAlpha,
                                            msg.preserveAlpha, msg.pixelCount,
                                            undefined, target || undefined);
-        var computeMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        var computeMs = nowMs() - t0;
 
         // If the transform did not write into the supplied array — no array was
         // usable, or a kernel returned its own — copy into the scratch anyway,

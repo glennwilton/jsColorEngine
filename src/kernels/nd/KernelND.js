@@ -1,9 +1,8 @@
 // src/kernels/nd/KernelND.js
 //
-// N-channel catch-all kernel (5CLR-15CLR). Registered across the whole 5..15
-// span of the dense kernel registry — one descriptor object in eleven slots,
-// so any single dimension can later be replaced with a tuned kernel without
-// forking the other ten. See docs/deepdive/KernelContract.md.
+// N-channel catch-all kernel (7CLR-15CLR). Slots 5 and 6 are Kernel5D /
+// Kernel6D (int8 WASM scalar). This descriptor occupies 7..15 so a later
+// tuned kernel can still replace one slot without forking the rest.
 // Float-only: N-channel press profiles are a proof/measurement use case, not
 // a throughput path, so correctness over speed is the right trade-off.
 'use strict';
@@ -64,8 +63,8 @@ module.exports = {
 
 
     // Inclusive [from, to] — registerKernel() fills every slot in the range
-    // with this same object. 15 is the ICC ceiling (FCLR).
-    dimensions: [5, 15],
+    // with this same object. 5 and 6 are Kernel5D/6D; 15 is the ICC ceiling.
+    dimensions: [7, 15],
 
     supports: {
         float: true,
@@ -139,6 +138,11 @@ module.exports = {
         // can actually supply rather than refusing the call.
         preserve = (preserve === undefined ? outAlpha : preserve) && inAlpha;
 
+        // Always Uint8ClampedArray, and a new Array(inCh) per pixel below.
+        // Both were measured: matching the caller's container, and inlining
+        // the interpolator args, bought noise. Switching the allocation to
+        // follow the LUT vs walk split was a silent regression (typed when
+        // the table ran, untyped when it didn't). Leave them.
         if (!outputArray) outputArray = new Uint8ClampedArray(pixelCount * outBPP);
 
         // THE LUT DOES ITS OWN SCALING, at both ends. lut.inputScale converts

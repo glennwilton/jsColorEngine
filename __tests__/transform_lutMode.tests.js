@@ -113,6 +113,8 @@ test("lutMode='int': sRGB->AdobeRGB matches float within 1 LSB", () => {
 
     var oFloat = floatT.transformArray(input);
     var oInt   = intT.transformArray(input);
+    expect(floatT.lastUsedKernel).toBe('kernel3D');
+    expect(intT.lastUsedKernel).toBe('kernel3D');
 
     expect(oInt.length).toBe(oFloat.length);
     expect(maxAbsDiff(oInt, oFloat)).toBeLessThanOrEqual(1);
@@ -147,6 +149,8 @@ test("lutMode='int': sRGB->GRACoL CMYK matches float within 2 LSB", async () => 
 
     var oFloat = floatT.transformArray(input);
     var oInt   = intT.transformArray(input);
+    expect(floatT.lastUsedKernel).toBe('kernel3D');
+    expect(intT.lastUsedKernel).toBe('kernel3D');
 
     expect(oInt.length).toBe(oFloat.length);
     expect(maxAbsDiff(oInt, oFloat)).toBeLessThanOrEqual(2);
@@ -185,6 +189,8 @@ test("lutMode='int': CMYK->sRGB matches float within 1 LSB (4D)", async () => {
 
     var oFloat = floatT.transformArray(input);
     var oInt   = intT.transformArray(input);
+    expect(floatT.lastUsedKernel).toBe('kernel4D');
+    expect(intT.lastUsedKernel).toBe('kernel4D');
 
     expect(oInt.length).toBe(oFloat.length);
     // 4D 3Ch budget = 1 LSB on GRACoL→sRGB. Two fixes in v1.1 combine
@@ -223,6 +229,8 @@ test("lutMode='int': CMYK->CMYK matches float within 1 LSB (4D u20)", async () =
 
     var oFloat = floatT.transformArray(input);
     var oInt   = intT.transformArray(input);
+    expect(floatT.lastUsedKernel).toBe('kernel4D');
+    expect(intT.lastUsedKernel).toBe('kernel4D');
 
     expect(oInt.length).toBe(oFloat.length);
     // v1.1 u20 Q16.4 single-rounding refactor drops the 4D 4Ch budget
@@ -334,6 +342,7 @@ test("lutMode='int': preserveAlpha works in 3D 3Ch kernel", () => {
         128, 128, 128, 200
     ];
     var output = intT.transformArray(input, true, true, true);
+    expect(intT.lastUsedKernel).toBe('kernel3D');
 
     expect(output.length).toBe(16);
     expect(output[3]).toBe(11);
@@ -366,6 +375,7 @@ test("lutMode='int': preserveAlpha works in 4D 3Ch kernel (CMYK->RGB)", async ()
          50,  40,  30,  20, 200,   // realistic + alpha
     ];
     var output = intT.transformArray(input, true, true, true);
+    expect(intT.lastUsedKernel).toBe('kernel4D');
 
     // 4 pixels × (3 RGB + 1 alpha) = 16 channels out
     expect(output.length).toBe(16);
@@ -509,6 +519,9 @@ test("lutMode='auto': survives create() across all four directions", async () =>
 
         var oAuto = autoT.transformArray(d.input);
         var oFloat = floatT.transformArray(d.input);
+        var route = d.label.indexOf('CMYK->') === 0 ? 'kernel4D' : 'kernel3D';
+        expect(autoT.lastUsedKernel).toBe(route);
+        expect(floatT.lastUsedKernel).toBe(route);
         expect(oAuto.length).toBe(oFloat.length);
         expect(maxAbsDiff(oAuto, oFloat)).toBeLessThanOrEqual(2);   // integer-kernel budget
     }

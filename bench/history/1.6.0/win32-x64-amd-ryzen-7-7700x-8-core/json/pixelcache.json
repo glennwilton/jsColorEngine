@@ -1,0 +1,407 @@
+{
+  "tool": "run.js",
+  "generated": "2026-08-22T22:46:35.920Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.6.0"
+  },
+  "tables": [
+    {
+      "id": "pixelCache.accuracyPath.rgb-rgb-matrix",
+      "title": "Pixel cache (BETA), accuracy path — RGB -> RGB  (matrix)",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 253.88,
+          "oneSlotMpxs": 6.68,
+          "slots32Mpxs": 6.34,
+          "hitPct32": 0,
+          "gain32Pct": -98
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 266.6,
+          "oneSlotMpxs": 16.52,
+          "slots32Mpxs": 15.68,
+          "hitPct32": 75,
+          "gain32Pct": -94
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 268.28,
+          "oneSlotMpxs": 25.31,
+          "slots32Mpxs": 23.91,
+          "hitPct32": 94.4,
+          "gain32Pct": -91
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 274.08,
+          "oneSlotMpxs": 32.28,
+          "slots32Mpxs": 29.72,
+          "hitPct32": 100,
+          "gain32Pct": -89
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 267.71,
+          "oneSlotMpxs": 7.49,
+          "slots32Mpxs": 8.48,
+          "hitPct32": 32.8,
+          "gain32Pct": -97
+        }
+      ]
+    },
+    {
+      "id": "pixelCache.accuracyPath.rgb-lab",
+      "title": "Pixel cache (BETA), accuracy path — RGB -> Lab",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 7.75,
+          "oneSlotMpxs": 6.53,
+          "slots32Mpxs": 6.25,
+          "hitPct32": 0,
+          "gain32Pct": -19
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 8.31,
+          "oneSlotMpxs": 16.58,
+          "slots32Mpxs": 15.42,
+          "hitPct32": 75,
+          "gain32Pct": 86
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 8.48,
+          "oneSlotMpxs": 25.42,
+          "slots32Mpxs": 23.98,
+          "hitPct32": 94.4,
+          "gain32Pct": 183
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 8.31,
+          "oneSlotMpxs": 31.69,
+          "slots32Mpxs": 28.97,
+          "hitPct32": 100,
+          "gain32Pct": 249
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 7.95,
+          "oneSlotMpxs": 7.23,
+          "slots32Mpxs": 8.24,
+          "hitPct32": 32.8,
+          "gain32Pct": 4
+        }
+      ]
+    },
+    {
+      "id": "pixelCache.accuracyPath.rgb-cmyk",
+      "title": "Pixel cache (BETA), accuracy path — RGB -> CMYK",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 4.51,
+          "oneSlotMpxs": 4.03,
+          "slots32Mpxs": 3.8,
+          "hitPct32": 0,
+          "gain32Pct": -16
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 5.28,
+          "oneSlotMpxs": 11.26,
+          "slots32Mpxs": 11.3,
+          "hitPct32": 75,
+          "gain32Pct": 114
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 5.33,
+          "oneSlotMpxs": 21.25,
+          "slots32Mpxs": 20.17,
+          "hitPct32": 94.4,
+          "gain32Pct": 279
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 5.3,
+          "oneSlotMpxs": 28.76,
+          "slots32Mpxs": 27.5,
+          "hitPct32": 100,
+          "gain32Pct": 419
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 4.77,
+          "oneSlotMpxs": 4.61,
+          "slots32Mpxs": 5.64,
+          "hitPct32": 32.8,
+          "gain32Pct": 18
+        }
+      ]
+    },
+    {
+      "id": "pixelCache.accuracyPath.cmyk-rgb",
+      "title": "Pixel cache (BETA), accuracy path — CMYK -> RGB",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 5.83,
+          "oneSlotMpxs": 4.83,
+          "slots32Mpxs": 4.61,
+          "hitPct32": 0,
+          "gain32Pct": -21
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 6.81,
+          "oneSlotMpxs": 13.91,
+          "slots32Mpxs": 12.86,
+          "hitPct32": 75,
+          "gain32Pct": 89
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 6.9,
+          "oneSlotMpxs": 22.45,
+          "slots32Mpxs": 21.21,
+          "hitPct32": 94.4,
+          "gain32Pct": 207
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 7.17,
+          "oneSlotMpxs": 30.49,
+          "slots32Mpxs": 28.16,
+          "hitPct32": 100,
+          "gain32Pct": 293
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 6.17,
+          "oneSlotMpxs": 5.46,
+          "slots32Mpxs": 6.07,
+          "hitPct32": 31.4,
+          "gain32Pct": -2
+        }
+      ]
+    },
+    {
+      "id": "pixelCache.accuracyPath.cmyk-cmyk",
+      "title": "Pixel cache (BETA), accuracy path — CMYK -> CMYK",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 5.29,
+          "oneSlotMpxs": 4.46,
+          "slots32Mpxs": 4.12,
+          "hitPct32": 0,
+          "gain32Pct": -22
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 6.54,
+          "oneSlotMpxs": 12.52,
+          "slots32Mpxs": 11.93,
+          "hitPct32": 75,
+          "gain32Pct": 83
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 6.59,
+          "oneSlotMpxs": 20.68,
+          "slots32Mpxs": 19.74,
+          "hitPct32": 94.4,
+          "gain32Pct": 200
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 6.85,
+          "oneSlotMpxs": 29,
+          "slots32Mpxs": 25.79,
+          "hitPct32": 100,
+          "gain32Pct": 277
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 5.21,
+          "oneSlotMpxs": 4.52,
+          "slots32Mpxs": 5.63,
+          "hitPct32": 31.4,
+          "gain32Pct": 8
+        }
+      ]
+    },
+    {
+      "id": "pixelCache.accuracyPath.rgb-rgb-softproof",
+      "title": "Pixel cache (BETA), accuracy path — RGB -> RGB  (softproof)",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 262144,
+        "buildLut": false,
+        "baseline": "its own uncached run"
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "noCacheMpxs",
+        "oneSlotMpxs",
+        "slots32Mpxs",
+        "hitPct32",
+        "gain32Pct"
+      ],
+      "rows": [
+        {
+          "content": "noise",
+          "adjPct": 0,
+          "noCacheMpxs": 2.43,
+          "oneSlotMpxs": 2.47,
+          "slots32Mpxs": 2.36,
+          "hitPct32": 0,
+          "gain32Pct": -3
+        },
+        {
+          "content": "gradient",
+          "adjPct": 75,
+          "noCacheMpxs": 3.09,
+          "oneSlotMpxs": 8.32,
+          "slots32Mpxs": 8.22,
+          "hitPct32": 75,
+          "gain32Pct": 166
+        },
+        {
+          "content": "blocks16",
+          "adjPct": 93.8,
+          "noCacheMpxs": 3.2,
+          "oneSlotMpxs": 17.61,
+          "slots32Mpxs": 17.76,
+          "hitPct32": 94.4,
+          "gain32Pct": 455
+        },
+        {
+          "content": "solid",
+          "adjPct": 100,
+          "noCacheMpxs": 3.25,
+          "oneSlotMpxs": 31.19,
+          "slots32Mpxs": 28.22,
+          "hitPct32": 100,
+          "gain32Pct": 767
+        },
+        {
+          "content": "photo",
+          "adjPct": 8.6,
+          "noCacheMpxs": 2.99,
+          "oneSlotMpxs": 2.91,
+          "slots32Mpxs": 3.54,
+          "hitPct32": 32.8,
+          "gain32Pct": 19
+        }
+      ]
+    }
+  ]
+}

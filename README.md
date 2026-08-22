@@ -15,34 +15,6 @@ harness that produced them:
 
 Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolorengine/samples/>**
 
-- **Fast.** Against [LittleCMS](https://littlecms.com/), the 25-year
-  reference implementation — one core against one core, on real
-  photographic content:
-  - **3.1–3.6× faster than `lcms-wasm`** — the engine a JS project would
-    otherwise install.
-  - **Pure JavaScript within 0.78–1.08× of optimised native C**<sup>1</sup>,
-    and *ahead* on both 4D CMYK workflows. No WASM involved.
-  - **~2× native C with the WASM SIMD tier** on LUT-based workflows.
-
-  In absolute terms<sup>2</sup>, **~80–120 MPx/s on photographs** through
-  a LUT workflow — and **~330 MPx/s** between matrix-shaper profiles
-  (sRGB, AdobeRGB, ProPhoto…), where a dedicated kernel takes over.
-  That is **40 4K images a second, on one core.**
-  [Every workflow, with its conditions](./docs/LcmsComparison.md).
-
-- **Multicore.** `transformImages()` spreads a batch of images across a
-  worker pool: **6.2× peak and 787 MPx/s** on the LUT path, and **past
-  1,000 MPx/s** with the matrix-shaper kernel — **130 4K images a second**,
-  byte-identical to the single-threaded result in all 72 cells measured.
-  Where workers are unavailable it falls back to the sequential path, so
-  it stays an optimisation rather than a capability.
-  [How it works, and what it costs](./docs/pool.md).
-
-- **Accurate.** **LUT-free mode** (`buildLut: false`) walks the full f64
-  pipeline for every pixel — no LUT quantisation, no rounding short-cuts.
-  For prepress, proofing and measurement work where ΔE matters more than
-  MPx/s. Available on both APIs. See [Accuracy](#accuracy).
-
 - **Fully-featured CMS.** RGB, CMYK, Lab, XYZ, 3CLR/4CLR **and N-channel
   (5CLR–15CLR)** device spaces; **DeviceLink profiles**; ICC v2 and v4
   loading (LUT-based **and** matrix-shaper); built-in virtual profiles;
@@ -50,6 +22,30 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   tetrahedral interpolation; multi-step transforms; custom pipeline
   stages; ΔE76 / ΔE2000; spectral and illuminant maths. See
   [Features at a glance](#features-at-a-glance).
+
+- **Accurate.** Image-path LUT within **1 LSB of LittleCMS** on 100 %
+  of samples. **LUT-free** (`buildLut: false`) walks the full f64
+  pipeline — no LUT quantisation — for prepress and measurement.
+  See [Accuracy](#accuracy).
+
+- **Fast.** **~80–120 MPx/s** on one core, **up to ~787 MPx/s** on a
+  pool of 8 workers (`transformImages()`, byte-identical), **~330 MPx/s**
+  on the matrix-shaper path (sRGB, AdobeRGB, ProPhoto…) on one
+  core.<sup>1</sup>
+  Against [`lcms-wasm`](https://www.npmjs.com/package/lcms-wasm) —
+  **3.1–3.6×** on every LUT workflow, one core.
+  [Conditions](./docs/LcmsComparison.md) · [pool](./docs/pool.md).
+
+- **Pixel cache.** On by default (`pixelCache: 'auto'`) for WASM
+  RGB–6CLR. A clean photograph is a ~10 % boost; noisy photographs
+  are the worst case (~4 %); solids **up to 3.94×**. Leave on for
+  general images; turn off (`0`) on grainy images for a small
+  speed boost.
+
+- **Small.** The UMD is **~115 KB gzip** (~435 KB minified) in one
+  file, WASM inlined — no extra fetch, sync init. The optional worker
+  pool is another **~100 KB gzip**. Smaller than most JPEGs; not
+  megabytes.
 
 - **Portable — no GPU required.** Node.js, browsers, Electron, web
   workers, React Native. LUT image and video work in JS-land usually
@@ -59,32 +55,20 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   anywhere a WebAssembly engine runs. No native bindings, no compile
   step, no platform-specific binaries.
 
-- **Portable LUTs — build once, ship anywhere.** Bake a transform to JSON
-  at deploy time; `Transform.fromJSON(json)` reconstructs it at runtime
-  with no profiles and no pipeline build cost. Supports LittleCMS
-  emulation — sample lcms colour maths into the grid once, then drop lcms
-  entirely. LUTs carry a chain and a content fingerprint, so you always
-  know what produced the file. See
+- **Ship a LUT, not the profiles.** Bake a small JSON at deploy time;
+  `Transform.fromJSON(json)` reconstructs it at runtime with no ICC
+  and no pipeline build. Chain and content fingerprint travel with
+  the file. See
   [Portable LUTs](#portable-luts--lutbuilder) ·
   [`LutBuilder`](./samples/LutBuilder/lutbuilder.md) ·
   [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).
 
-- **Two APIs, one `Transform`.** `transform(colorObj)` for single colours
-  (µs/call, always LUT-free). `transformArray(typedArray)` for bulk —
-  pre-baked LUT at full speed, or LUT-free f64 when you need accuracy
-  over throughput. Content matters more than most benchmarks admit:
-  a limited palette keeps the lookup table in cache, a photograph does
-  not — [why, measured](./docs/deepdive/benchmark.md#21-noise-is-the-great-equaliser).
-  See [Two paths, one Transform](#two-paths-one-transform).
+- **Three ways, one `Transform`.** `transform(colorObj)` for one colour
+  (µs/call, always LUT-free). `array(typedArray)` for images.
+  `transformImages()` for a worker pool. See
+  [Three ways, one Transform](#three-ways-one-transform).
 
-<sub><b>1.</b> "Native C" here means stock open-source lcms2, built by gcc
-at its best flags — not the fastest colour transform that can be written
-in C. Closed-source commercial CMMs are faster and can use AVX-512 and
-GPUs, which WebAssembly cannot reach; the
-[comparison page](./docs/LcmsComparison.md) says so explicitly rather than
-leaving it implied.</sub>
-
-<sub><b>2.</b> Measured on an AMD Ryzen 7 7700X (8 cores / 16 threads), 31 GB
+<sub><b>1.</b> Measured on an AMD Ryzen 7 7700X (8 cores / 16 threads), 31 GB
 RAM, Node v24.16.0, Windows 10 x64 — one core except where a worker count is
 given. Throughput depends heavily on content, so the ratios above travel better
 than the absolute numbers do. Every figure is regenerated by one command and
@@ -97,7 +81,7 @@ the conditions and says when a table is older than the code.</sub>
 
 - [Benchmark it yourself](#benchmark-it-yourself)
 - [Why compare to LittleCMS for accuracy and speed?](#why-compare-to-littlecms-for-accuracy-and-speed)
-- [Two paths, one Transform](#two-paths-one-transform)
+- [Three ways, one Transform](#three-ways-one-transform)
 - [Portable LUTs / LutBuilder](#portable-luts--lutbuilder)
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -116,57 +100,38 @@ the conditions and says when a table is older than the code.</sub>
 
 ### Benchmark it yourself
 
-> ### ⚠ Browser figures predate the corrected inputs (Aug 2026)
->
-> The browser bench still runs the seeded PRNG that turned out to emit
-> **105 distinct colours** — small enough to sit in L1, which flatters a
-> CLUT engine, and flatters ours most of all because the SIMD tier is the
-> most memory-bound of the three engines compared. On a correctly
-> distributed input the same workflows land near **half** the figures the
-> browser bench reports, and the *ratios* move too.
->
-> The Node comparison has already been re-run on a photo corpus, one
-> process per measurement, with CLUT coverage reported per row:
-> **[docs/LcmsComparison.md](./docs/LcmsComparison.md)** — the page to
-> quote. The browser bench and its harness are being rebuilt on the same
-> corpus as part of the next benchmark pass
-> ([Roadmap](./docs/Roadmap.md#browser-sample-bench--retune-on-real-image-content)).
-
 You do not have to take any of these figures on trust. The in-browser
-bench at [`samples/bench/`](./samples/bench/) — the one behind the
-browser figures in [docs/Performance.md](./docs/Performance.md), and
-alongside the
-[live sample demos, including the real-time video soft-proof no one asked for](https://www.o2creative.co.nz/jscolorengine/samples/bench/)
-— runs every `lutMode` against the real `lcms-wasm` library, on *your*
-hardware, in *your* browser. Zero upload, zero telemetry, everything
-runs locally.
+bench at [`samples/bench/`](./samples/bench/) — live at
+[the sample demos](https://www.o2creative.co.nz/jscolorengine/samples/bench/)
+— runs every `lutMode` against `lcms-wasm` on *your* hardware, in
+*your* browser. Zero upload, zero telemetry.
+
+Headline content is **photo with 5 % noise added**. A pinch of grain
+**stabilises the numbers** — clean photos and solids swing with cache
+locality from one machine (and one image) to the next; a little noise
+puts every run on the same plateau. The **Speed vs Noise** tab on
+that page is the demo. The chooser also has solid, photo, photo with
+15 % noise added, noise, and **legacy** (the old 105-colour LCG —
+do not quote).
+
+Node / methodology: [docs/LcmsComparison.md](./docs/LcmsComparison.md) ·
+[docs/BenchResults.md](./docs/BenchResults.md).
 
 ```bash
 npm run browser   # build the UMD bundle (once)
 npm run serve     # samples + browser bench on :8080 — see /samples/ and /samples/bench/
 ```
 
-The bench has five tabs: Full comparison (every direction × every
-mode), Accuracy sweep (Lab round-trip ΔE76), JIT warmup curve,
-pixel-count / cache-tier sweep, and an in-page methodology essay.
-A "Copy markdown" button serialises your results for pasting into an
-issue.
+Seven tabs: Full comparison, Accuracy sweep, JIT warmup, pixel-count
+sweep, **Pool demo**, **Speed vs Noise**, and the in-page methodology.
+A blurred tab pauses so a background sample cannot poison the run.
+"Copy markdown" serialises your results for an issue.
 
-See **[docs/Bench.md](./docs/Bench.md)** for the full guide, the
-methodology notes, and the submission template if your numbers
-disagree with ours.
+See **[docs/Bench.md](./docs/Bench.md)** for the guide and the
+submission template if your numbers disagree with ours.
 
-> Benchmarks quoted here were measured on **two reference machines**:
-> a developer Windows box (Node 20, V8, x86_64) and an Apple M4 Mac
-> mini in Chrome 147. Ratios (1.5× over lcms-wasm in pure JS, 3.25×
-> for WASM SIMD over plain JS on x86_64, ~1.4–1.6× ARM lift on top of
-> that for the WASM tiers) should be stable across like CPUs;
-> absolute MPx/s will move with your hardware. The per-architecture
-> comparison is in
-> [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
-> User-submitted results on other OSes / CPUs / browsers are welcome
-> — **and methodology critiques are equally welcome**; if we're
-> measuring wrong we'd rather hear about it.
+Absolute MPx/s move with the machine; run it on yours. User-submitted
+results — and methodology critiques — are welcome.
 
 A lot of the core concepts are lifted from LittleCMS. This is **not**
 a port — the implementation is independent, written for how a JIT
@@ -183,29 +148,16 @@ open-source ICC engine — comparing against it keeps us honest on both
 axes. Everything is measured **single-threaded, one core vs one core**,
 same hardware, same profiles, same input bytes:
 
-- **Faster than `lcms-wasm`** — the engine a JS project would
-  otherwise install. Don't assume "WASM = faster": jsCE's pure-JS
-  kernels beat it on every LUT workflow before any WASM is involved,
-  and the SIMD tier runs **3.2–3.6×** it on photographic content.
-- **Native-C-class speed on a single thread** — and this one is
-  literal rather than aspirational: on photographs, **pure JavaScript
-  lands within 0.78–1.08× of lcms compiled by gcc at its best flags**,
-  ahead on both 4D CMYK workflows. With WASM SIMD it is roughly 2×
-  native on LUT work. Native C keeps matrix-shaper RGB→RGB, where it
-  is ~1.4× ahead.
-- **Accurate against the same reference** — matches lcms's f64
-  pipeline to ≤ 0.06 ΔE76 across 130 reference files, and the
-  image-path LUT agrees **within 1 LSB on 100 % of samples** vs
-  lcms-wasm's default pipeline. See [Accuracy](#accuracy).
-- **~1.9× smaller over the wire** — ~68 KB gzip in one file with the
-  WASM inlined (no fetch, sync init), vs lcms-wasm's ~129 KB across
-  two fetches.
+- **Faster than `lcms-wasm`** — **3.1–3.6×** on every LUT workflow,
+  photographic content, one core. Don't assume "WASM = faster": the
+  pure-JS kernels already beat it before any WASM is involved.
+- **Accurate against the same reference** — image-path LUT within
+  **1 LSB on 100 % of samples**; LUT-free f64 pipeline ≤ 0.06 ΔE76
+  across 130 reference files. See [Accuracy](#accuracy).
 
-Where LittleCMS wins, the page says so: its one-pixel memo cache makes
-it substantially faster on flat graphic content, and its fused
-matrix-shaper path beats ours on RGB→RGB. Four corrections to our own
-published numbers are recorded there too — three of which had been
-flattering us.
+Native C, flats vs photographs, and where LittleCMS still wins
+(one-pixel memo, fused matrix-shaper RGB→RGB) live on the
+comparison page — not here.
 
 The full comparison — methodology, tables, caveats, and the upstream
 discussion with LittleCMS's author — lives on the
@@ -214,19 +166,20 @@ Reproduce all of it with `node bench/reproduce.js`.
 
 ---
 
-## Two paths, one Transform
+## Three ways, one Transform
 
-The engine is built around two very different use cases. Picking the
-right one matters more than any other choice you'll make.
+Three call shapes on the same `Transform`. Picking the right one
+matters more than any other choice you'll make.
 
 | Use case | API | Speed | Accuracy | When to use |
 |---|---|---|---|---|
 | **Single colour / colour picker** | `transform.transform(colorObj)` | µs per call, slow per pixel | Full 64-bit precision, all stages run | UI colour pickers, swatch libraries, Lab/RGB/CMYK display, ΔE calculations, prepress maths |
-| **Image / array processing** | `transform.transformArray(typedArray, ...)` | ~80–120 MPx/s on photographs, ~180 on flat artwork (x86_64, one thread, WASM SIMD) | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Image / array processing** | `transform.array(typedArray, ...)` | ~80–120 MPx/s LUT photographs, ~330 MPx/s matrix-shaper (sRGB / AdobeRGB / ProPhoto), one core | Slightly less accurate (LUT is finite resolution) | Soft-proofing, image conversion, video, anything pixel-bulk |
+| **Worker pool** | `transform.transformImages(...)` | up to ~787 MPx/s LUT / ~1,080 MPx/s matrix-shaper on 8 workers | Byte-identical to the sequential path | Whole folders, servers, RIPs — see [docs/pool.md](./docs/pool.md) |
 
-Both live on the same `Transform` object — you pick which by calling
-`transform()` or `transformArray()`, and by passing `{buildLut: true}`
-to the constructor when you want the image path.
+All three live on the same `Transform` — you pick which by calling
+`transform()`, `array()`, or `transformImages()`, and by passing
+`{buildLut: true}` to the constructor when you want the image path.
 
 The library is deliberately split this way so you don't pay accuracy
 costs for image work, and you don't pay speed-optimisation tax
@@ -250,7 +203,7 @@ fs.writeFileSync('lut.json', JSON.stringify(t));
 
 // Consumer (runtime — profiles not needed)
 const t = Transform.fromJSON(fs.readFileSync('lut.json'), { dataFormat: 'int8' });
-t.transformArray(cmykPixels);
+t.array(cmykPixels);
 ```
 
 Key features:
@@ -317,8 +270,11 @@ const { Profile, Transform, eIntent, color } = require('jscolorengine');
 ### Browser — UMD bundle
 
 The prebuilt UMD bundle at
-[`browser/jsColorEngineWeb.js`](./browser/jsColorEngineWeb.js) exposes
-everything on a global `jsColorEngine`:
+[`browser/jsColorEngineWeb.js`](./browser/jsColorEngineWeb.js)
+(~115 KB gzip, WASM inlined) exposes everything on a global
+`jsColorEngine`. The worker
+[`browser/jsColorEngineWorker.js`](./browser/jsColorEngineWorker.js)
+(~100 KB gzip) is only needed if you call `enablePool({ workerUrl })`:
 
 ```html
 <script src="jsColorEngineWeb.js"></script>
@@ -466,7 +422,7 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
 
     // imageData.data is [R, G, B, A, R, G, B, A, ...].
     // 2nd / 3rd args say "input has alpha, output does not" — alpha dropped.
-    const cmykBytes = rgb2cmyk.transformArray(imageData.data, true, false);
+    const cmykBytes = rgb2cmyk.array(imageData.data, true, false);
     // cmykBytes is now [C, M, Y, K, C, M, Y, K, ...].
 })();
 ```
@@ -513,7 +469,7 @@ const { Profile, Transform, eIntent } = require('jscolorengine');
     }
 
     const rgbIn  = new Uint8ClampedArray([255, 0, 0,  0, 255, 0,  0, 0, 255]);
-    const rgbOut = proof.transformArray(rgbIn, false, false);
+    const rgbOut = proof.array(rgbIn, false, false);
 
     console.log('soft-proofed sRGB:', Array.from(rgbOut));
 })();
@@ -605,6 +561,14 @@ as the wins.
   with per-image callbacks, cancellation, backpressure and `interrupt()`.
   6.2× peak, byte-identical to sequential. Falls back to sequential
   automatically whenever it cannot run. [Details and costs](./docs/pool.md)
+- **Pixel cache** (`pixelCache: 'auto'`) — last-pixel memo on WASM
+  RGB–6CLR, on by default. A clean photograph is a ~10 % boost;
+  noisy photographs are the worst case (~4 %; `int-wasm-simd`,
+  Chrome 151: 100→96 / 71→69); solids **up to 3.94×**
+  (CMYK→RGB 104→407). Matrix-shaper declines. Leave on for
+  general images; turn off (`pixelCache: 0`) on grainy images
+  for a small speed boost.
+  [PixelCache.md](./docs/deepdive/PixelCache.md)
 - **Matrix-shaper WASM kernel** (`wasmMatrixShaper`) — RGB→RGB matrix-shaper
   pairs run as a curve, a 3×3 and another curve rather than through a CLUT:
   **331 MPx/s at int8** on photographic content against ~123 for the CLUT, and
@@ -818,7 +782,7 @@ oracle for comparison.</small>
 
 For ΔE-critical work (colour measurement, calibration QA), use
 `lutMode: 'float'` and skip the LUT entirely — see
-[Quick reference](./docs/Performance.md#7-quick-reference--when-to-enable-what).
+[Quick reference](./docs/deepdive/Performance.md#7-quick-reference--when-to-enable-what).
 
 ### 3. 16-bit kernel ladder (`dataFormat: 'int16'`, v1.3)
 
@@ -844,7 +808,7 @@ prepress calcs, anything converting tens to hundreds of colours at a
 time.
 
 For image work: build a LUT (`new Transform({buildLut: true})`) and
-use `transformArray()`.
+use `array()`.
 
 ### Current figures — real photographs, corrected inputs
 
@@ -953,7 +917,7 @@ them further; the lcms-wasm comparisons above are unaffected.
   traffic that dominates the kernels on x86. The biggest lift lands
   on the **4D CMYK paths** (+65 %), which is exactly the prediction
   the [JIT-inspection deep-dive](./docs/deepdive/JitInspection.md#implications-for-future-work)
-  was filed against — see [Performance § 2.6](./docs/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
+  was filed against — see [Performance § 2.6](./docs/deepdive/Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
   for the full table.
 - **Ratios are stable across like CPUs; absolute numbers aren't.**
   JS engines (V8, SpiderMonkey, JSC) schedule the hot loops
@@ -963,7 +927,7 @@ them further; the lcms-wasm comparisons above are unaffected.
 
 Full benchmark methodology, the 15 % JIT-deletable-by-WASM analysis,
 the lcms-wasm comparison table, the "we measured" vs "we predicted"
-gap, and the roadmap live in **[docs/Performance.md](./docs/Performance.md)**.
+gap, and the roadmap live in **[docs/deepdive/Performance.md](./docs/deepdive/Performance.md)**.
 For *why* these numbers are possible — asm dumps, op-count tables,
 `.wat` design notes — see [the deep dive](./docs/deepdive/).
 
@@ -1029,17 +993,17 @@ regressions.
 The engine is deliberately scoped to the cases that matter for
 everyday colour management. Things outside that scope:
 
-- **The parallel worker pool is Node-only, for now.** It runs on
-  `worker_threads`, and the browser build stubs that out
-  (`"browser": {"worker_threads": false}`), so in a browser
-  `transformImages()` converts **sequentially** — correctly, with the same
-  bytes and the same per-image callbacks, just on one thread. Everything else,
-  including the WASM SIMD kernels, works identically in both.
+- **The parallel worker pool runs on Node and in the browser.** Node uses
+  `worker_threads` with no extra setup. A browser needs the worker bundle
+  (`browser/jsColorEngineWorker.js`, built by `npm run browser`) and a URL:
 
-  A Web Worker version is a packaging job rather than a threading one: the
-  message protocol ports unchanged, but a worker needs its own bundle and a URL
-  to load it from, and a library cannot reliably know its own URL. Queued for
-  1.6 → [Roadmap](./docs/Roadmap.md).
+  ```js
+  await Transform.enablePool({ workerUrl: '/path/to/jsColorEngineWorker.js' });
+  ```
+
+  Without that URL, `transformImages()` converts **sequentially** — same
+  bytes, same callbacks, one thread. Try it on the bench **Pool demo** tab.
+  → [pool.md](./docs/pool.md)
 - **Named Color profiles** (`ncl2`) are not supported.
   → [Why named colour profiles are not supported](./docs/deepdive/namedColorProfiles.md)
 - **N-channel (5CLR–15CLR) input runs on the accuracy pipeline only** —
@@ -1076,15 +1040,15 @@ everyday colour management. Things outside that scope:
 |---|---|
 | **[Benchmark results](./docs/BenchResults.md)** | **Generated** — every measured table with its conditions, the engine version it was measured on, and an index of which document cites which table |
 | **[Parallel worker pool](./docs/pool.md)** | `transformImages()` — batching, per-image callbacks, cancellation, backpressure, deployment, and what the pool costs |
-| **[Bench](./docs/Bench.md)** | Run the numbers on your own hardware — in-browser, zero-upload, full methodology & submission guide ([live](https://www.o2creative.co.nz/jscolorengine/samples/bench/)) |
+| **[Bench](./samples/benchmark/bench.html)** | Current in-browser harness — baselines + jsCE directions × LUT modes. Older vs-lcms UI: [`samples/bench/`](./samples/bench/) ([docs/Bench.md](./docs/Bench.md)) |
 | **[Deep dive](./docs/deepdive/)** | How it works, why it's fast — pipeline model, lutMode internals, JIT inspection, WASM kernel design |
-| **[Performance](./docs/Performance.md)** | Benchmark numbers, discoveries in the journey, lcms comparison |
+| **[Performance](./docs/deepdive/Performance.md)** | Historical measurement retrospective — the journey, not current tables |
 | **[Samples](./docs/Samples.md)** | Live demos — video soft-proof, image soft-proof, jsCE vs lcms-wasm comparison ([live](https://www.o2creative.co.nz/jscolorengine/samples/)) |
 | **[vs LittleCMS](./docs/LcmsComparison.md)** | The full comparison — lcms-wasm results, the native-C harness and its re-measurement, the specialisation story |
 | **[Roadmap](./docs/Roadmap.md)** | What's coming next — single source of truth for future plans (compiled pipeline / `toModule()`, profile oracle QC, kernel emit) |
 | **[Examples](./docs/Examples.md)** | Canvas round-trip, custom pipeline stages, and other recipes beyond Quick start |
 | [API — Profile](./docs/Profile.md) | `Profile` class: loading, virtual profiles, tag access |
-| [API — Transform](./docs/Transform.md) | `Transform` class: constructor options, `create`, `createMultiStage`, `transform`, `transformArray` |
+| [API — Transform](./docs/Transform.md) | `Transform` class: constructor options, `create`, `createMultiStage`, `transform`, `array` |
 | [API — Loader](./docs/Loader.md) | Optional batch profile loader |
 | [Plugins](./docs/Plugin.md) | Registering custom LUT kernels (`lutMode: 'custom…'`) — signature contract, resolution order, isolation |
 | [DeviceLink](./docs/DeviceLink.md) | How DeviceLink (`pClass: 'link'`) profiles are supported — element structure, asymmetric links, test fixtures |
@@ -1103,28 +1067,26 @@ authoritative reference for method signatures and parameter types:
 
 ### Benchmark your own machine
 
-The **in-browser bench is the canonical way** to reproduce the
-numbers on this page — see [docs/Bench.md](./docs/Bench.md) for the
-full guide. For headless / CI setups, the Node benches in the repo
-give the same numbers without opening a browser:
+**In the browser** — [`samples/benchmark/`](./samples/benchmark/bench.html).
+Hardware baselines, then the jsColorEngine directions × LUT modes.
+After `npm run browser && npm run serve`, open
+<http://localhost:8080/samples/benchmark/bench.html>.
+
+**On Node** — that run writes
+[Benchmark results — generated](./docs/BenchResults.md):
 
 ```bash
-# In-browser comparison UI vs lcms-wasm — opens localhost:8080
-npm run serve
-
-# Headless: headline throughput through the shipped dispatcher, all four lutModes
-node bench/mpx_summary.js
-
-# Headless: full WASM kernel matrix — 6 configs × JS vs scalar vs SIMD, bit-exact
-node bench/wasm_poc/tetra3d_simd_run.js
-node bench/wasm_poc/tetra4d_simd_run.js
+node bench/reproduce.js
+node scripts/build_bench_results.js "bobs pc"   # → docs/BenchResults-bobs-pc.md
 ```
 
-If your numbers differ meaningfully from the tables above we want to
-know — open an issue with CPU, OS, Node/browser version, and the
-raw bench output attached. **Critiques of the methodology are
-equally welcome.** If the test is broken we'd rather hear about it
-than brag on borrowed numbers.
+`--quick` is the short pass (~15 min). The older five-tab vs-lcms UI
+is still at [`samples/bench/`](./samples/bench/)
+([docs/Bench.md](./docs/Bench.md)).
+
+If your numbers differ meaningfully from the tables we want to know —
+open an issue with CPU, OS, Node/browser version, and the raw bench
+output. Critiques of the methodology are equally welcome.
 
 ---
 

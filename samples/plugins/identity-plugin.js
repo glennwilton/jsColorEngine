@@ -5,15 +5,18 @@
  *  Released under the MIT License
  *  Copyright (c) 2026 Glenn Wilton, O2 Creative Limited.
  *
- *  Demonstrates registerKernel / registerBuilder with a dead-simple identity
- *  plugin: passes every pixel through unchanged. Useful for testing that the
- *  plugin hooks fire correctly and the hot-path dispatch is wired up.
+ *  Demonstrates Transform.register with a dead-simple identity plugin:
+ *  passes every pixel through unchanged. Useful for testing that the
+ *  plugin hooks fire and the batch path is wired up.
  *
  *  Intentionally throws for mismatched channel counts (e.g. RGB→CMYK) since
  *  an identity pass-through is meaningless across different colour spaces.
  *
+ *  Same-file pairs need detectIdentity: false — otherwise the built-in
+ *  identity kernel takes the batch and this plugin never runs.
+ *
  *  Usage:
- *    node samples/identity-plugin.js
+ *    node samples/plugins/identity-plugin.js
  * ============================================================================
  */
 'use strict';
@@ -21,15 +24,14 @@
 const fs   = require('fs');
 const path = require('path');
 
-const { Transform, eIntent } = require('../src/main');
-const Profile                = require('../src/Profile');
+const { Transform, eIntent } = require('../../src/main');
+const Profile                = require('../../src/Profile');
 
 // ── 1. Kernel ─────────────────────────────────────────────────────────────────
 //
-// Called per transformArray() invocation.  Copies each pixel channel-for-channel
-// with no colour math.  Alpha is preserved when preserveAlpha is set.
-//
-// The signature must match every built-in kernel in src/lutKernelTable.js.
+// Called from kernel.array() — same signature as the built-in 3D/4D runs.
+// Copies each pixel channel-for-channel with no colour math. Alpha is
+// preserved when preserveAlpha is set.
 
 function identityKernel(transform, inputArray, outputArray, pixelCount, lut,
                         inputHasAlpha, outputHasAlpha, preserveAlpha) {
@@ -58,11 +60,8 @@ function identityKernel(transform, inputArray, outputArray, pixelCount, lut,
 // all dimensionality (1D gray, 2D duotone, 3D RGB, 4D CMYK) by dispatching on
 // the input profile type — the builder doesn't need separate cases.
 //
-// For a custom sampler (e.g. dynamic non-uniform grid), call
-// `transform.create3DDeviceLUT(outputChannels, gridSize)` directly.
-//
-// Note: the identity kernel only fires for 3D and 4D inputs.  1D/2D inputs
-// bypass plugin kernels entirely and route to the built-in gray/duotone path.
+// The plugin kernel only fires for 3D and 4D inputs.  1D / 2D / N-D call
+// their own loops and never ask the plugin registry.
 
 function identityBuilder(transform) {
     const lut = transform.createLut();   // auto-detects input/output channels from profile chain
@@ -87,14 +86,12 @@ Transform.register({
     lutMode: 'identity',
     kernel:  identityKernel,   // required — the hot-path run closure
     builder: identityBuilder,  // optional — replaces createLut()
-    // no wasmKernel/simdKernel/isSupported — JS is sufficient for a demo
-    // no options/initialise/serializer/deserializer — nothing extra needed
 });
 
 
 // ── 4. Demo ───────────────────────────────────────────────────────────────────
 
-const PROFILES = path.join(__dirname, 'profiles');
+const PROFILES = path.join(__dirname, '..', 'profiles');
 
 function loadICC(filename) {
     const p = new Profile();
@@ -111,11 +108,14 @@ function pixelMatch(a, b) {
 
 function runDemo() {
 
+    // detectIdentity: false — otherwise kernelIdentity takes same-file
+    // pairs and this plugin never sees the batch.
+    const opts = { buildLut: true, lutMode: 'identity', dataFormat: 'int8', detectIdentity: false };
+
     // ── Case 1: RGB → RGB ────────────────────────────────────────────────────
-    // Transform.create() accepts '*sRGB' string shortcut for built-in profiles.
     console.log('\n── Case 1: sRGB → sRGB (identity, should pass) ─────────────');
     {
-        const t = new Transform({ buildLut: true, lutMode: 'identity', dataFormat: 'int8' });
+        const t = new Transform(opts);
         t.create('*sRGB', '*sRGB', eIntent.relative);
 
         const pixels = new Uint8ClampedArray([
@@ -125,7 +125,8 @@ function runDemo() {
             128, 128, 128,    // mid grey
         ]);
 
-        const out = t.transformArray(pixels);
+        const out = t.array(pixels);
+        console.log('  lastUsedKernel:', t.lastUsedKernel);   // kernel3D (plugin run bound on it)
         console.log('  Input: ', Array.from(pixels));
         console.log('  Output:', Array.from(out));
         console.log(pixelMatch(pixels, out) ? '  PASS — output matches input exactly'
@@ -136,7 +137,7 @@ function runDemo() {
     console.log('\n── Case 2: GRACoL → GRACoL (identity, should pass) ─────────');
     {
         const cmyk = loadICC('CoatedGRACoL2006.icc');
-        const t = new Transform({ buildLut: true, lutMode: 'identity', dataFormat: 'int8' });
+        const t = new Transform(opts);
         t.create(cmyk, cmyk, eIntent.relative);
 
         const pixels = new Uint8ClampedArray([
@@ -145,7 +146,8 @@ function runDemo() {
             128,  64,  32, 200,    // arbitrary values
         ]);
 
-        const out = t.transformArray(pixels);
+        const out = t.array(pixels);
+        console.log('  lastUsedKernel:', t.lastUsedKernel);   // kernel4D
         console.log('  Input: ', Array.from(pixels));
         console.log('  Output:', Array.from(out));
         console.log(pixelMatch(pixels, out) ? '  PASS — output matches input exactly'
@@ -156,7 +158,7 @@ function runDemo() {
     console.log('\n── Case 3: sRGB → GRACoL (should throw — channel mismatch) ─');
     {
         const cmyk = loadICC('CoatedGRACoL2006.icc');
-        const t = new Transform({ buildLut: true, lutMode: 'identity', dataFormat: 'int8' });
+        const t = new Transform(opts);
 
         try {
             t.create('*sRGB', cmyk, eIntent.perceptual);

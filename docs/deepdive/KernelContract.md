@@ -1,206 +1,242 @@
 # The kernel contract
 
-> **Status: all phases landed 2026-08-21.**
+> **Status: as-built, v1.6.** All contract phases landed 2026-08-21.
+> Remaining work is coverage, not shape: there is no independent oracle
+> above 4 channels. See [The N-channel oracle](#the-n-channel-oracle).
 >
-> Remaining work is no longer contract shape, it is coverage: there is no
-> oracle above 4 channels. See [The N-channel oracle](#the-n-channel-oracle).
-> This is the specification for the v1.6 kernel boundary. The shipped architecture is described in
-> [KernelModules.md](./KernelModules.md), which this supersedes in part; when
-> this lands, the two are folded into one as-built document.
->
-> The previous migration's design notes (`KernelModules_impl.md`) were a
-> working file that was never committed, so the original intent could not be
-> checked against the result. This file is committed for that reason.
+> This is the specification **and** the journey. v1.5 split the files
+> (`KernelModules.md`); v1.6 moved ownership. The old modules doc is a
+> [redirect stub](./KernelModules.md). The v1.5 snapshot is git history.
+> `KernelModules_impl.md` was a working file that was never committed —
+> this file exists so intent can be checked against the result.
 
 **jsColorEngine docs:**
 [← Deepdive index](./README.md) ·
-[Kernel modules (as built)](./KernelModules.md) ·
+[Identity](./Identity.md) ·
 [Matrix-shaper kernel](./MatrixShaperKernel.md) ·
 [WASM kernels](./WasmKernels.md) ·
-[Compiled pipeline](./CompiledPipeline.md)
+[Compiled pipeline](./CompiledPipeline.md) ·
+[Plugin API](../Plugin.md)
 
 ---
 
 ## The principle
 
-**Transform owns the pipeline. The kernel owns the transforms. One kernel per
-input dimension.**
+**Transform owns the pipeline. The kernel owns the transforms. One kernel
+per input dimension.**
 
-Everything below follows from that sentence. Transform decides what stages a
-conversion needs and in what order, optimises them, and validates them. It
-does not decide how a colour is interpolated, at any batch size, in any
-numeric format. That is the kernel's, and it is the kernel's for both the
-single-colour path and the image path.
+Transform decides what stages a conversion needs and in what order,
+optimises them, and validates them. It does not decide how a colour is
+interpolated, at any batch size, in any numeric format. That is the
+kernel's, for both the single-colour path and the image path.
 
 ### What Transform actually does
 
 Three things, and the list is the specification:
 
-1. **Select a kernel by input channel count.** `Transform.kernels[inputChannels]`.
+1. **Select a kernel by input dimension.** `Transform.kernels[inputDimension]`.
+   Identity is dimension 0. A 7-channel press profile is 7. This is not
+   always the input *channel count* — see [Identity at index 0](#kernelidentity-at-index-0).
 2. **Initialise it** — offer it the LUT decision, then the built pipeline.
 3. **Hand it work.** *Here is a colour, or here is an array. You work it out.*
 
-Nothing else. Not which variant runs, not whether a batch is big enough to be
-worth a WASM call, not how a fallback ladder degrades. **Batch size is not
-Transform's concern** — a kernel that has a fast path for large arrays and a
-different one for small holds both and picks, and Transform never learns a
-choice was made.
+Nothing else. Not which variant runs, not whether a batch is big enough
+to be worth a WASM call, not how a fallback ladder degrades. **Batch
+size is not Transform's concern.** A kernel that has a fast path for
+large arrays and a different one for small holds both and picks.
+Transform never learns a choice was made.
 
-That last point is where several earlier drafts leaked. Returning
-`{big, small, threshold}` for the caller to compare still tells the caller
-there is a threshold. There is not, as far as it is concerned: there is a
-function that converts an array.
+The public batch call is `kernel.array(...)`. What it calls inside
+(`arrayFn`, `arrayFnBig` / `arrayFnSml`, a threshold) is the kernel's
+secret. Do not put a Transform-level `transformArrayFn` or
+`kernelArrayFn` back — see [Resolved](#resolved--do-not-reinvent).
 
 ### Everything Transform offers a kernel is optional
 
-This turns out to be the shape of the whole contract, and it is worth stating
-once rather than rediscovering per feature. A kernel's obligations are small —
-answer `floatFor`, answer `array`, clean up after itself. Everything else
-Transform provides is a **convenience with an escape hatch**:
+A kernel's obligations are small: answer `floatFor`, answer `array`,
+clean up after itself. Everything else is a **convenience with an
+escape hatch**:
 
 | Transform offers | a kernel that wants something else |
 |---|---|
 | `hints` — the caller's interpolation preferences | ignores them; it is the authority on its own dimension |
-| `{big, small, threshold}` — the two-tier dispatch shape | returns its own dispatcher in both slots and routes however it likes |
 | the LUT the builder baked | supplies its own through `provideLut`, in whatever representation suits it |
 | `opts.helpers` — the resolver, key format, gates | never touches them and writes its own dispatch |
+| `opts` named facts (`lutMode`, `wasmMatrixShaper`, `pixelCacheActive`) | reads only what it needs |
 
-None of these is a requirement, and **nothing degrades if a kernel declines
-one**. That is the property to preserve when adding to this contract: if a new
-member cannot be ignored, it is an obligation rather than an offer, and it
-needs a much better reason than convenience.
-
----
-
-## What we found
-
-The v1.5 kernel migration landed in three phases, each individually correct
-and each gated on measured throughput parity. Phase A created descriptors
-"delegating to the tuned loops". Phase B moved 3,250 lines of loop source into
-the kernel folders and re-attached them to `Transform.prototype`. Phase C moved
-dispatch state onto the kernel instance.
-
-Files moved. Data moved. **Ownership never did.**
-
-The result is visible in [Kernel3D.js](../../src/kernels/3d/Kernel3D.js): 56
-lines, five members, every one a single delegation back out —
-`wasmLifecycle.settleWasmStates(this.transform)`,
-`kernelUtils.resolveTableRuns(this)`, `kernelUtils.runTableKernel(this, …)`.
-It owns a `supports` block and nothing else.
-
-Three findings pushed this redesign:
-
-**1. There is a behavioural hole, not just an aesthetic one.**
-`registerKernel()` replaces the batch path only. A third-party Kernel3D changes
-what `transformArray()` produces while `transform(colour)` keeps running
-Transform's own tetrahedral code — so single-colour and batch can disagree for
-the same Transform, and a kernel author has no way to fix it.
-
-**2. The coupling that justified prototype attachment barely exists.**
-[kernel3D_loops.js](../../src/kernels/3d/kernel3D_loops.js) uses `this` exactly
-once, at line 418, to call a sibling. [interp.js](../../src/interp.js) — 3,155
-lines, 16 interpolators — uses `this` at four call sites, all sibling
-interpolators. Nothing reads Transform instance state. These are already pure
-functions of `(input, lut)`; the prototype is a namespace, not a receiver.
-
-**3. Transform already treats the interp stage as an opaque triple.**
-`optimisePipeline()` fuses `stage_Int_to_Device` into the following interp
-stage by matching on **stage name**, rewriting **stageData**
-(`lut.inputScale = 1 / intValue`), and passing `stage.funct` through without
-ever inspecting it. The only identity comparisons on any `stage.funct` in the
-codebase are `stage_debug` and `stage_history`.
-
-So the pipeline already manipulates these stages as *(name, opaque function,
-lut)*. The one remaining thing Transform does with the function is **choose**
-it — and that choice is derivable from the LUT plus a few policy options.
+None of these is a requirement, and **nothing degrades if a kernel
+declines one**. If a new member cannot be ignored, it is an obligation
+rather than an offer, and it needs a better reason than convenience.
 
 ---
 
-## The registry — 1 to 15, dense
+## How we got here
 
-`Transform.kernels` becomes an array indexed by input channel count, covering
-the entire ICC range: 1–15 (`FCLR` is 15 channels, see
-[Profile.js:1180](../../src/Profile.js:1180)). There is no `'nd'` key and no
-`inputChannels > 4` branch.
+`Transform.js` used to contain everything: ICC pipeline construction,
+all pixel-level math, WASM lifecycle, LUT build, and per-call dispatch.
+Those concerns evolve at different rates — pipeline logic changes
+rarely; kernel implementations change whenever a new CPU feature
+appears. v1.5 split the files. v1.6 moved ownership.
+
+### v1.5 — files moved, ownership did not
+
+Three phases, each gated on a green suite and MPx/s parity
+(2026-08-15):
+
+| Phase | What it did |
+|---|---|
+| **A** | `registerKernel` / `setKernel` (`Object.create` instances), descriptors in `src/kernels/{1d..nd}/` that *delegated* to the tuned loops, `provideLut`, `transformArrayViaLUT` reduced to preamble + `kernel.array()` |
+| **B** | ~3,250 lines of loops moved verbatim to `kernelXD_loops.js` and **re-attached to `Transform.prototype`**. WASM settle/release behind `kernel.create()` / `release()`. `.wat` / `.wasm.js` co-located |
+| **C** | BIG/SMALL run refs onto the kernel instance (`_runBig` / `_runSmall` / `_threshold`), filled by `kernel.resolveRuns()`. Plugins resolved into the same slots. The three fields left Transform |
+
+Phase B was performance-neutral on purpose: same function objects, same
+`this`, same hidden class. That is why it felt finished. It was not.
+
+The result, visible in the then-`Kernel3D.js`, was 56 lines of
+delegation back out — `wasmLifecycle.settleWasmStates(this.transform)`,
+`kernelUtils.resolveTableRuns(this)`, `kernelUtils.runTableKernel(...)`.
+It owned a `supports` block and nothing else.
+
+**Why the split was still worth doing.** Transform dropped from 15,878
+lines toward ~11,000. Pipeline and kernels could evolve on different
+clocks. Registration lived at the bottom of `Transform.js` (not
+`main.js`) so `require('./Transform.js')` — including the test suites —
+got the built-ins. That part stayed.
+
+Three findings pushed v1.6:
+
+**1. A behavioural hole, not just an aesthetic one.**
+`registerKernel()` replaced the batch path only. A third-party Kernel3D
+changed what `transformArray()` produced while `transform(colour)` kept
+running Transform's own tetrahedral code. Single-colour and batch could
+disagree for the same Transform, and a kernel author had no way to fix
+it.
+
+**2. The coupling that justified prototype attachment barely existed.**
+The loop files use `this` almost only to call a sibling.
+`interp.js` is the same: pure functions of `(input, lut)`. The
+prototype was a namespace, not a receiver.
+
+**3. Transform already treated the interp stage as an opaque triple.**
+`optimisePipeline()` fuses by **stage name**, rewrites `stageData`
+(`lut.inputScale = 1 / intValue`), and passes `stage.funct` through
+without inspecting it. The only identity comparisons on any
+`stage.funct` are `stage_debug` and `stage_history`. The one remaining
+thing Transform did with the function was **choose** it — and that
+choice is derivable from the LUT plus a few policy options.
+
+---
+
+## Resolved — do not reinvent
+
+These are closed. A future session that "discovers" one of them is
+reading an old spec or inventing a problem that was already paid for.
+Git has the code; this table has the *reason*.
+
+| Idea that looks reasonable | Resolved | Why not |
+|---|---|---|
+| Move the loops again / tidy the unrolled bodies into helpers | **No.** Read the PERFORMANCE LESSONS block at the top of `Transform.js`. Unrolling is the throughput. | Re-rolling saves ~5 KB of L1i and costs 5–10 cycles/px in mispredicts. |
+| Re-attach loops to `Transform.prototype` so call sites stay identical | **Tried (v1.5 B).** Performance-neutral file move. Ownership never followed. | The next change still had to give each kernel both surfaces. |
+| One `lutKernelTable` walker in Transform that dispatches every dimension | **Retired as the dispatcher.** Per-kernel `resolve()` switches live next to the kernel (`kernel3D_table.js`, `kernel4D_table.js`). `src/lutKernelTable.js` remains a generic helper (key format, plugin merge), not the owner of 3-D/4-D policy. | The v1.3 table existed because Transform dispatched every dimension from one flat structure. Nothing does that now. Do not rebuild a central 42-row table for kernels that already own a switch. |
+| Share one function body between `floatFor` and the array loop | **Never.** Same tetrahedral maths, two ABIs, two array shapes. | V8 deoptimises; the array path slows **2–3×**. The 22 `run_` thunks were not cosmetic renames — they were the family boundary that kept float and int call sites apart. Phase 4's first write-up called them dead; measurement corrected that. |
+| `arrayFor()` returning `{big, small, threshold}` so Transform can pick | **Superseded (phase 4e → 8).** | Telling the caller there is a threshold makes batch size Transform's business. The kernel holds both fns and compares inside `array()`. |
+| `resolveRuns()` as a required descriptor member | **Never designed.** Arrived in v1.5 C as the vehicle for moving three fields off Transform. | Every spec written *after* C documented it as contract. It left Transform sequencing the resolve and comparing the threshold. Replaced by `init()` + `bindArrayRuns()` inside the kernel. |
+| `transformArrayFn` / `bindTransformArrayFn` / a Transform-level `kernelArrayFn` | **Removed v1.6.** Option still accepted and ignored. | Measured no faster for images and slower for tiny batches. Once kernels own dispatch it is a wrapper around `kernel.array()`. Identity was the last reason to bind a closure; `kernels[0]` removed it. Do not restore. |
+| Make `array()` `async`, or ship a stub `arrayAsync` that only `Promise.resolve`s today's path | **No. `array()` stays sync.** A waiter is a later Transform method, built when a backend actually waits (GPU `mapAsync`, UI yield). Do not put `await` on `kernel.array()`. | WASM `run()` is already sync; `create()` already paid instantiate. A Promise on every batch is the same tax as `transformArrayFn` — noise on 1M px, real on the small batches we refuse to gate. It also breaks the sequential oracle inside `transformImages()`. Workers already exist (`transformImages`). GPU is parked: upload+download dominates under ~10 MPx vs WASM SIMD ([Roadmap](../Roadmap.md#what-we-are-explicitly-not-doing)). A stub trains callers onto the slower name with no capability. |
+| Identity as an `isIdentity` branch that binds a copy closure | **`KernelIdentity` at `kernels[0]`.** | Last dimension-shaped special case. Input *dimension* is not input *channel count*. Named for the role (`Identity`, not `Copy`) to match `Kernel3D` not `KernelTetrahedral`. |
+| Replace `instance.array` with a bound `arrayFn` at init | **No.** `array()` is the trampoline. `arrayFn` / `arrayFnBig` / `arrayFnSml` live beside it. | Swapping `instance.array` breaks the hidden class. `kernel.array()` stays monomorphic. Identity binds `arrayFn` only; its `arrayFnBig`/`arrayFnSml` stay **null** (those are LUT dispatch slots). |
+| `Transform.claimKernels` + `claims()` / `displacesLut()` | **Retired.** Kernel3D `init()` inspects the pipeline and **yields** a matrix-shaper instance. Transform has no claim list. | Channel count cannot tell `*sRGB→*AdobeRGB` (folds) from `*sRGB→GRACoL` (does not) from identity (collapses). Two hooks existed because two pipelines exist (temp device→device vs final). The dimensional owner can ask both questions itself. A claim registry at Transform level made two 3-channel accelerators collide and leaked `_pixelCacheData` into the claimant. |
+| Rename `provideLut` to `wantsLut` | **Kept `provideLut`.** `displacesLut` was the narrower hook; its whole answer space already fitted. | Moving the *call* to where the temporary pipeline exists is what made the merge possible. It also removed a descriptor-vs-instance bug: `displacesLut` was asked of the shared descriptor, so any cache would have leaked across every Transform of that dimension. |
+| `init` returning `{kernel: null}` means decline | **No. It means keep.** | An earlier draft used `decline` leftover from the claim registry. Kernel3D always has an answer for 3-channel input. A real decline would fail the transform. |
+| Load both 3-D and 4-D WASM families on every `create()` | **Per-dimension `wasmLadder`, after `init()` yield.** One shared `instantiate()`. SIMD scalar fallthrough only when `outputChannels ∉ {3,4}`. | Used to compile tetrahedral modules for a matrix-shaper pair that then threw them away, and a second Instance for RGB→RGB that SIMD already covers. Do not put a second loader beside `src/wasm/instantiate.js`. |
+| `floatFor` may return `null` and fall through | **No (phase 3).** | A stage has no fallback. A hole is discovered at transform time. `floatFor` returns a binding or raises. |
+| Use `interpolationFast` as the hint for a lossy (f32 / small-grid) table | **No.** | That flag already means "reference vs tuned interpolator". A lossy *representation* needs its own hint, an accuracy budget, or a `lutMode` extension. |
+| Kernel reuses one output buffer by default | **Allowed, usually wrong.** | The kernel cannot see the caller's lifetime. `transformImages()` + `onImage` that pushes buffers onto an array ends up with N references to the last image. The caller already passes its own buffer in. |
+| Export `Transform.lutKernelTable` / `helpers` as public API | **Inject via `init(pipeline, opts)`, if at all.** | An export is a promise about a shape that moved twice. Built-ins that take a private path and third parties that take a public one is a contract nobody exercises. |
+| Gate a kernel refactor on the content-matrix bench, on cells &lt; 256k px, or on "vs last run" | **No.** Pin `bench/baseline/<machine>/`. Gate `solo`. | Seven phases at 1.5% each is 11% slower with every step passing. 64k cells showed 17% spread with "before" in the middle of "after". The content matrix moves `lcmsWasm` columns just as hard. Two concurrent benches look like a regression. |
+| Treat `lutMode: 'int-wasm-simd'` on a 1-D/2-D transform as "WASM ran" | **No.** | The mode string is the *request*, settled from `dataFormat` before the kernel is known. 1-D and 2-D have no WASM. `kernelInfo()` is what ran. |
+| Treat GRACoL→GRACoL with a LUT as identity | **No.** | Identity is a collapsed *pipeline*. A LUT pair is Kernel4D (or 3D), not `kernels[0]`. |
+| Pixel-cache the matrix-shaper | **No.** | ~3 ns/px. A probe costs more than the pixel. |
+| Rule SIMD out of the in-kernel pixel cache because "a scalar check serialises f32x4" | **Wrong axis.** | `tetra3d_simd` lanes are the four channels at a CLUT corner; one iteration is one pixel, not four. Measured 3.07× on solids. Alpha must **not** be in the cache key. |
+| Cache 1-D / 2-D input | **Precompute instead.** | Those spaces are enumerable (256 or 65,536). |
+| Sell the JS matrix-shaper as a speed feature | **No. WASM beats it ~5×.** | It exists for **per-channel TRCs** (WASM keeps one shared table) and for hosts with no WebAssembly. |
+| "Fix" a missing throw when `interpolation3D` is typo'd on a PCS-input LUT | **Old switch did the same.** | Trilinear override resolves the method before the bad value is examined. Device input still throws. Side-by-side vs `HEAD` settled it; do not "fix" without that probe. |
+| Call `interp.tetrahedralInterp4D_3or4Ch` as a bare function | **Throws.** | 4-D reference variants reach 3-D siblings through `this`. Stages are `stage.funct.call(transform, …)`. Anything that changes invocation must keep a receiver carrying those methods. |
+| Put matrix-shaper back on `Transform.registerKernel` as a peer of Kernel3D | **No.** | It lives in `src/kernels/3d/matrixShaper/` and is Kernel3D's other implementation. Transform must not learn the name. |
+| Estimate allocation pressure from allocation *count* | **Overstates.** | Phase 2's per-pixel temps died in the nursery. Gray still gained ~30%, but the prediction of "catastrophic" was the count, not the lifetime. |
+| One `'nd'` key for channels 5–15 | **Eleven slots, one descriptor object.** | A real 7-channel kernel can replace slot 7 alone. Tests can inject at 9. Same hidden class until a slot is actually replaced. |
+| Register kernels from `main.js` | **No. Bottom of `Transform.js`.** | Direct `require('./Transform.js')` (the tests) must get them. |
+| Hand the shared descriptor to a Transform | **`Object.create(descriptor)` in `setKernel`.** | Per-instance state must not leak across Transforms. Plant the same own-properties (including `arrayFn = null` and the WASM slots) on every instance so they share a hidden class. |
+| A 15-D A2B oracle at 2 points/axis | **Legal, meaningless.** | No interior. Honest A2B ceiling is 10 channels; B2A (3-D in, N out) goes to 15 and is Kernel3D. |
+| Bake an N-channel-input CLUT in the engine | **5/6 bake at the profile A2B density; KernelND (7–15) still returns `false`.** | WASM replaces the interpolator, so 9^5 / 7^6 are worth a table. Do not up-res. Real 7CLR A2B is ~5 pts/axis, not 2–3 — see [SyntheticProfiles.md § real grids](./SyntheticProfiles.md#what-real-profiles-actually-use). RGB→7CLR is a *3-D input* and bakes a normal 3-D LUT. |
+
+---
+
+## The registry — 0 to 15, dense
+
+`Transform.kernels` is an array indexed by **input dimension**, covering
+identity plus the entire ICC range (1–15; `FCLR` is 15 channels).
 
 ```js
+Transform.kernels[0]  = KernelIdentity;
 Transform.kernels[1]  = Kernel1D;
 Transform.kernels[2]  = Kernel2D;
 Transform.kernels[3]  = Kernel3D;
 Transform.kernels[4]  = Kernel4D;
-Transform.kernels[5]  = KernelND;   // slots 5-15 hold the SAME descriptor
-Transform.kernels[6]  = KernelND;   // object today — one implementation,
-// ...                              // eleven independently replaceable slots
+Transform.kernels[5]  = Kernel5D;   // int8 JS + WASM scalar
+Transform.kernels[6]  = Kernel6D;
+Transform.kernels[7]  = KernelND;   // slots 7–15 hold the SAME descriptor
+// ...
 Transform.kernels[15] = KernelND;
 ```
 
-**Why eleven slots instead of one shared key.** Registering the same object
-eleven times costs nothing and buys the ability to replace *one* dimension
-without forking the rest. Someone with a real 7-channel workload can register
-a tuned Kernel7D and leave 5, 6, 8–15 on the generic implementation. A test can
-inject a probe kernel at dimension 9 and assert dispatch without touching any
-path a real conversion uses. Neither is possible while 5–15 share one key.
+`setKernel` is one array index. There is no `'nd'` key and no
+`inputChannels > 4` branch.
 
-**It does not add hidden classes.** Slots 5–15 point at one descriptor object,
-so `Object.create(descriptor)` produces one shape for all of them — the
-`kernel.array(...)` call site still sees five shapes, exactly as today.
-Patching a single slot with a distinct descriptor adds one shape, bounded by
-15 and in practice never more than one or two per process.
+`registerKernel(descriptor)` validates `dimensions` as 0–15, or a
+`[from, to]` range so KernelND registers slots 7–15 in one call.
+Legacy `'ND'` still means `[5, 15]`. Re-registering replaces those
+slots for future `create()` calls; live transforms keep the instance
+they resolved at create time.
 
-`setKernel` simplifies with it:
-
-```js
-// today — builds a string and hashes it, on every create()
-var key = inChannels > 4 ? 'nd' : inChannels + 'd';
-var descriptor = Transform.kernels[key];
-
-// after
-var descriptor = Transform.kernels[inChannels];
-```
-
-`registerKernel(descriptor)` validates `dimensions` as 1–15, or accepts a
-`[from, to]` range so `KernelND` registers its eleven slots in one call.
+`MAX_KERNEL_DIMENSIONS` is a ceiling, not a floor — 0 is a legal lower
+bound because identity has no ICC channel width.
 
 ---
 
-## The descriptor API
+## The descriptor API (as built)
 
 | Member | Required | Purpose |
 |---|---|---|
-| `dimensions` | yes | 1–15, or `[from, to]` for a range |
+| `dimensions` | yes | 0–15, or `[from, to]` |
 | `name` | yes | stable identity; re-registering the same name replaces in place |
-| `supports` | no | declarative variant capability map — diagnostics only |
-| **`floatFor(lut, hints)`** | **yes** | **NEW** — returns `{funct, stageName}` for a single-colour pipeline stage |
-| **`arrayFn(in, out, px, inAlpha, outAlpha, preserve)`** | yes | **TARGET** — converts an array. Any variant choice, including batch size, happens inside. See [arrayFn](#arrayfn) |
-| **`provideLut(lutMode)`** | no | one hook: `null` build normally · `false` build none · a LUT object to use instead. Absorbed `displacesLut` |
-| **`init(pipeline, opts)`** | no | **NEW** — replaces `claims`; returns `{pipeline, kernel}` |
-| `create(lutMode)` | yes | settle WASM state, demote lutMode if the host can't run the request; returns the settled mode |
-| ~~`resolveRuns()`~~ | — | **TO BE REMOVED** — see [why it exists](#resolveruns) |
-| `array(in, out, px, lut, inAlpha, outAlpha, preserve)` | yes | image batch — owns output allocation/validation and dispatch |
+| `supports` | no | diagnostics only |
+| `floatFor(lut, hints)` | yes | `{funct, stageName}` for a single-colour pipeline stage. Called on the **descriptor**. |
+| `array(in, out, px, lut, inAlpha, outAlpha, preserve)` | yes | image batch. Owns preamble, output allocation, and which secret fn runs. **Do not replace this function on the instance.** |
+| `provideLut(lutMode)` | no | `null` build normally · `false` build none · a LUT object to use instead |
+| `init(pipeline, opts)` | no | settle the instance; may rewrite the pipeline; may yield `{kernel: otherInstance}`. `{kernel: null}` means **keep**. |
+| `create(lutMode)` | yes | settle WASM, demote lutMode; returns the settled mode |
 | `release()` | yes | free WASM state |
-| `emitKernel(opts)` | no | reserved for `compile()` integration — see [CompiledPipeline.md](./CompiledPipeline.md) |
+| `emitKernel(opts)` | no | reserved for `compile()` — see [CompiledPipeline.md](./CompiledPipeline.md) |
+
+Retired members (do not add them back): `claims`, `displacesLut`,
+`resolveRuns`, `arrayFor`, `wantsLut`.
+
+Instance fields the built-ins plant in `setKernel` so every kernel
+shares one hidden class: `arrayFn`, `arrayFnBig`, `arrayFnSml`,
+`threshold`, the `wasmTetra*` slots. Identity leaves the LUT slots
+null on purpose.
 
 ---
 
 ## `floatFor(lut, hints)` — the kernel decides, the caller hints
 
-Today [`addStageLUT`](../../src/Transform.js:7678) is a ~120-line switch, called
-from 11 sites, that picks a single-colour interpolator. It reads exactly four
-things:
-
-| input | whose knowledge |
-|---|---|
-| `lut.inputChannels` | the registry key — *is* the kernel selector |
-| `lut.outputChannels` → `_3Ch` / `_4Ch` / `_NCh` | **kernel-internal** — nobody else needs to know a kernel's variants |
-| `interpolation3D` / `interpolation4D` / `interpolationFast` | Transform policy, public API |
-| `inputEncoding` + `useTrilinearFor3ChInput` | Transform policy — and **3D-only** |
-
-The switch's top level (`case 1 / 2 / 3 / 4 / default`) is a hand-maintained
-copy of the registry keys. The PCS→trilinear override appears **only** in
-`case 3`; `case 4` has no equivalent. That asymmetry is the clearest single
-sign that this is dimensional knowledge living in the wrong file.
-
-It collapses to:
+`addStageLUT` is a registry lookup plus a hints object. All selection
+— by `lut.inputChannels`, then `interpolation3D` / `interpolation4D`,
+then `interpolationFast`, then `lut.outputChannels` — lives inside the
+kernel that owns that dimension. `src/interp.js` is the built-in float
+*implementations*; the kernels are the *policy*. A third-party kernel
+can ignore the file.
 
 ```js
 var bind = Transform.kernels[lut.inputChannels].floatFor(lut, {
@@ -214,56 +250,52 @@ this.addStage(inputEncoding, bind.stageName, bind.funct, lut, outputEncoding, de
 
 ### Hints, not orders
 
-`hints` is advisory. The kernel resolves the actual function and **is the
-authority** on what interpolation its dimension uses — trilinear for 3D PCS
-input, tetrahedral for 4D, bilinear for 2D. A kernel is free to ignore a hint
-it has no variant for.
+`hints` is advisory. The kernel is the authority on what interpolation
+its dimension uses — trilinear for 3-D PCS input, tetrahedral for 4-D,
+bilinear for 2-D. It may ignore a hint it has no variant for.
 
-It is **not** free to ignore a hint silently. Today an unrecognised
-`interpolation3D` throws `'Unknown 3D interpolation method "…"'`. That throw
-moves inside the kernel; a typo in a public option must not degrade into a
-default.
+It is **not** free to ignore a hint *silently*. An unrecognised
+`interpolation3D` throws `'Unknown 3D interpolation method "…"'` from
+inside the kernel (device input). A typo in a public option must not
+degrade into a default.
 
-`interpolationFast: false` comes along as a kernel-internal choice — a kernel
-may offer a slow reference variant (today's `_3or4Ch` functions) without
-Transform knowing it exists. That is a decent test of whether the boundary is
-in the right place.
+`interpolationFast: false` is a kernel-internal choice — the slow
+`_3or4Ch` reference variants — without Transform knowing they exist.
 
 ### Statelessness is what makes this work
 
-The float surface needs no WASM handle, no `transform` back-reference, no
-per-instance state. So the stage binds the **descriptor**, not an instance:
+The float surface needs no WASM handle and no per-instance state. The
+stage binds the **descriptor**, not an instance:
 
-- `this.kernel` keeps meaning exactly what it means today — the *batch* kernel,
-  chosen by the Transform's input channel count
-- a CMYK→RGB Transform binds its 4D A2B stage to `Transform.kernels[4]` and its
-  3D B2A stage to `Transform.kernels[3]`
-- no second instance, no second lifecycle, one hidden class per dimension
-  shared across every Transform
-
-The kernel controls the whole of its dimension without owning the Transform.
+- `this.kernel` is the *batch* kernel, chosen by the Transform's input
+  dimension
+- a CMYK→RGB Transform binds its 4-D A2B stage to
+  `Transform.kernels[4]` and its 3-D B2A stage to
+  `Transform.kernels[3]`
+- no second instance, no second lifecycle, one hidden class per
+  dimension
 
 ### It may return a WASM function
 
-Nothing in the contract says `funct` must be JS. A kernel may return a WASM
-entry point provided it is bit-compatible with the JS variant. Per call this is
-a poor trade — the boundary crossing costs more than three floats of work,
-which is why `WASM_DISPATCH_MIN_PIXELS` exists at all.
+Nothing says `funct` must be JS. Per single-colour call the boundary
+crossing costs more than three floats of work. The consumer where it
+could pay is **`createLut()`**, which bakes the grid by walking the
+pipeline once per grid point — 33³ ≈ 36,000 identical-shape calls on
+the `create()` path. A batch wearing a per-pixel coat. Left open;
+not wired.
 
-There is one consumer where it is not a per-call decision: **`createLut()`
-bakes the grid by walking the pipeline once per grid point** — 33³ ≈ 36,000
-single-colour calls, identical shape every time, on the `create()` critical
-path. That is a batch wearing a per-pixel coat. The option costs nothing to
-leave open and that is where it would first pay.
+The PCS-input trilinear override lives **only in Kernel3D**. lcms 2.0
+moved to tetrahedral and disagreed with 1.19 / SampleICC / Photoshop
+on Lab-indexed LUTs because L sits on one axis and the space is
+uncentred. **Its absence from Kernel4D is the point** — one function
+used to carry one dimension's rule for all dimensions.
 
 ---
 
 ## The two-phase LUT contract
 
-`optimisePipeline()` runs at [Transform.js:5005](../../src/Transform.js:5005),
-inside `createPipeline()`. That is **before** `pipelineCreated = true`
-([2057](../../src/Transform.js:2057)) and before the claim pass
-([2113](../../src/Transform.js:2113)). The optimiser writes into the shared LUT
+`optimisePipeline()` runs inside `createPipeline()`, **before**
+`pipelineCreated` and before `init()`. It writes into the shared LUT
 as it fuses:
 
 ```js
@@ -271,209 +303,142 @@ lut.inputScale  = 1 / intValue;        // stage_Int_to_Device folded in
 lut.outputScale = lut.outputScale * intValue;
 ```
 
-So a stage is bound *before* its LUT's scales are final. That is a footgun
-unless it is named, and naming it gives us a clean phase boundary:
+A stage is bound *before* its LUT's scales are final:
 
-| hook | when | `inputScale` / `outputScale` | may precompute from the LUT? |
+| hook | when | scales | may precompute from the LUT? |
 |---|---|---|---|
 | `floatFor(lut, hints)` | stage bind, **pre**-optimise | not final | **no** — read scales at call time |
 | `init(pipeline, opts)` | **post**-optimise | final | yes |
 
-Today's interpolators already comply — 249 scale reads in `interp.js`, all off
-the `lut` argument at call time. A kernel author caching `1/inputScale` in
-`floatFor` would produce quietly wrong output on any pipeline the optimiser
-touched, which is exactly the class of bug a written contract prevents.
+Today's interpolators already comply — scale reads in `interp.js` are
+off the `lut` argument at call time. A kernel that caches
+`1/inputScale` in `floatFor` produces quietly wrong output on any
+pipeline the optimiser touched.
 
 ---
 
 ## `provideLut()` and `init()` — two hooks, one object
 
-Two questions, asked at two moments, because the answers depend on different
-things:
+Two questions, asked at two moments, because the answers depend on
+different things:
 
 ```
 kernels[n].provideLut(lutMode)      → null | false | a LUT
 kernels[n].init(pipeline, opts)     → {pipeline, kernel, meta}
 ```
 
-**`provideLut` runs against the temporary device-to-device pipeline** the LUT
-builder makes before it walks the grid. **`init` runs against the real one**,
-after `optimisePipeline()`, with `lutMode` already settled by `create()`.
+**`provideLut` runs against the temporary device-to-device pipeline**
+the LUT builder makes before it walks the grid. **`init` runs against
+the real one**, after `optimisePipeline()`, with `lutMode` already
+settled by `create()`.
 
-### One hook, not two
+That is the whole reason v1.5 needed `displacesLut` *and* `claims`:
+the first decides whether a 214 KB table gets built; the second
+decides who runs the pixels. Saying `false` from `provideLut` means
+**no CLUT is built**, so a later refusal would strand the caller on
+the generic loops at ~8 MPx/s — worse than the table that was skipped.
+Both checks therefore use the same conditions against their respective
+pipelines. Kernel3D does both itself (`wantsInsteadOfLut` /
+`inspect`). Opt-in via `wasmMatrixShaper: 'prefer'`.
 
-Until v1.6 this was `provideLut` *and* `displacesLut`:
+`provideLut` is not only yes/no. A kernel may return a **different**
+LUT: a smaller preview grid, f32 cells, a table never derived from
+the profile pair (`createNDDeviceLUT`). Transform stores what it gets
+and asks nothing. [Luts.md](./Luts.md) is the portable JSON format; a
+table `toJSON()` cannot serialise is a private table, which is
+allowed.
 
-| | asked on | when | could answer |
-|---|---|---|---|
-| `provideLut(lutMode)` | the instance | before any pipeline existed | `null` · `false` · a LUT |
-| `displacesLut(transform)` | the **descriptor** | against the temp pipeline | `false` · `true` |
+**Kernel5D / Kernel6D return `null`** (build the CLUT) at the profile's
+own A2B density. **KernelND (7–15) still returns `false`** because those
+grids have no interior worth baking. The temporary pipeline is still
+built before the hook is asked; that cost is `create()`-once.
 
-`displacesLut`'s answer space was a strict subset of `provideLut`'s — it could
-only say "no LUT" or "carry on". It existed for one reason: the matrix shaper
-has to answer **later** than `provideLut` was being asked, because its decision
-reads the pipeline.
+---
 
-So `provideLut` moved to the later point and `displacesLut` was deleted. Two
-things fell out of that:
+## Matrix-shaper — Kernel3D yields, Transform never learns
 
-- **A latent bug went with it.** `displacesLut` was asked of
-  `Transform.kernels[inputChannels]` — the shared *descriptor*, not the
-  per-Transform instance. Any kernel that cached during it would have written
-  into the object every Transform of that dimension shares. That is the same
-  mistake `init()` was fixed for, and it was harmless only because the one
-  implementation happened to be stateless.
-- **Every kernel gets more information.** A `provideLut` that wants to inspect
-  what it is replacing now can.
+Under "one kernel per input dimension", a Transform-level claim list
+cannot survive. It also does not need to move inside Kernel3D as a
+mini-registry: there is one other 3-channel implementation, and
+Kernel3D knows how to find it.
 
-### What the pipeline check buys
-
-Only one of `wantsInsteadOfLut`'s conditions needs a pipeline, and it is the
-one that matters: the stage names must read
-
-```js
-['stage_Gamma_Inverse', 'stage_matrix_rgb', 'stage_Gamma']
+```
+setKernel(3)                 → Kernel3D instance
+provideLut()                 → false if the temp pipeline folds (opt-in)
+init(pipeline, opts)
+  ├─ inspect the FINAL pipeline
+  ├─ keep  → bindArrayRuns(self); { kernel: null }
+  └─ yield → Object.create(MatrixShaperKernel); { kernel: instance }
 ```
 
-That is what separates `*sRGB → *AdobeRGB`, which folds, from
-`*sRGB → GRACoL`, which does not — both are 3-channel input, and no amount of
-inspecting `inputProfile.type` distinguishes them. It also rejects identity
-pairs, which collapse to three different stages.
+`*sRGB → *AdobeRGB` folds to inverse-gamma / 3×3 / gamma.
+`*sRGB → GRACoL` does not. `*sRGB → *sRGB` with identity detection
+collapses to a copy. **No channel count separates those three.** Only
+the built pipeline does.
 
-### The one case that pays for nothing
+After `init`, `this.kernel` may not be `Transform.kernels[3]`. The
+invariant is *"one kernel **owns** each dimension"*, not *"one kernel
+**runs** it"*. `kernelInfo()` reports the endpoint (`matrix-shaper` or
+`kernel3D`).
 
-The temporary pipeline is built before the hook is asked, so a kernel that
-declines has built one it did not need. That is `KernelND`, which declines for
-reasons that never involved a pipeline (an N-D CLUT bake is impractical at
-grid^N cells).
-
-It does not matter, and it is worth saying why rather than measuring it:
-**this is `create()`, which runs once.** Loading the profile that fed it took
-longer. The only costs worth a number in this document are per-pixel ones, and
-nothing here is on that path — the second hook existed to save work that was
-never hot.
-
-### `provideLut` is not only a yes/no
-
-A kernel may decide it wants a **different** LUT: a smaller grid for a preview
-mode, f32 cells instead of u16, an intLut it fills itself, or a table that was
-never derived from the profile pair at all. It can call `createNDDeviceLUT` and
-hand back whatever it built. Transform stores what it gets and asks nothing
-about it — `false` and a custom table travel the same path out.
-
-[Luts.md](./Luts.md) documents the portable JSON format. A `provideLut` that
-returns something `toJSON()` cannot serialise is making a private table, which
-is allowed and worth knowing.
-
-## The sub-registry — where matrix-shaper goes
-
-Under "one kernel per input dimension", `Transform.claimKernels` cannot survive
-at the Transform level. It should not simply be deleted either: it is an ordered
-list, and two independent 3-channel accelerators can coexist in it today. Under a
-single dimensional owner, adding one would mean replacing `Transform.kernels[3]`
-wholesale, and two vendors would collide.
-
-**The list moves inside the dimension that owns it.** Kernel3D hosts its own
-ordered list of 3-channel claiming kernels and asks them in `init()`.
-Matrix-shaper registers with Kernel3D, not with Transform.
-
-Terminology note: these are **claiming kernels**, the name the codebase already
-uses — `claims()`, `claimed`, `_kernelClaim`. An earlier draft of this section
-called them "strategies", which was a synonym for something that already had a
-name and left the code holding a list called `strategies` full of things
-implementing `claims()`. One concept, one word. The invariant holds at the
-Transform level; composability survives where the domain knowledge is.
-
-This pays immediately. `KernelMatrixShaper.claims()` currently opens by
-reaching into Transform internals:
-
-```js
-if(transform.wasmMatrixShaper === 'off') { /* ... */ }
-if(transform._pixelCacheData !== null && transform._pixelCacheData !== undefined) { /* ... */ }
-```
-
-A kernel reading `_pixelCacheData` is the boundary leaking. When Kernel3D owns
-the decision it passes those in as part of the offer, and matrix-shaper stops
-needing to know Transform exists.
-
-**One consequence to plan for.** After `init`, `this.kernel` may not be
-`Transform.kernels[inputChannels]`. The invariant is *"one kernel **owns** each
-dimension"*, not *"one kernel **runs** it"*. `kernelInfo()` should report the
-chain — `kernel3D → matrix-shaper` — rather than only the endpoint.
+Detail, binaries, accuracy: [MatrixShaperKernel.md](./MatrixShaperKernel.md).
 
 ---
 
 ## The shape test — what a stranger can do without touching Transform
 
-The point of the boundary is not the three hooks. It is that a kernel becomes
-an isolated unit with its own control, so things nobody designed for become
-possible without a core change. That is the criterion this design should be
-judged against, and it is falsifiable: **name something a third party would
-want, and check what Transform has to learn.**
+The point of the boundary is not the three hooks. It is that a kernel
+is an isolated unit, so things nobody designed for become possible
+without a core change. Falsifiable: **name something a third party
+would want, and check what Transform has to learn.**
 
 | Someone wants… | built as | what Transform must know |
 |---|---|---|
-| An f32 CLUT — half the memory, better cache behaviour, one ULP of loss | a Kernel3D variant whose `provideLut` returns an f32-celled table and whose `floatFor` reads it | nothing |
-| RGB → sepiatone, or any house look baked as a table | a kernel whose `provideLut` calls `createNDDeviceLUT` itself and returns a table never derived from the profile pair | nothing |
-| A fast-preview mode on a small 8-bit grid | a kernel that returns a 9³ or 17³ u8 table when a preview option is set | nothing |
-| A tuned 7-channel press kernel, leaving 5, 6, 8–15 generic | `Transform.kernels[7] = Kernel7D` | nothing |
-| A probe that records every dispatch, for a test | `Transform.kernels[9] = probe` | nothing |
-| A JS → WASM → GPU kernel: three tiers, two thresholds orders of magnitude apart, and a decision that depends on device availability | the kernel's own `arrayFn`, dispatching over three tiers internally | nothing — though a GPU tier raises an async question for the *public API*, see [arrayFn](#arrayfn) |
+| An f32 CLUT | Kernel3D `provideLut` + `floatFor` that read it | nothing |
+| RGB → sepiatone, house look as a table | `provideLut` calls `createNDDeviceLUT` | nothing |
+| Fast-preview on a small 8-bit grid | kernel returns 9³ / 17³ u8 when an option is set | nothing |
+| A tuned 7-channel press kernel | `Transform.kernels[7] = Kernel7D` | nothing |
+| A probe that records every dispatch | `Transform.kernels[9] = probe` | nothing |
+| JS → WASM → GPU, two thresholds | the kernel's own sync `array()`, three internal tiers | nothing — a GPU wait is a later `arrayAsync()` on Transform, not on the kernel. Do not stub it. |
 
-Every row is a kernel decision expressed through hooks that already exist in
-this document. None of them is a case in a switch in `Transform.js`, which is
-where all five would have to live today.
-
-Two of those deserve a note. **A LUT that is not derived from the profile pair**
-still satisfies everything Transform checks — `validatePipeline()` pushes a
-mid-grey through and looks for NaN, `undefined` and wrong output types, and a
-sepiatone table passes. The stage's `inputEncoding` / `outputEncoding` still
-chain, because the table replaced one of the same shape. Nothing about "this
-LUT means profile A → profile B" was ever load-bearing. **A smaller grid** is
-already half-expressible: `lutGridPoints3D` (33) and `lutGridPoints4D` (17) are
-public options today — but Transform-wide, one number, and with no say over the
-cell type. What is new is a kernel choosing both, for itself.
+A LUT not derived from the profile pair still satisfies
+`validatePipeline()` (mid-grey, no NaN, right types). Nothing about
+"this LUT means profile A → profile B" was ever load-bearing. Grid
+size and cell type used to be Transform-wide
+(`lutGridPoints3D` / `lutGridPoints4D`); a kernel choosing both for
+itself is what is new.
 
 ### The red kernel
 
-The limit case: a kernel whose `init` throws the pipeline away and returns a
-one-stage pipeline that returns red.
+A kernel whose `init` throws the pipeline away and returns red:
 
 ```js
 init: function(pipeline, opts){
-    if(opts.onlyRed) return {pipeline: redPipeline};
+    if(opts.onlyRed) return {pipeline: redPipeline, lut: null};
     return {pipeline: pipeline};
 }
 ```
 
-Transform re-optimises it, validates it — a mid-grey test colour comes back red,
-which is not NaN, not `undefined`, and the right output type, so it passes —
-and then runs it. It never learns that anything unusual happened. **That is the
-goal, not a defect.** The test of an ownership boundary is whether the owner can
-be absurd without the host noticing; if Transform had to understand red, it
-would not own only the pipeline.
+Transform re-optimises, validates — mid-grey comes back red, which is
+not NaN and is the right type, so it passes — and runs it. **That is
+the goal, not a defect.** If Transform had to understand red, it would
+not own only the pipeline.
 
-**And the experiment finds a hole worth closing.** A red pipeline with the
-built CLUT still attached would make `transform(colour)` return red while
-`transformArray()` returns whatever the LUT says, because the batch path routes
-through `transformArrayViaLUT` whenever a LUT exists. That is the same
-single-colour/batch divergence this whole design set out to close, re-entering
-through the mutator hook.
+The experiment found the hole: a red pipeline with the built CLUT
+still attached makes `transform(colour)` return red while `array()`
+returns whatever the LUT says, because the batch path uses the LUT
+whenever one exists. Same single/batch divergence, re-entering through
+the mutator.
 
-So the contract needs one more line: **`init` owns both surfaces or neither.**
-If it rewrites the pipeline it must also settle the batch path — hand back a
-kernel whose `array()` agrees, or clear the LUT so batch walks the same
-pipeline it just installed. For the red kernel, clearing the LUT is both the
-cheapest answer and the correct one.
+**`init` owns both surfaces or neither.** Rewrite the pipeline and
+settle the batch path — hand back a kernel whose `array()` agrees, or
+clear the LUT. For red, clearing the LUT is the correct cheap answer.
 
 ### Wrapping rather than replacing
 
-The right idiom for a kernel that only wants to intercept sometimes is to
-inherit and delegate, not to reimplement:
-
 ```js
 var RedKernel = Object.create(Transform.kernels[3]);
-RedKernel.name = 'kernel3D-red';        // do not skip this — see below
+RedKernel.name = 'kernel3D-red';        // do not skip — see below
 RedKernel.init = function(pipeline, opts){
     if(opts.onlyRed) return {pipeline: redPipeline, lut: null};
     return Transform.kernels[3].init.call(this, pipeline, opts);
@@ -481,49 +446,27 @@ RedKernel.init = function(pipeline, opts){
 Transform.kernels[3] = RedKernel;
 ```
 
-Every hook the wrapper does not override keeps working, and keeps picking up
-later fixes to the base kernel. Two practical notes:
-
-- **Override `name`.** `setKernel` already does `Object.create(descriptor)` per
-  Transform, so a wrapper makes the instance a two-level chain — harmless for
-  correctness and one extra link on a lookup that resolves once per create. But
-  a wrapper that inherits `name` reports as `kernel3D` in `kernelInfo()`, and an
-  invisible override is a bad thing to debug.
-- **`supports` is inherited too**, and will claim capabilities the wrapper may
-  not honour. It is diagnostics-only, so the stakes are low, but a wrapper that
-  narrows behaviour should narrow `supports` with it.
+- **Override `name`.** `setKernel` already does `Object.create`, so a
+  wrapper is a two-level chain. Inheriting `name` reports as
+  `kernel3D` in `kernelInfo()`.
+- **`supports` is inherited too.** Diagnostics-only, but a wrapper
+  that narrows behaviour should narrow `supports`.
 
 ### How a custom option reaches a kernel
 
-Options are merged with a blanket copy
-([Transform.js:600](../../src/Transform.js:600)), so an unrecognised key is
-carried rather than rejected: `{kernel3D_32f: true}` would in fact reach a
-kernel today with no Transform change at all.
-
-Prefer a named bag anyway:
+Top-level options are blanket-copied, so `{kernel3D_32f: true}` would
+reach a kernel today. Prefer a named bag anyway:
 
 ```js
 new Transform({
-    kernelOptions: { 'kernel3D': { f32: true, preview: false } }
+    kernelOptions: { kernel3D: { f32: true, preview: false } }
 });
 ```
 
-Keyed by **kernel name**, not by dimension — the name is the stable identity,
-and a dimension slot can be re-registered by someone else. Passed opaquely into
-`floatFor(lut, hints)`, `provideLut(lutMode)` and `init(pipeline, opts)`.
-
-Three reasons over a flat prefixed key:
-
-- **Transform never validates it, and never has to.** A flat namespace forces a
-  choice between rejecting unknown top-level options (which would break the
-  blanket copy that everything relies on) and never being able to catch a typo
-  in a core option.
-- **A typo inside the bag is the kernel's to catch**, and it can, because it
-  owns the schema. That is the same split as `hints`: the caller asks, the
-  kernel decides, and an unrecognised request is an error the kernel raises
-  rather than a default it silently falls back to.
-- **It survives re-registration.** A kernel that moves slots, or a test kernel
-  parked at dimension 9, still finds its own options.
+Keyed by **kernel name**, not dimension. Passed opaquely into
+`floatFor`, `provideLut`, and `init`. Transform never validates the
+bag; a typo inside it is the kernel's to catch; it survives
+re-registration.
 
 ---
 
@@ -533,404 +476,108 @@ Three reasons over a flat prefixed key:
 create()
   ├─ isIdentity = <profile chain collapsed?>
   ├─ inputDimension = isIdentity ? 0 : inputChannels
-  ├─ setKernel(inputDimension)           → Transform.kernels[n], one array index
+  ├─ setKernel(inputDimension)           → Object.create(kernels[n])
   │
-  ├─ IDENTITY: kernel.init() builds the copy pipeline, and create() returns
+  ├─ IDENTITY: kernel.init() builds the copy pipeline; create() returns
   │
-  ├─ createPipeline(...)                 → the TEMPORARY device→device pipeline
+  ├─ createPipeline(...)                 → TEMPORARY device→device
   ├─ kernel.provideLut(lutMode)          → null | false | a LUT
   ├─ [CLUT build, unless it said otherwise]
   ├─ createPipeline(...)                 → the real one
   │    ├─ addStageLUT → kernels[lut.inputChannels].floatFor(lut, hints)
-  │    │                 ↑ on the DESCRIPTOR, scales NOT final here
+  │    │                 ↑ DESCRIPTOR, scales NOT final
   │    └─ optimisePipeline()             → folds scales into the LUT
   ├─ pipelineCreated = true
-  ├─ kernel.create(lutMode)              → WASM settle + lutMode demotion
-  └─ {pipeline, kernel} = kernel.init(pipeline, opts)
-       ├─ resolves its own image path onto itself
-       └─ if it rewrote the pipeline: optimisePipeline() + validatePipeline()
+  ├─ {pipeline, kernel} = kernel.init(pipeline, opts)   yield first (cheap)
+  ├─ kernel.create(lutMode)              → WINNING kernel loads its WASM
+  │    └─ bindArrayRuns() once the slots exist
+  └─ if init rewrote the pipeline: already re-optimised / re-validated
 ```
 
-Then `transformArray()` hands the kernel an array, and `kernel.array()` decides
-everything else. There is no resolve step after `init`, and nothing outside the
-kernel holds a run reference or a threshold.
+Then `array()` (the public Transform method) hands the kernel a batch
+and `kernel.array()` decides everything else. There is no resolve step
+after `init`.
 
----
+Demotion never upgrades, and never crosses the dataFormat family:
 
-## What stays in Transform, and why
-
-Each of these has a reason. A bullet without one is how the last boundary
-drifted.
-
-- **Pipeline construction, optimisation and validation.** This is the whole of
-  what Transform is for.
-- **The policy options** — `interpolation3D`, `interpolation4D`,
-  `interpolationFast`, `useTrilinearFor3ChInput`. Public API, documented,
-  user-settable. They are passed *into* kernels as hints; kernels must never
-  read `transform.*` for them, or the coupling grows straight back.
-- **`lutMode` settling and demotion**, `_expectsU16`, `_isIntegerMode`. The
-  settled mode is public (`t.lutMode`) and fixes the output container type
-  across the whole Transform. `create(lutMode)` returning the settled mode is
-  already the right shape.
-- **`transformArrayViaLUT()`** — the public choke point, 52 test call sites plus
-  user code. Preamble plus `kernel.array(...)`.
-- **The WASM memory management API** — `setWasmShrinkRatio`, `setWasmMaxMemory`,
-  `compactWasmMemory`, `releaseWasmMemory`, `wasmMemoryBytes`. Public API.
-- **The no-LUT dimension-generic pipeline walk.** Duplicating it in fifteen
-  kernels is copy-paste risk for no gain.
-
----
-
-## Invariants that break silently
-
-These are the ways to get this wrong without a test failing.
-
-**1. Stage names are the coupling surface.** `compile()` resolves emitters by
-string — `emit_js_<stageName>` at
-[Transform.js:8373](../../src/Transform.js:8373) — and `optimisePipeline()`
-matches its fusion patterns against a list of six literal names at
-[5044](../../src/Transform.js:5044). `floatFor` must return the stage name
-alongside the function, and the six names must stay byte-stable. Change one and
-fusion quietly stops firing; throughput drops and every test still passes.
-
-**2. Never precompute from the LUT in `floatFor`.** See the two-phase table
-above.
-
-**3. The float family and the array family must never share bodies.** From
-[Transform.js:7655](../../src/Transform.js:7655): sharing inner code between the
-single-colour path and the array loop **poisons the JIT** — same function, two
-ABIs and two array shapes, V8 deoptimises and the array path slows 2–3×. Once
-`float` and `array` are members of one object, "these are both tetrahedral 3D,
-why two implementations?" becomes the obvious next thought. It is a 2–3× trap
-and it belongs in the descriptor's own comments, not only in Transform.js.
-
-**4. Mutating the pipeline requires re-optimise plus re-validate.** See above.
-
-**5. `init` owns both surfaces or neither.** Rewriting the pipeline without
-settling the batch path re-opens the single-colour/batch divergence this design
-exists to close — `transformArrayViaLUT` runs whenever a LUT is attached,
-whatever the pipeline now says. Return a kernel whose `array()` agrees, or clear
-the LUT. See [The red kernel](#the-red-kernel).
-
-**6. Both WASM families load on every create today, and a test asserts it.**
-[transform_lutMode_wasm_4d.tests.js:97](../../__tests__/transform_lutMode_wasm_4d.tests.js:97)
-— *"create(): both wasmTetra3D and wasmTetra4D populated (no silent
-demotion)"*. Its purpose is to prove WASM actually ran rather than falling back
-to `'int'` (see [WasmKernels.md](./WasmKernels.md)). Per-dimension loading is a
-real win — a CMYK Transform compiles four 3D modules it never calls — but the
-test's *intent* must be re-expressed against a host-capability probe, not
-deleted. "Can this host do WASM/SIMD?" is a property of the host, cached once
-per process; it is not a property of a Transform.
-
----
-
-## What this makes testable
-
-This is half the point of the change.
-
-- **Inject a probe kernel at any dimension.** `Transform.kernels[9] = probe` and
-  assert what got called, with no effect on dimensions a real conversion uses.
-- **Assert single-colour and batch agree.** Currently unprovable for a
-  third-party kernel, because `transform(colour)` does not go through it. Once
-  one object owns both surfaces, "the same kernel produced both" is a test you
-  can write.
-- **Assert the hint contract.** An unknown `interpolation3D` throws; a known one
-  is honoured; `interpolationFast: false` selects the reference variant.
-- **Assert the phase boundary.** Bind a stage, run the optimiser, check the
-  kernel's output still tracks the rewritten `inputScale`.
-- **Assert the WASM loadout per dimension**, once loading is per-dimension.
-- **Assert `kernelInfo()` reports the chain** after an `init` reassignment.
-
----
-
-## Migration
-
-Every step gated on: full test suite green, both bundles building, and MPx/s
-parity from `node bench/reproduce.js` against the previous run. This is the
-first kernel work with a bench harness that can prove neutrality on demand
-rather than by comparison across vintages — v1.6 is already scheduled for a
-full benchmark rebuild, so each phase gets a before/after from one harness.
-
-The gate is a **pinned baseline**, not the previous run:
-
-```bash
-node bench/reproduce.js
-node scripts/bench_compare.js          # newest run vs bench/baseline/<machine>/
+```
+int8_simd    → int8_scalar  → int8_js  → float
+int16_simd   → int16_scalar → int16_js → float
 ```
 
-Comparing each phase against whatever ran last is a ratchet that only turns one
-way — seven phases at 1.5% each is 11% slower with every step passing. The pin
-is a committed run that moves only deliberately (`bench/baseline/README.md`).
-It is filed per machine, because a Ryzen pin is not a control for an M2; the
-comparison picks the pin matching the machine it is running on and refuses
-rather than reporting a different CPU as a regression.
-
-`bench_compare` sorts columns three ways: jsCE throughput **gates**, third-party
-`lcmsWasm`/`native` columns are the **control** that sets the noise floor, and
-accuracy (`*MaxLsb`, `*MeanLsb`) is gated at **zero** — a refactor that quietly
-changes rounding is the failure worth catching, and it never shows up as a
-throughput number.
-
-**Small batches do not gate.** Cells below 256k px are reported and never fail
-a comparison. `js.sweep.rgb-rgb-matrix.64k / noise / jsceInt` was measured four
-times around phase 1 — 53.9 before, then 47.5, 53.9, 56.5 after — a 17% spread
-with the "before" value sitting in the middle of the "after" range. Small
-batches are dominated by per-call overhead and GC rather than the kernel loop
-and they measure like it. The published tables use 1M px; the small sizes exist
-to show the shape of the size curve, which is worth seeing and not worth failing
-a build over.
-
-**Run one bench at a time.** Two concurrent runs on the same box produce control
-columns down ~3% and individual cells down 16%, which reads exactly like a
-regression. `bench_compare`'s control columns catch it — the noise floor jumps
-from 7% to 15% — but the run is still wasted. The tool can tell you a
-measurement is untrustworthy; it cannot make it trustworthy.
-
-**Gate on the `solo` phase, not the content matrix.** Phase 1 measured both.
-`solo` runs one image, one engine, one process per measurement and reported
-0.2–1.0% internal spread; across 6 engine/workflow cells it moved by at most
-0.42%, which is inside each cell's own spread. The `js` content matrix, over
-the same code, showed individual cells moving up to 12% — but the movement
-lands on the `lcmsWasm` and `lcmsWasmNoCache` columns just as hard, and those
-are Little CMS running in WASM, which a jsCE refactor cannot touch. Its mean
-across 324 cells was +0.32%. **Per-cell variance in the content matrix is too
-large to gate a refactor on; the isolated measurement is the one that answers
-the question.** This is the same lesson as
-[LcmsComparison.md](../LcmsComparison.md)'s "quote the MPx/s rather than the
-speedup", one level down: quote the measurement that controls its conditions.
-
-| Phase | Content | Why here |
-|---|---|---|
-| ~~1~~ | ~~Dense 1–15 registry; `setKernel` becomes an array index; `registerKernel` accepts a range~~ **LANDED 2026-08-21** — descriptors gained `name`, `KernelND` registers `[5, 15]`, `MAX_KERNEL_DIMENSIONS = 15`. New suite `__tests__/kernel_registry.tests.js` (17 tests) | Mechanical, no behaviour change, unblocks test injection |
-| ~~2~~ | ~~`floatFor` on Kernel1D and Kernel2D; `addStageLUT` cases 1 and 2 become registry lookups~~ **LANDED 2026-08-21**, and it closed `TODO (B3)` with it — see [Phase 2 as built](#phase-2-as-built) | No WASM in the way. Ownership change plus a real throughput win, with a number to show before touching 3D/4D |
-| ~~3~~ | ~~`floatFor` on KernelND, then Kernel3D, then Kernel4D~~ **LANDED 2026-08-21** — `addStageLUT` went from 133 lines to 34. See [Phase 3 as built](#phase-3-as-built) | Ascending risk. 3D and 4D one at a time |
-| ~~4~~ | ~~Loops and WASM state move onto the kernel; the 22 `run_` adapters in `lutKernelTable.js` follow the loops they call~~ **LANDED 2026-08-21** across 4/4b/4c/4d | ~~They exist only to rename `t.method`~~ **Corrected**: they are the family boundary that keeps float and int bodies from sharing a call site and poisoning the JIT |
-| ~~4e~~ | ~~`arrayFor()` returns `{big, small, threshold}`~~ **LANDED 2026-08-21, AND SUPERSEDED** — the shared `WASM_DISPATCH_MIN_PIXELS` retired into `dispatchThreshold.js`, but returning a threshold to the caller still made batch size Transform's business. Replaced by [`arrayFn`](#arrayfn) in phase 8 | After the loops move, this is the last thing Transform knows about dispatch |
-| ~~5~~ | ~~`init()` + sub-registry; matrix-shaper moves inside Kernel3D; `claims`/`claimKernels` retire~~ **LANDED 2026-08-21** — no claim registry at all in the end: Kernel3D reads the pipeline and yields to the matrix shaper itself, and Transform never learns a choice was made. The 42-row dispatch table became a `resolve()` switch in each kernel file, verified against a 560-decision oracle; the u16 wide-output gap it hid (CMYK→5CLR threw at 16 bits) is fixed | Needs 3 and 4 landed first |
-| ~~6~~ | ~~`wantsLut()` merges `provideLut` + `displacesLut`~~ **LANDED 2026-08-21** — kept the name `provideLut`, since `displacesLut` was the narrower of the two and its whole answer space already fitted. Moving the call to where the temporary pipeline exists is what made the merge possible, and it took a descriptor-vs-instance bug with it | Smallest surface, last |
-| ~~7~~ | ~~Per-dimension WASM loading~~ **LANDED 2026-08-21** — no host probe needed in the end: each kernel declares a `wasmLadder` in its own file and the lead module's failure is the probe. 4 modules and 256 KB per transform became 2 and 128 KB, and the half that went was unreachable. The tripwire fired as designed | Independent of the rest; re-express the loadout test first |
-| ~~8~~ | ~~`arrayFn` replaces `arrayFor`; `resolveRuns`, `_resolveLutKernels` and `_bindLutTransformArrayFn` retire; `init()` decides everything and `create()` stores it on the instance** | The half-steps left Transform holding a threshold, sequencing a resolve, and knowing there is a BIG and a SMALL. None of that is its business~~ **LANDED 2026-08-21**, and it took `transformArrayFn` with it: identity became `kernels[0]`, so the last closure Transform had a reason to bind stopped being a special case. See [What Transform actually does](#the-principle) |
+A failed `int16-wasm-scalar` load demotes to `'int16'`, never `'int'` —
+the output container (`Uint16Array` vs `Uint8ClampedArray`) is fixed
+by the settled mode. `float` is the only cross-family landing point
+because the float LUT scales via `lut.outputScale` at run time.
 
 ---
 
-<a id="phase-2-as-built"></a>
+## `array()` — one call site; the kernel keeps its own secrets
 
-## Phase 2 as built
-
-Kernel1D and Kernel2D own their single-colour function and their array loop.
-`addStageLUT` cases 1 and 2 are registry lookups; `linearInterp1D_NCh` and
-`bilinearInterp2D_NCh` moved out of `src/interp.js` into the kernel modules.
-
-**The ownership change and `TODO (B3)` turned out to be one change seen from
-either end.** B3 said the 1-D and 2-D array loops should be inlined like the
-3-D ones. The contract said the float and array families must never share
-bodies. Those are the same statement: the loops shared a body *because* nobody
-owned the pair, and giving the kernel both surfaces is what made the
-duplication deliberate rather than accidental.
-
-Measured, 1M px, float lutMode, best of 5, three consecutive runs agreeing to
-0.3%:
-
-| workflow | before | after | change |
-|---|---:|---:|---:|
-| gray → RGB | 72.6 | **93.8** | +29% |
-| gray → CMYK | 63.6 | **81.4** | +28% |
-| gray → 6CLR | 49.7 | **64.9** | +31% |
-| duotone → RGB | 50.7 | **61.5** | +21% |
-| duotone → CMYK | 44.7 | **51.3** | +15% |
-| duotone → 6CLR | 35.7 | **41.0** | +15% |
-
-Gray gains more than duotone because bilinear does four CLUT reads and more
-arithmetic per output channel, so the per-pixel allocation was a smaller share
-of its total.
-
-**A third, not a multiple, and the reason is worth keeping.** The prediction
-before measuring was larger — ~2M allocations per megapixel sounds
-catastrophic. It is not, because V8 allocates short-lived small objects by
-bumping a pointer in the nursery and collects them almost free when they die
-immediately, which these did. The allocation was real cost but never the
-dominant one. Estimating allocation pressure from the allocation *count* rather
-than from its lifetime overstates it.
-
-Correctness was checked by comparing the loop against the kernel's own
-`floatFor` function across 159,744 values and 9 LUT shapes per dimension —
-through the same `Uint8ClampedArray` container, because it rounds half-to-even
-where `Math.round` rounds half-up, and comparing through different rounding
-shows a 1 LSB "failure" that is not one.
-
-The isolated `solo` bench moved at most **+0.30%** across six 3D/4D cells,
-confirming the kernels this phase did not touch were also not disturbed.
-
-<a id="phase-3-as-built"></a>
-
-## Phase 3 as built
-
-`addStageLUT` went from **133 lines to 34**. All the selection logic — by
-`lut.inputChannels`, then `interpolation3D`/`interpolation4D`, then
-`interpolationFast`, then `lut.outputChannels` — is now inside the kernels that
-own those dimensions. What is left is a registry lookup and a hints object.
-
-`src/interp.js` becomes the built-in float *implementations*; the kernels are
-the *policy*. A third-party kernel can ignore the file entirely.
-
-### Proving a pure refactor is pure
-
-The risk here was not that tests would fail. It was that a subtly different
-interpolator would be installed for some combination nobody tests directly, and
-everything would still pass while the numbers quietly moved.
-
-So `HEAD` was extracted to a scratch tree and the same probe run against both
-copies — stage names **and** accuracy-path colour output, for RGB→RGB, RGB→Lab,
-RGB→CMYK, CMYK→RGB, CMYK→CMYK and CMYK→Lab, each also with
-`interpolationFast:false`, `interpolation3D:'trilinear'`,
-`interpolation4D:'trilinear'`, `useTrilinearFor3ChInput:false` and
-`buildLut:true`. **Byte-identical across all fifteen cases.** That comparison
-was worth more than any number of new assertions, and it is cheap: `git archive
-HEAD | tar -x -C <scratch>` and run the same script twice.
-
-It also settled something that looked like a regression. A typo in
-`interpolation3D` does **not** throw for a PCS-input LUT, because the trilinear
-override resolves the method before the bad value is ever examined. The probe
-showed the old switch did exactly the same thing. With device input, it throws.
-Without the side-by-side, that would have been a plausible-looking bug to chase
-or, worse, to "fix".
-
-### The rule that proves the boundary was wrong
-
-The PCS-input trilinear override existed **only** in the 3-channel branch —
-lcms 2.0 moved to tetrahedral and found it disagreed with 1.19, SampleICC and
-Photoshop on Lab-indexed LUTs, because L sits on one axis and the space is
-uncentred. The 4-D branch had no equivalent.
-
-One function was carrying one dimension's rule for all dimensions. It now lives
-in Kernel3D, and **its absence from Kernel4D is the point.**
-
-### A fragility worth knowing about
-
-`src/interp.js` is still attached to `Transform.prototype`, and that is
-load-bearing rather than vestigial. The 4-D reference variants evaluate two 3-D
-interpolations at the bracketing K planes and reach their siblings through
-`this`:
-
-```js
-var output1 = this.tetrahedralInterp3D_Master(cmyInput, lut, K0);
-```
-
-Stages are invoked as `stage.funct.call(transform, …)`, so `this` is the
-Transform and the sibling resolves off the prototype. Calling
-`interp.tetrahedralInterp4D_3or4Ch(…)` as a bare function throws. **Anything
-that changes how stages are invoked must keep a receiver carrying these
-methods** — which is a live constraint on phase 4, when the loops and WASM state
-move onto the kernels.
-
-### Measured
-
-Throughput unchanged, as a create-time-only change should be: jsCE **median
-+0.21%** across 132 cells, isolated `solo` bench **worst −0.61%**, accuracy
-identical. Phase 2's gray and duotone gains held.
-
-<a id="arrayfn"></a>
-
-## `arrayFn` — one function, and the kernel keeps its own secrets
-
-`floatFor` gives the kernel the single-colour path. `arrayFn` is the image
-path, and it is deliberately the plainest possible thing:
-
-```js
-kernel.arrayFn(input, output, pixelCount, inAlpha, outAlpha, preserve)
-```
-
+`floatFor` is the single-colour path. `array()` is the image path.
 Transform calls it. That is the entire interface.
 
-### What this replaced, and why the earlier shapes were wrong
+```js
+kernel.array(input, output, pixelCount, lut, inAlpha, outAlpha, preserve)
+```
 
-Three drafts of this exist in the history of this document, each less leaky
-than the last:
+### What this replaced
 
-1. **`kernel.array(...)` reaching back through `kernelUtils.runTableKernel`**,
-   which consulted a resolver, compared a threshold and called a run closure —
-   with the kernel's own state written onto it from outside.
-2. **`arrayFor()` returning a bound function.** Better: the kernel answers once
-   and the caller holds the result.
-3. **`arrayFor()` returning `{big, small, threshold}`** so a caller could pick
-   per call, or skip the compare when they collapse.
+Three drafts, each less leaky than the last:
 
-The third still leaks. Telling the caller there is a threshold makes the batch
-size their business, and it is not — **why would Transform care how big the
-array is?** A kernel with a WASM path above some pixel count and a JS path
-below holds both and picks:
+1. **`kernel.array(...)` reaching back through
+   `kernelUtils.runTableKernel`**, which consulted a resolver,
+   compared a threshold, and called a run closure — with the kernel's
+   own state written onto it from outside.
+2. **`arrayFor()` returning a bound function.** The kernel answers
+   once; the caller holds the result.
+3. **`arrayFor()` returning `{big, small, threshold}`** so a caller
+   could pick per call.
+
+The third still leaks. A kernel with a WASM path above some pixel
+count and a JS path below holds both and picks:
 
 ```js
-// set up once, in create() / init()
+// set up once, in init()
 this.arrayFnBig = …;
 this.arrayFnSml = …;
-this.threshold  = …;      // the kernel's own number, nobody else's
+this.threshold  = …;      // the kernel's own number
 
-arrayFn: function(input, output, px, inAlpha, outAlpha, preserve){
+array: function(input, output, px, lut, inAlpha, outAlpha, preserve){
     var fn = (px >= this.threshold) ? this.arrayFnBig : this.arrayFnSml;
-    return fn(input, output, px, inAlpha, outAlpha, preserve);
+    return fn(this.transform, input, output, px, lut, inAlpha, outAlpha, preserve);
 }
 ```
 
-One compare, once per image, inside the kernel that owns the reason for it. A
-kernel with one implementation just assigns `arrayFn` directly and there is no
-compare at all.
+One compare, once per image, inside the kernel that owns the reason.
+A kernel with one implementation (Identity, 1-D, 2-D, N-D) assigns
+`arrayFn` and there is no compare. Identity's `array()` is a
+trampoline onto `this.arrayFn` so the per-call body does not switch
+on `dataFormat`.
 
-<a id="resolveruns"></a>
+`bindArrayRuns()` in `kernelUtils.js` is how the built-in LUT kernels
+fill the two slots. Plugins (`Transform.register()` custom lutModes)
+resolve into the **same** slots via
+`kernelUtils._resolvePluginRuns` (simd > wasm > js, threshold 0).
+One dispatch path; no plugin bypass. See [Plugin.md](../Plugin.md).
 
-### And resolution happens in `init()`
+The preamble (default `pixelCount`, clamp `preserve` to what the
+input can supply, `ensureOutputArray`) is the kernel's. It used to be
+applied by whichever caller was in front — which is how
+`transformArray(input, false, false)` on a matrix-shaper pair once
+returned `[]`.
 
-There is no `resolveRuns()` in the target. `init()` already receives the built
-pipeline and everything the kernel is allowed to know; whatever it decides —
-which variant, which threshold, which tables — it decides there and stores on
-itself.
-
-**`resolveRuns()` was never part of the design.** It is worth being precise
-about this, because the spec that documented it made it look deliberate. From
-the v1.5 migration history:
-
-> **C** — BIG/SMALL run refs onto the kernel instance
-> (`_runBig`/`_runSmall`/`_threshold`), resolved by `kernel.resolveRuns()`;
-> `_lutKernelBig`/`_lutKernelSmall`/`_lutKernelThreshold` removed from
-> Transform
-
-Phases A and B — the modular kernel work proper — have no `resolveRuns`. It
-arrived in phase C purely as the vehicle for moving three fields off Transform,
-and every revision of the spec was written after C, which is why it reads as a
-required member of the contract rather than as the migration step it was.
-
-It is a half-step by its own description: the *fields* moved to the kernel, but
-Transform kept *sequencing* the resolve and *comparing* the threshold. It also
-brought `_resolveLutKernels()` with it, which grew a second unrelated job and
-ended up being called on the identity path, where there is no kernel at all.
-
-**A doc that records what was built reads exactly like a doc that records what
-was intended.** This one now says which it is.
-
-### The resolution itself lives in the kernel file
-
-Not in a table module beside it, and certainly not in a shared registry.
-**Open `Kernel3D.js` and see how 3-D dispatch resolves** — a switch on the
-lutMode, twenty readable lines, with the fallback ladder written as code
-because that is what it is. The v1.3 table existed because Transform.js
-dispatched for every dimension out of one flat structure and it had to be
-data. Nothing dispatches that way any more.
+---
 
 ## Helpers reach the kernel through `init`, not through an export
 
-A third-party kernel already works with nothing but the public surface —
-`Transform.registerKernel(descriptor)`, a `floatFor` and an `array` — and it
-drives **both** paths, which is what phases 2 and 3 were for. Verified rather
-than assumed: an independent Kernel3D returning its own maths shows up in
-`kernelInfo()`, in `transform(colour)` and in `transformArray()` together.
+A third-party kernel already works with the public surface —
+`registerKernel`, `floatFor`, `array` — and drives **both** paths.
+Verified: an independent Kernel3D shows up in `kernelInfo()`,
+`transform(colour)` and `array()` together.
 
-What is *not* reachable is the dispatch machinery: the fallback resolver, the
-key format, the gate predicates, the break-even constant. A kernel that wants
-several variants — SIMD, scalar, JS, with eligibility gates and a degradation
-ladder — currently has to write its own version of what
-`src/lutKernelTable.js` already does.
-
-**The answer is to hand them over at `init()`, not to export them.**
+What is *not* reachable without help is the dispatch machinery. Hand
+it over at `init()`, do not export it:
 
 ```js
 init: function(pipeline, opts){
@@ -939,261 +586,457 @@ init: function(pipeline, opts){
 }
 ```
 
-`init(pipeline, opts)` already takes an options bag, so this adds no new
-surface. That matters more than it sounds:
+`floatFor()` cannot use helpers: it is called on the descriptor
+before any `init`. That is fine — picking a single-colour function
+needs no dispatch machinery. Helpers are for the image path only.
 
-- **Nothing new becomes public.** An exported `Transform.lutKernelTable` is a
-  promise about a shape that is still moving — it changed twice today. Passing
-  it in is dependency injection, and the contract is the `opts` shape, which is
-  already versioned by this document.
-- **A kernel that does not want them never sees them.** The built-ins reach
-  their own tables directly; the helpers exist for strangers.
-- **Drift is visible at the boundary.** If a helper changes, `opts` changes,
-  and a kernel notices at `init()` — at create time, in one place — rather than
-  through a deep import that silently resolves to something different.
+The built-in tables are still module-level constants
+(`kernel3D_table.js` reads gates at load time). Turning them into
+`makeTable(helpers)` factories is a real restructure, not a rename,
+and is why this is an extension rather than a requirement.
 
 ### A kernel owning its output buffer — allowed, and usually wrong
 
-Output allocation is the kernel's business, so nothing stops a kernel keeping
-one buffer and returning it every call. For a fixed-size stream — frames off a
-camera, tiles of a known size — that removes an allocation per image, and the
-temptation is obvious.
+Nothing stops a kernel keeping one buffer and returning it every
+call. For a fixed-size stream that removes an allocation. It is
+still the wrong *default*: the kernel cannot see whether the caller
+holds the result. The safe version already exists on the side that
+has the knowledge — the caller passes `outputArray` and gets it
+back. Permitted behind an explicit option; never the default.
 
-It is still the wrong place for the decision, and the reason is the same one
-that runs through this whole document: **the kernel cannot see the caller's
-lifetime.** It does not know whether the result is consumed before the next
-call or held. Return a reused buffer to someone who stashes it and the data
-changes underneath them, with no error and no wrong-looking output until much
-later.
+---
 
-`transformImages()` makes it concrete. Its documented pattern is an `onImage`
-callback that writes each result out as it completes — safe, because the
-callback consumes immediately. Anyone who instead pushes the buffer onto an
-array ends up with N references to one buffer holding the last image.
+## `KernelIdentity` at index 0
 
-**And the safe version already exists, on the side that has the knowledge.**
-The caller passes its own buffer and gets it back:
+**Built.** Identity has no ICC channel width, so it used to sit
+outside the registry as an `isIdentity` branch that bound
+`transformArrayFn` to a copy. `setKernel(0)` when the profile chain
+collapses. Transform still detects the collapse — that is a
+profile-chain fact — and hands over.
 
-```js
-var mine = new Uint8ClampedArray(px * outCh);
-t.transformArrayViaLUT(input, false, false, false, px, mine);   // returns mine
+`init()` builds the copy pipeline by calling back into Transform
+(`addStage`, the input/output device pipelines). Those are shared by
+every conversion and are not identity's to own. What belongs here is
+the **decision** that an identity transform gets a device-to-device
+copy between them.
+
+`arrayFn` is bound from `dataFormat` in `init()`:
+
+| `dataFormat` | what `arrayFn` does |
+|---|---|
+| `int8` / `int16` | typed-buffer memcpy; alpha stride |
+| `device` | element copy into a plain `Array`, fill-alpha `1` |
+| `object` / `objectFloat` | new `Array` of shallow-cloned colour objects |
+
+Object batches used to walk the pipeline (`lastUsedKernel ===
+'pipeline'`). They now report `'kernelIdentity'`. See
+[Identity.md](./Identity.md) §6.
+
+---
+
+## Coverage — what exists, per kernel
+
+Derived from each descriptor's `supports` and confirmed by probing a
+built Transform. `kernelInfo()` reports what a given Transform
+actually resolved to.
+
+The kernel is chosen by **input** width. **Output** width then picks
+the variant (or demotes). SIMD is channel-parallel on a CLUT corner
+and only covers `outputChannels ∈ {3, 4}`. Wider output falls to
+scalar WASM if an `intLut` exists, else float.
+
+### Numeric variants (input)
+
+| kernel | in | float | int8 JS | int8 WASM scalar | int8 WASM SIMD | int16 JS | int16 scalar | int16 SIMD |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `KernelIdentity` | 0 | copy | copy | — | — | copy | — | — |
+| `Kernel1D` grey | 1 | ✅ | ✅ | — | — | ✅ | — | — |
+| `Kernel2D` duotone | 2 | ✅ | ✅ | — | — | ✅ | — | — |
+| `Kernel3D` RGB/Lab | 3 | ✅ | ✅ ⁽ᵇ⁾ | ✅ | ✅ ⁽ᶜ⁾ | ✅ ⁽ᵇ⁾ | ✅ | ✅ ⁽ᶜ⁾ |
+| `Kernel4D` CMYK | 4 | ✅ | ✅ ⁽ᵇ⁾ | ✅ | ✅ ⁽ᶜ⁾ | ✅ ⁽ᵇ⁾ | ✅ | ✅ ⁽ᶜ⁾ |
+| `Kernel5D` 5CLR | 5 | ✅ | ✅ | ✅ | — | — | — | — |
+| `Kernel6D` Hexachrome | 6 | ✅ | ✅ | ✅ | — | — | — | — |
+| `KernelND` | 7–15 | ✅ | — | — | — | — | — | — |
+| **matrix-shaper** *(yielded by Kernel3D)* | 3 | — | ✅ ⁽ᵃ⁾ | ✅ | ✅ | ✅ ⁽ᵃ⁾ | ✅ | ✅ |
+
+⁽ᵃ⁾ JS is `matrixShaperJS.js` — same fused 3×3 and curves, no LUT, no
+WASM. ~62 / 57 MPx/s at int8 / int16, ≤ 1 LSB, against ~8 for the
+stage pipeline and ~329 / 220 for WASM. Coverage insurance, not a
+headline number.
+⁽ᵇ⁾ JS int only for **narrow** output (3 or 4). Wide output (5–15)
+has no `i_*_n` / `i16_*_n` and no `intLut` from `buildIntLut`.
+⁽ᶜ⁾ SIMD only when `outputChannels ∈ {3, 4}`.
+
+`matrixShaper.useVariant('simd' | 'scalar' | 'js' | null)` pins
+the choice so fallbacks are reachable on machines that have SIMD.
+
+### Input × output × format
+
+What actually runs after `create()`. “intLut” is the integer CLUT
+`buildIntLut` is willing to bake.
+
+| in → out | intLut? | float | int8 JS | int8 WASM s | int8 WASM SIMD | int16 JS | int16 WASM s | int16 SIMD |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 1 → any | grey table | ✅ | ✅ | — | — | ✅ | — | — |
+| 2 → any | duo table | ✅ | ✅ | — | — | ✅ | — | — |
+| 3 → 3/4 | yes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 3 → 5–15 (print *to* HiFi) | **no** | ✅ `fl_3_n` | — | — | — | — | — | — |
+| 4 → 3/4 | yes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 4 → 5–15 | **no** | ✅ `fl_4_n` | — | — | — | — | — | — |
+| 5 → any | yes (profile A2B density) | ✅ | ✅ | ✅ | — | — ⁽ᵈ⁾ | — | — |
+| 6 → any | yes (profile A2B density) | ✅ | ✅ | ✅ | — | — ⁽ᵈ⁾ | — | — |
+| 7–15 → any | **no** (`provideLut` false) | ✅ pipeline | — | — | — | — | — | — |
+
+⁽ᵈ⁾ `dataFormat: 'int16'` on 5/6 **works** — it lands on the float
+LUT (`outputScale` 65535). There is no int16 kernel. Not planned:
+another Q0.13 pair (`tetra5d_nch_int16` / `tetra6d_nch_int16`) plus
+JS oracles, for ~1.6× on a rare HiFi-16-bit *input*. Every binary
+ships. int8 WASM 5/6 (~4 KB each) is the product; int16 / SIMD 5/6
+are not.
+
+Print *to* 5–15 (Lab/RGB → 7CLR) is the 3 → 5–15 row: already a
+3-D bake, float `fl_3_n`. That is why 7–15 channels are cheap to
+support and why they are not a kernel project. See
+[NChannel.md](../NChannel.md).
+
+### What ships (WASM)
+
+On-demand instantiate (`src/wasm/instantiate.js`) — a matrix-shaper
+pair never loads tetrahedral bytes. Still, every `.wasm.js` is in
+the package:
+
+| family | modules | ≈ `.wasm.js` |
+|---|---|---|
+| tetra 3D int8 + int16, scalar + SIMD | 4 | 15 KB |
+| tetra 4D int8 + int16, scalar + SIMD | 4 | 17 KB |
+| tetra 5D / 6D int8 scalar only | 2 | 9 KB |
+| matrix-shaper int8 + int16, scalar + SIMD | 4 | 28 KB |
+
+A 5/6 int16 twin would add two more modules and a second ladder to
+test, for a format HiFi proofing almost never uses. That is the
+cost/benefit.
+
+### dataFormat
+
+| dataFormat | `transform(colour)` | `array()` | `transformImages` | LUT export (`toJSON`) | matrix-shaper |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `object` | ✅ | identity only (clone); colour *conversion* walks the pipeline | identity only | ✅ with `buildLut` | ✕ |
+| `objectFloat` | ✅ | same | same | ✅ with `buildLut` | ✕ |
+| `int8` | ✅ | ✅ | ✅ | ✅ with `buildLut` | ✅ |
+| `int16` | ✅ | ✅ | ✅ | ✅ with `buildLut` | ✅ |
+| `device` | ✅ | ✅ (identity copies to `Array`) | ✅ | ✅ with `buildLut` | ✕ ⁽ᵇ⁾ |
+
+⁽ᵇ⁾ Matrix-shaper tables are indexed by an integer code; `device`
+carries normalised floats.
+
+Colour *conversion* of objects still walks the pipeline
+(`lastUsedKernel === 'pipeline'`). Identity of objects is the kernel.
+
+### Features
+
+| feature | 1D | 2D | 3D | 4D | ND | matrix-shaper |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| alpha (skip / fill / preserve) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| multicore | ✅ | ✅ | ✅ | ✅ | ✅ ⁽¹⁾ | ✅ |
+| pixel cache — accuracy path (`pixelCache`, beta) | ✅ | ✅ | ✅ ⁽⁷⁾ | ✅ ⁽⁸⁾ | ✅ | n/a ⁽²⁾ |
+| pixel cache — in-kernel (1.6, beta, **off by default**) | ✕ ⁽³⁾ | ✕ ⁽³⁾ | **measured** ⁽⁵⁾ | planned ⁽⁶⁾ | ✕ | ✕ ⁽⁴⁾ |
+
+⁽¹⁾ Workers ship the profile chain, not an N-channel CLUT.
+⁽²⁾ Accuracy-path cache sits in the stage pipeline; matrix-shaper
+bypasses that pipeline on the array path.
+⁽³⁾ Enumerable — precompute.
+⁽⁴⁾ Probe dearer than the pixel.
+⁽⁵⁾ SIMD kernel, byte-identical paired exports: **3.07× solid,
+2.40× 5% logo, 2.57× 30% logo**, ~1× on photos/noise. Alpha is not
+in the key.
+⁽⁶⁾ Same five-anchor insertion; four input bytes. Worth measuring
+rather than assuming — a 4-D tetrahedral pixel is dearer, so
+break-even hit rate is *lower*. That is the direction the 3-D
+scoping was already wrong.
+⁽⁷⁾ `'auto'` (the default) is left alone — Transform injects nothing.
+A forced `1` / `N` still injects.
+⁽⁸⁾ Kernel4D / 5D / 6D `init()` promote `'auto'` to `1`. `pixelCacheUsed`
+is what ran. The LUT image path still uses the kernel.
+
+---
+
+## File layout
+
+```
+src/
+  Transform.js                 — pipeline, LUT orchestration, public API
+  interp.js                    — built-in float interpolators (policy is in the kernels)
+  lutKernelTable.js            — generic key format / plugin merge; not the 3-D/4-D owner
+  wasm/wasm_loader.js
+  kernels/
+    kernelUtils.js             — ensureOutputArray, bindArrayRuns, plugin resolve
+    wasmLifecycle.js
+    dispatchThreshold.js       — one source for the WASM break-even
+    gates.js
+    identity/KernelIdentity.js
+    1d/  Kernel1D.js, kernel1D_loops.js
+    2d/  Kernel2D.js, kernel2D_loops.js
+    3d/  Kernel3D.js, kernel3D_loops.js, kernel3D_table.js, tetra3d_*
+         matrixShaper/         — Kernel3D's other implementation, not registered
+    4d/  Kernel4D.js, kernel4D_loops.js, kernel4D_table.js, tetra4d_*
+    5d/  Kernel5D.js, kernel5D_loops.js, kernel5D_table.js, tetra5d_nch
+    6d/  Kernel6D.js, kernel6D_loops.js, kernel6D_table.js, tetra6d_nch
+    nd/  KernelND.js                   — 7–15 float only
 ```
 
-Same allocation saved, decided by the party that knows whether reuse is safe.
-A kernel that wants this should want its *caller* to do it.
+Loop files still must not grow module-scope dependencies: bodies use
+arguments, locals, and `this.*` only. Do not "clean up" the unrolled
+loops.
 
-So: permitted, occasionally right behind an explicit option the caller sets,
-never the default. It is the one case so far where the answer to "can a kernel
-do this?" is yes but you probably should not, rather than yes and Transform
-does not care.
+---
 
-### The built-ins should take them the same way
+## What stays in Transform, and why
 
-If the built-in kernels also receive helpers rather than requiring them, then
-**Transform builds them once and every kernel gets them from one site.** That is
-worth more than the symmetry: instrumentation, a recording resolver for a test,
-or an alternate threshold become a change at that one site instead of edits
-spread across however many modules did their own `require`.
+Each of these has a reason. A bullet without one is how the last
+boundary drifted.
 
-It also keeps the built-ins honest. A contract where the built-in kernels take a
-private path and third parties take a public one is a contract whose public path
-nobody exercises.
+- **Pipeline construction, optimisation and validation.** That is
+  what Transform is for.
+- **The policy options** — `interpolation3D`, `interpolation4D`,
+  `interpolationFast`, `useTrilinearFor3ChInput`. Public API. Passed
+  *into* kernels as hints; kernels must never read `transform.*` for
+  them.
+- **`lutMode` settling**, `_expectsU16`, `_isIntegerMode`. The
+  settled mode is public and fixes the output container type.
+  `create(lutMode)` returning the settled mode is the right shape.
+- **`transformArrayViaLUT()`** — public choke point (tests + user
+  code). Preamble plus `kernel.array(...)`. Throws `'No LUT loaded'`
+  when there is none; `lastUsedKernel` is left unchanged on that
+  throw.
+- **The WASM memory management API** —
+  `setWasmShrinkRatio`, `setWasmMaxMemory`, `compactWasmMemory`,
+  `releaseWasmMemory`, `wasmMemoryBytes`. Public policy; the states
+  being compacted live on the kernel. Forwarding accessors on
+  `Transform.prototype` keep ~210 existing WASM tests honest.
+- **The no-LUT dimension-generic pipeline walk.** Duplicating it in
+  fifteen kernels is copy-paste for no gain. Colour-object
+  *conversion* still uses it.
+- **Identity *detection*.** A fact about the profile chain. The
+  copy *implementation* is `kernels[0]`.
 
-**What stands in the way, concretely.** The per-kernel tables are module-level
-constants: `kernel3D_table.js` reads the gates and the threshold at *load* time,
-long before any `init()` exists to hand it anything. Taking helpers means the
-tables become factories —
+`lastUsedKernel` is the kernel `name`, or `'pipeline'` / `'cache'`.
+Null until the first batch.
 
-```js
-module.exports = function makeTable(helpers){ return { 'fl_3_3': { … } }; };
+---
+
+## Invariants that break silently
+
+**1. Stage names are the coupling surface.** `compile()` resolves
+emitters by `emit_js_<stageName>`. `optimisePipeline()` matches
+fusion against six literal names. `floatFor` must return the stage
+name alongside the function, and those names must stay byte-stable.
+Change one and fusion quietly stops; throughput drops; tests still
+pass.
+
+**2. Never precompute from the LUT in `floatFor`.** Two-phase table
+above.
+
+**3. Float family and array family must never share bodies.** Once
+both are members of one object, "these are both tetrahedral 3D, why
+two implementations?" is the obvious thought. It is a 2–3× trap.
+Belongs in the descriptor's own comments, not only here.
+
+**4. Mutating the pipeline requires re-optimise plus re-validate.**
+
+**5. `init` owns both surfaces or neither.** See [The red kernel](#the-red-kernel).
+
+**6. Compare float and array output through the same container.**
+`Uint8ClampedArray` rounds half-to-even; `Math.round` rounds
+half-up. A 1 LSB "failure" across those is not one.
+
+---
+
+## V8 notes that still apply
+
+Deep receipts: [benchmark.md](./benchmark.md) §§16–20,
+[JitInspection.md](./JitInspection.md). Short version:
+
+- The `kernel.array` call site sees at most **five shapes** (one
+  hidden class per dimensional family, plus identity). Polymorphic
+  at worst; V8's megamorphic cliff is >4. A real app uses 1–2.
+- `ensureOutputArray` / `bindArrayRuns` are module-level —
+  single-target, inlinable.
+- `Object.create(descriptor)` plus a fixed order of own-properties
+  is the instancing model. Do not add an occasional own-property in
+  one kernel's `init` and not the others.
+- Endgame for many live transforms is `Transform.compile()` /
+  `new Function` ([CompiledPipeline.md](./CompiledPipeline.md)).
+  `emitKernel(opts)` is reserved; not built.
+
+---
+
+## What this makes testable
+
+- Inject a probe at any dimension (`kernels[9] = probe`) without
+  touching a real conversion.
+- Assert single-colour and batch agree for a third-party kernel —
+  unprovable when only the batch path went through it.
+- Assert the hint contract (unknown method throws; `interpolationFast:
+  false` selects the reference).
+- Assert the phase boundary: bind a stage, run the optimiser, check
+  output still tracks rewritten `inputScale`.
+- Assert WASM loadout *per dimension*, not "both families present".
+- Assert `kernelInfo()` after an `init` yield.
+
+`__tests__/kernel_registry.tests.js` is the contract suite.
+`claimKernels`, `resolveRuns`, and `arrayFor` are asserted
+**undefined**.
+
+---
+
+## Journey that still teaches
+
+### Phase 2 — owning both surfaces *is* the B3 inlining
+
+Kernel1D and Kernel2D took `floatFor` and their array loops.
+`TODO (B3)` said the 1-D / 2-D array loops should be inlined like
+the 3-D ones. The contract said float and array must never share
+bodies. Those are the same statement: the loops shared a body
+*because* nobody owned the pair.
+
+Measured, 1M px, float lutMode, best of 5:
+
+| workflow | before | after |
+|---|---:|---:|
+| gray → RGB | 72.6 | **93.8** (+29%) |
+| gray → CMYK | 63.6 | **81.4** |
+| gray → 6CLR | 49.7 | **64.9** |
+| duotone → RGB | 50.7 | **61.5** |
+| duotone → CMYK | 44.7 | **51.3** |
+| duotone → 6CLR | 35.7 | **41.0** |
+
+Gray gained more because bilinear's arithmetic dwarfed the
+per-pixel allocation. Correctness: 159,744 values × 9 LUT shapes,
+same `Uint8ClampedArray` container. Isolated `solo` bench on
+untouched 3-D/4-D cells moved at most **+0.30%**.
+
+### Phase 3 — proving a pure refactor is pure
+
+`addStageLUT` went **133 lines → 34**. Risk was not a red test: a
+subtly different interpolator for a combination nobody hits
+directly. `HEAD` was extracted to a scratch tree and the same probe
+run against both — stage names **and** colour output, fifteen
+cases including every public interpolation override.
+**Byte-identical.** `git archive HEAD | tar -x -C <scratch>` is
+cheaper than a suite that cannot see a quiet number move.
+
+Throughput unchanged (create-time only): jsCE median **+0.21%**
+across 132 cells, `solo` worst **−0.61%**. Phase 2 gains held.
+
+### How to gate the next kernel change
+
+```bash
+node bench/reproduce.js
+node scripts/bench_compare.js          # newest run vs bench/baseline/<machine>/
 ```
 
-— built once per kernel at `init` and cached. That is a real restructure, not a
-rename, and it is why this is a future extension rather than part of phase 4.
+Pinned baseline, not previous run. jsCE columns gate; `lcmsWasm` /
+native are the noise-floor **control**; accuracy (`*MaxLsb`,
+`*MeanLsb`) gates at **zero**. Small batches (&lt; 256k px) are
+reported and never fail. Run one bench at a time. Gate `solo`, not
+the content matrix. Same lesson as
+[LcmsComparison.md](../LcmsComparison.md): quote the measurement
+that controls its conditions.
 
-**And there is a duplication to resolve first.** The break-even exists twice
-with different sourcing: `entry.minPx`, baked into the table at module load, and
-`kernel._threshold`, read at resolve time from
-`Transform.WASM_DISPATCH_MIN_PIXELS`. Both are 256 today so nothing is wrong —
-and the documented `= 0` profiling override still works, because `big` is
-resolved with an infinite pixel floor. But a kernel answering for its own
-break-even (phase 4e) would have to feed both, or the resolver would pick an
-entry the per-call compare then declines to use. One source, then helpers.
+v1.6 phases 1–8 (dense registry → `floatFor` 1/2 → `floatFor` N/3/4
+→ loops+WASM onto the kernel → `{big,small,threshold}` then
+withdrawn → `init` yield, no claim list → `provideLut` merge →
+per-dimension WASM → `array()` secrets + Identity at 0) all used
+this gate.
 
-**One ordering constraint.** `init()` runs during `create()`, on the instance,
-after the pipeline exists, so a kernel can stash the helpers there and use them
-for everything the image path needs. `floatFor()` cannot:
-it is called on the *descriptor* while the pipeline is still being built, before
-any `init`. That is fine — picking a single-colour function needs no dispatch
-machinery — but it means the helpers are for the image path only, and the
-contract should say so rather than let someone discover it.
+---
 
-## `KernelIdentity` at index 0 — identity stops being a special case
+## Still open — with enough context to continue
 
-**Built.** `Transform.kernels` ran 1 to 15 because those are the input widths
-ICC can express. Identity has no input width in that sense — it copies — so it
-used to sit outside the registry as an `isIdentity` branch:
+- **Does `createLut()`'s bake walk an optimised pipeline?** Affects
+  whether the bake can use a `floatFor` WASM variant safely, and
+  whether the two-phase table needs a third row for the temporary
+  pipeline.
+- **What hint authorises a lossy representation?** New option,
+  accuracy budget in `hints`, or a `lutMode` extension — not
+  `interpolationFast`.
+- **Per-channel TRCs vs WASM matrix-shaper.** JS carries three
+  curves; WASM carries one. Second entry in Kernel3D's list, or a
+  variant inside one entry? No profile in `testbed/profiles/rgb/`
+  actually trips it. Treat as coverage until a calibrated display
+  profile says otherwise.
+- **`emitKernel(opts)` — function or source?** `compile()` currently
+  sends CLUT stages to the runtime fallback. A kernel that owns its
+  float function is the natural emitter.
+- **A registration `parent` chain** so wrappers do not capture
+  `var base = Transform.kernels[3]` at load time. Not needed yet
+  (one wrapper, in a test). If built: pick *either* explicit
+  `parent` *or* `Object.getPrototypeOf` — two chains that usually
+  agree and sometimes do not is worse than either. Re-registering
+  the same object must not make it its own parent (infinite
+  `init` at create time).
+- **N-channel-input u16 LUT bake** only if a real workload needs
+  image-rate N-ch input. Hook is `KernelND.provideLut`;
+  `tetrahedralInterpND_NCh` already honours scales. Do not build it
+  for completeness.
+- **In-kernel pixel cache on 4-D.** Same insertion as 3-D; measure
+  it. Do not skip SIMD this time.
+- **`arrayAsync()` — only when a backend waits.** `array()` and
+  `kernel.array()` stay synchronous. If GPU or UI-slice yield ever
+  land, add a new Transform method that returns a Promise; the
+  JS/WASM path inside it may `Promise.resolve(this.array(...))` so
+  callers who opted in pay one tick and everyone else does not.
+  Do not mark `array()` `async` "to be ready". Workers are already
+  `transformImages()`. See the resolved row.
 
-```js
-if(this.isIdentity){
-    this.transformArrayFn = function(...){ return t._kernelCopy(...); };
-    return;
-}
-```
+### Future: helpers-as-factories
 
-That is the last dimension-shaped special case left in Transform, and it does
-not have to be one. **Register `KernelIdentity` at index 0** — its `array()`
-is the copy — call `setKernel(0)` when `isIdentity`, and the branch goes away
-along with the `isIdentity` check under it. Identity becomes a kernel selected
-the same way as every other kernel.
+If built-ins also receive helpers rather than requiring them,
+Transform builds them once and every kernel gets them from one
+site. Instrumentation or a recording resolver becomes one change.
+Blocked on the load-time tables becoming factories. The
+break-even already has one source (`dispatchThreshold.js`); do not
+reintroduce `entry.minPx` *and* `kernel._threshold` as two numbers
+that can disagree.
 
-Named for the role rather than the implementation, which is why not
-`KernelCopy`: copying is how it works, identity is what it is, and the rest of
-the registry is named the same way (`Kernel3D`, not `KernelTetrahedral`).
-
-It buys more than symmetry. It gets `init(pipeline, opts)` like the rest, so an identity transform could **rewrite its own pipeline** — an
-alpha-only pass, a copy with a stride change, a clamp — with none of it
-becoming Transform's business. And index 0 becomes a place to put a test
-kernel that counts identity conversions, which today there is nowhere to hook.
-
-`registerKernel` now accepts 0 as a lower bound (`MAX_KERNEL_DIMENSIONS` was
-always a ceiling, not a floor), and `Transform.inputDimension` carries the
-distinction that made the whole thing possible: **input dimension is not input
-channel count.** See [Identity.md](./Identity.md) §6 for the as-built detail.
-
-## Future: a registration chain, so wrappers do not have to capture
-
-`init()` yielding to another kernel turns out to be the composition primitive.
-A wrapper checks its own condition and either takes the transform or hands back
-what it wrapped:
-
-```js
-init: function(pipeline, opts){
-    if(!opts.kernelOptions || !opts.kernelOptions.sepia){
-        return base.init.call(this, pipeline, opts);   // yield to the original
-    }
-    return { pipeline: pipeline, kernel: mySepiaKernel, meta: {...} };
-}
-```
-
-The awkward part is `base`. Today a wrapper has to capture the previous
-occupant itself — `var base = Transform.kernels[3]` at load time — and that is
-fragile: two wrappers loading in the wrong order, or one capturing after the
-other has already replaced the slot, and the chain is wrong in a way nothing
-reports.
-
-**Registration could do it.** `registerKernel` knows what it is displacing, so
-it could set `descriptor.parent` to the previous occupant, `null` at the base.
-Three kernels registered in turn would form a chain, each yielding to its
-parent until the original answers.
-
-```js
-init: function(pipeline, opts){
-    if(!thisIsForMe(opts)) return this.parent.init.call(this, pipeline, opts);
-    …
-}
-```
-
-Two things to get right if this is built:
-
-- **There is already a chain.** `Object.create(Transform.kernels[3])` — the
-  documented wrapping idiom — makes the previous occupant the *prototype*, so
-  `Object.getPrototypeOf(this)` is the parent for anything built that way. An
-  explicit `parent` is more reliable, because it does not depend on how the
-  descriptor was constructed, but two chains that usually agree and sometimes
-  do not is worse than either alone. Pick one and say so.
-- **Re-registering the same object must not make it its own parent.** A cycle
-  here is an infinite `init` recursion at create() time, which is a bad way to
-  find out.
-
-Worth having. Not needed yet, because the one wrapper that exists is in a test
-and captures explicitly.
+---
 
 <a id="the-n-channel-oracle"></a>
 
 ## The N-channel oracle
 
-Every kernel above 4 channels, and every one below 3, could only ever be
-checked **against itself**. `accuracy.js` compares jsColorEngine to Little CMS
-for RGB and CMYK because those are the profiles this repo can legally ship, and
-there was nothing to hand lcms for anything else.
+Every kernel above 4 channels, and every one below 3, could only
+ever be checked **against itself**. `accuracy.js` compares to Little
+CMS for RGB and CMYK because those are the profiles this repo can
+legally ship.
 
-That is not a small gap. A suite that only agrees with itself is precisely how
-a dropped clamp survived in **four** interpolators at once: the reference suite
-ran every specialised variant against `_Master`, at the one input scale where
-the bug was invisible, and the block that used the revealing scale only ever
-ran the variant that was already correct.
+That is not a small gap. A suite that only agrees with itself is
+how a dropped clamp survived in **four** interpolators at once: the
+reference suite ran every specialised variant against `_Master`, at
+the one input scale where the bug was invisible, and the block that
+used the revealing scale only ever ran the variant that was already
+correct.
 
 ### The way out is to write profiles, not find them
 
-Real ICC profiles are licensed. **A profile the engine wrote is not** — it is
-ours, so it can go in git, and both engines can be pointed at the same file.
+Real ICC profiles are licensed. **A profile the engine wrote is
+not.** `src/encodeICC.js`, `Profile.toICC()` /
+`Profile.createGrayICC()`, `scripts/make_test_profiles.js` →
+`__tests__/profiles/`. Ordinary ICC files. The second CMS is the
+point; unit tests only prove the writer is self-consistent.
 
-- `src/encodeICC.js` — the writer, the mirror of `decodeICC.js`
-- `Profile.toICC()` / `Profile.createGrayICC()`
-- `scripts/make_test_profiles.js` — writes them to `__tests__/profiles/` **once**,
-  deterministically. They are ordinary ICC files: open them in an inspector.
-- `bench/lcms-comparison/accuracy_gray.js` — hands them to lcms and compares
+**Built and passing for gray.** Four profiles (γ1.0, γ1.8, γ2.2,
+256-entry sampled TRC): gray → sRGB, all 256 steps, **100% within
+1 LSB**, γ1.8 exact. First independent check Kernel1D has ever had.
 
-**Built and passing for gray.** Four profiles (γ1.0, γ1.8, γ2.2, and a
-256-entry sampled TRC, which is a different code path in every reader),
-gray → sRGB across all 256 input steps: **100% within 1 LSB**, γ1.8 exact.
-That is the first independent check `Kernel1D` has ever had.
-
-### What the unit tests cannot prove
-
-`__tests__/encodeICC.tests.js` proves the bytes are well-formed and that our
-decoder reads back what our encoder wrote — including a byte-identical
-decode→encode round trip. **A writer can be self-consistently wrong.** Only the
-second CMS closes that, which is why the lcms comparison is the point and the
-unit tests are the scaffolding.
-
-### Scope for the rest
-
-The remaining piece is `mft2`/`mAB` encoding, which is what 2CLR through 15CLR
-need. The two directions have very different cost, and the plan splits on it:
+The remaining piece is `mft2` / `mAB` encoding (2CLR–15CLR):
 
 | | grid | cells | to |
 |---|---|---|---|
-| **PCS → Device** (`B2A`) | 3-D input, N-channel output | 33³ × 15 = 538 K | **15 channels** |
-| **Device → PCS** (`A2B`) | N-D input, 3 output | `points^N × 3` | **10 channels** |
+| **PCS → Device** (`B2A`) | 3-D in, N out | 33³ × 15 = 538 K | **15 channels** (Kernel3D) |
+| **Device → PCS** (`A2B`) | N-D in, 3 out | `points^N × 3` | **10 channels** honest |
 
-`B2A` is cheap at any width: the grid stays 3-D and only the output stride
-grows. `A2B` is where `points^N` bites, and the grid has to shrink as
-dimensions rise:
-
-| dims | points | cells × 3 |
-|---|---|---|
-| 4 | 33 | 3.5 M |
-| 6 | 9 | 1.6 M |
-| 8 | 5 | 1.2 M |
-| 10 | 4 | 3.1 M |
-| 12 | 3 | 1.6 M |
-| 15 | 3 | **43 M** — no |
-| 15 | 2 | 98 K — legal, and too coarse to mean anything |
-
-**Ten channels is the honest ceiling for the device→PCS direction.** A 15-D
-A2B is only encodable at 2 points per axis, which is a table with no interior:
-it would exercise the plumbing and tell you nothing about the interpolation.
-Real 15-channel profiles are almost always PCS→Device for the same reason.
-That is why the table above stops A2B at 10 and takes B2A all the way.
-
-## Open questions
-
-- **Does `createLut()`'s bake walk an optimised pipeline?** It affects whether
-  the bake can use a `floatFor` WASM variant safely, and whether the two-phase
-  rule needs a third row for the temporary pipeline.
-- **What hint authorises a lossy representation?** A new option, an accuracy
-  budget passed in `hints`, or an extension of the `lutMode` family — but not
-  `interpolationFast`. See the representation section above.
-- ~~**Should `floatFor` be allowed to return `null`?**~~ **Answered by phase 3:
-  no.** A stage has no fallback to fall through to, and the kernels that had a
-  real choice to make (3D, 4D) all resolve to something or throw. Returning
-  `null` would mean a pipeline with a hole in it, discovered at transform time
-  rather than build time. `floatFor` returns a binding or raises.
-- **Per-channel TRCs and the sub-registry.** Matrix-shaper's JS variant exists
-  partly to carry three curves where WASM carries one. Whether that is a second
-  entry in Kernel3D's list or a variant inside one entry is a v1.6 question.
-- **Does `emitKernel(opts)` want `floatFor`'s function or its source?**
-  `compile()` currently sends CLUT stages to the runtime fallback. A kernel that
-  owns its float function is the natural place to emit one.
+A 15-D A2B is only encodable at 2 points/axis: a table with no
+interior. Real 15-channel profiles are almost always PCS→Device
+for the same reason. Journey and the two routes that measured the
+wrong thing: [SyntheticProfiles.md](./SyntheticProfiles.md).

@@ -1,22 +1,24 @@
 # Pixel cache — design notes
 
-> **Status (2026-08-17).** The **pipeline path is implemented and
-> instrumented** — `src/cache.js`, opt-in via `pixelCache`, covered by
-> `__tests__/pixelcache.tests.js`. What it is *worth* is still unknown:
-> no hit-rate corpus has been run, and no throughput claim should be
-> made from it. The **kernel path remains design-only.** Every
-> performance number below is either an estimate (labelled as such) or
-> a measurement of *LittleCMS*, not of us. Do not quote any of it.
-> See "As built" at the end for what shipped and what it taught us.
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
+
+> **Status (2026-08-23).** Both caches ship in 1.6. The **accuracy-path**
+> cache is `src/cache.js` (`pixelCacheUsed`). The **in-kernel WASM**
+> cache is `interp_*_cached` inside the shipped tetra `*.wasm.js`
+> files — `create()` binds it when `pixelCache !== 0` (including
+> `'auto'`). `kernelInfo().cache` is `1` when that export ran.
+> Hash-table variants stay in the POC builder only. Two-register
+> double is still a TODO. Historical notes below are labelled.
 
 ## What this is
 
 LittleCMS memoises the last pixel inside `cmsDoTransform` (unless
 `cmsFLAGS_NOCACHE`): if the incoming pixel is byte-identical to the
 previous one, it copies the previous output and skips the
-interpolation entirely. jsColorEngine's kernels have no such cache —
-they are **content-neutral**, converting noise and flat colour at the
-same rate.
+interpolation entirely. jsColorEngine's **accuracy path** used to be content-neutral in the
+same way. WASM 3/4/5/6 kernels now carry a LittleCMS-style last-pixel
+compare on the image path (`interp_*_cached`). JS fallbacks and the
+matrix-shaper do not.
 
 That difference is measured and written up in
 [LcmsComparison.md](../LcmsComparison.md) (noise / gradient / solid
@@ -25,9 +27,14 @@ on noise, roughly 2–3× on gradients, ~5× on solid fills, and every
 workflow converges on the same cache-hit ceiling — the cost of compare
 plus copy with no interpolation at all.
 
-**So this is a content-class feature, not a throughput feature.** It
-must be opt-in, and it must never quietly change the numbers we
-publish.
+**So this is a content-class feature, not a throughput feature.**
+Kernel3D still leaves the *pipeline* hint at `'auto'` (no accuracy-path
+inject on RGB). The image path now binds the in-kernel export on
+`'auto'`: a clean photograph is a ~10 % boost; a photograph with
+5 % noise added is the worst case (~4 %); solids up to 3.94×.
+4/5/6 also
+keep their accuracy-path inject for `transform()`. `pixelCache: 0`
+restores the uncached kernel.
 
 Which content classes actually win is not what we assumed going in — the
 design notes come first here, then
@@ -263,15 +270,19 @@ Catches solid fills and flat regions. Two live values, no memory
 traffic, no allocation. This is the lcms behaviour and the baseline
 every other option has to beat.
 
-### 2. Two-entry rotating memo — for dither
+### 2. Two-register double — last two pixels (TODO, never built)
 
-Ordered dithering is the pathological case for (1): it alternates over
-a short horizontal period, so the branch mispredicts on nearly every
-pixel while never hitting. But the pattern is **periodic, not
-random** — an ABAB alternation is caught exactly by keeping the last
-*two* entries and comparing against both. Four live values, still no
-memory traffic. A 4-pixel period would need eight, which almost
-certainly spills.
+Not a 2-slot hash table. Same shape as (1): two `u32` (or two pairs of
+i32 locals), two compares instead of one, still no memory. ABAB
+dither and a 2-colour logo would hit; ABCABC would not.
+
+**Never written, never timed.** The paired-export benches jumped from
+single-entry to an 8+ slot **array** in linear memory. That is a
+different product (hash, store traffic on every miss). Do not read
+those table numbers as a verdict on this variant. Future work: one
+inject snippet (`_cached_double`) next to `_cached`, same anchors,
+same two-export rule — if it does not beat single on logo/dither
+without paying more than ~1% on photo, drop it.
 
 ### 3. Small direct-mapped table — 32 or 64 slots
 
@@ -504,6 +515,11 @@ byte-identical:
 | photographs | 0.93–0.96× |
 | noise | 0.99× |
 
+Scalar hits keep a `$prevOutPtr` to the last colour write — copying
+from `outputPos - cMax` would pick up the previous pixel's alpha
+byte. SIMD already holds colour in `$prevOut`, so it did not need
+that.
+
 **Alpha is not in the key, and must not be.** `tetra3d` reads three bytes,
 advances `inputPos` by three, and handles alpha in a tail; the cache brackets
 only the colour work, so the tail runs on a hit as well as a miss. A solid RGB
@@ -535,10 +551,11 @@ content this whole feature is not for.
   tie, as it must be, since there is no cache code in it to pay for. Enabling
   the cache is swapping a function reference; the signature is identical.
 
-POC: `bench/pixel_cache_wasm/` — `hitrate.js`, `build_paired.js`,
-`run_paired.js`. Scheduled for **1.6, beta, off by default**: 4–7% on
-photographs is a real cost, and the caller is the only one who knows whether
-their work is flat.
+`scripts/compile_kernel_wat.js` injects the single-entry twin
+(`interp_*` + `interp_*_cached`) into every tetra `*.wasm.js`.
+`create()` swaps the function reference when `pixelCache !== 0`.
+POC benches and table variants stay in `bench/pixel_cache_wasm/`.
+Two-register double: [§ TODO](#2-two-register-double--last-two-pixels-todo-never-built).
 
 ## Codegen — specialised interpolators via `new Function()`
 
@@ -1186,15 +1203,16 @@ whether real workloads clear break-even.
 ## As built (2026-08-17)
 
 `src/cache.js`, attached to `Transform.prototype` like `stages.js` and
-`interp.js`. Opt in with `pixelCache: 0 | 1 | 16 | 32` (0 = off, the
-default; 1 = single entry; anything else rounds down to a power of
-two). Read counters with `getPixelCacheStats()` →
+`interp.js`. The 2026-08-17 default was `0`. That changed — see
+[As built 2026-08-22](#as-built-2026-08-22--auto-and-who-decides).
+Read counters with `getPixelCacheStats()` →
 `{enabled, slots, hits, misses, lookups, hitRate}`; also
 `resetPixelCacheStats()` and `clearPixelCache()`.
 
-Two stages are injected after `optimisePipeline()` and before the
-pipeline-validity check. The walk in `transform()` gained a third arm
-(`if pipelineDebug … else if cache … else …`) that reads `stage.step`.
+Two stages are injected **after** `init()` (`_applyPixelCache`), so the
+kernel can promote `'auto'` to `1`. The walk in `transform()` gained a
+third arm (`if pipelineDebug … else if cache … else …`) that reads
+`stage.step`.
 
 **Three things building it changed about the design notes:**
 
@@ -1210,9 +1228,9 @@ pipeline-validity check. The walk in `transform()` gained a third arm
    `_buildValidationInput()` at build time and taking the first
    position holding a numeric array of the right length — the same
    technique `validatePipeline()` already uses. The store position uses
-   a marker to the **first output-conversion stage**, which survives
-   optimisation because no optimiser pattern matches
-   `stage_device_to_*`.
+   a marker to the **first output-conversion stage**. LUT +
+   `stage_device_to_int` is a legal fusion — if the marker is gone,
+   inject stores at the end of the pipeline and the hit path copies.
 
 2. **A fixed quantiser in the hash is a bug, not a detail.** The first
    hash used `(value * 65536) | 0`, assuming device floats in 0..1.
@@ -1243,8 +1261,8 @@ pipeline-validity check. The walk in `transform()` gained a third arm
 **Declines rather than misbehaves** when it cannot guarantee
 correctness: `pipelineDebug` on (a jump would fabricate a history that
 never ran), custom stages present (a hit would skip their side
-effects), no numeric-array position before the output conversion, or
-the output marker lost to the optimiser.
+effects), or no numeric-array position before the store. A fused
+output conversion no longer declines — store goes at the end.
 
 ## N-channel input is a different regime
 
@@ -1253,10 +1271,13 @@ profiles that existed. With the synthetic set (see
 [SyntheticProfiles.md](./SyntheticProfiles.md)) the wide inputs can be measured
 too, and the answer is not a scaled-up version of the RGB one.
 
-`KernelND` declines the LUT — an A2B bake is `grid^n` cells — so every pixel
-walks the pipeline at ~0.8 MPx/s rather than tens. **A miss therefore costs
-roughly fifty times what it costs in RGB**, and the whole economic argument
-moves with it.
+`KernelND` (7–15) declines the LUT — an A2B bake is `grid^n` cells — so
+every pixel walks the pipeline at ~0.8 MPx/s rather than tens. **A miss
+therefore costs roughly fifty times what it costs in RGB**, and the
+whole economic argument moves with it. 5/6 now bake and run int8 WASM;
+in-kernel inject (paired exports) is
+`__tests__/pixel_cache_wasm_5d_6d.tests.js`. The accuracy-path table
+still applies when `buildLut` is off or the kernel is KernelND.
 
 Reproduce with:
 
@@ -1330,9 +1351,11 @@ All three produced convincing numbers before being caught, and the first
 version of this section was published with the third one in it.
 
 **`pixelCache: true` is ONE slot.** It resolves to `1`, not "on with a sensible
-default" — a single-entry cache, which is a real mode and not the one intended
-here. Pass a count: `pixelCache: 4096`. Reading a 13% hit rate on content with
-eight distinct colours is the symptom, because a single entry hits 1-in-8.
+table" — and `'auto'` (when a kernel promotes it) is also `1`. That is
+deliberate for unknown content; see [Why auto is 1](#why-auto-is-1-not-a-2-table).
+Pass a count when you know the work is a palette: `pixelCache: 4096`.
+Reading a 13% hit rate on content with eight distinct colours is the
+symptom, because a single entry hits 1-in-8.
 
 **An LCG's low byte has a short period.** Generating "noise" as `s & 0xff`
 produces content that repeats far more than random, which flatters the cache
@@ -1359,14 +1382,112 @@ says *why* the width matters instead of asserting that it does.
 `__tests__/pixelcache.tests.js` covers 35 input×output width combinations from
 1 to 15 channels, both depths, asserting cached output is byte-identical to
 uncached — plus that the cache genuinely engages at those widths rather than
-quietly declining, and that where it *does* decline (an identity pair, where
-the optimiser replaces the output boundary it needs) the conversion is still
-correct.
+quietly declining, and that where it *does* decline (an identity pair) the
+conversion is still correct. Also: `'auto'` — 4/5/6 promote to 1 and inject;
+3CLR leaves it; `array()` still names the kernel.
+
+## As built (2026-08-22) — auto, and who decides
+
+Transform does not look at `inputChannels`. The kernel that won `init()`
+does.
+
+| hint | what Transform does | what the kernel may do |
+|---|---|---|
+| `'auto'` (default) | ignore | 4/5/6 change it to `1`; 3D / 1D / 2D / identity / ND / matrix-shaper leave it |
+| `0` / `false` | off | leave it |
+| `1` / `true` | single-entry | leave it (3D also keeps tetra — will not yield the shaper) |
+| `16`, `32`, `256`… | that many slots (power of two) | leave it |
+
+After `init()`, `_applyPixelCache()` injects only if the value is then a
+number > 0. `pixelCacheUsed` is what landed (`0` if inject declined).
+`kernelInfo().cache` is `'not-supported' | 'off' | 1 | N`.
+
+`opts.pixelCache` and `opts.pixelCacheActive` (forced number, not auto)
+are named facts on `_kernelOpts()`. A kernel that throws from `init()`
+is ignored; auto stays auto.
+
+### Why `array()` still uses the kernel
+
+The accuracy-path cache is two pipeline stages. `transform()` walks
+them. `array()` on a bound LUT kernel (`enableForArrays`) does **not**
+— it calls `kernel.array()`, which is the WASM / JS int path. Auto on
+4/5/6 therefore memos single colours and does not steal the image
+path. That is why `mpx_summary` LUT cells stay on `kernel3D` /
+`kernel4D`.
+
+If there is no kernel batch path (no LUT, not claimed, objects),
+`array()` uses `_transformArrayCached` when the stages are in.
+
+### Why auto is 1, not a 2+ table
+
+Two products got measured. They disagree about tables.
+
+**In-kernel WASM** (paired exports, `run_paired_*.js`) — single-entry
+vs a 2 / 8 / 16 / 32 / 256-slot table, same bits out:
+
+| path | photo+5% noise tax, single | photo+5% noise tax, table | solid, single |
+|---|---:|---:|---:|
+| 3D SIMD int8 | 2% | 7–9% | 3.1× |
+| 4D SIMD int8 | 3% | 10% | 5.2× |
+| 4D scalar int8 | 1% | 7% | 6.6× |
+| 5D scalar | 16% | worse | 13× |
+| 6D scalar | 1% | ~1% | 39× |
+
+int16 is the same policy (slightly smaller solid win, same photo
+band). A table is **slower than single on flats** and a **worse miss
+tax** on photo/noise. It would only win on a small palette of
+*non-adjacent* repeats — you cannot see that from `inputChannels`.
+So the in-kernel product is still `1`. Table snippets stay in the
+POC builder; they are not in the shipped `*.wasm.js`.
+
+**TODO — two-register double, not a 2-slot array.** We never
+injected “last two keys, last two outputs” as two locals. That is
+still just (1) with a second compare. An array starts at the first
+hashed slot in memory; whether 2 or 4096, it is a different tax.
+Build the double only if dither/ABAB is a real workload; do not
+infer it from the table arms.
+
+**Accuracy path** — table size is almost free (4096 no slower than
+32) and a keyed table *does* catch interleaved palettes that a
+single entry misses (A,B,C,A,B,C… is 0 hits on one slot, 27 on 32).
+That is why `pixelCache: 256` is still the right explicit choice
+when you know the work is a poster.
+
+Auto does not know the work. It picks **last-pixel**, which is what
+unknown content actually is: solids, logos, and runs. A 2+ table
+needs a size, and the size that is free to *have* is not free to
+*guess* — `true` resolving to `1` already surprised people who
+thought it meant "on with a sensible table". Auto meaning 256 would
+quietly put a 256-slot walk on every 4CLR `transform()` and still
+lose on a solid to the one-slot form.
+
+So: **auto → 1.** Want 2+? Pass the count.
+
+### 5D photographs
+
+The one number that is not "1–3% for a 4–6× solid win" is 5D
+photo with 5 % noise added at **0.84×** on the in-kernel
+single-entry export. Auto
+still turns 5D on: 5CLR input is almost never a grainy photograph.
+Leave `pixelCache: 0` if that `array()` cell matters.
+
+## As built (2026-08-23) — in-kernel export in `create()`
+
+One hint, two implementations:
+
+| path | who | `'auto'` | `0` | report |
+|---|---|---|---|---|
+| `transform()` | `src/cache.js` stages | 4/5/6 inject 1; 3D leaves | off | `pixelCacheUsed` |
+| `array()` WASM 3–6 | `interp_*_cached` | bind cached export | verbatim export | `kernelInfo().cache === 1` |
+
+Matrix-shaper / identity / 1D / 2D / ND / JS fallback: `'not-supported'`
+or `'off'`. No second option name — the kernel that can bind does;
+the one that cannot declines. Hash tables are not shipped.
 
 ## Open questions
 
-- Does the accuracy-path hypothesis hold? (Cheapest, highest-value
-  test.)
+- ~~Does the accuracy-path hypothesis hold?~~ Yes above 4 input
+  channels, and on flats at 3/4. Photographs on 3D still do not.
 - Does the run-scan restructure actually beat the memo, or does V8
   handle the spill better than expected?
 - Is dithered continuous-tone input a real workload? Normally you
@@ -1375,3 +1496,5 @@ correct.
   their justification and (1) is the whole story.
 - Interaction with `preserveAlpha` and the identity `_kernelCopy`
   path — both already skip work; confirm no double-counting.
+- **Two-register double** — last two `u32` keys, two compares, no
+  array. Never built. See [option 2](#2-two-register-double--last-two-pixels-todo-never-built).

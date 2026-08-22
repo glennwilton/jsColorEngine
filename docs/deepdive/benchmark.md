@@ -4,6 +4,8 @@
 **Date:** 2026-05-11
 **Purpose:** Design and specification for a universal, trustworthy benchmark framework
 
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
+
 ---
 
 ## 1. The Problem
@@ -708,7 +710,7 @@ For accurate performance numbers that match real-world production:
 
 ### 16.10 What this means for the docs
 
-The `docs/Performance.md` headline numbers ("Over 210 MPx/s on x86_64")
+The `docs/deepdive/Performance.md` headline numbers ("Over 210 MPx/s on x86_64")
 were correct all along. The 175 MPx/s figures from the older browser bench
 are real, but they're already 15% under the true kernel speed because of
 how the old bench's `samples/bench/main.js` is laid out. To reproduce the
@@ -1177,7 +1179,9 @@ in its own code, with no help from the framework.
 ## 20. Schrödinger's Bench bites back — the failed reproduction
 
 **Status:** Field notes, 2026-05-12
-**Demo:** [`samples/the-good-the-bad-and-the-ugly.html`](../../samples/the-good-the-bad-and-the-ugly.html)
+**Demo (archived):** [`docs/deepdive/good-bad-ugly/`](./good-bad-ugly/index.html)
+— hidden from samples. Input is the old 256-colour LCG; do not quote
+MPx/s against the photo with 5 % noise added headline bench.
 
 After documenting Schrödinger's Bench (§19) we tried to build a small,
 runnable, side-by-side demo that would show the 100 / 175 / 200 MPx/s
@@ -1261,10 +1265,13 @@ This is the inverted lesson:
 > implementations through one shared dispatcher over many invocations.
 
 The framework at `samples/benchmark/bench.html` remains the canonical
-reproduction. The standalone demo at
-`samples/the-good-the-bad-and-the-ugly.html` is now framed as the
-failed experiment that demonstrates the inverse: in realistic code,
-V8 is harder to fool than the bench-harness pathology suggests.
+reproduction. The standalone demo now lives at
+[`docs/deepdive/good-bad-ugly/`](./good-bad-ugly/index.html) (archived,
+off the samples index) as the failed experiment that demonstrates the
+inverse: in realistic code, V8 is harder to fool than the bench-harness
+pathology suggests. Its pixels are the old 256-colour LCG — L1-flattering
+— so the MPx/s on that page are not the photo with 5 % noise added
+headline numbers.
 
 ### 20.5 When a large app *might* still hit this
 
@@ -1503,10 +1510,15 @@ should never be the headline row.
 
 ### The knee is much earlier than intuition suggests
 
-If ordering is what costs, how much disorder does it take? The `noisy:N`
-generator blends a photograph toward the noise buffer — `noisy:0` is
-byte-identical to `photo`, `noisy:100` to `noise` — so locality can be
-swept continuously with everything else held constant.
+If ordering is what costs, how much disorder does it take? The `photo-N`
+generator blends a photograph toward the noise buffer — `photo` is
+byte-identical to 0 %, `noise` to 100 % — so locality can be
+swept continuously with everything else held constant. The browser bench
+and `mpx_summary` default to **photo with 5 % noise added** (on the
+plateau, shy of
+heavy grain). The
+**Speed vs Noise** tab on `samples/bench/` remakes this sweep live
+(solid / photo / noise × jsCE / lcms / lcms `NOCACHE`).
 
 ![Throughput as a photograph is blended toward noise](./images/noise-locality-rgb-lab.svg)
 

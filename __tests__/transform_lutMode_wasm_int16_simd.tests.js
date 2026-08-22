@@ -139,10 +139,8 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
         expect(t.wasmTetra3DInt16Simd).not.toBeNull();
         expect(t.wasmTetra3DInt16Simd.isSimd).toBe(true);
 
-        // Scalar u16 fallthrough — loaded for cMax ∉ {3, 4} cases the
-        // SIMD kernel can't service.
-        expect(t.wasmTetra3DInt16).not.toBeNull();
-        expect(t.wasmTetra3DInt16.isSimd).toBe(false);
+        // Scalar u16 fallthrough is on demand (cMax ∉ {3, 4}). RGB→RGB is 3.
+        expect(t.wasmTetra3DInt16).toBeNull();
         // PHASE 7: a kernel loads only its own dimension's modules, so the
         // other family is null rather than loaded-and-never-fired. That is a
         // stronger guarantee than a dispatch counter staying flat -- there is
@@ -177,6 +175,7 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -214,6 +213,7 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -243,15 +243,15 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
 
         expect(simdT.lutMode).toBe('int16-wasm-simd');
         const beforeSimd   = simdT.wasmTetra3DInt16Simd.dispatchCount;
-        const beforeScalar = simdT.wasmTetra3DInt16.dispatchCount;
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel3D');
 
-        // Neither SIMD u16 nor scalar u16 WASM advances — below threshold
-        // the dispatcher routes directly to JS u16.
+        // Below threshold the dispatcher routes to JS u16. Scalar was never
+        // loaded for this narrow RGB pair.
         expect(simdT.wasmTetra3DInt16Simd.dispatchCount).toBe(beforeSimd);
-        expect(simdT.wasmTetra3DInt16.dispatchCount).toBe(beforeScalar);
+        expect(simdT.wasmTetra3DInt16).toBeNull();
 
         const d = maxAbsDiff(oJs, oSimd);
         expect(d.max).toBe(0);
@@ -287,6 +287,7 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
 
         const oJs   = jsT.transformArray(input, false, false, false);
         const oSimd = simdT.transformArray(input, false, false, false);
+        expect(simdT.lastUsedKernel).toBe('kernel4D');
 
         // 4D SIMD u16 WAS invoked for CMYK input...
         expect(simdT.wasmTetra4DInt16Simd.dispatchCount).toBe(before4D + 1);
@@ -346,18 +347,14 @@ describeIfSimd('lutMode=int16-wasm-simd — v1.3 WASM SIMD u16 dispatcher', () =
         const t2 = new Transform({dataFormat: 'int16', buildLut: true, lutMode: 'int16-wasm-simd', wasmCache: cache});
         t2.create('*srgb', '*adobergb', eIntent.relative);
 
-        // Both SIMD u16 module keys (3D + 4D) are cached when
-        // lutMode=int16-wasm-simd; scalar u16 keys are also cached
-        // for the fallthrough path.
+        // SIMD u16 3-D Module is cached. Scalar fallthrough is on demand
+        // (cMax ∉ {3, 4}); RGB→RGB never instantiates it. 4-D stays unloaded.
         const simd3DKey   = '__jsColorEngine_tetra3d_simd_int16_module__';
         const simd4DKey   = '__jsColorEngine_tetra4d_simd_int16_module__';
         const scalar3DKey = '__jsColorEngine_tetra3d_nch_int16_module__';
         const scalar4DKey = '__jsColorEngine_tetra4d_nch_int16_module__';
         expect(cache[simd3DKey]).toBeInstanceOf(WebAssembly.Module);
-        expect(cache[scalar3DKey]).toBeInstanceOf(WebAssembly.Module);
-        // PHASE 7: these are RGB transforms, so the 4-D modules are never
-        // compiled and never reach the shared cache. A CMYK transform sharing
-        // this cache would put them there.
+        expect(cache[scalar3DKey]).toBeUndefined();
         expect(cache[simd4DKey]).toBeUndefined();
         expect(cache[scalar4DKey]).toBeUndefined();
 

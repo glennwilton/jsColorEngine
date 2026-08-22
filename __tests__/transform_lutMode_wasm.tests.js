@@ -199,6 +199,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1); // exactly one WASM dispatch for this transformArray
 
@@ -233,6 +234,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         expectDispatched(1);
 
@@ -269,6 +271,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel3D');
 
         // Counter MUST NOT have advanced — this is how we prove the
         // threshold gate actually fired. If the counter went up, the
@@ -438,7 +441,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
     // This used to be a `test.failing` tripwire while the 4D WASM
     // kernel was missing. It flipped to a real test when
     // src/wasm/tetra4d_nch.wat + src/wasm/wasm_loader.js::createTetra4DState
-    // landed — see docs/Performance.md §1b "4D scalar — measured".
+    // landed — see docs/deepdive/Performance.md §1b "4D scalar — measured".
     //
     // The interesting invariant: 4D dispatch goes through
     // `wasmTetra4D`, not `wasmTetra3D`. Both states coexist on the
@@ -472,6 +475,7 @@ describeIfWasm('lutMode=int-wasm-scalar — v1.2 WASM dispatcher', () => {
 
         const oInt  = intT.transformArray(input, false, false, false);
         const oWasm = wasmT.transformArray(input, false, false, false);
+        expect(wasmT.lastUsedKernel).toBe('kernel4D');
 
         // 4D kernel fired exactly once.
         expect(wasmT.wasmTetra4D.dispatchCount).toBe(before4D + 1);

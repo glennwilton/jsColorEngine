@@ -20,7 +20,8 @@ samples/
 │   └── styles.css               dark theme used by all demo pages
 │
 ├── bench/                     interactive browser benchmark (jsCE vs lcms)
-├── browser/                   UMD bundle (jsColorEngineWeb.js)
+│   └── images/                  copied photos for content + pool demo
+├── browser/                   UMD + worker (`npm run browser` copies both here)
 ├── images/                    preview images for LUT TIFF builder
 ├── lcms-wasm-dist/            vendored lcms-wasm (used by vs-lcms + LUT demos)
 ├── plugins/                   sample engine plugins
@@ -39,6 +40,27 @@ samples/
 ├── serve.js                   static dev server (node samples/serve.js)
 └── LICENSE                    MIT (sample code only; engine is MPL-2.0)
 ```
+
+## Calling the engine
+
+`transform.array()` is the batch entry. Native units; the container
+matches `dataFormat` (`Uint8ClampedArray` for `int8`, `Uint16Array`
+for `int16`, a plain `Array` for `device`, an array of colour objects
+for `object` / `objectFloat`). `transformArray()` is the same call
+plus an optional `outputFormat` via `Transform.reformat`.
+
+After either, `transform.lastUsedKernel` is the kernel `name`, or
+`'pipeline'` / `'cache'`. Identity (same file twice) is
+`'kernelIdentity'` in every format, including objects.
+
+`transformArrayViaLUT()` is the same work with a throw if there is no
+table. Use it when a missing LUT must be a hard error rather than a
+silent (and slower) walk — video loops that reuse an output buffer
+are the usual case.
+
+See [docs/Transform.md](../docs/Transform.md) and the usage guide at
+the top of `src/Transform.js`. Plugins: [docs/Plugin.md](../docs/Plugin.md),
+demo at `samples/plugins/identity-plugin.js`.
 
 ## License
 

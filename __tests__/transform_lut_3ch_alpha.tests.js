@@ -43,6 +43,7 @@ describe('tetrahedralInterp3DArray_3Ch_loop preserveAlpha (multi-pixel)', () => 
         ]);
 
         const out = proof.transformArray(input, true, true, true);
+        expect(proof.lastUsedKernel).toBe('kernel3D');
 
         expect(out).toBeInstanceOf(Uint8ClampedArray);
         expect(out.length).toBe(16); // 4 px * (3 RGB + 1 alpha)
@@ -68,6 +69,7 @@ describe('tetrahedralInterp3DArray_3Ch_loop preserveAlpha (multi-pixel)', () => 
         ]);
 
         const out = t.transformArray(input, true, true, true);
+        expect(t.lastUsedKernel).toBe('kernel3D');
 
         expect(out.length).toBe(12);
         expect(out[3]).toBe(64);
@@ -91,6 +93,7 @@ describe('tetrahedralInterp3DArray_3Ch_loop preserveAlpha (multi-pixel)', () => 
         ]);
 
         const out = t.transformArray(input, false, true, false);
+        expect(t.lastUsedKernel).toBe('kernel3D');
 
         expect(out.length).toBe(12);
         expect(out[3]).toBe(255);

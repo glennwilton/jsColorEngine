@@ -178,11 +178,13 @@ describe('plugin isolation: builder proves data reaches kernel', () => {
 
     test('output is FIXED_VALUE (200) for every channel regardless of input', () => {
         const output = transform.transformArray(RGB_INPUT);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         expect(allChannelsEqual(output, FIXED_VALUE, 3, RGB_PIXELS)).toBe(true);
     });
 
     test('output does not match input (builder rewrote the CLUT)', () => {
         const output = transform.transformArray(RGB_INPUT);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         // Input has values like 100, 150, 200 — output should be all 200, not those values
         let inputEchoed = true;
         for (let i = 0; i < RGB_INPUT.length; i++) {
@@ -209,6 +211,7 @@ describe('plugin isolation: kernel proves it receives and transforms input', () 
 
     test('output[i] === 255 − input[i] for every channel', () => {
         const output = transform.transformArray(RGB_INPUT);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         for (let i = 0; i < RGB_INPUT.length; i++) {
             expect(output[i]).toBe(255 - RGB_INPUT[i]);
         }
@@ -219,6 +222,7 @@ describe('plugin isolation: kernel proves it receives and transforms input', () 
         const b = new Uint8ClampedArray([40, 50, 60]);
         const outA = transform.transformArray(a);
         const outB = transform.transformArray(b);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         expect(Array.from(outA)).toEqual([245, 235, 225]);
         expect(Array.from(outB)).toEqual([215, 205, 195]);
     });
@@ -241,6 +245,7 @@ describe('plugin isolation: both builder and kernel work together', () => {
 
     test('output is INVERTED_VALUE (213 = 255 − 42) for every channel', () => {
         const output = transform.transformArray(RGB_INPUT);
+        expect(transform.lastUsedKernel).toBe('kernel3D');
         expect(allChannelsEqual(output, INVERTED_VALUE, 3, RGB_PIXELS)).toBe(true);
     });
 

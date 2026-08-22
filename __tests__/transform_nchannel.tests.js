@@ -152,6 +152,7 @@ describe('NChannel — buildLut behaviour', () => {
 
         // white, black — 2 pixels RGB in, 14 bytes out
         const out = t.transformArray(new Uint8ClampedArray([255, 255, 255, 0, 0, 0]), false, false);
+        expect(t.lastUsedKernel).toBe('kernel3D');
         expect(out.length).toBe(14);
         // white pixel → no ink
         for(let c = 0; c < 7; c++){

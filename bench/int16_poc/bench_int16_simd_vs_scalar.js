@@ -17,7 +17,7 @@
  *
  * Workflows match bench_engine_int16.js (3D RGB→Lab/CMYK + 4D CMYK→Lab/CMYK)
  * so the numbers compose with the v1.3 scalar bench numbers in
- * docs/Performance.md.
+ * docs/deepdive/Performance.md.
  *
  * Run:  cd bench/int16_poc && npm install && npm run bench:simd
  */

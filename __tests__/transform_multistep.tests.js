@@ -25,6 +25,7 @@ test('multi Stage - sRGB->relative->CMYK->relative->adobeRGB ', async () => {
     ];
 
     let output = rgb2CMYK2rgb.transformArray(input);
+    expect(rgb2CMYK2rgb.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -60,6 +61,7 @@ test('multi Stage - sRGB->perceptual->CMYK->relative->adobeRGB ', async () => {
     ];
 
     let output = rgb2CMYK2rgb.transformArray(input);
+    expect(rgb2CMYK2rgb.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is

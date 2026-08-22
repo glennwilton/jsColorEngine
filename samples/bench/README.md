@@ -4,13 +4,15 @@ A fully self-contained, zero-upload, in-browser benchmark for
 jsColorEngine. Runs every `lutMode` against the real `lcms-wasm`
 library directly in your browser. Clone the repo, start a static
 server, open <http://localhost:8080/samples/bench/>, and you've reproduced the numbers
-in [`../../docs/Performance.md`](../../docs/Performance.md) on your
+in [`../../docs/deepdive/Performance.md`](../../docs/deepdive/Performance.md) on your
 own hardware.
 
-**For the full user-facing guide — methodology, all five tabs,
+**For the full user-facing guide — methodology, tabs,
 how to submit your results — see
 [`docs/Bench.md`](../../docs/Bench.md).** This file covers the
-source layout only.
+source layout only. The `samples/` tree is portable: every asset URL is
+relative to this folder. `npm run browser` copies the engine and worker
+bundles into `samples/browser/`.
 
 ## Quickstart
 
@@ -31,19 +33,23 @@ Then open <http://localhost:8080/samples/bench/>. Stop with `Ctrl+C`.
 
 | File             | Purpose                                                                                                          |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `index.html`     | Page chrome, five tabs, controls, results tables, and the in-page "About this bench" methodology essay           |
+| `index.html`     | Page chrome, seven tabs, controls, results tables, and the in-page "About this bench" methodology essay          |
 | `styles.css`     | All styling. Dark slate + lime accent. No framework, no build step                                               |
 | `main.js`        | Bench orchestrator (ES module) — detection, Transform builds, timing, result rendering, markdown export          |
+| `content.js`     | Input generators — solid / photo / `photo-N` / `solid-N` / noise / legacy (lockstep with `bench/lib/benchContent.cjs`) |
+| `images/`        | Copied photographs (strawberries, illustration, beach). Originals stay in `bench/release_matrix/images/`         |
 | `lcms-runner.js` | Thin `lcms-wasm` wrapper (dynamic ESM import, pinned heap buffers, probe for SIMD opcodes in the shipped `.wasm`) |
 | `serve.js`       | Zero-dep Node static HTTP server. Sets `.wasm` / `.icc` MIME types and CORS / COOP / COEP headers                |
 
-## The five tabs
+## The seven tabs
 
 1. **Full comparison** — every direction × every mode, headline MPx/s table + summary cards
 2. **Accuracy sweep** — Lab → device → Lab round-trip, ΔE76 stats, jsColorEngine only
 3. **JIT warmup curve** — per-iter ms plotted across N iters, shows Ignition → Sparkplug → TurboFan tier-up
 4. **Pixel-count sweep** — same direction × mode swept from 4 K to 4 M pixels, exposes L1 / L2 / L3 transitions
-5. **About this bench** — in-page methodology essay (duplicate of the content in `docs/Bench.md`)
+5. **Pool demo** — three photographs at different sizes through `transformImages()` (Web Worker backend)
+6. **Speed vs Noise** — why we add grain: a pinch of noise stabilises MPx/s (solid flies; pure noise is worst case)
+7. **About this bench** — in-page methodology essay (duplicate of the content in `docs/Bench.md`)
 
 Full description of each tab, the modes compared, the methodology,
 and the submission template live in

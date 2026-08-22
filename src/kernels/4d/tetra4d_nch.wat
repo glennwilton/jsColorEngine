@@ -147,12 +147,14 @@
         (local $u20         i32)   ;; Q16.4 intermediate
         (local $k0_u20      i32)   ;; K0-plane u20 loaded from scratch (K1 pass)
         (local $u8          i32)
+        ;;Inject:localsAfter
 
         ;; -- Init ----------------------------------------------------------
         local.get $inputPtr
         local.set $inputPos
         local.get $outputPtr
         local.set $outputPos
+        ;;Inject:initAfter
 
         ;; -- Main per-pixel loop ------------------------------------------
         (block $pixel_exit
@@ -192,6 +194,7 @@
                 i32.const 4
                 i32.add
                 local.set $inputPos
+                ;;Inject:probeAfter
 
                 ;; pk, px, py, pz = input * gps   (Q8.16 grid coordinates)
                 local.get $inputK local.get $gps i32.mul local.set $pk
@@ -1077,6 +1080,7 @@
                         ;; Fall through to $k_exit.
                         br $k_exit))
 
+                ;;Inject:storeBefore
                 ;; -- Alpha tail (mirrors tetra3d_nch.wat exactly) ---------
                 (if (i32.eq (local.get $outAlphaMode) (i32.const 2))
                     (then

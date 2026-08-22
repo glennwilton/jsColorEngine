@@ -112,6 +112,8 @@ describe('matrix-shaper kernel — accuracy against the pipeline it replaces', (
             const ref = reference(a, b);
             const expected = ref.transformArray(img.data, false, false, false, img.pixelCount);
             const got = fast.transformArray(img.data, false, false, false, img.pixelCount);
+            expect(ref.lastUsedKernel).toBe('pipeline');
+            expect(fast.lastUsedKernel).toBe('matrix-shaper');
 
             expect(got.length).toBe(expected.length);
             const r = compare(got, expected);
@@ -127,6 +129,8 @@ describe('matrix-shaper kernel — accuracy against the pipeline it replaces', (
         const fast = accelerated('*sRGB', '*AdobeRGB');
         const px = new Uint8ClampedArray([10, 20, 30, 200, 100, 50]);
         fast.transformArray(px, false, false, false, 2);
+        expect(fast.lastUsedKernel).toBe('matrix-shaper');
+        expect(fast.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(fast)).toBe(true);
         expect(typeof fast.kernel.array).toBe('function');
     });
@@ -194,6 +198,7 @@ describe('matrix-shaper kernel — it must not change anything else', () => {
         const expected = ref.transformArray(px, true, true, true, 400);
         expect(Array.from(got)).toEqual(Array.from(expected));
 
+        expect(fast.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(fast)).toBe(true);
     });
 
@@ -219,6 +224,7 @@ describe('matrix-shaper kernel — it must not change anything else', () => {
     test('rebuilding a Transform drops the kernel with the pipeline', () => {
         const t = accelerated('*sRGB', '*AdobeRGB');
         t.transformArray(new Uint8ClampedArray(30), false, false, false, 10);
+        expect(t.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(t)).toBe(true);
 
         t.clear();
@@ -289,6 +295,7 @@ describe('wasmMatrixShaper mode — auto / prefer / off', () => {
         const px = new Uint8ClampedArray(300);
         for(let i = 0; i < px.length; i++) px[i] = (i * 41) & 255;
         t.transformArray(px, false, false, false, 100);
+        expect(t.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(t)).toBe(true);
     });
 
@@ -451,7 +458,8 @@ describe('matrix-shaper kernel — int16', () => {
         test(`${a} -> ${b}: within 1 LSB of 65535 over ${img.pixelCount} colours`, () => {
             const fast = accelerated16(a, b);
             const got = fast.transformArray(img.data, false, false, false, img.pixelCount);
-            expect(kernelRan(fast)).toBe(true);
+            expect(fast.lastUsedKernel).toBe('matrix-shaper');
+        expect(kernelRan(fast)).toBe(true);
             expect(fast.kernelInfo().bits).toBe(16);
 
             const expected = reference16(a, b)
@@ -465,6 +473,7 @@ describe('matrix-shaper kernel — int16', () => {
         const t = accelerated16('*sRGB', '*AdobeRGB');
         const out = t.transformArray(new Uint16Array([1000, 2000, 3000]), false, false, false, 1);
         expect(out instanceof Uint16Array).toBe(true);
+        expect(t.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(t)).toBe(true);
     });
 
@@ -475,6 +484,7 @@ describe('matrix-shaper kernel — int16', () => {
         const out = new Uint16Array(300);
         const got = t.transformArray(px, false, false, false, 100, undefined, out);
         expect(got).toBe(out);
+        expect(t.lastUsedKernel).toBe('matrix-shaper');
         expect(kernelRan(t)).toBe(true);
     });
 
@@ -527,7 +537,8 @@ describe('matrix-shaper kernel — the scalar build', () => {
         withVariant('scalar', () => {
             const t = accelerated('*sRGB', '*AdobeRGB');
             t.transformArray(new Uint8ClampedArray([1, 2, 3]), false, false, false, 1);
-            expect(kernelRan(t)).toBe(true);
+            expect(t.lastUsedKernel).toBe('matrix-shaper');
+        expect(kernelRan(t)).toBe(true);
             expect(t.kernelInfo().variant).toBe('8-scalar');
             expect(t.kernelInfo().simd).toBe(false);
         });
@@ -672,7 +683,8 @@ describe('matrix-shaper kernel — alpha', () => {
             const exp  = reference('*prophoto', '*sRGB')
                              .transformArray(src, inA, outA, preserve, N);
 
-            expect(kernelRan(fast)).toBe(true);                // not a silent fallback
+            expect(fast.lastUsedKernel).toBe('matrix-shaper');
+        expect(kernelRan(fast)).toBe(true);                // not a silent fallback
             expect(got.length).toBe(N * outCh);
 
             // Colour channels only — alpha is checked separately below, because

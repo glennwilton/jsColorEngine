@@ -32,6 +32,7 @@ describe('lutInputHook / lutOutputHook constructor options', () => {
         var xf = createXf();
         var inp = makeRGB(4);
         var out = xf.transformArray(inp, false, false, false, 4);
+        expect(xf.lastUsedKernel).toBe('kernel3D');
         expect(out).toBeInstanceOf(Uint8ClampedArray);
         expect(out.length).toBe(12);
     });
@@ -48,6 +49,8 @@ describe('lutInputHook / lutOutputHook constructor options', () => {
         var inp = makeRGB(64);
         var plain  = xfPlain.transformArray(inp, false, false, false, 64);
         var hooked = xfHooked.transformArray(inp.slice(), false, false, false, 64);
+        expect(xfPlain.lastUsedKernel).toBe('kernel3D');
+        expect(xfHooked.lastUsedKernel).toBe('kernel3D');
 
         var anyDiff = false;
         for (var i = 0; i < plain.length; i += 3) {
@@ -66,6 +69,7 @@ describe('lutInputHook / lutOutputHook constructor options', () => {
 
         var inp = makeRGB(8);
         var out = xfHooked.transformArray(inp, false, false, false, 8);
+        expect(xfHooked.lastUsedKernel).toBe('kernel3D');
 
         var firstPixel = [out[0], out[1], out[2]];
         for (var i = 3; i < out.length; i += 3) {
@@ -106,6 +110,7 @@ describe('addLutInputHook / addLutOutputHook', () => {
 
         var inp = new Uint8ClampedArray([255, 0, 0, 0, 255, 0, 0, 0, 255]);
         var out = xf.transformArray(inp, false, false, false, 3);
+        expect(xf.lastUsedKernel).toBe('kernel3D');
         expect(out[0]).toBe(0);
         expect(out[3]).toBe(0);
         expect(out[6]).toBe(0);
@@ -187,6 +192,7 @@ describe('composability', () => {
 
         var inp = new Uint8ClampedArray([255, 128, 64]);
         var out = xf.transformArray(inp, false, false, false, 1);
+        expect(xf.lastUsedKernel).toBe('kernel3D');
         expect(out[0]).toBe(Math.round(0.5 * 255));
     });
 

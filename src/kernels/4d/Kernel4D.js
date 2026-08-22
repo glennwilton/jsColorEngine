@@ -14,6 +14,7 @@
 var kernelUtils = require('../kernelUtils.js');
 var table = require('./kernel4D_table.js');
 var wasmLifecycle = require('../wasmLifecycle.js');
+var wasmLoader = require('../../wasm/wasm_loader.js');
 var interp = require('../../interp.js');
 
 module.exports = {
@@ -92,7 +93,12 @@ module.exports = {
      * land on and the order it degrades in.
      */
     init: function(pipeline, opts){
-        kernelUtils.bindArrayRuns(this);
+        // Yield is a 3-D idea. Bind waits for create(), after WASM is loaded.
+        // 'auto' → single-entry accuracy-path cache; a number is already a
+        // decision. Transform injects after this return — see _applyPixelCache.
+        var slots = kernelUtils.autoPixelCacheSlots(opts);
+        if(slots === undefined) return;
+        return { pixelCache: slots };
     },
 
     /**
@@ -101,7 +107,7 @@ module.exports = {
      * Walked by wasmLifecycle.settleWasmStates() at create() time. `load` is
      * the module whose failure demotes lutMode to `demoteTo`; `alsoLoad` is
      * best-effort, covering the output widths the SIMD kernel does not (it
-     * handles 4 and 4 output channels; wider needs the scalar module), and its
+     * handles 3 and 4 output channels; wider needs the scalar module), and its
      * absence demotes nothing -- resolve() below simply picks a lower rung.
      *
      * NOTHING FROM THE OTHER DIMENSION IS HERE. Before v1.6 every create()
@@ -109,23 +115,23 @@ module.exports = {
      * a wasmTetra3D* slot, so those compiles were pure cost.
      */
     wasmLadder: {
-        'int-wasm-simd':     { load: 'createTetra4DSimdState',      slot: 'wasmTetra4DSimd',
-                               alsoLoad: 'createTetra4DState',      alsoSlot: 'wasmTetra4D',
+        'int-wasm-simd':     { load: wasmLoader.createTetra4DSimdState,      slot: 'wasmTetra4DSimd',
+                               alsoLoad: wasmLoader.createTetra4DState,      alsoSlot: 'wasmTetra4D',
                                demoteTo: 'int-wasm-scalar' },
-        'int-wasm-scalar':   { load: 'createTetra4DState',          slot: 'wasmTetra4D',
+        'int-wasm-scalar':   { load: wasmLoader.createTetra4DState,          slot: 'wasmTetra4D',
                                demoteTo: 'int' },
-        'int16-wasm-simd':   { load: 'createTetra4DInt16SimdState', slot: 'wasmTetra4DInt16Simd',
-                               alsoLoad: 'createTetra4DInt16State', alsoSlot: 'wasmTetra4DInt16',
+        'int16-wasm-simd':   { load: wasmLoader.createTetra4DInt16SimdState, slot: 'wasmTetra4DInt16Simd',
+                               alsoLoad: wasmLoader.createTetra4DInt16State, alsoSlot: 'wasmTetra4DInt16',
                                demoteTo: 'int16-wasm-scalar' },
-        'int16-wasm-scalar': { load: 'createTetra4DInt16State',     slot: 'wasmTetra4DInt16',
+        'int16-wasm-scalar': { load: wasmLoader.createTetra4DInt16State,     slot: 'wasmTetra4DInt16',
                                demoteTo: 'int16' },
     },
 
     create: function(lutMode){
-        // Load the WASM kernels (3D + 4D families — see wasmLifecycle.js for
-        // why both) and demote lutMode if the host can't run the request.
         this._variant = null;
-        return wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
+        var settled = wasmLifecycle.settleWasmStates(this.transform, this, this.wasmLadder);
+        kernelUtils.bindArrayRuns(this);
+        return settled;
     },
 
     /**

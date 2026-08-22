@@ -148,6 +148,7 @@ describe('transformArrayViaLUT accepts valid outputArray', () => {
         expect(() => {
             t.transformArrayViaLUT(input, false, false, false, undefined, out);
         }).not.toThrow();
+        expect(t.lastUsedKernel).toBe('kernel3D');
     });
 
     test('int8 mode — oversized Uint8ClampedArray is fine', () => {
@@ -157,6 +158,7 @@ describe('transformArrayViaLUT accepts valid outputArray', () => {
         expect(() => {
             t.transformArrayViaLUT(input, false, false, false, undefined, out);
         }).not.toThrow();
+        expect(t.lastUsedKernel).toBe('kernel3D');
     });
 
     test('int16 mode — Uint16Array of correct size', () => {
@@ -167,6 +169,7 @@ describe('transformArrayViaLUT accepts valid outputArray', () => {
         expect(() => {
             t.transformArrayViaLUT(input, false, false, false, undefined, out);
         }).not.toThrow();
+        expect(t.lastUsedKernel).toBe('kernel3D');
     });
 });
 
@@ -192,6 +195,7 @@ describe('transformArrayViaLUT: CMYK output — guards still work', () => {
         expect(() => {
             t.transformArrayViaLUT(input, false, false, false, undefined, out);
         }).not.toThrow();
+        expect(t.lastUsedKernel).toBe('kernel3D');
     });
 });
 
@@ -373,4 +377,40 @@ test('a LUT attached out of band gets a kernel, rather than the input back', () 
     const t = new Transform({ dataFormat: 'int8' });
     t.lut = lut; t.inputChannels = inCh; t.outputChannels = outCh;
     expect(Array.from(t.transformArrayViaLUT(px, false, false, false, 2))).toEqual(explicit);
+    expect(t.lastUsedKernel).toBe('kernel2D');
+});
+
+describe('lastUsedKernel records the route array() took', () => {
+    test('LUT RGB → kernel3D; ViaLUT throws leave it unchanged', () => {
+        const t = createTransform();
+        expect(t.lastUsedKernel).toBe(null);
+        t.array(makeRGBInput(4), false, false);
+        expect(t.lastUsedKernel).toBe('kernel3D');
+
+        const loud = new Transform({ dataFormat: 'int8' });
+        expect(() => loud.transformArrayViaLUT(makeRGBInput(1), false, false))
+            .toThrow('No LUT loaded');
+        expect(loud.lastUsedKernel).toBe(null);
+    });
+
+    test('same-file identity → kernelIdentity', () => {
+        const t = new Transform({ dataFormat: 'int8' });
+        t.create('*srgb', '*srgb', eIntent.relative);
+        t.array(makeRGBInput(4), false, false);
+        expect(t.lastUsedKernel).toBe('kernelIdentity');
+    });
+
+    test('no LUT, not claimed → pipeline', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false });
+        t.create('*srgb', cmykProfile, eIntent.relative);
+        t.array(makeRGBInput(4), false, false);
+        expect(t.lastUsedKernel).toBe('pipeline');
+    });
+
+    test('pixelCache → cache', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false, pixelCache: 1 });
+        t.create('*srgb', cmykProfile, eIntent.relative);
+        t.array(makeRGBInput(4), false, false);
+        expect(t.lastUsedKernel).toBe('cache');
+    });
 });

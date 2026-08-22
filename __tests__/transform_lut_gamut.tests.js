@@ -191,6 +191,8 @@ test('color mode — visible through int8 transformArrayViaLUT', async () => {
 
     let outGamut  = tGamut.transformArrayViaLUT(input);
     let outNormal = tNormal.transformArrayViaLUT(input);
+    expect(tGamut.lastUsedKernel).toBe('kernel3D');
+    expect(tNormal.lastUsedKernel).toBe('kernel3D');
 
     // Mid-grey (pixel 1, offset 4–7) identical
     expect(Math.abs(outGamut[4] - outNormal[4])).toBeLessThanOrEqual(1);
@@ -262,6 +264,7 @@ test('map mode — int8 sRGB→CMYK heatmap, saturated blue > mid-grey', async (
     ];
 
     let out = tMap.transformArrayViaLUT(input);
+    expect(tMap.lastUsedKernel).toBe('kernel3D');
     expect(out).toBeInstanceOf(Uint8ClampedArray);
     expect(out.length).toBe(8);
 

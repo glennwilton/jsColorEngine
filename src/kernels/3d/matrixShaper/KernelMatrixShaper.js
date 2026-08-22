@@ -71,7 +71,7 @@ module.exports = {
      */
     info: function(){
         var out = { name: 'matrix-shaper', dimensions: 3, claimed: true,
-                    built: !!this._impl };
+                    built: !!this._impl, cache: 'not-supported' };
         if(this._impl){
             out.variant = this._impl.variant;
             out.bits    = this._impl.bits;

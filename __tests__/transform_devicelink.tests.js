@@ -149,6 +149,7 @@ describe('DeviceLink — Transform integration', () => {
 
         // 400% ink pixel + clean cyan pixel
         const out = t.transformArray(new Uint8ClampedArray([255, 255, 255, 255, 255, 0, 0, 0]), false, false);
+        expect(t.lastUsedKernel).toBe('kernel4D');
         expect(out.length).toBe(8);
         expect(out[3]).toBe(255);                                  // K preserved
         for(let c = 0; c < 3; c++) expect(Math.abs(out[c] - 255 / 6)).toBeLessThanOrEqual(2);

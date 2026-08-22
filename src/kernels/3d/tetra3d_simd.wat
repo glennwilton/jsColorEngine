@@ -120,11 +120,13 @@
     (local $vU16         v128)
     (local $vU8          v128)
     (local $vOut         v128)
+    ;;Inject:localsAfter
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     (local.set $outputStride (local.get $cMax))
+    ;;Inject:initAfter
 
     ;; --- Per-pixel loop -------------------------------------------------------
     (block $pixel_exit
@@ -137,6 +139,7 @@
         (local.set $input1 (i32.load8_u offset=1   (local.get $inputPos)))
         (local.set $input2 (i32.load8_u offset=2   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 3)))
+        ;;Inject:probeAfter
 
         (local.set $px (i32.mul (local.get $input0) (local.get $gps)))
         (local.set $py (i32.mul (local.get $input1) (local.get $gps)))
@@ -477,6 +480,7 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
+        ;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_nch.wat) --------------------
         ;; Outer guard collapses the no-alpha hot path (inAlphaSkip==0,
         ;; outAlphaMode==0) to a single i32.or test per pixel — V8's

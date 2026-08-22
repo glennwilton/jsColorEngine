@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -18,6 +18,8 @@
 [Compiled pipeline](./CompiledPipeline.md)
 
 ---
+
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 The performance story of `lutMode: 'int'` rests on three assumptions about V8:
 
@@ -236,7 +238,7 @@ we actually want.</small>
   1.6× ARM lift carries through pure-JS `int`, `int-wasm-scalar`,
   and even the no-LUT f64 pipeline — the signature of a *global*
   register-pressure win, not a SIMD-specific one. Full numbers in
-  [Performance § 2.6](../Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
+  [Performance § 2.6](./Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed).
 - **WASM scalar on x86-64** wins here too, and perhaps more than we
   initially credited. WASM's linear memory is a single base pointer with
   no aliasing constraints, so the WASM compiler can pin the
@@ -265,13 +267,13 @@ we actually want.</small>
   allocator stops spilling the K0 / K1 intermediates on the 4D
   paths. Algebraic identity, so bit-exact-by-design (subject to
   the same Q0.16 / u20 rounding contract). The
-  [Apr 2026 M4 measurement](../Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
+  [Apr 2026 M4 measurement](./Performance.md#26-arm64--apple-silicon--the-register-pressure-prediction-landed)
   shows the 4D paths gain ~65 % on ARM64 vs ~25 % on 3D — i.e.
   most of the remaining x86 cost on 4D **is** spill traffic, which
   is what this reorder would target. **Parked deliberately**:
   real-world image-path performance is already excellent
   (~210 MPx/s on x86_64 SIMD, ~270 MPx/s on M4 SIMD — see
-  [Performance § 1](../Performance.md#1-where-we-are--current-numbers)),
+  [Performance § 1](./Performance.md#1-where-we-are--current-numbers)),
   and re-shaping a hot expression for a speculative single-platform
   win against a known-good baseline isn't worth the regression
   surface today. Worth keeping on file for a future "V8 regressed
@@ -676,5 +678,5 @@ might affect us.
   dissected here
 - [Architecture](./Architecture.md) — the pipeline / LUT / kernel stack
   these hot lines sit inside
-- [Performance](../Performance.md) — measured MPx/s and direction-by-
+- [Performance](./Performance.md) — measured MPx/s and direction-by-
   direction throughput

@@ -1756,6 +1756,10 @@ class Profile {
      * stride) is for.
      */
     static gridFor(channels) {
+        // Fixture budget, not an industry recommendation. Real 5/6/7 A2B
+        // tables are typically 9 / 7-9 / 5 pts/axis; 2-pt at 11+ is ours.
+        // See docs/deepdive/SyntheticProfiles.md#what-real-profiles-actually-use
+        //
         // Chosen so every file lands under ~700 KB -- these are committed, and
         // a 6 MB fixture is its own problem. grid^channels grows fast enough
         // that one step of grid is the difference between 354 KB and 6.3 MB at

@@ -1,7 +1,8 @@
 # Sample apps
 
 The `samples/` directory holds runnable HTML demos of `jsColorEngine` plus
-the small helper module they all share.
+the small helper module they all share. Directory map and license:
+[`samples/README.md`](../samples/README.md).
 
 > **Live demos:** <https://www.o2creative.co.nz/jscolorengine/samples/>
 >
@@ -10,6 +11,20 @@ the small helper module they all share.
 > **License:** the engine in `src/` is **MPL-2.0**; everything in `samples/`
 > is **MIT** (see [`samples/LICENSE`](../samples/LICENSE)). Copy the
 > samples freely.
+
+## Calling the engine
+
+Demos use `transform.array()` (or `transformArray()`). That is the
+batch entry — native units, container matches `dataFormat`. After the
+call, `transform.lastUsedKernel` is the kernel `name`, or
+`'pipeline'` / `'cache'`.
+
+`transformArrayViaLUT()` is the same work with a throw if there is no
+table. The live-video demo uses it so a missing LUT cannot silently
+walk the pipeline on every frame.
+
+See [Transform.md](./Transform.md) and the usage guide at the top of
+`src/Transform.js`.
 
 ## Helper
 
@@ -27,18 +42,23 @@ and the explicit list of what's deliberately missing.
 
 | File | Status | Demonstrates |
 |---|---|---|
-| [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame decoded and run through a full ICC sRGB → CMYK → sRGB pipeline via a pre-built 3D CLUT — in real time. JavaScript + WASM SIMD on a single thread; **no WebGL, no GPU, no workers**. 40+ fps on 720p — the same kernel that would run headless on a Node.js print-queue server. |
-| [`softproof.html`](../samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + render the C / M / Y / K plates as tinted previews. Floating colour picker with Lab, sRGB, CMYK, Delta E 2000 and Delta E 76. Shows `toProof`, `toSeparation`, `renderChannelAs`, `pixel()`, intent + BPC controls. |
-| [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm comparison. Same image, same profile, same pipeline — pixel-by-pixel diff visualisation with logarithmic gain slider (up to 128×), signed RGB mode, CMYK + RGB accuracy stats, speed ratio. |
-| [`index.html`](../samples/index.html) | Ready | Project landing page (overview; links to samples and bench). |
-| [`samples.html`](../samples/samples.html) | Ready | Sample hub with demo index, local run instructions, and `ICCImage` links. |
+| [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame through a pre-built 3D CLUT via `transformArrayViaLUT` — JavaScript + WASM SIMD, one thread. |
+| [`softproof.html`](../samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + C / M / Y / K plates. Colour picker with Lab, sRGB, CMYK, ΔE. |
+| [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm. Pixel-by-pixel diff, signed RGB, accuracy stats, speed ratio. |
+| [`colour-calculator.html`](../samples/colour-calculator.html) | Ready | ICC-aware Lab / XYZ / RGB / CMYK converter on the accuracy path. |
+| [`lut-cmyk-to-rgb.html`](../samples/lut-cmyk-to-rgb.html) | Ready | CMYK → RGB via a pre-baked portable LUT. |
+| [`lut-tiff-builder.html`](../samples/lut-tiff-builder.html) | Ready | Generate / import LUT TIFFs ([LutBuilder](../samples/LutBuilder/lutbuilder.md)). |
+| [`index.html`](../samples/index.html) | Ready | Project landing page. |
+| [`samples.html`](../samples/samples.html) | Ready | Sample hub. |
 
-### Planned demos (from [Roadmap §v1.4](./Roadmap.md))
+### Plugins
 
-| Demo | Will show |
-|---|---|
-| `colour-calculator.html` | Per-pixel `pixel(x, y)` — Lab + sRGB + device readout via the no-LUT accuracy path. |
-| `intent-comparison.html` | Side-by-side perceptual / relative / saturation / absolute through the same proof profile. |
+[`samples/plugins/identity-plugin.js`](../samples/plugins/identity-plugin.js)
+is a `Transform.register` demo (custom `lutMode`, builder + kernel).
+Run with `node samples/plugins/identity-plugin.js`. Same-file pairs need
+`detectIdentity: false` or the built-in identity kernel takes the batch
+before the plugin runs. Tests: `__tests__/plugin_identity.tests.js`,
+`__tests__/plugin_isolation.tests.js`. Contract: [Plugin.md](./Plugin.md).
 
 ## Running locally
 

@@ -1,7 +1,7 @@
 // src/kernels/kernelUtils.js
 //
-// Shared helpers for the built-in kernel modules (v1.7 kernel module
-// architecture — see docs/deepdive/KernelModules.md).
+// Shared helpers for the built-in kernel modules
+// (see docs/deepdive/KernelContract.md).
 //
 // These were extracted from Transform.transformArrayViaLUT() so that
 // allocation + dispatch live behind the kernel boundary. Error strings are
@@ -166,9 +166,23 @@ function _resolvePluginRuns(kernel, plugin){
     return { big: run, small: run, threshold: 0, bigName: key, smallName: key };
 }
 
+/**
+ * Accuracy-path pixelCache hint. 'auto' is the kernel's to resolve.
+ * 4/5/6 promote it to a single-entry table; a number is already a
+ * decision and must not be overridden. Returns undefined to leave
+ * Transform.pixelCache unchanged.
+ *
+ * @param {object} opts  from Transform._kernelOpts()
+ * @returns {number|undefined}
+ */
+function autoPixelCacheSlots(opts){
+    return (opts && opts.pixelCache === 'auto') ? 1 : undefined;
+}
+
 module.exports = {
     ensureOutputArray: ensureOutputArray,
     bindArrayRuns: bindArrayRuns,
     resolveThreshold: resolveThreshold,
     resolveArrayRuns: resolveArrayRuns,
+    autoPixelCacheSlots: autoPixelCacheSlots,
 };

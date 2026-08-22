@@ -2,7 +2,7 @@
 
 [README](../README.md) ·
 [Deep dive](./deepdive/) ·
-[Performance](./Performance.md) ·
+[Performance](./deepdive/Performance.md) ·
 [Bench](./Bench.md) ·
 [Examples](./Examples.md) ·
 **Roadmap** ·
@@ -14,7 +14,7 @@
 
 Single source of truth for what's coming next in jsColorEngine.
 Retrospective material (what shipped, what we measured, what we
-learned) lives in [Performance.md](./Performance.md). Versioned
+learned) lives in [Performance.md](./deepdive/Performance.md). Versioned
 release notes live in [CHANGELOG.md](../CHANGELOG.md). This page is
 future-facing only.
 
@@ -29,7 +29,7 @@ future-facing only.
 > **Convention: plan here, thinking elsewhere.** The roadmap is the
 > *what* and *when* — keep sections short and actionable. Detailed
 > analysis, trade-off reasoning, benchmark results, and design
-> rationale live in [Performance.md](./Performance.md),
+> rationale live in [Performance.md](./deepdive/Performance.md),
 > [deep-dive docs](./deepdive/), or inline code comments. Roadmap
 > sections should reference those docs rather than duplicating the
 > long-tail thinking, so ideas don't get lost across copy/paste and
@@ -56,12 +56,15 @@ future-facing only.
 - [v1.5.5 — RGB matrix-shaper fast path + one-pixel cache](#v155--rgb-matrix-shaper-fast-path--one-pixel-cache)
     - [RGB matrix-shaper fast path — fused gamma + matrix + curves](#rgb-matrix-shaper-fast-path--fused-gamma--matrix--curves)
     - [One-pixel memo cache — performance experiment](#one-pixel-memo-cache-for-the-lut-kernels--performance-experiment)
+    - [Browser sample bench — retune on real-image content](#4-browser-sample-bench--retune-on-real-image-content)
 - [v1.6 — QC infrastructure + automated bench history](#v16--qc-infrastructure--automated-bench-history)
     - [Automated bench recording — `npm run benchRecord`](#automated-bench-recording--npm-run-benchrecord)
     - [One home for the numbers — `docs/BenchResults.md`, generated](#one-home-for-the-numbers--docsbenchresultsmd-generated)
     - [Browser bundle archive — `bench/results/bundles/`](#browser-bundle-archive--benchresultsbundles)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
+    - [Accuracy-path `pixelCache: 'auto'` — shipped](#accuracy-path-pixelcache-auto--shipped)
+    - [In-kernel pixel cache — shipped in 1.6](#in-kernel-pixel-cache--beta-off-by-default)
 - [v1.7 — Compiled non-LUT pipeline + `toModule()`](#v17--compiled-non-lut-pipeline--tomodule)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
@@ -87,7 +90,7 @@ n-channel device spaces, spectral + illuminant maths.
 `Math.imul`-based tetrahedral kernels for all four 3-/4-channel
 directions. ≤ 1 LSB on u8 output, 10–25 % faster than the float
 kernel, 4× less LUT memory. See
-[Performance.md § v1.1 shipped](./Performance.md#v11--4d-integer-kernels-cmyk-input--u20-refactor--shipped).
+[Performance.md § v1.1 shipped](./deepdive/Performance.md#v11--4d-integer-kernels-cmyk-input--u20-refactor--shipped).
 
 **v1.2** — WASM LUT kernels + `lutMode: 'auto'` default +
 browser benchmark + documentation restructure.
@@ -103,16 +106,17 @@ browser benchmark + documentation restructure.
 - Browser benchmark (`samples/bench/` + [docs/Bench.md](./Bench.md))
   — zero-dependency, runs every kernel against `lcms-wasm`.
 - Full documentation restructure: README → overview, Deep dive →
-  internals, Performance.md → measurements, Roadmap.md → future
-  plans (this page).
+  internals, Bench / BenchResults → current numbers,
+  deepdive/Performance.md → measurement retrospectives, Roadmap.md
+  → future plans (this page).
 
-Full numbers and the journey: [Performance.md](./Performance.md).
+Full numbers and the journey: [Performance.md](./deepdive/Performance.md).
 Release notes: [CHANGELOG.md](../CHANGELOG.md).
 
 **v1.2 is feature-complete.** The last open item — a measured
 head-to-head against native (non-wasm) lcms2 — landed via
 [`bench/lcms_c/`](../bench/lcms_c) and is documented in
-[Performance.md § Measured — vs native LittleCMS](./Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
+[Performance.md § Measured — vs native LittleCMS](./deepdive/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
 The headline at the time (pure JS beating vanilla native lcms2 on
 most measured workflows) has since been revised: the native
 comparison proved strongly input-content-dependent and is under
@@ -219,7 +223,7 @@ GRACoL2006 + sRGB), `int16-wasm-simd` row vs lcms 16-bit best:
 
 Bit-exact across all three jsCE u16 implementations on every
 cell of the test matrix. See
-[Performance.md § v1.3 — 16-bit kernel ladder](./Performance.md#v13--16-bit-kernel-ladder-shipped)
+[Performance.md § v1.3 — 16-bit kernel ladder](./deepdive/Performance.md#v13--16-bit-kernel-ladder-shipped)
 for the headless-bench numbers, the design constraints
 (why Q0.13 specifically, why two-rounding for 4D), and
 [Accuracy.md § 16-bit kernel accuracy](./deepdive/Accuracy.md#16-bit-kernel-accuracy-v13--near-perfect-no-corners-cut)
@@ -239,13 +243,18 @@ big features. Dependency hygiene (webpack → esbuild);
 change for same-profile round-trips); fully-bound `transformArrayFn`;
 LUT kernel plugins ([docs/Plugin.md](./Plugin.md)); **kernel modules
 by dimension** (`src/kernels/`, Transform.js 15.9 k → ~11 k lines,
-bench parity — [deepdive/KernelModules.md](./deepdive/KernelModules.md));
+bench parity — then [deepdive/KernelContract.md](./deepdive/KernelContract.md));
 **DeviceLink profiles** ([docs/DeviceLink.md](./DeviceLink.md));
 **N-channel 5CLR–15CLR profiles** ([docs/NChannel.md](./NChannel.md));
 lcms comparison corrections after upstream review
 ([docs/LcmsComparison.md](./LcmsComparison.md) — accuracy oracle now
 lcms default flags, 100 % within 1 LSB on all four image workflows).
 488 tests. Full notes: [CHANGELOG.md](../CHANGELOG.md).
+
+**v1.6.0 (2026-08-23)** — Kernel5D / Kernel6D int8 WASM; in-kernel
+pixel cache in `create()`; on-demand WASM compile; browser worker
+pool. Native C IT8 oracle is next. Full notes:
+[CHANGELOG.md](../CHANGELOG.md#160--2026-08-23).
 
 ----
 
@@ -549,7 +558,7 @@ via `<script>`, work from `file://` so devs can just download + open):
 
   Budget check: 1280 × 720 @ 30 fps = **27.6 MPx/s**, vs the SIMD
   3D path already sitting at hundreds of MPx/s per
-  `docs/Performance.md` — plenty of slack even after `drawImage`
+  `docs/deepdive/Performance.md` — plenty of slack even after `drawImage`
   round-trip overhead, and a generous buffer for a side-by-side
   "original vs softproof" layout (double the pixel count). 1080p30
   = 62 MPx/s, also reachable; 4K30 = 249 MPx/s sits at the edge of
@@ -1289,9 +1298,10 @@ dropped for the same reason. Custom kernels plug in via
 than `setKernelModule()`.
 
 **As-built documentation:**
-[deepdive/KernelModules.md](./deepdive/KernelModules.md) (includes
-remaining future work: `emitKernel()` for the v1.7 `toModule()`
-pipeline, `kernelInfo()` diagnostics, per-dimension WASM loading).
+[deepdive/KernelContract.md](./deepdive/KernelContract.md)
+(`emitKernel()` still reserved for `compile()`; `kernelInfo()` and
+per-dimension WASM loading have shipped). The v1.5 modules snapshot
+is git history; [KernelModules.md](./deepdive/KernelModules.md) is a stub.
 
 ### DeviceLink profile support — ✅ SHIPPED in v1.5.0 (2026-08-15)
 
@@ -1312,13 +1322,24 @@ other profile type.
 ### N-channel LUT support (5CLR–15CLR) — ✅ SHIPPED in v1.5.0 (2026-08-15)
 
 Hexachrome / 7-ink / spot-colour profiles (5CLR–FCLR) load and transform
-in both directions: N-channel→PCS via the generic
-`tetrahedralInterpND_NCh` sorted-fraction simplex (accuracy path — no
-hot-path array loop by design; press profiles are a proof/measurement
-use case), and PCS/RGB→N-channel including the fast baked-LUT image path
-(3D grid, N output channels, existing `3D→NCh` array loop).
-`buildLut` with N-channel *input* is declined with a warning (a `grid^N`
-bake is impractical) and falls back to the per-pixel pipeline.
+in both directions: N-channel→PCS via tetrahedral-on-last-three / linear
+peel (Little CMS scheme), and PCS/RGB→N-channel including the fast
+baked-LUT image path (3D grid, N output channels, existing `3D→NCh`
+array loop).
+
+**5CLR / 6CLR input now has int8 WASM scalar** (`Kernel5D` / `Kernel6D`):
+`buildLut` bakes at the profile's own A2B density (9^5, 7^6 — do not
+up-res) and `lutMode: 'int-wasm-scalar'` runs `tetra5d_nch` /
+`tetra6d_nch`. JS int8 is the bit-exact fallback. **7+ input stays on
+`KernelND`**: `provideLut` still returns false, no WASM. Real 7CLR A2B
+is typically 5 pts/axis (the press profile on disk); 2–3 pts is only
+our 9–15 *fixture* cap — see
+[SyntheticProfiles.md § real grids](./deepdive/SyntheticProfiles.md#what-real-profiles-actually-use).
+**No int16 / SIMD twins for 5/6.** int8 WASM is 1.6× JS and enough
+for proofing; another pair of binaries would ship to everyone for a
+HiFi-16-bit input almost nobody uses. `int16` dataFormat lands on
+float. Coverage matrix:
+[KernelContract.md § Coverage](./deepdive/KernelContract.md#coverage--what-exists-per-kernel).
 
 Implementation notes: [`docs/NChannel.md`](./NChannel.md) ·
 Tests: `__tests__/transform_nchannel.tests.js` (7CLR press profile;
@@ -1329,14 +1350,14 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 
 ## v1.5.5 — matrix-shaper kernel + pixel cache in the image kernels
 
-> **Status (2026-08-20): three of four shipped.**
+> **Status (2026-08-22): items 1, 3 and 4 shipped.** Item 2 stays in v1.6.
 >
 > | item | status |
 > |---|---|
 > | 1. Matrix-shaper WASM kernel | **shipped** |
 > | 2. Pixel cache in the image kernels | **moved to v1.6** — prototyped, measured, see below |
 > | 3. Multicore | **shipped** |
-> | 4. Browser sample bench on real-image content | **not started** — see below |
+> | 4. Browser sample bench on real-image content | **shipped** — photo with 5 % noise added headline; see below |
 >
 > **1. Matrix-shaper kernel — shipped, and larger than scoped.** The
 > POC was to be "packaged as a kernel descriptor and wired into
@@ -1412,24 +1433,45 @@ and choosing by accident is how the old figures went wrong:
 | **gradients / sweeps** | largely redundant with solid; useful for exercising a pixel cache, though an illustration with a known distinct-colour count is a better controlled test | anything about memory pressure — they prefetch perfectly |
 | **anything + 5 % noise** | real-world throughput, and the only figure comparable across machines, because the variable that made results incomparable is deliberately destroyed | the *range* real content spans — that still needs a corpus |
 
-**Plan.** Feed the browser bench a real corpus rather than generators:
+**Shipped (2026-08-22).** `samples/bench/` and `bench/mpx_summary.js`
+default to **photo with 5 % noise added** — the strawberries frame
+tiled, then 5 % high-bit grain. Past ~3 % every starting content
+collapses onto the same plateau; 5 % sits on it without walking as far
+into noise.
+Chooser also has solid, photo, photo with 15 % noise added (deep
+plateau), noise, and
+**legacy** (256-colour LCG — do not quote). CMYK workflows use a GRACoL
+**separation** of the same frame, not RGB stuffed into four channels.
+Photos live in `samples/bench/images/` (copies; release-matrix originals
+untouched).
 
-1. A **tall composite test image** — several photographs stacked into one
-   file — so the bench loads one asset and gets a mixture of content
-   (flat sky, dense foliage, skin, text) at typical image strides.
-2. Convert that once to **CMYK** and keep it, so the CMYK→RGB and
-   CMYK→CMYK workflows measure real separated data instead of random
-   ink values. Separation changes adjacency and colour distribution, so
-   synthesised CMYK is not a stand-in.
-3. Report **adjacency and CLUT coverage** next to every result, the same
-   way [`bench/release_matrix/`](../bench/release_matrix/README.md) now
-   does, so a reader can tell whether the interpolation table was
-   exercised at all.
-4. Keep noise and `blocks16` as explicitly-labelled *bounds* rather than
-   headline rows.
+Also on that page:
 
-The Node-side harness and its six rules are already built and can be
-ported rather than reinvented.
+- **Speed vs Noise** tab — this computer's L1/L2 vs 0–100 % grain; jsCE vs
+  lcms vs lcms `NOCACHE`. A Mac will draw a different knee.
+- Optional identity rows (sRGB→sRGB / GRACoL→GRACoL) — memcpy ceiling,
+  kept out of summary cards.
+- `await browserFocus()` — tab blur pauses and discards the poisoned
+  hot batch. Primitive: `samples/bench/browserFocus.js`.
+- **Pool demo** tab — 15-image queue through `transformImages()`.
+
+Run [`samples/bench/`](../samples/bench/) — the **Speed vs Noise**
+tab is why headline content is photo with 5 % noise added. Photo
+with 15 % noise added is the same plateau; legacy is ~1.8× faster
+because the LCG is L1-resident. Guide: [Bench.md](./Bench.md).
+
+**Still open (does not block quoting photo with 5 % noise added):**
+
+- Adjacency / CLUT coverage next to browser rows (Node
+  `bench/release_matrix/` already reports this).
+- A stacked multi-photo composite — three separate frames + tiling is
+  enough for the headline; a single tall asset would only help the
+  corpus-range question.
+
+The Good / Bad / Ugly call-shape page is **archived** to
+[`docs/deepdive/good-bad-ugly/`](./deepdive/good-bad-ugly/) — off the
+samples index. Lesson in [benchmark.md §20](./deepdive/benchmark.md);
+its pixels are the old LCG.
 
 ### RGB matrix-shaper fast path — fused gamma + matrix + curves
 
@@ -1451,7 +1493,7 @@ lcms2 `fast-float` reaches ~455 MPx/s via a SIMD-compiled fused loop.
 Closing that gap requires a WASM SIMD kernel — see below.
 
 **Context.** Benchmarking against the lcms2 `fast-float` plugin (see
-[Performance.md — Steelmanning the steelman](./Performance.md#steelmanning-the-steelman--fast-float-measured-directly))
+[Performance.md — Steelmanning the steelman](./deepdive/Performance.md#steelmanning-the-steelman--fast-float-measured-directly))
 found the one workflow class where jsCE currently loses: RGB→RGB
 matrix-shaper transforms (sRGB↔AdobeRGB etc.), where fast_float runs
 a fused 3×3 matrix multiply at ~455 MPx/s while jsCE's general-purpose
@@ -1562,8 +1604,8 @@ prerequisite.
 **WASM SIMD kernel — matrix-shaper kernel module.**
 
 The SIMD matrix-shaper path is the natural first use-case for the
-kernel-module architecture that shipped in v1.5.0 (see
-[deepdive/KernelModules.md](./deepdive/KernelModules.md)):
+kernel-module architecture that shipped in v1.5.0 (as-built now
+[deepdive/KernelContract.md](./deepdive/KernelContract.md)):
 
 - A `kernel3D_matrix_shaper` descriptor is registered via `Transform.registerKernel()`
 - Its `buildLut(lutMode)` checks `inputProfile.isRGBMatrix && outputProfile.isRGBMatrix`
@@ -1680,16 +1722,19 @@ required.
 > (DeviceLink and N-channel support, originally filed here, shipped
 > early — see [v1.5](#v15--polish-validation-and-fast-paths--shipped-in-v150).)
 >
-> **Also carried in from 1.5.5: the in-kernel pixel cache**, prototyped and
-> measured but not shipped — it needs a dispatcher change and eight
-> regenerated binaries, and 1.6 is where breaking changes and different
-> optimisations belong.
+> **Also carried in from 1.5.5: the in-kernel pixel cache**, now in
+> `create()` — `compile_kernel_wat.js` injects `interp_*_cached`;
+> the loader binds it when `pixelCache !== 0`. The **accuracy-path**
+> knob (`pixelCache: 'auto'`) is a different implementation of the
+> same hint. Findings:
+> [PixelCache.md](./deepdive/PixelCache.md#as-built-2026-08-23--in-kernel-export-in-create).
+> Native C IT8 matrix testing is next, not a 1.6 gate.
 
 ### One home for the numbers — `docs/BenchResults.md`, generated ✅ built
 
-Throughput figures are currently quoted in the README, `Performance.md`,
-`LcmsComparison.md`, `pool.md`, the CHANGELOG and four deepdives. Nothing links
-them, so a re-measurement means finding every copy by hand — which is how a
+Throughput figures used to be quoted in the README, `Performance.md`,
+`LcmsComparison.md`, `pool.md`, the CHANGELOG and four deepdives. Nothing linked
+them, so a re-measurement meant finding every copy by hand — which is how a
 page ends up carrying two vintages of the same number at once.
 
 The shape to build, alongside the bench-recording work above:
@@ -1718,36 +1763,41 @@ each writes its own JSON. Still to wire: the native C harness (its numbers are
 parsed from text) and the one-off POC benches, which are history rather than
 published figures.
 
-### Web Worker pool for browsers
+### Web Worker pool for browsers — landed
 
-`transformImages()` is Node-only today: it requires `worker_threads`, and the
-browser build stubs that out (`"browser": {"worker_threads": false}`), so a
-browser gets the sequential path — correct, same bytes, same callbacks, one
-thread.
+`transformImages()` uses `worker_threads` under Node and `Worker` in a
+browser. The fragment queue, out-of-order reassembly, cancellation and
+`interrupt()` were always platform-neutral; what shipped is the packaging:
 
-**The blocker is packaging, not threading.** The fragment queue, the
-out-of-order reassembly, cancellation, backpressure and `interrupt()` are all
-platform-neutral, and `postMessage` with transferables behaves the same in a
-browser. What is missing:
+1. **`browser/jsColorEngineWorker.js`** — engine plus the `poolWorker`
+   protocol (`npm run browser` builds it).
+2. **A URL the app supplies** — `Transform.enablePool({workerUrl})` or
+   `globalThis.JSCE_WORKER_URL`. A library cannot know its own URL.
+3. **`Pool.start()`** picks `new Worker(url)` when `worker_threads` is
+   stubbed.
+4. **CSP / missing URL** falls back to sequential, same as every other
+   failure path.
 
-1. **A second bundle.** `browser/jsColorEngineWorker.js` — the worker entry is
-   the whole engine plus the `poolWorker` protocol, so it cannot share the IIFE
-   the main build produces.
-2. **A URL to load it from.** A library cannot reliably know its own URL;
-   `new URL('./poolWorker.js', import.meta.url)` needs ESM plus bundler
-   cooperation and the package ships UMD. The honest answer is to let the APP
-   say where it put the file — `globalThis.JSCE_WORKER_URL` — which
-   `src/settings.js` already supports reading.
-3. **A browser branch in `Pool.start()`**, choosing `new Worker(url)` over
-   `worker_threads`.
-4. **Nothing for CSP.** A blocked worker construction already falls back to
-   sequential, like every other failure path.
+The bench **Pool demo** tab is the first in-browser exercise. Worth
+measuring separately: a tab's memory ceiling is lower than a server's,
+and per-worker LUT copies are the pool's dominant cost.
 
-Worth measuring separately once it exists: a browser tab's memory ceiling is
-lower than a server's, and per-worker LUT copies are the pool's dominant cost —
-16 workers at 1.4 MB per transform is a different proposition in a tab.
+### Accuracy-path `pixelCache: 'auto'` — shipped
 
-### In-kernel pixel cache — BETA, OFF BY DEFAULT
+`src/cache.js` is no longer caller-only. Default is `'auto'`.
+Transform ignores that string; `init()` may change it to `1`.
+Kernel4D / 5D / 6D do; Kernel3D and everyone else leave it.
+After init, `_applyPixelCache()` injects if the value is then a
+number > 0. `pixelCacheUsed` is what ran.
+
+`array()` still uses the kernel when one is bound — auto must not
+steal the WASM image path. A 2+ slot table is **not** what auto
+picks; pass `256` yourself when you know the work is a palette.
+Why: [PixelCache.md § Why auto is 1, not a 2+ table](./deepdive/PixelCache.md#why-auto-is-1-not-a-2-table).
+
+The in-kernel export is the next section — same hint, image path.
+
+### In-kernel pixel cache — shipped (same `pixelCache` hint)
 
 A single-entry cache inside the CLUT kernels: *"did the same bits arrive as
 last time, so the same bits can leave"*. Not "have I seen this colour" — it
@@ -1766,45 +1816,100 @@ the shipped kernel:
 | photographs | 0.93–0.96× |
 | noise | 0.99× |
 
-**Off by default.** 4–7% on photographs is a real cost, and only the caller
-knows whether their work is flat. The rule is simple enough to document in a
-sentence — *design work, logos and gradients on solid grounds: on; photographic
-pipelines: off* — which is the most a set-and-forget default can honestly ask.
+**On with `'auto'`.** Chrome 151, this machine: a clean photograph
+is a ~10 % boost; a photograph with 5 % noise added is the worst
+case (~4 % tax); solids **up to 3.94×**. 5D photo is the outlier
+(0.84×) — leave `pixelCache: 0` on that cell. `0` is the uncached
+export; there is no separate kernel flag.
 
-**Shipping shape — paired exports, not a runtime mode.** Behind a `$cacheMode`
-parameter the *uncached* path measured 15–22% slower, and got worse when a
-third mode was added: the cost is the code behind the guard, not the guard
-itself. A single mode compare was worth ~10% on its own. So the cache is a
-second function in the same module, with an identical signature:
+**Shipping shape — compile-inject, not a runtime mode, not eight
+hand-copied binaries.** Behind a `$cacheMode` parameter the *uncached*
+path measured 15–22% slower, and got worse when a third mode was
+added: the cost is the code behind the guard, not the guard. A single
+mode compare was worth ~10% on its own.
+
+So the `.wat` stays the single source of truth.
+`scripts/compile_kernel_wat.js` copies the function verbatim, then
+injects a cache snippet at the four `;;Inject:*` comments (same
+names on every shape) and compiles with wabt. The POC builder still
+emits table variants for benches:
 
 ```
-interp_tetra3d_simd          the shipped kernel, verbatim
+interp_tetra3d_simd          the shipped kernel, byte for byte
 interp_tetra3d_simd_cached   the same, plus two locals
 ```
 
-The uncached export measures 0.985–1.008× against the shipped binary — a tie,
-because there is no cache code in it to pay for. Enabling the cache is swapping
-a function reference; the call site does not change.
+The uncached export measures 0.985–1.008× against the shipped binary —
+a tie, because there is no cache code in it to pay for. Enabling the
+cache is swapping a function reference; the signature does not change.
+
+**Single-entry is the kernel product.** A hash table (2…4096) was
+measured beside it: slower than single on flats, and a worse miss tax
+on photo/noise (~8–15% vs ~2%). It would only win on an illustration
+with a small palette of *non-adjacent* repeats — an edge case you
+cannot auto-tune. Keep the table snippet in the POC builder; do not
+wire it into `create()`. `'auto'` binds the single-entry export on
+every WASM 3–6 kernel that has one. The accuracy-path `'auto'`
+above is a different *implementation* of the same hint.
+
+The accuracy-path table (`pixelCache: 16|32|4096` in `src/cache.js`)
+is a different feature — it skips a stage walk, not a tetrahedral
+gather. Same option name; `pixelCacheUsed` vs `kernelInfo().cache`.
+
+If a table variant is ever wanted, it is a **second snippet** on the
+same anchors (`_cached_table`), compiled as a third export — not a
+parameter. Same rule as `$cacheMode`: do not put the unused path in
+the binary the hot loop sees.
 
 **Work remaining:**
 
-1. Extend the generator (`bench/pixel_cache_wasm/build_paired.js`) to the
-   remaining kernels — 3D and 4D, scalar and SIMD, int8 and int16. Each needs a
-   five-anchor recipe; the 4D key packs four input bytes instead of three. The
-   uncached function is copied in verbatim, so the shipped path cannot drift.
-2. Dispatcher: select the export from a `pixelCacheKernel` flag, alongside the
-   existing `lutMode` resolution.
-3. **Load one WASM family instead of both.** Currently 3D and 4D both load on
-   every `create()` (test-asserted). It matters more once each module carries
-   two functions — and it is now decidable, since the kernel is claimed during
-   `create()`.
-4. Decide whether the accuracy-path `pixelCache` option and this one share a
-   name. Two knobs called the same thing with different risk profiles would be
-   worse than having one.
+1. ~~Fold the generator into the real WASM build.~~ **Shipped.**
+   `scripts/compile_kernel_wat.js` injects single-entry only.
+   Table exports stay in `bench/pixel_cache_wasm/build_paired.js`.
+2. ~~Dispatcher.~~ **Shipped.** `pixelCache !== 0` (including
+   `'auto'`) binds `_cached` when the export exists. Missing export
+   is a silent decline. `kernelInfo().cache` is `'not-supported'` |
+   `'off'` | `1` | `N`.
+3. ~~Load one WASM family instead of both.~~ **Shipped.**
+   `src/wasm/instantiate.js` is the only compile path and must not
+   `require` any kernel `.wasm.js`. `wasmLadder` is functions; SIMD
+   scalar `alsoLoad` only when `outputChannels ∉ {3,4}`. Transform
+   yields, then the winning kernel `create(lutMode)` — a matrix-shaper
+   pair never compiles tetrahedral WASM.
+4. ~~Name.~~ **Superseded.** One hint, two implementations
+   (pipeline vs `interp_*_cached`). A second option would have been
+   worse than sharing `pixelCache`.
+5. **TODO later — two-register double, not a 2-slot table.** Last
+   two keys as locals, two compares. Never written. Do not treat the
+   hashed-array arms (8…4096) as a test of it. Design note:
+   [PixelCache.md § two-register double](./deepdive/PixelCache.md#2-two-register-double--last-two-pixels-todo-never-built).
 
 POC: `bench/pixel_cache_wasm/` (`hitrate.js`, `build_paired.js`,
-`run_paired.js`). Design notes, and how the "never in SIMD" exclusion came apart:
+`run_paired.js`). Design notes, and how the "never in SIMD" exclusion
+came apart:
 [deepdive/PixelCache.md](./deepdive/PixelCache.md#simd-here-is-parallel-interpolation-not-parallel-pixels).
+
+### Automated profile oracle — build on synthetics
+
+The TOC item was written when the gap was "no second CMS for 1 / 2 /
+5–15 channels." That hole is closed.
+[SyntheticProfiles.md](./deepdive/SyntheticProfiles.md) already ships
+fifteen dual-table profiles, every input width into every output
+width, both depths, compared to LittleCMS.
+
+v1.6 oracle work **starts there**, not with a licensed RGB/CMYK
+corpus or a regenerated `lcms_patch`:
+
+1. Promote `accuracy_nchannel.js` (and the gray / nCLR writer) from
+   a bench you run by hand into a gate — same shape as
+   `bench/reproduce.js` phases.
+2. Keep the RGB/CMYK LittleCMS comparison as the *real-profile*
+   oracle it already is ([LcmsComparison.md](./LcmsComparison.md)).
+3. A bulk `.it8` dump of every file in a private corpus is a later
+   widening. It needs `lcms_patch/` regen and profiles we cannot
+   commit. Synthetics do not.
+
+Do not wait for (3) to call the width-coverage oracle done.
 
 ### Matrix shaper — per-channel TRCs, and a hot JS path
 
@@ -2616,7 +2721,7 @@ but four of its findings still shape decisions here:
    emits the same code. Still useful against accidental float promotion.
 
 The full analysis, with the POC table and the instruction-mix breakdown, is in
-[Performance § 5](./Performance.md#historical-record-original-v13--v15-analysis-1d-wasm-poc);
+[Performance § 5](./deepdive/Performance.md#historical-record-original-v13--v15-analysis-1d-wasm-poc);
 raw results in `bench/wasm_poc/README.md`. It is not repeated here.
 
 ---
@@ -2784,7 +2889,7 @@ the implementation doesn't start from scratch.
 
 ## Related
 
-- [Performance.md](./Performance.md) — where we are (measured),
+- [Performance.md](./deepdive/Performance.md) — where we are (measured),
   what we learned, the journey
 - [CHANGELOG.md](../CHANGELOG.md) — versioned release notes
 - [Deep dive](./deepdive/) — how the current kernels work

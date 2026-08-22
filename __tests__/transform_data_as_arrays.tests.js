@@ -25,6 +25,7 @@ test('sRGB to CMYK via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input);
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -61,6 +62,7 @@ test('sRGB+Alpha to CMYK via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, false);
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -95,6 +97,7 @@ test('sRGB+Alpha to CMYK+Alpha via arrays ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, false);
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -129,6 +132,7 @@ test('sRGB+Alpha to CMYK+Alpha via arrays with PRESERVE Alpha ', async () => {
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, true);
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -163,6 +167,7 @@ test('sRGB+Alpha to CMYK+Alpha via arrays with PRESERVE Alpha with length of 3',
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, true, 3);
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     // transformArray() returns a TYPED array, matching dataFormat -- it used to
     // hand back an untyped Array on the non-LUT route only, so which container
     // you got depended on whether a LUT was built. Uint8ClampedArray is
@@ -195,6 +200,7 @@ test('sRGB+Alpha to CMYK+Alpha via arrays with PRESERVE Alpha with length of 3 a
     ];
 
     let output = rgb2CMYK.transformArray(input, true, true, true, 3, 'int8');
+    expect(rgb2CMYK.lastUsedKernel).toBe('pipeline');
     expect(output).toBeInstanceOf(Uint8ClampedArray);
 
     expect(output).toEqual( new Uint8ClampedArray([

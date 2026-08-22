@@ -7,7 +7,93 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [1.6.0] — 2026-08-23
+
+### UMD size
+
+`browser/jsColorEngineWeb.js` is **~115 KB gzip** (~435 KB
+minified) with the 5/6 kernels and single-entry cached WASM
+twins inlined. The optional worker is **~100 KB gzip**. The
+README no longer quotes the old ~68 KB / vs-lcms-wasm size
+line — the engine is small on its own.
+
+### In-kernel WASM pixel cache
+
+Shipped tetra modules carry a paired `interp_*_cached` export
+(single-entry, last pixel). `create()` binds it when `pixelCache`
+is `'auto'` or any number > 0; `0` keeps the verbatim kernel.
+Hash tables stay in the POC builder. Chrome 151, this machine:
+a clean photograph is a ~10 % boost; a photograph with 5 % noise
+added is the worst case (~4 % tax); solids **up to 3.94×**
+(CMYK→RGB 104→407). 5D photo is 0.84× — use `0` there if that
+cell matters. `kernelInfo().cache` is `1` when the cached export
+ran. Native C IT8 matrix testing is next, not a 1.6 gate.
+
+### pixelCache `'auto'` — kernels decide
+
+`pixelCache` defaults to `'auto'`. Transform ignores that string;
+`init()` may change it to `1`. Kernel4D / 5D / 6D do; Kernel3D and
+everyone else leave it, so nothing is injected. After init,
+`_applyPixelCache()` injects the accuracy-path stages if the value
+is then a number > 0. `pixelCacheUsed` is what ran. `array()` still
+uses the kernel when one is bound — auto must not steal the WASM
+image path.
+
+### 5D / 6D int8 WASM scalar (n-channel proofing)
+
+`Kernel5D` and `Kernel6D` own slots 5 and 6. `buildLut` now bakes a
+device LUT at the profile's A2B density (typically 9^5 / 7^6); int8
+WASM scalar (`tetra5d_nch` / `tetra6d_nch`) is bit-exact with the new
+JS int8 peel+tetra loops. KernelND stays on 7–15 and still declines a
+CLUT. Throughput probe (`bench/nch_56/run.js`, photo with 5 % noise
+added, this machine): 5CLR **16.4 / 9.71 MPx/s** (WASM / JS, 1.69×), 6CLR
+**7.66 / 4.84** (1.58×). No int16 / SIMD 5/6 — package size vs a
+rare HiFi-16-bit input. Coverage matrix:
+[KernelContract.md § Coverage](docs/deepdive/KernelContract.md#coverage--what-exists-per-kernel).
+Real-world A2B grid sizes (vs our fixture budget) are in
+[SyntheticProfiles.md § real grids](docs/deepdive/SyntheticProfiles.md#what-real-profiles-actually-use).
+
+### Browser bench — photo with 5 % noise added is the headline
+
+`samples/bench/` and `bench/mpx_summary.js` no longer feed the old
+256-colour LCG. Default content is the strawberries frame plus 5 %
+grain — on the locality plateau, shy of walking into noise. The
+chooser also has solid, photo, photo with 15 % noise added, noise, and **legacy**
+(do not quote). CMYK workflows use a GRACoL separation of the same
+frame.
+
+New **Speed vs Noise** tab graphs how *this* computer's caches treat
+0–100 % grain (jsCE vs lcms vs lcms `NOCACHE`). Optional identity
+rows (sRGB→sRGB / GRACoL→GRACoL) are the memcpy ceiling and stay out
+of the summary cards. `await browserFocus()` pauses if the tab blurs
+and discards a hot batch that lost focus.
+
+Headline (Chrome 151, DevTools closed, photo with 5 % noise added)
+— SIMD **94 / 97 / 69 / 67 MPx/s** (RGB→RGB / RGB→CMYK / CMYK→RGB /
+CMYK→CMYK). Same-machine photo with 15 % noise added is the same
+plateau; legacy is ~1.8× faster because that LCG is L1-resident.
+The **Speed vs Noise** tab on `samples/bench/` is the demo.
+
+The Good / Bad / Ugly call-shape page moved to
+[`docs/deepdive/good-bad-ugly/`](docs/deepdive/good-bad-ugly/) and
+is off the samples index. Its pixels are that old LCG.
+
+### WASM modules compile on demand
+
+`src/wasm/instantiate.js` is the only compile / instantiate path and
+does not `require` any kernel `.wasm.js`. The winning kernel loads
+its own binary after `create()`; a matrix-shaper pair never compiles
+the tetrahedral modules. SIMD scalar fallthrough loads only when
+output is not 3 or 4 channels.
+
+### Web Worker pool in the browser
+
+`transformImages()` now starts a real `Worker` pool when the app passes
+`workerUrl` (or `JSCE_WORKER_URL`) to `enablePool()`. `npm run browser`
+emits `browser/jsColorEngineWorker.js`. Without the URL the batch still
+runs sequentially — same bytes, same callbacks. The bench **Pool demo**
+tab loads three photographs at different sizes and reports wall time,
+per-image compute, fragment counts and finish order.
 
 ### Documented — the pixel cache is a different proposition above 4 channels
 
@@ -1135,7 +1221,7 @@ is meant to behave.
 
 ### Added — ARM64 / Apple Silicon (M4) measurement
 
-- **`docs/Performance.md` § 2.6** — new section with measured M4
+- **`docs/deepdive/Performance.md` § 2.6** — new section with measured M4
   Mac mini numbers (Chrome 147, browser bench): SIMD 3D paths
   +25 % over x86_64, **SIMD 4D paths +65 %**. The `int-wasm-scalar`
   and pure-JS `int` tiers gain the same ~1.4–1.6×, confirming the
@@ -1385,7 +1471,7 @@ short version:
 
 ### Documentation
 
-- New [Performance.md § v1.3 — 16-bit kernel ladder](./docs/Performance.md#v13--16-bit-kernel-ladder--shipped)
+- New [Performance.md § v1.3 — 16-bit kernel ladder](./docs/deepdive/Performance.md#v13--16-bit-kernel-ladder--shipped)
   with the headless-bench numbers, design constraints (why Q0.13
   specifically, why two-rounding for 4D), and the per-workflow
   precision tables.
@@ -1475,7 +1561,7 @@ pure JavaScript. With the v1.2 default (`'int-wasm-simd'`) added in
 the row above: all 4 workflows, 2–5× faster than native lcms2.
 
 The measurement also **replaces the earlier `wasm × 1.5–2.5`
-estimate** in `docs/Performance.md § 4` — reality is `native ≈
+estimate** in `docs/deepdive/Performance.md § 4` — reality is `native ≈
 lcms-wasm × 1.4–1.6` on this profile/CPU. The estimate was
 optimistic at the top of the band; modern V8 compiles wasm32 more
 tightly than the original Emscripten rule-of-thumb assumed.
@@ -1498,7 +1584,7 @@ full guide.
 
 - New [Deep dive](./docs/deepdive/) section with subpages for
   architecture, JIT inspection, LUT modes, and WASM kernel design.
-- `docs/Performance.md` restructured around "where we are / what we
+- `docs/deepdive/Performance.md` restructured around "where we are / what we
   learned / where we're going".
 - `docs/Bench.md` consolidates the browser-bench user guide.
 - Top-level nav bar added to every docs page.
@@ -1566,9 +1652,9 @@ standard image workflows.
   CMYK → RGB gamut-clipping disagreement on 0.93 % of samples (out-
   of-gamut inputs where both CMS engines are "inventing" a legal RGB
   answer from an illegal CMYK request) — documented as a hypothesis
-  in `README.md` and `docs/Performance.md`.
+  in `README.md` and `docs/deepdive/Performance.md`.
 - **Why pure-JS can beat a WASM-wasm32 port.** Detailed in
-  `docs/Performance.md` under "Why pure-JS can beat an Emscripten-
+  `docs/deepdive/Performance.md` under "Why pure-JS can beat an Emscripten-
   wasm32 port": hand-tuned V8 kernels (TurboFan, monomorphic, L1i-
   resident), no JS↔WASM FFI per call, no WASM-sandbox bounds checks,
   and a bundle that's **~2.5× smaller over the wire** (~52 KB gzip
@@ -1829,7 +1915,7 @@ new profile types won't crash, they just use the float path.
 
 ### Documentation
 
-- `docs/Performance.md` — full performance findings, lcms2/babl
+- `docs/deepdive/Performance.md` — full performance findings, lcms2/babl
   comparison, WASM POC results, roadmap rationale. Explains JIT-driven
   engine variance (V8 vs SpiderMonkey vs JSC) and why the hot loops
   are deliberately unrolled and inlined despite looking counter-intuitive.

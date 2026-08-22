@@ -149,11 +149,13 @@
     (local $vU16_K0      v128)  ;; K0-plane u16 stashed across the K loop
     (local $vOutI        v128)  ;; final i32x4 for narrow (lanes pre-clamp)
     (local $vOut         v128)  ;; i16x8 result of unsigned narrow
+    ;;Inject:localsAfter
 
     ;; --- Init -----------------------------------------------------------------
     (local.set $inputPos     (local.get $inputPtr))
     (local.set $outputPos    (local.get $outputPtr))
     (local.set $outputStride (i32.shl (local.get $cMax) (i32.const 1)))
+    ;;Inject:initAfter
 
     ;; --- Per-pixel loop -------------------------------------------------------
     (block $pixel_exit
@@ -168,6 +170,7 @@
         (local.set $input1 (i32.load16_u offset=4   (local.get $inputPos)))
         (local.set $input2 (i32.load16_u offset=6   (local.get $inputPos)))
         (local.set $inputPos (i32.add (local.get $inputPos) (i32.const 8)))
+        ;;Inject:probeAfter
 
         ;; pk/px/py/pz = input * gps  (u16 * Q0.13)
         (local.set $pk (i32.mul (local.get $inputK) (local.get $gps)))
@@ -607,6 +610,7 @@
         (local.set $outputPos
           (i32.add (local.get $outputPos) (local.get $outputStride)))
 
+        ;;Inject:storeBefore
         ;; --- Alpha tail (mirrors tetra3d_simd_int16.wat — u16 stride) -----
         ;; Outer i32.or guard collapses to a single test per pixel on the
         ;; no-alpha hot path. inputPos is at the (optional) alpha sample —

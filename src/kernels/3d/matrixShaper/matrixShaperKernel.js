@@ -72,6 +72,9 @@
 'use strict';
 
 var matrixShaperJS = require('./matrixShaperJS.js');
+var instantiateMod = require('../../../wasm/instantiate.js');
+var compileModule  = instantiateMod.compile;
+var instantiate    = instantiateMod.instantiate;
 
 var VARIANTS = {
     '8-simd':    require('./matrix_shaper_int8_simd.wasm.js'),
@@ -81,27 +84,13 @@ var VARIANTS = {
 };
 
 var PAGE = 65536;
-var compiled = {};                  // variant name -> Module | null (tried, unavailable)
 
-/**
- * Compile — once per variant, for the life of the process.
- *
- * The matrix lives in linear memory rather than baked into the code, so a
- * single compiled Module serves every profile pair; only the Instance is per
- * Transform.
- */
-function moduleFor(name){
-    if(compiled.hasOwnProperty(name)) return compiled[name];
-    var mod = null;
-    if(typeof WebAssembly !== 'undefined' && typeof WebAssembly.Module === 'function'){
-        try {
-            mod = new WebAssembly.Module(VARIANTS[name]);
-        } catch(e){
-            mod = null;             // host without SIMD, or a stale binary
-        }
-    }
-    compiled[name] = mod;
-    return mod;
+function cacheKeyFor(name){
+    return '__jsColorEngine_matrix_' + name + '__';
+}
+
+function compileOpts(name, cache){
+    return { cache: cache, cacheKey: cacheKeyFor(name) };
 }
 
 /**
@@ -126,13 +115,14 @@ var pinned = require('../../../settings.js')
  * The best available variant for a bit depth: SIMD if the host will compile it,
  * scalar otherwise. Returns null only when WebAssembly itself is missing.
  */
-function pickVariant(bits){
+function pickVariant(bits, cache){
     // 'js' pins to no WASM variant at all, which build() reads as "use the JS
     // implementation" — the same route a host without WebAssembly takes.
     if(pinned === 'js') return null;
-    if(pinned) return moduleFor(bits + '-' + pinned) ? bits + '-' + pinned : null;
-    if(moduleFor(bits + '-simd'))   return bits + '-simd';
-    if(moduleFor(bits + '-scalar')) return bits + '-scalar';
+    if(pinned) return compileModule(VARIANTS[bits + '-' + pinned], compileOpts(bits + '-' + pinned, cache))
+        ? bits + '-' + pinned : null;
+    if(compileModule(VARIANTS[bits + '-simd'], compileOpts(bits + '-simd', cache))) return bits + '-simd';
+    if(compileModule(VARIANTS[bits + '-scalar'], compileOpts(bits + '-scalar', cache))) return bits + '-scalar';
     return null;
 }
 
@@ -237,7 +227,7 @@ function inspect(transform){
     // ~8 MPx/s. Reported here rather than decided here, so build() picks.
     var perChannel = perChannelCurve(transform, sInv, sFwd);
 
-    var variant = perChannel ? null : pickVariant(bits);
+    var variant = perChannel ? null : pickVariant(bits, transform.wasmCache);
     if(!variant && typeof WebAssembly === 'undefined'){
         // No WASM at all is also a JS case, not a failure.
         variant = null;
@@ -287,7 +277,7 @@ function wantsInsteadOfLut(transform){
     // The final pipeline needs its int<->device stages for inspect() to match;
     // without them this kernel is not what ends up running.
     if(transform.convertInputOutput !== true) return false;
-    if(!pickVariant(bits)) return false;
+    if(!pickVariant(bits, transform.wasmCache)) return false;
 
     // The temporary LUT-build pipeline is device in, device out: the same
     // three stages as the real one, minus the int conversions.
@@ -321,14 +311,16 @@ function build(transform){
         catch(e){ return null; }
     }
 
-    var instance;
-    try {
-        instance = new WebAssembly.Instance(moduleFor(check.variant), {});
-    } catch(e){ return null; }
+    var loaded = instantiate(VARIANTS[check.variant], {
+        cache: transform.wasmCache,
+        cacheKey: cacheKeyFor(check.variant),
+        exportName: 'run'
+    });
+    if(!loaded) return null;
 
-    var exports = instance.exports;
+    var instance = loaded.instance;
+    var exports = loaded.exports;
     var memory = exports.memory;
-    if(typeof exports.run !== 'function' || !memory) return null;
 
     var L = VARIANTS[check.variant].LAYOUT;
     var bytesPerChannel = L.bits === 8 ? 1 : 2;

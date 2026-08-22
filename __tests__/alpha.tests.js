@@ -152,6 +152,7 @@ describe('alpha — the reason these exist', () => {
 
         const pre = alpha.premultiply(data, n);
         const wrong = t.transformArray(pre, true, true, true, n);      // T(a.C)
+        expect(t.lastUsedKernel).toBe('matrix-shaper');
 
         const right = alpha.premultiply(
             t.transformArray(data, true, true, true, n), n);            // a.T(C)

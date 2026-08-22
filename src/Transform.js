@@ -19,7 +19,6 @@
     var convert = require('./convert');
     var defs = require('./def');
     var wasmLifecycle = require('./kernels/wasmLifecycle');
-    // var lutKernelTable = require('./lutKernelTable');
     var _pool = require('./pool.js');
 
     var eIntent = defs.eIntent;
@@ -56,33 +55,35 @@
      *          var lab = transform.transform(color.RGB(255, 0, 0));
      *
      *
-     *   2. MANY COLOURS  (a few hundred / thousand — still need full accuracy)
+     *   2. MANY COLOURS / IMAGE DATA
+     *      `transform.array(...)` is the batch entry. Native units; the
+     *      container matches `dataFormat`:
      *
-     *          transform.transformArray(arr, ...);   // object/objectFloat OK
+     *          int8         Uint8ClampedArray  (0–255)
+     *          int16        Uint16Array        (0–65535)
+     *          device       Array of floats    (0–1)
+     *          object       Array of colour objects  ({R,G,B} / {C,M,Y,K} / …)
+     *          objectFloat  Array of float colour objects ({Rf,Gf,Bf} / …)
      *
-     *      Walks the full pipeline per pixel. Use for analysis batches; do NOT
-     *      use for image data — see (3).
-     *
-     *
-     *   3. IMAGE DATA  (millions of pixels, 8-bit per channel)
-     *      Speed-first path. ~45–70 Mpx/s on V8 / x64 (see
-     *      bench/mpx_summary.js). Built on the prebuilt LUT and the
-     *      unrolled `*_loop` interpolators in src/kernels/.
+     *      `transformArray` is the same call plus an optional `outputFormat`
+     *      applied afterwards via `Transform.reformat`. After either,
+     *      `transform.lastUsedKernel` is the kernel `name`, or `'pipeline'` /
+     *      `'cache'`.
      *
      *          new Transform({ buildLut: true, dataFormat: 'int8', BPC: true })
      *              .create('*sRGB', cmykProfile, eIntent.perceptual);
-     *          var out = transform.transformArrayViaLUT(uint8Pixels, true, true);
+     *          var out = transform.array(uint8Pixels, true, true);
      *
-     *      Equivalent shortcut:
+     *      `transformArrayViaLUT` is the loud cousin: same work, but throws
+     *      'No LUT loaded' instead of falling through to the per-pixel walk.
+     *      Use it when a missing table must be a hard error.
      *
-     *          transform.transformArray(uint8Pixels, true, true);
-     *          // routes to transformArrayViaLUT() when dataFormat==='int8' and
-     *          // a LUT was prebuilt.
-     *
-     *      Input MUST be a Uint8ClampedArray (or Uint8Array) of well-formed
-     *      pixel data, length === pixelCount * channelsPerPixel. Bounds-checks
-     *      are deliberately omitted in the inner loops — passing out-of-range
-     *      values is undefined behaviour (garbage out, no exception).
+     *      Image kernels omit bounds-checks. For `int8` / `int16` the input
+     *      must be a well-formed typed buffer, length === pixelCount ×
+     *      channelsPerPixel. Out-of-range values are undefined behaviour
+     *      (garbage out, no exception). Object batches are an array of
+     *      colour objects; identity clones them, a colour conversion walks
+     *      the pipeline per element.
      *
      *
      *   ANTI-PATTERN — do not do this:
@@ -93,7 +94,7 @@
      *
      *      That bypasses the LUT, allocates ~6 Arrays per pixel, and dispatches
      *      every stage via .call(this, ...). On a 4 MP image you will be ~30x
-     *      slower than transformArrayViaLUT and you will GC-thrash the host.
+     *      slower than `array()` on a LUT and you will GC-thrash the host.
      *
      *  ----------------------------------------------------------------------------
      *  DATAFORMAT OPTIONS  (constructor `dataFormat`)
@@ -112,12 +113,10 @@
      *                  CMYK: {type, Cf, Mf, Yf, Kf}
      *
      *   'int8'         Flat 8-bit integer array, 0–255 per channel. Image path.
-     *                  When combined with `buildLut: true`, transformArray()
-     *                  routes to transformArrayViaLUT() — the fast path.
+     *                  With `buildLut: true`, `array()` hands the batch to
+     *                  the kernel (`enableForArrays`).
      *
      *   'int16'        Flat 16-bit integer array, 0–65535 per channel.
-     *                  (Image-grade _16bit interpolators are TODO — see the
-     *                  "HOT PATH" header above the *_loop functions.)
      *
      *   'device'       Flat array of n-channel floats, 0.0–1.0 per channel.
      *                  CMYK 25%,0,100%,50% → [0.25, 0.0, 1.0, 0.5]
@@ -356,7 +355,7 @@
      *                               millions of verified pixels (6-config
      *                               matrix in `bench/wasm_poc/`). ~1.40×
      *                               over 'int' on x64 for 3D tetrahedral
-     *                               workloads; see docs/Performance.md
+     *                               workloads; see docs/deepdive/Performance.md
      *                               "WASM scalar — measured" section.
      *
      *                               If WebAssembly is unavailable in the
@@ -374,7 +373,7 @@
      *                               same 6-config matrix. ~3.0-3.5× over
      *                               'int' (2.0-2.5× over 'int-wasm-scalar')
      *                               on x64 for 3D RGB→RGB / RGB→CMYK; see
-     *                               docs/Performance.md "WASM SIMD —
+     *                               docs/deepdive/Performance.md "WASM SIMD —
      *                               channel-parallel" section.
      *
      *                               Supports cMax ∈ {3, 4} only — other
@@ -399,7 +398,7 @@
      *                               (`bench/wasm_poc/tetra3d_int16_run.js`).
      *                               1.07–1.38× over 'int16' on x64 for 3D
      *                               tetrahedral; 1.96–2.53× over lcms-wasm
-     *                               u16; see docs/Performance.md
+     *                               u16; see docs/deepdive/Performance.md
      *                               "WASM int16 — measured" section.
      *
      *                               3D + 4D both ship (4D uses two-rounding
@@ -470,11 +469,9 @@
         // setKernel() is one array index with no key string to build, and any
         // single dimension can be replaced without disturbing its neighbours.
         //
-        // Slots 5..15 hold the SAME KernelND descriptor object today. That is
-        // deliberate: eleven independently replaceable slots cost nothing (one
-        // object, therefore one hidden class), and they let someone with a real
-        // 7-channel workload register a tuned Kernel7D — or a test park a probe
-        // at dimension 9 — without forking the generic implementation.
+        // Slots 5 and 6 are Kernel5D / Kernel6D (int8 WASM scalar). Slots
+        // 7..15 hold the SAME KernelND descriptor. A later tuned kernel can
+        // still replace one slot without forking the rest.
         //
         // Registered once via Transform.registerKernel(); instantiated per
         // Transform in setKernel() via Object.create(descriptor).
@@ -525,6 +522,9 @@
          *
          *     await Transform.enablePool();                       // Node
          *     await Transform.enablePool({cores: 4});
+         *     await Transform.enablePool({                        // browser
+         *         workerUrl: '/path/to/jsColorEngineWorker.js'
+         *     });
          *
          * Everything else falls back to sequential silently on failure, which
          * is right — multicore is an optimisation, never a capability. This is
@@ -533,10 +533,10 @@
          * thread. It also warms the pool, so the first batch is not the one
          * paying for spawning.
          *
-         * Rejects with the reason. In a browser that reason is currently "no
-         * worker backend" — the Web Worker pool is 1.6 work; see the Roadmap.
+         * Rejects with the reason. A browser needs the worker bundle URL —
+         * `workerUrl` or `globalThis.JSCE_WORKER_URL`.
          *
-         * @param {object} [options]  pool options, e.g. {cores, maxThreads}
+         * @param {object} [options]  pool options, e.g. {cores, maxThreads, workerUrl}
          * @returns {Promise<{workers:number, host:string}>}
          */
         static enablePool(options){
@@ -627,11 +627,16 @@
          */
         static disablePool(){
             Transform._poolDefault = null;
-    Transform._poolInfo = null;
-    Transform._warnedPoolReconfig = false;
-            Transform._poolInfo    = null;
+            Transform._poolInfo = null;
+            Transform._warnedPoolReconfig = false;
             _pool.destroyAll();
         }
+
+        /** Per-worker fragment / MPx/s split — see pool.workerStats(). */
+        static workerStats(){ return _pool.workerStats(); }
+
+        /** Resident LUT copies across the pool, one line per pool. */
+        static poolMemory(){ return _pool.memorySummary(); }
 
         /**
          * Accept the words people actually reach for.
@@ -649,9 +654,7 @@
             if(o.maxWorkers !== undefined && o.maxThreads === undefined) o.maxThreads = o.maxWorkers;
             if(o.minWorkers !== undefined && o.minThreads === undefined) o.minThreads = o.minWorkers;
             delete o.workers; delete o.maxWorkers; delete o.minWorkers;
-            // `url` is where the Web Worker bundle lives. Carried, not used:
-            // the browser backend is 1.6 work, and enable() rejects there with
-            // that spelled out rather than pretending the URL did something.
+            if(o.url !== undefined && o.workerUrl === undefined) o.workerUrl = o.url;
             return o;
         }
 
@@ -692,6 +695,11 @@
             }
 
             this.kernel = null;
+            // What array() actually ran last: the kernel's `name`, or
+            // 'pipeline' / 'cache'. Null until the first batch. Tests
+            // assert on this; ViaLUT throws before array() so it stays
+            // whatever it was.
+            this.lastUsedKernel = null;
 
             // Cache the raw constructor options so behaviours applied via t.use()
             // can read plugin-specific values (e.g. totalInk) without the caller
@@ -1006,15 +1014,27 @@
             this.useCurveLut = options.useCurveLut === true;
 
             // pixelCache: memoise the accuracy path at the device boundary.
-            //   0 / false — off (default)
-            //   1         — single entry: catches solid fills and runs
-            //   16, 32 …  — direct-mapped table (rounded to a power of two):
-            //               also catches repeating palettes and dithers
-            // One number rather than an enabled+size pair, which would admit
+            //   'auto'    — default. Transform ignores it; the kernel may
+            //               change it to 1 from init() (4/5/6 do). 3D and
+            //               everything else leave it, so nothing is injected.
+            //   0 / false — off
+            //   1 / true  — single entry: catches solid fills and runs
+            //   16, 32 …  — direct-mapped table (rounded to a power of two)
+            // One value rather than an enabled+size pair, which would admit
             // the meaningless {enabled: true, size: 0}. See
             // docs/deepdive/PixelCache.md.
-            this.pixelCache = (options.pixelCache === true) ? 1 : (Number(options.pixelCache) || 0);
-            if(this.pixelCache < 0 || isNaN(this.pixelCache)){ this.pixelCache = 0; }
+            // pixelCacheUsed is what actually ran after init() + inject.
+            var rawPixelCache = options.pixelCache;
+            if(rawPixelCache === undefined || rawPixelCache === 'auto'){
+                this.pixelCache = 'auto';
+            } else if(rawPixelCache === true){
+                this.pixelCache = 1;
+            } else {
+                this.pixelCache = Number(rawPixelCache) || 0;
+                if(this.pixelCache < 0 || isNaN(this.pixelCache)){ this.pixelCache = 0; }
+            }
+            this._pixelCacheRequested = this.pixelCache;
+            this.pixelCacheUsed = 0;
             this._pixelCacheData = null;
 
             this.verbose = options.verbose === true;
@@ -1075,12 +1095,11 @@
         };
 
         /**
-         * Register a kernel module descriptor.
-         * Binds all array-kernel variants and lifecycle methods to Transform.prototype.
-         * The HOW of binding is entirely inside this method — change it here to
-         * experiment with different dispatch claimKernels (prototype, this.kernels[key], etc.).
+         * Store a kernel descriptor in Transform.kernels[dimensions].
+         * `dimensions` is one index or an inclusive [from, to] range.
+         * Live Transforms keep the instance they got at create().
          *
-         * @param {object} descriptor  Kernel module export (see docs/deepdive/KernelModules.md)
+         * @param {object} descriptor  Kernel module export (see docs/deepdive/KernelContract.md)
          */
         static registerKernel(descriptor){
             var MAX = Transform.MAX_KERNEL_DIMENSIONS;
@@ -1114,21 +1133,6 @@
                     + '0-' + MAX + ', or [from, to] within that range');
             }
 
-            // TWO KINDS OF KERNEL, ONE REGISTRATION CALL.
-            //
-            // A DIMENSIONAL kernel owns a channel count and is chosen before
-            // the pipeline exists — 3 channels in means Kernel3D, always.
-            //
-            // A CLAIMING kernel declares `claims(transform)` and is offered the
-            // transform AFTER the pipeline is built, because what it needs to
-            // know is not the channel count but the SHAPE the optimiser folded
-            // the conversion into. sRGB->AdobeRGB and sRGB->GRACoL are both
-            // 3-channel input; only one of them is a matrix shaper.
-            //
-            // Claiming kernels are held in registration order and asked in that
-            // order, so a later registration is a lower priority than an
-            // earlier one. They do not displace the dimensional slot: a pair
-            // that is not claimed still gets Kernel3D, and so does every LUT.
             // One descriptor object into every slot in the range. Sharing the
             // object is what keeps this free: Object.create(descriptor) in
             // setKernel() produces one hidden class for the whole span.
@@ -1137,17 +1141,6 @@
             }
         }
 
-        /**
-         * Offer this Transform to the claiming kernels, in registration order.
-         *
-         * Called once at the end of create(), after `pipelineCreated`. The
-         * first kernel to claim replaces `this.kernel` for the batch path; the
-         * dimensional kernel it displaces is simply dropped, because a claimed
-         * transform has no LUT for that kernel to walk.
-         *
-         * The reason it cannot happen in setKernel(): the answer depends on the
-         * pipeline, and at setKernel() time there is not one yet.
-         */
         /** Release and detach the current kernel instance, if any. */
         _releaseKernel(){
             if(this.kernel && typeof this.kernel.release === 'function'){
@@ -1175,26 +1168,23 @@
                 dataFormat:        this.dataFormat,
                 verbose:           this.verbose,
                 wasmMatrixShaper:  this.wasmMatrixShaper,
-                pixelCacheActive:  this._pixelCacheData !== null && this._pixelCacheData !== undefined,
+                pixelCache:        this.pixelCache,
+                // A forced table (1 / N) is a decision. 'auto' is not — the
+                // kernel resolves that. Inject happens after init(), so
+                // _pixelCacheData is still empty here.
+                pixelCacheActive:  typeof this.pixelCache === 'number' && this.pixelCache > 0,
                 kernelOptions:     this.kernelOptions || null,
             };
         }
 
         /**
          * Let the kernel that owns this dimension settle the pipeline and,
-         * if it wants to, hand the batch path to something better.
+         * if it wants to, hand the batch path to something else.
          *
-         * v1.6 phase 5. This used to walk Transform.claimKernels — one registry
-         * on Transform, asked of every conversion whatever its channel count,
-         * even though the only entry in it has nothing to say about CMYK. The
-         * list now belongs to the kernel that owns the dimension, and Transform
-         * asks one question of one object.
-         *
-         * IT OWNS BOTH SURFACES OR NEITHER. A kernel returning a rewritten
-         * pipeline must also settle the batch path, or transform(colour) and
-         * transformArray() can disagree — see the red-kernel note in the
-         * contract. Nothing built-in rewrites the pipeline yet; when something
-         * does, the re-optimise and re-validate below is what keeps it honest.
+         * Identity's init() builds the copy pipeline. Kernel3D's init() may
+         * yield a matrix-shaper instance. Either way, both surfaces or
+         * neither — a rewritten pipeline without a matching array() path
+         * makes transform(colour) and array() disagree.
          */
         _initKernel(){
             this._kernelClaim = null;
@@ -1205,6 +1195,10 @@
             // decision into one object — the next conversion would inherit the
             // last one's. The prototype chain hides that until an instance
             // field shadows it, which is exactly how it was found.
+            // Re-ask every create(). A previous init() may have promoted
+            // 'auto' to 1; the hint the caller passed is the one to resolve.
+            this.pixelCache = this._pixelCacheRequested;
+
             var kernel = this.kernel;
             if(!kernel || typeof kernel.init !== 'function') return;
 
@@ -1233,6 +1227,13 @@
             }
             if(!result) return;
 
+            // Kernel owns the hint. 'auto' stays 'auto' unless this return
+            // changes it (4/5/6 → 1). Transform injects after init() only
+            // when the value is then a number > 0.
+            if(result.pixelCache !== undefined){
+                this.pixelCache = result.pixelCache;
+            }
+
             if(result.pipeline && result.pipeline !== this.pipeline){
                 this.pipeline = result.pipeline;
                 this.optimisePipeline();
@@ -1251,16 +1252,31 @@
                 console.log('Kernel "' + this._kernelClaim.name + '" took this transform');
             }
 
-            // A kernel MAY still hand back a different object to run the batch
-            // path. Nothing built-in does — the matrix shaper is Kernel3D's own
-            // other implementation, not a separate kernel — but the door stays
-            // open for one that genuinely is.
+            // Kernel3D yields a matrix-shaper instance this way. create() —
+            // WASM load — runs AFTER this return, on whoever won, so a
+            // yielded kernel never pays for tetrahedral modules.
             if(result.kernel){
-                var instance = result.kernel;
-                if(typeof instance.create === 'function'){
-                    this.lutMode = instance.create(this.lutMode);
-                }
-                this.kernel = instance;
+                this.kernel = result.kernel;
+            }
+        }
+
+        /**
+         * Inject the accuracy-path pixel cache after the kernel has settled.
+         *
+         * createPipeline() only records the output-conversion marker.
+         * 'auto' is ignored here — the kernel had its chance in init() to
+         * change it to 1. A number > 0 (forced, or promoted) injects.
+         * pixelCacheUsed is what actually landed (0 if declined).
+         */
+        _applyPixelCache(){
+            this.pixelCacheUsed = 0;
+            if(typeof this.pixelCache !== 'number' || this.pixelCache <= 0){
+                return;
+            }
+            if(this.injectPixelCacheStages()){
+                var data = this._pixelCacheData;
+                this.pixelCacheUsed = (!data || data.slots === 0) ? 1 : data.slots;
+                this.verifyPipeline();
             }
         }
 
@@ -1295,12 +1311,30 @@
 
             info.lutMode = this.lutMode;
             info.hasLut  = this.lut !== false && !!this.lut;
+            // Pixel-cache hint: not a contract. The kernel says whether a
+            // cached export exists; Transform never fails create() for this.
+            //   'not-supported'  matrix-shaper, identity, 1D/2D, ND
+            //   'off'            3D/4D CLUT kernel, hint off or no cached bind
+            //   1                single-entry (same bits as last pixel)
+            //   N                array table, N slots (power of two)
+            if(info.cache == null){
+                var dim = info.dimensions;
+                // Image-path first: the WASM _cached bind is what array()
+                // actually ran. pixelCacheUsed is the accuracy-path table.
+                if(this.kernel && this.kernel.inKernelCache){
+                    info.cache = 1;
+                } else if(this.pixelCacheUsed){
+                    info.cache = this.pixelCacheUsed;
+                } else {
+                    info.cache = (dim >= 3 && dim <= 6) ? 'off' : 'not-supported';
+                }
+            }
             return info;
         }
 
         setKernel(inChannels) {
             // One array index. No key string to build, no `> 4` special case —
-            // the registry is dense over 1..15 and KernelND occupies 5..15.
+            // the registry is dense over 1..15 (5/6 specialised, 7..15 KernelND).
             var descriptor = Transform.kernels[inChannels];
             if(!descriptor){
                 // No kernel module registered for this dimension (yet) —
@@ -1319,11 +1353,15 @@
             // The kernel's own image path. Declared here only so every
             // instance of a dimension shares one hidden class - written by the
             // kernel's init(), read by nothing outside it:
+            //   arrayFn    : single-implementation bind (Identity: the
+            //                format-specific copy). LUT kernels leave this
+            //                null and pick between the two slots below.
             //   arrayFnBig : run for pixelCount >= threshold
             //   arrayFnSml : run for pixelCount <  threshold
             //   threshold  : the kernel's break-even, or 0 when both slots
             //                hold the same implementation and there is
             //                nothing to pick between
+            instance.arrayFn    = null;
             instance.arrayFnBig = null;
             instance.arrayFnSml = null;
             instance.threshold = 0;
@@ -1333,11 +1371,24 @@
             // instead of its table — see Kernel3D.init(). Declared here so
             // every instance of a dimension keeps one hidden class.
             instance.claimed = false;
+            instance.enableForArrays = false;
             instance._matrixShaper = null;
-            // WASM module states, owned by the kernel that runs them (v1.6
-            // phase 4c). Populated by kernel.create() via wasmLifecycle, nulled
-            // by kernel.release(). Declared here in a fixed order so every
-            // instance of a dimension keeps one hidden class.
+            // Eight WASM slots on EVERY instance — identity and KernelND
+            // included, which never load a module. History: Transform owned
+            // both the 3D and 4D families, so eight states lived on `this`.
+            // They moved onto the kernel so the loader also releases them.
+            // `transform.wasmTetra3D` still reads through the forwarding
+            // accessors at the bottom of this file, and those accessors
+            // read `this.kernel[slot]`. If only Kernel3D planted the slots,
+            // an identity transform would throw on the getter.
+            //
+            // One hidden class is the other reason. Object.create() plus
+            // this fixed own-property order means identity, 1D, 3D and ND
+            // instances are the same shape, so V8 monomorphs kernel.array()
+            // and the accessors. Eight nulls cost a few pointers; a missing
+            // property on some kernels would split the hidden class and
+            // cost the call. They stay null unless create() instantiates
+            // a module for that family.
             instance.wasmTetra3D          = null;
             instance.wasmTetra3DSimd      = null;
             instance.wasmTetra3DInt16     = null;
@@ -1346,7 +1397,33 @@
             instance.wasmTetra4DSimd      = null;
             instance.wasmTetra4DInt16     = null;
             instance.wasmTetra4DInt16Simd = null;
+            instance.wasmTetra5D          = null;
+            instance.wasmTetra6D          = null;
             this.kernel = instance;
+        }
+
+        /**
+         * Whether array() should hand the batch to this.kernel.
+         *
+         * Decided once, after the kernel (and any yield) is in place:
+         * identity always — its arrayFn is bound to the right container
+         * for this dataFormat, objects included — a claimed kernel or
+         * an int8/int16 CLUT when the format is a flat buffer. Object
+         * formats on a colour kernel still walk: those kernels copy
+         * channels, not colour objects.
+         *
+         * array() then checks one flag. Pixel cache stays a per-call
+         * exclude: it can be live without the kernel knowing.
+         */
+        _enableKernelForArrays(){
+            var k = this.kernel;
+            if(!k) return;
+            var objects = this.dataFormat === 'object' || this.dataFormat === 'objectFloat';
+            k.enableForArrays = this.isIdentity
+                || (!objects && (
+                    k.claimed === true
+                    || (!!this.lut && (this.dataFormat === 'int8' || this.dataFormat === 'int16'))
+                ));
         }
 
         /**
@@ -1750,7 +1827,7 @@
          * with new Profile(url) / loadPromise() first.
          *
          * After this call returns, the Transform is ready: call transform() for
-         * single colours, or transformArray() / transformArrayViaLUT() for arrays.
+         * single colours, or array() / transformArray() for batches.
          *
          * @param {string|Profile} inputProfile   Source profile or '*virtualName'
          * @param {string|Profile} outputProfile  Destination profile or '*virtualName'
@@ -2046,7 +2123,9 @@
             // that would otherwise leave a silently empty one behind.
             if(this.isIdentity){
                 this._initKernel();
+                this._applyPixelCache();
                 this.pipelineCreated = this.pipeline.length > 0;
+                this._enableKernelForArrays();
                 return;
             }
 
@@ -2230,36 +2309,20 @@
                 this.gamutColorDevice = [];
             }
 
-            // WASM KERNEL INIT — moved verbatim into
-            // src/kernels/wasmLifecycle.js (v1.7 phase B) and reached via the
-            // kernel module's create(lutMode). Tries to compile/instantiate
-            // the tetrahedral WASM kernels once, at create() time, demoting
-            // lutMode on any failure (simd → scalar → JS) so the best
-            // available kernel runs. The dispatcher then sees the settled
-            // lutMode — zero per-call overhead from the demotion.
+            // Yield first (cheap pipeline inspect), then the WINNING kernel
+            // loads its own WASM. create-before-init compiled tetrahedral
+            // modules for every sRGB→AdobeRGB pair that then threw them away.
+            this._initKernel();
+            this._applyPixelCache();
             if(this.kernel){
                 this.lutMode = this.kernel.create(this.lutMode);
             }
-
-            // CLAIM PASS. The dimensional kernel above was chosen from the
-            // channel count before the pipeline existed; a claiming kernel is
-            // offered the transform now that its SHAPE is known, and may take
-            // over the batch path. See registerKernel().
-            this._initKernel();
+            this._enableKernelForArrays();
 
             this._propagateWasmMemorySettings();
 
-            // v1.3 — resolve LUT dispatcher table refs ONCE per create().
-            // Walks the fallback chain in src/lutKernelTable.js for the
-            // current (lutMode, inputChannels, outputChannels) triple,
-            // caching one ref for big batches (WASM-eligible) and one for
-            // small batches (below memcpy break-even). Per-array dispatch
-            // is then a single threshold compare + indirect call. Safe
-            // no-op when this.lut is false (no LUT path) or inputChannels
-            // is gray/duotone (handled by separate kernels, not the table).
-            // Cache lutMode classification booleans so the per-call hot path
-            // in transformArrayViaLUT avoids repeated string comparisons.
-            // Must run AFTER lutMode demotions above have settled.
+            // Cache lutMode classification so the hot path does not
+            // re-compare the string. After the demotions above have settled.
             var lm = this.lutMode;
             this._expectsU16    = (lm === 'int16' || lm === 'int16-wasm-scalar' || lm === 'int16-wasm-simd');
             this._isIntegerMode = (lm === 'int' || lm === 'int16'
@@ -2301,7 +2364,8 @@
                 this.wasmTetra3D, this.wasmTetra3DSimd,
                 this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
                 this.wasmTetra4D, this.wasmTetra4DSimd,
-                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd,
+                this.wasmTetra5D, this.wasmTetra6D
             ];
             var ratio = this._wasmShrinkRatio;
             var max   = this._wasmMaxMemory;
@@ -2383,7 +2447,8 @@
                 this.wasmTetra3D, this.wasmTetra3DSimd,
                 this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
                 this.wasmTetra4D, this.wasmTetra4DSimd,
-                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd,
+                this.wasmTetra5D, this.wasmTetra6D
             ];
             for (var i = 0; i < states.length; i++) {
                 if (states[i]) states[i].compact();
@@ -2443,8 +2508,7 @@
                 lutGamutLimit:              this.lutGamutLimit,
                 lutGamutMapScale:           this.lutGamutMapScale,
                 lutGamutColor:              this.lutGamutColor,
-                pixelCache:                 this.pixelCacheSlots !== undefined
-                                                ? this.pixelCacheSlots : 0,
+                pixelCache:                 this.pixelCacheUsed,
                 roundOutput:                this.roundOutput,
                 precision:                  this.precision,
                 optimise:                   this.optimise,
@@ -2739,10 +2803,11 @@
          *     });
          *
          * `info` carries `{id, index, pixelCount, outputChannels, ms,
-         * computeMs, source}`. `ms` is wall time from the start of the call —
-         * what a progress bar wants; `computeMs` is summed worker time for
-         * that image, which is the work actually done and can EXCEED `ms`,
-         * because one image's slices run on several workers at once. `source`
+         * computeMs, fragments, source}`. `ms` is wall time from the start of
+         * the call — what a progress bar wants; `computeMs` is summed worker
+         * time for that image, which is the work actually done and can EXCEED
+         * `ms`, because one image's slices run on several workers at once.
+         * `fragments` is how many slices that image was cut into. `source`
          * is the caller's own descriptor, so any metadata hung on it comes
          * back without the engine defining a shape for it.
          *
@@ -2837,6 +2902,7 @@
                     // is the honest per-image cost.
                     ms:             Date.now() - batchStarted,
                     computeMs:      (stats && stats.computeMs !== undefined) ? stats.computeMs : null,
+                    fragments:      (stats && stats.fragments !== undefined) ? stats.fragments : null,
                     // A cancelled image still announces — a caller awaiting one
                     // callback per image would otherwise wait forever for work
                     // that will never run. `data` is null in that case: tasks
@@ -2873,7 +2939,7 @@
                     var pl = plans[i], f = pl.flags;
                     var converted = self.transformArray(pl.data, f.inputHasAlpha,
                         f.outputHasAlpha, f.preserveAlpha, pl.pixelCount);
-                    announce(i, converted, {computeMs: Date.now() - t0});
+                    announce(i, converted, {computeMs: Date.now() - t0, fragments: 1});
                     return converted;
                 });
                 return Promise.resolve({images: out, imageInfo: imageInfo,
@@ -3048,7 +3114,7 @@
             // — up to 512 KB of tables at int16, plus pixel buffers. Leaving it
             // attached across clear() would keep that memory and, worse, offer
             // the next create() a kernel chosen for a conversion it no longer
-            // performs. create() re-runs setKernel() and the claim pass.
+            // performs. create() re-runs setKernel() and _initKernel().
             this._releaseKernel();
             this._kernelClaim = null;
 
@@ -3110,7 +3176,8 @@
                 this.wasmTetra3D, this.wasmTetra3DSimd,
                 this.wasmTetra3DInt16, this.wasmTetra3DInt16Simd,
                 this.wasmTetra4D, this.wasmTetra4DSimd,
-                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd
+                this.wasmTetra4DInt16, this.wasmTetra4DInt16Simd,
+                this.wasmTetra5D, this.wasmTetra6D
             ];
             for (var i = 0; i < states.length; i++) {
                 if (states[i]) total += states[i].memory.buffer.byteLength;
@@ -3344,6 +3411,18 @@
                     CLUT = this.create4DDeviceLUT(outputChannels, this.lutGridPoints4D);
                     gridPoints = [this.lutGridPoints4D, this.lutGridPoints4D, this.lutGridPoints4D, this.lutGridPoints4D];
                     break;
+                case eProfileType.NChannel:
+                    // 5CLR / 6CLR bake at the profile's own A2B density — do
+                    // not up-res to lutGridPoints3D (33^5 is not a LUT).
+                    inputChannels = this.getProfileChannels(this.inputProfile);
+                    var a2b = this.inputProfile.A2B && (this.inputProfile.A2B[1] || this.inputProfile.A2B[0]);
+                    var nGrid = (a2b && a2b.gridPoints && a2b.gridPoints[0])
+                        ? a2b.gridPoints[0]
+                        : Profile.gridFor(inputChannels);
+                    CLUT = this.createNDDeviceLUT(outputChannels, nGrid, inputChannels);
+                    gridPoints = [];
+                    for(var gi = 0; gi < inputChannels; gi++) gridPoints.push(nGrid);
+                    break;
                 default:
                     throw 'Create Lut Invalid input profile type ' + this.inputProfile.type;
             }
@@ -3365,6 +3444,8 @@
             var g1 =      gridPoints[0];
             var g2 = g1 * (gridPoints[1] || 0);
             var g3 = g2 * (gridPoints[2] || 0);
+            var g4 = g3 * (gridPoints[3] || 0);
+            var g5 = g4 * (gridPoints[4] || 0);
             return {
                 // Useful info if we were to just reuse this LUT
                 // we can use this to check how the LUT is built
@@ -3380,10 +3461,14 @@
                 g1: g1,
                 g2: g2,
                 g3: g3,
+                g4: g4,
+                g5: g5,
                 go0: outputChannels,
                 go1: g1 * outputChannels,
                 go2: g2 * outputChannels,
                 go3: g3 * outputChannels,
+                go4: g4 * outputChannels,
+                go5: g5 * outputChannels,
                 CLUT: CLUT, // data
 
                 // Numeric type of the CLUT cells. See `Transform#f`
@@ -3564,7 +3649,8 @@
             // worrying about edge profiles.
             var supported3D = (inputChannels === 3 && (outputChannels === 3 || outputChannels === 4));
             var supported4D = (inputChannels === 4 && (outputChannels === 3 || outputChannels === 4));
-            if(!supported3D && !supported4D){
+            var supported56 = (inputChannels === 5 || inputChannels === 6);
+            if(!supported3D && !supported4D && !supported56){
                 return;
             }
 
@@ -3584,6 +3670,12 @@
             var isU16Mode = (this.lutMode === 'int16'
                           || this.lutMode === 'int16-wasm-scalar'
                           || this.lutMode === 'int16-wasm-simd');
+
+            // int16 5D/6D is a later clone — decline the u16 mirror so
+            // resolve() lands on float rather than a half-built intLut.
+            if(supported56 && isU16Mode){
+                return;
+            }
 
             var scale = isU16Mode ? 65535 : 65280;
             var gpsPrecisionBits = isU16Mode ? 13 : 16;
@@ -3649,7 +3741,9 @@
             var maxX = (g1 - 1) * lut.go2;
             var maxY = (g1 - 1) * lut.go1;
             var maxZ = (g1 - 1) * lut.go0;
-            var maxK = supported4D ? ((g1 - 1) * lut.go3) : 0;
+            var maxK = (supported4D || supported56) ? ((g1 - 1) * lut.go3) : 0;
+            var maxE = supported56 ? ((g1 - 1) * lut.go4) : 0;
+            var maxF = (inputChannels === 6) ? ((g1 - 1) * lut.go5) : 0;
 
             // ------------------------------------------------------------
             // FORMAT TAG — do not remove.
@@ -3705,7 +3799,7 @@
                 dataType: 'u16',                  // Uint16Array CLUT (matches outer lut.dataType field)
                 scale: scale,                     // 65280 for u8 modes, 65535 for u16 modes
                 gpsPrecisionBits: gpsPrecisionBits, // 16 for u8 modes, 13 for u16 modes (Q0.13)
-                accWidth: supported4D ? (isU16Mode ? 16 : 20) : 16,  // u8 4D uses u20 Q16.4; u16 4D uses two-rounding (no intermediate)
+                accWidth: (supported4D || supported56) ? (isU16Mode ? 16 : 20) : 16,
 
                 // --- CLUT and indexing ---
                 CLUT: u16,
@@ -3721,7 +3815,11 @@
                 go0: lut.go0,
                 go1: lut.go1,
                 go2: lut.go2,
-                go3: supported4D ? lut.go3 : 0,
+                go3: (supported4D || supported56) ? lut.go3 : 0,
+                go4: supported56 ? (lut.go4 || 0) : 0,
+                go5: (inputChannels === 6) ? (lut.go5 || 0) : 0,
+                maxE: maxE,
+                maxF: maxF,
 
                 gamutMode:     lut.gamutMode     || 'none',
                 gamutLimit:    lut.gamutLimit    || 0,
@@ -3910,6 +4008,49 @@
             return CLUT;
         }
 
+        /**
+         * Generic N-D device LUT bake. Last channel varies fastest (ICC order).
+         * Used for 5CLR / 6CLR input at the profile's own A2B grid density.
+         */
+        createNDDeviceLUT(outputChannels, gridPoints, inputChannels){
+            var cells = 1;
+            var d;
+            for(d = 0; d < inputChannels; d++) cells *= gridPoints;
+            var CLUT = new Float64Array(outputChannels * cells);
+            var step = 1 / (gridPoints - 1);
+            var idx = new Array(inputChannels);
+            for(d = 0; d < inputChannels; d++) idx[d] = 0;
+            var position = 0;
+            var inHooks  = this._lutInputHooks;
+            var outHooks = this._lutOutputHooks;
+            var hasIn  = inHooks.length  > 0;
+            var hasOut = outHooks.length > 0;
+            var done = false;
+            while(!done){
+                var src = new Array(inputChannels);
+                for(d = 0; d < inputChannels; d++) src[d] = idx[d] * step;
+                if(hasIn) src = this._applyLutHooks(inHooks, src);
+                var device = this.transform(src);
+                if(hasOut) device = this._applyLutHooks(outHooks, device, src);
+                if(this.lutGamutMode !== 'none'){
+                    device = this.gamutCheck(src, device, outputChannels);
+                }
+                var o;
+                for(o = 0; o < outputChannels; o++){
+                    CLUT[position++] = device[o];
+                }
+                d = inputChannels - 1;
+                while(d >= 0){
+                    idx[d]++;
+                    if(idx[d] < gridPoints) break;
+                    idx[d] = 0;
+                    d--;
+                }
+                if(d < 0) done = true;
+            }
+            return CLUT;
+        }
+
 
         /**
          * Run a single colour through the full pipeline. ACCURACY-PATH entry point.
@@ -3922,8 +4063,8 @@
          * Cost: ~µs per colour (scales linearly with pipeline length).
          *
          *  ⚠ DO NOT loop this over image data. For 100 colours it's fine; for
-         *    100,000 colours use transformArray(); for image-grade pixel buffers
-         *    use transformArrayViaLUT() with `buildLut: true, dataFormat: 'int8'`.
+         *    100,000 colours or image buffers use array() with
+         *    `{ buildLut: true, dataFormat: 'int8' }`.
          *    See class JSDoc "USAGE GUIDE" and the "anti-pattern" section.
          *
          * When `pipelineDebug` is true, each stage's input/output is recorded into
@@ -4046,10 +4187,11 @@
          * {@link Transform.reformat} or the sixth argument of
          * {@link Transform#transformArray}.
          *
-         * Hands the kernel the batch when it can take it (identity, a claimed
-         * kernel, or an int8/int16 CLUT). Otherwise walks the pipeline per
-         * pixel: colour objects for `object` / `objectFloat`, a flat numeric
-         * array for everything else.
+         * Hands the kernel the batch when `kernel.enableForArrays` is set
+         * (identity in any dataFormat, a claimed kernel, or an int8/int16
+         * CLUT — decided at create()). Otherwise walks the pipeline per
+         * pixel. After the call, `this.lastUsedKernel` is the kernel
+         * `name`, or `'pipeline'` / `'cache'`.
          *
          * `preserveAlpha` is a preference. Omitted, it follows `outputHasAlpha`;
          * it is then clamped to what the input actually has.
@@ -4104,41 +4246,19 @@
                     throw 'Invalid inputChannels ' + this.lut.inputChannels;
                 }
             }
+            // setKernel() plants enableForArrays=false. create() flips it;
+            // an out-of-band LUT (attach then setKernel, or setKernel then
+            // array()) never went through create(), so flip it here too.
+            if(this.lut) this._enableKernelForArrays();
 
-            // ONE DISPATCH TO THE KERNEL. Three routes used to reach
-            // kernel.array() by three separate conditions -- identity, which
-            // has no LUT; a built CLUT; and a claiming kernel, which also has
-            // no LUT. They are the same question asked three ways: can this
-            // kernel take the batch. Since identity became kernels[0] and got
-            // an array() like every other kernel, there is nothing left to
-            // distinguish them at the call site.
-            //
-            //   identity   always, whatever the dataFormat -- a copy with
-            //              alpha handling, and the pipeline walk below would
-            //              be orders of magnitude slower for it
-            //   claimed    a kernel that took the transform instead of a CLUT
-            //              (the matrix shaper). May still decline, in which
-            //              case falling through is the safe answer.
-            //   CLUT       int8/int16 only; the float and object formats keep
-            //              the accuracy path
-            //
-            // A pixel cache excludes all of them: the per-pixel walk below
-            // resolves through the cache, and a batch kernel would bypass it.
-            // Colour objects are not a kernel batch: Identity.array() copies
-            // channels as a flat buffer, and a claimed matrix shaper expects
-            // int8/int16 pixels. The walk below is the object path.
-            var isObjectFmt = this.dataFormat === 'object' || this.dataFormat === 'objectFloat';
-            if(this.kernel && this._pixelCacheData === null && !isObjectFmt){
-                var batchLut = this.lut || null;
-                var canBatch = this.isIdentity
-                    || this.kernel.claimed === true
-                    || (batchLut !== null
-                        && (this.dataFormat === 'int8' || this.dataFormat === 'int16'));
-
-                if(canBatch){
-                    var batched = this.kernel.array(inputArray, outputArray, pixelCount,
-                        batchLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
-                    if(batched) return batched;
+            // One flag, set at create() (and on the out-of-band LUT net
+            // above). A null return is a late decline — fall through.
+            if(this.kernel && this.kernel.enableForArrays){
+                var batched = this.kernel.array(inputArray, outputArray, pixelCount,
+                    this.lut || null, inputHasAlpha, outputHasAlpha, preserveAlpha);
+                if(batched){
+                    this.lastUsedKernel = this.kernel.name || 'kernel';
+                    return batched;
                 }
             }
 
@@ -4155,6 +4275,7 @@
                 // prototype at the bottom of this file alongside stages.js and
                 // interp.js. It reads as a missing method from here, which is
                 // why the file is named.
+                this.lastUsedKernel = 'cache';
                 return this._transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha,
                     preserveAlpha, pixelCount);
             }
@@ -4185,6 +4306,7 @@
                     }
                     outputArray[i] = result;
                 }
+                this.lastUsedKernel = 'pipeline';
                 return outputArray;
             }
 
@@ -4360,6 +4482,7 @@
                         }
                     }
             }
+            this.lastUsedKernel = 'pipeline';
             return outputArray;
         };
 
@@ -4508,10 +4631,10 @@
          * in the kernel, and array() reaches the same kernel.array() by the
          * same dispatch.
          *
-         * The one thing it still adds is the explicit "No LUT loaded" refusal,
-         * kept because callers reaching for this name are asking for the CLUT
-         * path specifically and a silent fall to the per-pixel walk would be a
-         * hundredfold slower without saying so.
+         * The one thing it still adds is the explicit "No LUT loaded" refusal.
+         * array() may fall through to the pipeline walk when there is no table;
+         * this name throws instead. Cost is one `if`. lastUsedKernel is set by
+         * array() after a successful call.
          *
          * NOTE the argument order differs from transformArray(): the sixth
          * parameter here is `outputArray`, not `outputFormat`. Two public
@@ -4853,13 +4976,9 @@
                 this.optimisePipeline();
             }
 
-            // After the optimiser (so the cache stages cannot be folded into a
-            // neighbour, and so the positions it finds are final) and before
-            // verifyPipeline (so the injected device->device encodings are
-            // still checked rather than silently trusted).
-            if(this.pixelCache){
-                this.injectPixelCacheStages();   // src/cache.js, prototype-attached
-            }
+            // Pixel-cache stages are injected AFTER init() — _applyPixelCache
+            // — so the kernel can promote 'auto' to 1 (or leave it). The
+            // output-conversion marker above is what inject reads.
 
             // Ensure pipeline is valid by checking that the output of one stage matches the input of the next
             this.verifyPipeline();
@@ -4897,6 +5016,7 @@
                 'tetrahedralInterp3D',
                 'trilinearInterp4D',
                 'tetrahedralInterp4D',
+                'tetrahedralInterpND',
             ]
 
             while (Opt === true){
@@ -5069,7 +5189,7 @@
                 for(var i = 0; i < interp3DList.length; i++){
                     var interpND = interp3DList[i];
                     // Simplify Int to LUT, we can use the LUT's inputscale directly instead of converting to device
-                    Opt |= this.optimiseFindPattern('stage_Int_to_Device', interpND, function(stage1,stage2){
+                    var _foldIntIn = function(stage1,stage2){
                         var lut = stage2.stageData;
                         var intValue = stage1.stageData; // 255 or 65535
                         lut.inputScale = 1 / intValue;
@@ -5082,7 +5202,9 @@
                             '  *[optimised : {name}]|({last}) > ({data})',
                             true
                         )];
-                    });
+                    };
+                    Opt |= this.optimiseFindPattern('stage_Int_to_Device', interpND, _foldIntIn);
+                    Opt |= this.optimiseFindPattern('stage_IntN_to_Device', interpND, _foldIntIn);
 
                     // We can use the LUT's output directly instead of
                     // This only saves a few multiplications and if statements, so not much of a saving
@@ -5229,6 +5351,16 @@
                         this.lut,
                         this.getDevice2OutputPCSInfo(outputProfile),
                         ' [Prebuilt LUT4D : {name}]|({last}) > ({data})'
+                    );
+                    break;
+                case 5:
+                case 6:
+                    this.addStageLUT(
+                        false,
+                        this.getInput2DevicePCSInfo(inputProfile),
+                        this.lut,
+                        this.getDevice2OutputPCSInfo(outputProfile),
+                        ' [Prebuilt LUT' + this.lut.inputChannels + 'D : {name}]|({last}) > ({data})'
                     );
                     break;
                 default:
@@ -8502,10 +8634,14 @@
             lut.g1  = g1;
             lut.g2  = g2;
             lut.g3  = g3;
+            lut.g4  = (gp.length >= 4) ? g3 * gp[3] : 0;
+            lut.g5  = (gp.length >= 5) ? lut.g4 * gp[4] : 0;
             lut.go0 = oc;
             lut.go1 = g1 * oc;
             lut.go2 = g2 * oc;
             lut.go3 = g3 * oc;
+            lut.go4 = lut.g4 * oc;
+            lut.go5 = lut.g5 * oc;
         }
         return lut;
     }
@@ -8563,7 +8699,7 @@
         // input), but those are kernel-internal scaling parameters and don't
         // belong in the wire format.
         var SKIP_FIELDS = {
-            g1:1, g2:1, g3:1, go0:1, go1:1, go2:1, go3:1,
+            g1:1, g2:1, g3:1, g4:1, g5:1, go0:1, go1:1, go2:1, go3:1, go4:1, go5:1,
             inputScale:1, outputScale:1,
         };
         var out = {
@@ -9293,11 +9429,8 @@ Transform.verifyLut = function(lutOrJson){
 
 
 // ─── Tuned array-loop kernels ───────────────────────────────────────────────
-// The unrolled LUT array loops were moved verbatim into src/kernels/
-// (v1.7 phase B) to shrink this file. They are re-attached here as
-// non-enumerable Transform.prototype methods — identical semantics and
-// performance to the original class methods; every call site
-// (lutKernelTable run closures, kernel modules, tests) is unchanged.
+// The unrolled LUT array loops live in src/kernels/ and are
+// re-attached here as non-enumerable Transform.prototype methods.
 function _attachPrototypeLoops(loops){
     Object.keys(loops).forEach(function(name){
         Object.defineProperty(Transform.prototype, name, {
@@ -9313,6 +9446,8 @@ _attachPrototypeLoops(require('./kernels/1d/kernel1D_loops.js'));
 _attachPrototypeLoops(require('./kernels/2d/kernel2D_loops.js'));
 _attachPrototypeLoops(require('./kernels/3d/kernel3D_loops.js'));
 _attachPrototypeLoops(require('./kernels/4d/kernel4D_loops.js'));
+_attachPrototypeLoops(require('./kernels/5d/kernel5D_loops.js'));
+_attachPrototypeLoops(require('./kernels/6d/kernel6D_loops.js'));
 
 // ─── Stage functions + single-colour interpolators ──────────────────────────
 // Moved verbatim into src/stages.js (stage_* + their compile emitters and
@@ -9345,7 +9480,8 @@ _attachPrototypeLoops(require('./cache.js'));
 // gives null and a write is dropped. Nothing writes these before setKernel().
 [
     'wasmTetra3D', 'wasmTetra3DSimd', 'wasmTetra3DInt16', 'wasmTetra3DInt16Simd',
-    'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd'
+    'wasmTetra4D', 'wasmTetra4DSimd', 'wasmTetra4DInt16', 'wasmTetra4DInt16Simd',
+    'wasmTetra5D', 'wasmTetra6D'
 ].forEach(function(slot){
     Object.defineProperty(Transform.prototype, slot, {
         configurable: true,
@@ -9362,12 +9498,14 @@ _attachPrototypeLoops(require('./cache.js'));
 // create() time via setKernel(). Overridable: a later registerKernel() call
 // for the same dimensions replaces those slots for all future create() calls.
 // KernelND registers the whole 5..15 span in one call via its [from, to].
-// See docs/deepdive/KernelModules.md.
+// See docs/deepdive/KernelContract.md.
 Transform.registerKernel(require('./kernels/identity/KernelIdentity.js'));
 Transform.registerKernel(require('./kernels/1d/Kernel1D.js'));
 Transform.registerKernel(require('./kernels/2d/Kernel2D.js'));
 Transform.registerKernel(require('./kernels/3d/Kernel3D.js'));
 Transform.registerKernel(require('./kernels/4d/Kernel4D.js'));
+Transform.registerKernel(require('./kernels/5d/Kernel5D.js'));
+Transform.registerKernel(require('./kernels/6d/Kernel6D.js'));
 Transform.registerKernel(require('./kernels/nd/KernelND.js'));
 
 // The matrix shaper is NOT registered here any more. It is Kernel3D's other

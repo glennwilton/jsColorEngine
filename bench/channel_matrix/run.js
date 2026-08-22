@@ -21,7 +21,9 @@
  *
  *    1-4 in   a CLUT is built and a tuned array loop runs it. Tens to
  *             hundreds of MPx/s. WASM applies at 3 and 4.
- *    5-15 in  KernelND declines the LUT -- an N-D CLUT bake is grid^N cells --
+ *    5-6 in   Kernel5D / Kernel6D now bake at the profile A2B density
+ *             (9^5 / 7^6) and run int8 WASM scalar. See bench/nch_56/run.js.
+ *    7-15 in  KernelND declines the LUT -- an N-D CLUT bake is grid^N cells --
  *             so the generic per-pixel pipeline walk runs instead. ~1 MPx/s,
  *             and the interpolator is most of it.
  *    any out  wide output costs linearly: more channels written per pixel,

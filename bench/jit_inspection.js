@@ -60,7 +60,7 @@
  *     lutMode:'int' vs lutMode:'float'.
  *   - Moves (~30-40%) and safety (~20%) dominate both families —
  *     they're memory-move-bound, not ALU-bound. This shapes the
- *     realistic WASM / SIMD ceiling (see docs/Performance.md §1b).
+ *     realistic WASM / SIMD ceiling (see docs/deepdive/Performance.md §1b).
  *   - Bounds-check pairs are ~6-8% of instructions. WASM guard
  *     pages eliminate these.
  *   - Overflow checks (`jo`) are ANOTHER ~8% of instructions,
@@ -112,9 +112,9 @@
  *     compilers can pin linear-memory pointers (no aliasing
  *     worries), freeing 2 GPRs → fewer spills.
  *   - Ideas for JIT reordering (just-in-time c0/c1/c2 loads,
- *     narrower live ranges) are documented in docs/Performance.md.
+ *     narrower live ranges) are documented in docs/deepdive/Performance.md.
  *
- * See docs/Performance.md §1b for the full analysis.
+ * See docs/deepdive/Performance.md §1b for the full analysis.
  *
  * Machine-code sizes (actual .text bytes emitted by V8):
  *
@@ -133,7 +133,7 @@
  * on any CPU shipped since ~2008. Apple M-series has 192 KB L1i so
  * they essentially disappear there.
  *
- * See `docs/Performance.md` section "JIT inspection" for the fuller
+ * See `docs/deepdive/Performance.md` section "JIT inspection" for the fuller
  * analysis and the L1i / branch-prediction tradeoff of the unroll.
  *
  * ---------------------------------------------------------------------

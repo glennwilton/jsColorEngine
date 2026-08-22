@@ -3,7 +3,7 @@
 **jsColorEngine docs:**
 [← Project README](../../README.md) ·
 [Bench](../Bench.md) ·
-[Performance](../Performance.md) ·
+[Performance](./Performance.md) ·
 [Roadmap](../Roadmap.md) ·
 [Examples](../Examples.md) ·
 [API: Profile](../Profile.md) ·
@@ -12,12 +12,15 @@
 
 ---
 
-> **Status: shipped.** `src/kernels/matrixShaper/`, four prebuilt binaries with
-> five alpha entry points each, registered as a **claiming kernel module**
-> (`KernelMatrixShaper.js`) and controlled by the `wasmMatrixShaper` option.
-> It is selected by PIPELINE SHAPE rather than channel count — see
-> [KernelModules.md](./KernelModules.md#claiming-kernels--selected-by-pipeline-shape-not-channel-count)
-> — and `transform.kernelInfo()` reports whether it took a given transform.
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
+
+> **Status: shipped.** Lives in `src/kernels/3d/matrixShaper/`, four
+> prebuilt binaries with five alpha entry points each. It is
+> **Kernel3D's other implementation**, not a Transform-level claiming
+> kernel: `Kernel3D.init()` inspects the folded pipeline and yields an
+> instance. Controlled by `wasmMatrixShaper`. See
+> [KernelContract.md](./KernelContract.md#matrix-shaper--kernel3d-yields-transform-never-learns).
+> `transform.kernelInfo()` reports whether it took a given transform.
 > The POC notes further down are kept as the working record; where the
 > shipped result differs from what the POC expected, it is marked inline.
 
@@ -579,7 +582,7 @@ const { alpha } = require('jscolorengine');
 
 // premultiplied source, transparency preserved
 const straight = alpha.unpremultiply(rgba, n);
-const converted = transform.transformArray(straight, true, true, true, n);
+const converted = transform.array(straight, true, true, true, n);
 const result = alpha.premultiply(converted, n);
 
 // or, when the destination has no alpha at all
@@ -722,7 +725,7 @@ displace, so nothing is lost but the CLUT-displacing case.
 
 ### Cost of building it
 
-Resolved **lazily**, on the first `transformArray` call, not at `create()`.
+Resolved **lazily**, on the first `array()` call, not at `create()`.
 Filling the tables costs 3–4 ms at int8 and roughly twice that at int16 —
 worth paying for an image, wasted on a Transform that only ever converts single
 colours, and the gamut helpers build several of those per LUT.
@@ -1141,7 +1144,7 @@ _isMatrixShaperPair() {
 ### Async `create()` and the JS fallback
 
 `create()` is synchronous. `_buildMatrixShaperWasm` is async (`WebAssembly.compile`).
-The first few `transformArray()` calls before the Promise resolves fall through
+The first few `array()` calls before the Promise resolves fall through
 to `_variant = 'matrix_shaper_js'` — the existing JS matrix pipeline — then
 WASM takes over transparently once the compiled module is ready.
 
@@ -1265,7 +1268,7 @@ iteration with plain f32 locals instead of f32x4.
 | `Profile.js` / `decodeFile` | Matrix profiles already decoded; `RGBMatrix.XYZMatrix` and `XYZMatrixInv` are populated |
 | `createPipeline_Device_to_PCS_via_RGBMatrix` | Retained for the single-pixel accuracy path (`transform(color)`) |
 | Existing WASM kernels (`tetra3d_*`) | Untouched — different profile type, different dispatch |
-| `transformArray` | Calls `this.kernel.array(...)` — kernel handles the variant internally |
+| `array()` | Calls `this.kernel.array(...)` — kernel handles the variant internally |
 | LUT bake path | `provideLut()` returns `false` — no CLUT built for matrix-shaper pairs |
 | Smoke test / validate | Runs on the JS fallback pipeline before WASM is ready; still correct |
 

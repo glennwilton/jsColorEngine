@@ -30,6 +30,7 @@
 const path = require('path');
 const {Transform, eIntent} = require('../src/main');
 const Profile = require('../src/Profile');
+const benchContent = require('./lib/benchContent.cjs');
 
 // ----------------------------------------------------------------------
 // Configuration
@@ -55,13 +56,7 @@ const CMYK_PROFILE_PATH = path.join(__dirname, '..', '__tests__', 'GRACoL2006_Co
 // ----------------------------------------------------------------------
 
 function buildInput(channels, pixelCount){
-    var arr = new Uint8ClampedArray(pixelCount * channels);
-    var seed = 0x13579bdf;
-    for(var i = 0; i < arr.length; i++){
-        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
-        arr[i] = seed & 0xff;
-    }
-    return arr;
+    return benchContent.buildInput(channels, pixelCount, 'photo-5');
 }
 
 function timeIters(fn, warmupIters, batchIters){
@@ -95,11 +90,24 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
 
     var input = buildInput(inputChannels, PIXEL_COUNT);
 
-    // --- 1. Accuracy / non-LUT path ---
-    var noLut = new Transform({dataFormat: 'int8', buildLut: false});
+    // --- 1. Accuracy / non-LUT path (matrix-shaper FORCED off) ---
+    var noLut = new Transform({dataFormat: 'int8', buildLut: false, wasmMatrixShaper: false});
     noLut.create(srcProfile, dstProfile, eIntent.relative);
     var msNoLut = timeIters(function(){ noLut.transformArray(input, false, false); },
                             WARMUP_ITERS_NOLUT, BATCH_ITERS_NOLUT);
+
+    // --- 1b. Matrix-shaper (RGB→RGB only; default wasmMatrixShaper:'auto') ---
+    var mpxShaper = null, msShaper = null;
+    if(inputChannels === 3){
+        var shaper = new Transform({dataFormat: 'int8', buildLut: false});
+        shaper.create(srcProfile, dstProfile, eIntent.relative);
+        var info = shaper.kernelInfo && shaper.kernelInfo();
+        if(info && info.name === 'matrix-shaper'){
+            msShaper = timeIters(function(){ shaper.transformArray(input, false, false); },
+                                 50, BATCH_ITERS_LUT);
+            mpxShaper = mpxPerSec(msShaper);
+        }
+    }
 
     // --- 2. lutMode='float' path ---
     var floatT = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'float'});
@@ -119,6 +127,10 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
 
     console.log('  no LUT (accuracy path)  : ' + fmtMpx(mpxNoLut) +
                 '   (' + msNoLut.toFixed(2) + ' ms/iter)');
+    if(mpxShaper != null){
+        console.log('  matrix-shaper           : ' + fmtMpx(mpxShaper) +
+                    '   (' + msShaper.toFixed(2) + ' ms/iter)');
+    }
     console.log('  lutMode = \'float\'     : ' + fmtMpx(mpxFloat) +
                 '   (' + msFloat.toFixed(2) + ' ms/iter)   ' +
                 (mpxFloat / mpxNoLut).toFixed(0) + 'x vs no LUT');
@@ -127,7 +139,7 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
                 (mpxInt / mpxNoLut).toFixed(0) + 'x vs no LUT, ' +
                 (mpxInt / mpxFloat).toFixed(2) + 'x vs float');
 
-    return {name: name, mpxNoLut: mpxNoLut, mpxFloat: mpxFloat, mpxInt: mpxInt};
+    return {name: name, mpxNoLut: mpxNoLut, mpxShaper: mpxShaper, mpxFloat: mpxFloat, mpxInt: mpxInt};
 }
 
 
@@ -140,6 +152,7 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
     console.log(' MPx/s summary bench — all three working modes');
     console.log('==============================================================');
     console.log(' pixels per iter    : ' + PIXEL_COUNT);
+    console.log(' content            : photo with 5% noise added (strawberries, plateau)');
     console.log(' batches x iters    : ' + TIMED_BATCHES + ' x ' +
                 BATCH_ITERS_LUT + ' (LUT)  /  ' +
                 TIMED_BATCHES + ' x ' + BATCH_ITERS_NOLUT + ' (non-LUT)');
@@ -155,6 +168,14 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
         throw new Error('Failed to load CMYK profile: ' + CMYK_PROFILE_PATH);
     }
 
+    var photoInfo = await benchContent.ready();
+    var sep = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
+    sep.create('*srgb', cmykProfile, eIntent.relative);
+    var rgbPlane = benchContent.buildInput(3, photoInfo.npx, 'photo');
+    benchContent.setPhotoCmyk(sep.array(rgbPlane, false, false, false, photoInfo.npx), photoInfo.npx);
+    console.log(' photo               : ' + photoInfo.width + 'x' + photoInfo.height +
+                ' strawberries + GRACoL sep');
+
     var results = [];
     results.push(runDirection('RGB -> RGB    (sRGB -> AdobeRGB)',    3, '*srgb',     '*adobergb'));
     results.push(runDirection('RGB -> CMYK   (sRGB -> GRACoL)',      3, '*srgb',     cmykProfile));
@@ -165,12 +186,14 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
     console.log('\n==============================================================');
     console.log(' SUMMARY — Mpx/s across all three working modes');
     console.log('==============================================================');
-    console.log('  direction                         no-LUT     float      int');
-    console.log('  -------------------------------  -------   -------   -------');
+    console.log('  direction                         no-LUT   shaper     float      int');
+    console.log('  -------------------------------  -------  -------   -------   -------');
     for(var i = 0; i < results.length; i++){
         var r = results[i];
+        var sh = r.mpxShaper != null ? r.mpxShaper.toFixed(1).padStart(5) + ' M' : '    -  ';
         var line = '  ' + r.name.padEnd(32) +
                    '  ' + r.mpxNoLut.toFixed(1).padStart(5) + ' M' +
+                   '  ' + sh +
                    '   ' + r.mpxFloat.toFixed(1).padStart(5) + ' M' +
                    '   ' + r.mpxInt.toFixed(1).padStart(5) + ' M';
         console.log(line);
@@ -178,14 +201,15 @@ function runDirection(name, inputChannels, srcProfile, dstProfile){
 
     // --- Plain markdown table (copy-paste for docs/README) ---
     console.log('\nMarkdown (copy for README):');
-    console.log('| Workflow | No LUT (accuracy) | `lutMode: \'float\'` | `lutMode: \'int\'` |');
-    console.log('|---|---|---|---|');
+    console.log('| Workflow | No LUT (accuracy) | matrix-shaper | `lutMode: \'float\'` | `lutMode: \'int\'` |');
+    console.log('|---|---|---|---|---|');
     for(var i = 0; i < results.length; i++){
         var r = results[i];
-        // Collapse runs of spaces to a single space for the markdown table.
         var label = r.name.replace(/\s+/g, ' ').trim();
+        var shCol = r.mpxShaper != null ? r.mpxShaper.toFixed(1) + ' Mpx/s' : '—';
         console.log('| ' + label + ' | ' +
                     r.mpxNoLut.toFixed(2) + ' Mpx/s | ' +
+                    shCol + ' | ' +
                     r.mpxFloat.toFixed(1)  + ' Mpx/s | ' +
                     r.mpxInt.toFixed(1)    + ' Mpx/s |');
     }

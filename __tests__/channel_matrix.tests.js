@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const Profile = require('../src/Profile');
 const { Transform, eIntent } = require('../src/main');
+const { routeForInputChannels } = require('./helpers/expectRoute');
 
 const DIR = path.join(__dirname, 'profiles');
 const WIDTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -82,6 +83,12 @@ describe('the channel matrix — 1..15 in, 1..15 out', () => {
                     // Single colour, and the batch path, on the same Transform.
                     const single = t.transform([...input.slice(0, inCh)], false);
                     const batch  = t.transformArray(input, false, false, false, 3);
+                    const route = routeForInputChannels(inCh, inCh === outCh);
+                    if(t.lastUsedKernel !== route){
+                        failures.push(inCh + '->' + outCh + ': lastUsedKernel '
+                            + t.lastUsedKernel + ', wanted ' + route);
+                        continue;
+                    }
 
                     if(!single || single.length !== outCh){
                         failures.push(inCh + '->' + outCh + ': transform() gave '
@@ -129,6 +136,12 @@ describe('the channel matrix — 1..15 in, 1..15 out', () => {
                     const t = new Transform({ dataFormat: 'int16', buildLut: true });
                     t.create(profiles[inCh], profiles[outCh], eIntent.relative);
                     const out = t.transformArray(input, false, false, false, 3);
+                    const route = routeForInputChannels(inCh, inCh === outCh);
+                    if(t.lastUsedKernel !== route){
+                        failures.push(inCh + '->' + outCh + ': lastUsedKernel '
+                            + t.lastUsedKernel + ', wanted ' + route);
+                        continue;
+                    }
                     if(!out || out.length !== 3 * outCh){
                         failures.push(inCh + '->' + outCh + ': got '
                             + (out ? out.length : out) + ', wanted ' + (3 * outCh));
