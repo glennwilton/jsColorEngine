@@ -17,6 +17,27 @@ twins inlined. The optional worker is **~100 KB gzip**. The
 README no longer quotes the old ~68 KB / vs-lcms-wasm size
 line — the engine is small on its own.
 
+### Reproduce wakes WSL2
+
+`bench/reproduce.js` starts the Ubuntu distro at the top and waits
+until `gcc` answers. Native is only seconds after start, so a
+background poke would still lose the race.
+
+### BenchResults — in-kernel pixel cache
+
+`bench/release_matrix/run.js --pixelcache` now also emits
+`pixelCache.inKernel.*` tables: `int-wasm-simd` `array()`, off vs
+`'auto'`, on solid / clean photo / photo with 5 % noise added /
+noise. The Chrome pair is no longer the only off-vs-auto record.
+
+### Matrix-shaper ignores `pixelCache`
+
+A forced `1` / `N` used to make Kernel3D refuse the shaper and inject
+accuracy-path stages — Chrome measured **−89 % to −98 %** on
+RGB→RGB (matrix) versus the uncached shaper (~270 MPx/s → ~7).
+A matrix pair now returns `pixelCache: 0` and still yields. The
+hint is not a footgun on that path.
+
 ### In-kernel WASM pixel cache
 
 Shipped tetra modules carry a paired `interp_*_cached` export

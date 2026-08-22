@@ -1,0 +1,47 @@
+==========================================================================
+ lcms2 2180 — content x cache x size sweep (MPx/s, median of 5)
+==========================================================================
+ adjacency = % of pixels equal to the previous one, i.e. what the
+ one-pixel cache inside cmsDoTransform can hit.
+
+
+ RGB  -> RGB  (matrix)   
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on        157.3     158.6     154.9     153.4 
+                    off       159.9     158.5     153.0     157.8 
+
+ RGB  -> Lab             
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on         64.6      52.7      52.0      52.8 
+                    off        70.6      55.5      54.8      55.0 
+
+ RGB  -> CMYK            
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on         60.1      49.0      48.9      48.3 
+                    off        63.5      50.9      50.4      50.6 
+
+ CMYK -> RGB             
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on         33.3      32.3      32.4      32.4 
+                    off        34.6      33.6      33.7      33.4 
+
+ CMYK -> CMYK            
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on         28.5      28.1      28.6      28.5 
+                    off        29.4      29.5      29.1      29.5 
+
+ RGB  -> RGB  (softproof)
+   content   adj%              16K       64K     1024K    10240K 
+   --------  -----  cache --------- --------- --------- --------- 
+   noise       0.0  on         61.0      53.5      53.6      53.4 
+                    off        64.6      56.4      56.3      56.1 
+
+ Read it: where 'on' and 'off' agree, the cache is not engaging and the
+ figure is the transform's real throughput. Where they diverge, the gap
+ is the memo cache reacting to repetition in the input.
+

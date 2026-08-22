@@ -1,6 +1,6 @@
 {
   "tool": "bench/matrix_shaper_kernel/accuracy.js",
-  "generated": "2026-08-22T22:46:06.234Z",
+  "generated": "2026-08-22T23:31:36.480Z",
   "node": "v24.16.0",
   "platform": "win32 x64",
   "meta": {

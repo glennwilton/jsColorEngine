@@ -29,7 +29,7 @@
  *   js             jsCE + lcms-wasm: content matrix, size sweep, per-image
  *   matrix         the fused matrix-shaper kernel: throughput by content, and accuracy
  *   pool           the worker pool: the content x kernel x worker-count matrix   [slow]
- *   pixelcache     the beta accuracy-path cache, against its own baseline
+ *   pixelcache     accuracy-path cache + in-kernel WASM off-vs-auto
  *   solo           the minimal control bench (one image, one engine, one process)
  *
  * NOTHING ELSE SHOULD BE RUNNING. These are timing measurements on one pinned
@@ -43,13 +43,12 @@
  *   node bench/reproduce.js --only js,solo
  *   node bench/reproduce.js --with-flags          # include the CFLAGS sweep
  *   node bench/reproduce.js --skip-native         # no WSL/gcc available
- *
- * ON WINDOWS, START WSL2 FIRST. Open a WSL terminal (or run `wsl.exe -d
- * Ubuntu -- true`) before running this. A cold WSL is not started on demand
- * reliably enough for a `wsl.exe -- gcc --version` probe, so the native phase
- * reports "no gcc" and skips when the real problem is that the distro was
- * never running.
  *   node bench/reproduce.js --wsl-distro Ubuntu
+ *
+ * Native is the fourth phase, only seconds after start (corpus + accuracy
+ * are cheap). A background `wsl` poke would still lose that race, so on
+ * Windows we start the distro at the top and wait until `gcc --version`
+ * answers — same as opening a WSL terminal, without the extra click.
  */
 'use strict';
 
@@ -146,6 +145,39 @@ function nativeAvailable() {
     } catch { return null; }
 }
 
+function sleepMs(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Cold WSL2 is not started by the first `gcc --version` probe. Kick the
+// distro now and wait — native is only seconds away, not 14 minutes.
+function wakeWsl() {
+    if (!isWindows || SKIP_NATIVE) return;
+    if (!phases.includes('native') && !phases.includes('flags')) return;
+    process.stdout.write('waking WSL2 (' + WSL_DISTRO + ')…\n');
+    const deadline = Date.now() + 120000;
+    let last = 'not started';
+    while (Date.now() < deadline) {
+        try {
+            execFileSync('wsl.exe', ['-d', WSL_DISTRO, '--', 'true'], {
+                encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            const gcc = nativeAvailable();
+            if (gcc) {
+                process.stdout.write('  ready: ' + gcc + '\n');
+                return gcc;
+            }
+            last = 'distro is up, gcc is not on PATH';
+        } catch (e) {
+            last = (e.stderr && String(e.stderr).trim()) || e.message;
+        }
+        process.stdout.write('  waiting for WSL/gcc…\n');
+        sleepMs(3000);
+    }
+    process.stdout.write('  warmup gave up: ' + last + '\n');
+    return null;
+}
+
 // ---- conditions --------------------------------------------------------
 //
 // The doc's Conditions table is not decoration: a throughput figure without
@@ -217,7 +249,7 @@ function phase(name, fn) {
     }
 }
 
-let gccVersion = null;
+let gccVersion = wakeWsl();
 
 phase('corpus', () => {
     const out = node([path.join(MATRIX, 'make_corpus.cjs')]);
@@ -242,12 +274,10 @@ phase('flags', () => {
 
 phase('native', () => {
     if (SKIP_NATIVE) throw new Error('--skip-native given');
-    gccVersion = nativeAvailable();
+    gccVersion = gccVersion || nativeAvailable();
     if (!gccVersion) throw new Error(
-        'no gcc. ON WINDOWS, START WSL2 FIRST: open a WSL terminal, or run ' +
-        '`wsl.exe -d ' + WSL_DISTRO + ' -- true`, then re-run — a distro that is ' +
-        'not running probes the same as a missing compiler. Otherwise install ' +
-        'build-essential in WSL, or pass --skip-native.');
+        'no gcc after waking WSL2 (' + WSL_DISTRO + '). Install build-essential ' +
+        'in that distro, pass --wsl-distro <name>, or pass --skip-native.');
 
     process.stdout.write('building lcms2 at -O2 and -O3 (a few minutes)...\n');
     bashInLcmsDir(

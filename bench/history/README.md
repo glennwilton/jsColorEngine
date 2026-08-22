@@ -5,6 +5,7 @@ bench/history/<version>/<machine-id>/
     BenchResults.md     the generated page exactly as it read at release
     conditions.md       machine, compiler and library versions
     json/*.json         the measured rows — any published figure re-derivable
+    native-*.txt        lcms native C harness output (no JSON emitter)
     SNAPSHOT.json       run id, machine detail, date, whether tests passed
 ```
 

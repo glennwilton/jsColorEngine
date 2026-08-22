@@ -139,6 +139,13 @@ for(const f of ['conditions.md', 'summary.txt']){
     const src = path.join(runDir, f);
     if(fs.existsSync(src)) fs.copyFileSync(src, path.join(OUT, f));
 }
+// Native C has no emit.cjs JSON — keep the harness text so a skipped-WSL
+// run and a measured one are distinguishable after results/ is gone.
+for(const f of fs.readdirSync(runDir)){
+    if(/^native-/.test(f) && f.endsWith('.txt')){
+        fs.copyFileSync(path.join(runDir, f), path.join(OUT, f));
+    }
+}
 fs.copyFileSync(path.join(DOCS, 'BenchResults.md'), path.join(OUT, 'BenchResults.md'));
 
 let tables = 0, node = null, platform = null;

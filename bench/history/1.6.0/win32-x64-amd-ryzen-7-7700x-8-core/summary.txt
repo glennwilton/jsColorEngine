@@ -1,14 +1,14 @@
 ======================================================================
  REPRODUCTION COMPLETE
 ======================================================================
- results: C:\Users\glenn\dev\www\jsColorEngine\bench\results\2026-08-22T22-31-22
+ results: C:\Users\glenn\dev\www\jsColorEngine\bench\results\2026-08-22T23-09-46
   ✓ corpus         0.0 min
   ✓ accuracy       0.0 min
-  ✗ native         0.0 min   no gcc. ON WINDOWS, START WSL2 FIRST: open a WSL terminal, or run `wsl.exe -d Ubuntu -- true`, then re-run — a distro that is not running probes the same as a missing compiler. Otherwise install build-essential in WSL, or pass --skip-native.
+  ✓ native         7.1 min
   ✓ js            14.3 min
   ✓ matrix         0.4 min
   ✓ pool           0.5 min
-  ✓ pixelcache     4.0 min
+  ✓ pixelcache     5.4 min
   ✓ smalldim       0.0 min
   ✓ solo           2.1 min
  conditions.md holds the machine/version block for the doc.

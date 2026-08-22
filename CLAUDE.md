@@ -17,6 +17,7 @@ Hard rules for this repo:
   (488+ tests) and `node bench/mpx_summary.js` throughput parity.
 - **Performance/accuracy claims need a runnable bench or oracle**, and
   comparisons are always single-threaded, apples-to-apples.
-- Docs have owners: future plans → `docs/Roadmap.md`; measurement
-  retrospectives → `docs/Performance.md`; release notes →
+- Docs have owners: future plans → `docs/Roadmap.md`; current
+  numbers → `docs/Bench.md` / `docs/BenchResults.md`; measurement
+  retrospectives → `docs/deepdive/Performance.md`; release notes →
   `CHANGELOG.md`. Don't duplicate content across them.

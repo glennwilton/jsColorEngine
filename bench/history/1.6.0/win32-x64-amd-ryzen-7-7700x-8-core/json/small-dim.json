@@ -1,6 +1,6 @@
 {
   "tool": "bench/small_dim/run.js",
-  "generated": "2026-08-22T22:50:38.610Z",
+  "generated": "2026-08-22T23:37:28.345Z",
   "node": "v24.16.0",
   "platform": "win32 x64",
   "meta": {
@@ -32,91 +32,91 @@
           "kernel": "kernel1D",
           "outputChannels": 3,
           "grid": 256,
-          "mpxs": 91.5
+          "mpxs": 93.2
         },
         {
           "workflow": "gray -> CMYK",
           "kernel": "kernel1D",
           "outputChannels": 4,
           "grid": 256,
-          "mpxs": 81.5
+          "mpxs": 82.7
         },
         {
           "workflow": "gray -> 6CLR",
           "kernel": "kernel1D",
           "outputChannels": 6,
           "grid": 256,
-          "mpxs": 64.7
+          "mpxs": 65.4
         },
         {
           "workflow": "duotone -> RGB",
           "kernel": "kernel2D",
           "outputChannels": 3,
           "grid": 256,
-          "mpxs": 60.8
+          "mpxs": 61.7
         },
         {
           "workflow": "duotone -> CMYK",
           "kernel": "kernel2D",
           "outputChannels": 4,
           "grid": 256,
-          "mpxs": 51.1
+          "mpxs": 52.6
         },
         {
           "workflow": "duotone -> 6CLR",
           "kernel": "kernel2D",
           "outputChannels": 6,
           "grid": 256,
-          "mpxs": 41.1
+          "mpxs": 41.4
         },
         {
           "workflow": "RGB -> RGB",
           "kernel": "kernel3D",
           "outputChannels": 3,
           "grid": 33,
-          "mpxs": 76.9
+          "mpxs": 77.9
         },
         {
           "workflow": "RGB -> CMYK",
           "kernel": "kernel3D",
           "outputChannels": 4,
           "grid": 33,
-          "mpxs": 67.4
+          "mpxs": 68.2
         },
         {
           "workflow": "RGB -> 6CLR",
           "kernel": "kernel3D",
           "outputChannels": 6,
           "grid": 33,
-          "mpxs": 34.5
+          "mpxs": 35.3
         },
         {
           "workflow": "RGB -> 8CLR",
           "kernel": "kernel3D",
           "outputChannels": 8,
           "grid": 33,
-          "mpxs": 29.2
+          "mpxs": 29.8
         },
         {
           "workflow": "CMYK -> RGB",
           "kernel": "kernel4D",
           "outputChannels": 3,
           "grid": 17,
-          "mpxs": 42.7
+          "mpxs": 44.6
         },
         {
           "workflow": "CMYK -> CMYK",
           "kernel": "kernel4D",
           "outputChannels": 4,
           "grid": 17,
-          "mpxs": 36.1
+          "mpxs": 36.4
         },
         {
           "workflow": "CMYK -> 6CLR",
           "kernel": "kernel4D",
           "outputChannels": 6,
           "grid": 17,
-          "mpxs": 22.8
+          "mpxs": 23.8
         }
       ]
     }

@@ -263,6 +263,27 @@ describe('kernelInfo — names come from the descriptor', () => {
         expect(t.kernelInfo().cache).toBe('not-supported');
     });
 
+    test('matrix-shaper ignores a forced pixelCache — reports 0, still the shaper', () => {
+        const t = new Transform({ dataFormat: 'int8', buildLut: false, pixelCache: 32 });
+        t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+        expect(t.kernelInfo().name).toBe('matrix-shaper');
+        expect(t.pixelCacheUsed).toBe(0);
+        expect(t.kernelInfo().cache).toBe('not-supported');
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).not.toMatch(/stage_pixelCache_/);
+    });
+
+    test('matrix pair with the shaper off still declines the cache', () => {
+        const t = new Transform({
+            dataFormat: 'int8', buildLut: false,
+            wasmMatrixShaper: false, pixelCache: 32,
+        });
+        t.create('*sRGB', '*AdobeRGB', eIntent.relative);
+        expect(t.pixelCacheUsed).toBe(0);
+        const names = t.pipeline.map(s => s.stageName).join(' ');
+        expect(names).not.toMatch(/stage_pixelCache_/);
+    });
+
     test('identity reports cache not-supported', () => {
         const t = new Transform({ dataFormat: 'int8' });
         t.create('*sRGB', '*sRGB', eIntent.relative);

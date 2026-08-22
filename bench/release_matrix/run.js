@@ -26,15 +26,17 @@
  * columns should sit flat across the content rows. That flatness is a result,
  * not an assumption: if a jsCE column moves with content, something is wrong.
  *
- * The pixel cache is measured separately (--pixelcache), because it lives on
- * the accuracy path (buildLut:false) rather than the LUT kernels, so putting
- * it in the main table would compare two different baselines in one row.
+ * The pixel cache is measured separately (--pixelcache): accuracy-path
+ * stages (buildLut:false) and in-kernel WASM off-vs-auto (int-wasm-simd).
+ * Neither belongs in the main table — different baselines, different
+ * questions.
  *
  * Run:
  *   node bench/release_matrix/make_corpus.js      # once, decodes the photos
  *   node bench/release_matrix/run.js
  *   node bench/release_matrix/run.js --sizes 16384,65536,1048576,10485760
  *   node bench/release_matrix/run.js --pixelcache
+ *   node bench/release_matrix/run.js --pixelcache-inkernel
  */
 
 import { readFile } from 'fs/promises';
@@ -69,7 +71,9 @@ function argString(name, fallback) {
 
 const SIZES        = argString('sizes', '65536').split(',').map(s => parseInt(s.trim(), 10));
 const CONTENTS     = argString('content', 'noise,gradient,blocks16,solid,photo').split(',').map(s => s.trim());
-const PIXEL_CACHE  = process.argv.indexOf('--pixelcache') !== -1;
+const PIXEL_CACHE           = process.argv.indexOf('--pixelcache') !== -1;
+const PIXEL_CACHE_INKERNEL  = process.argv.indexOf('--pixelcache-inkernel') !== -1
+    || PIXEL_CACHE;
 
 // --cell <wfIndex>:<content>:<engine>:<npx> measures exactly one number and
 // prints it. --isolate makes the parent spawn one child process per cell.
@@ -704,6 +708,93 @@ function runPixelCacheTable() {
     }
 }
 
+// In-kernel WASM last-pixel (interp_*_cached). Off vs 'auto' on the
+// image path (array()). RGB→RGB (matrix) with buildLut:true is the
+// 3D CLUT on that pair — default wasmMatrixShaper is 'auto', so the
+// LUT bakes and Kernel3D keeps tetra; the shaper only wins on
+// 'prefer' or buildLut:false.
+function runInKernelPixelCacheTable() {
+    const npx = SIZES[0];
+    const kinds = ['solid', 'photo', 'noisy:photo:5', 'noise'].filter(function(k) {
+        if (k === 'photo' || k.indexOf('photo') !== -1) return havePhoto;
+        return true;
+    });
+    function kindLabel(kind) {
+        if (kind === 'noisy:photo:5') return 'photo with 5% noise added';
+        return kind;
+    }
+
+    console.log('\n' + '='.repeat(104));
+    console.log(' Pixel cache — in-kernel WASM, lutMode:int-wasm-simd, ' +
+        (npx / 1024).toFixed(0) + 'K px');
+    console.log('='.repeat(104));
+    console.log(' pixelCache 0 vs auto on array(). Ratio is auto / off.');
+    console.log(' cache is kernelInfo().cache after create() (1 / off / not-supported).\n');
+
+    for (const wf of WORKFLOWS) {
+        console.log(' ' + wf.name);
+        console.log('   content                         adj%      off     auto   auto/off   cache');
+        console.log('   ------------------------------ ------  -------  -------  --------  ------');
+
+        const rows = [];
+        for (const kind of kinds) {
+            const input = buildContent(kind, npx, wf.inCh);
+            const adj   = adjacency(input, npx, wf.inCh);
+            const speeds = [];
+            let cacheReport = 'off';
+
+            for (const hint of [0, 'auto']) {
+                const transform = makeJsTransform(wf, {
+                    dataFormat: 'int8',
+                    buildLut: true,
+                    lutMode: 'int-wasm-simd',
+                    pixelCache: hint,
+                });
+                const ms = timeFn(function() {
+                    transform.array(input, false, false, false, npx);
+                });
+                speeds.push(mpx(npx, ms));
+                if (hint === 'auto') {
+                    const info = transform.kernelInfo();
+                    cacheReport = (info && info.cache != null) ? info.cache : 'off';
+                }
+            }
+
+            const ratio = speeds[0] > 0 ? speeds[1] / speeds[0] : 0;
+            console.log('   ' + kindLabel(kind).padEnd(30) +
+                adj.toFixed(1).padStart(6) + '  ' +
+                speeds[0].toFixed(1).padStart(7) + '  ' +
+                speeds[1].toFixed(1).padStart(7) + '  ' +
+                ratio.toFixed(2).padStart(7) + 'x  ' +
+                String(cacheReport));
+
+            rows.push({
+                content:    kindLabel(kind),
+                adjPct:     +adj.toFixed(1),
+                offMpxs:    +speeds[0].toFixed(1),
+                autoMpxs:   +speeds[1].toFixed(1),
+                autoOverOff:+ratio.toFixed(2),
+                cache:      cacheReport,
+            });
+        }
+
+        emit.table({
+            id:      'pixelCache.inKernel.' + slugify(wf.name),
+            title:   'Pixel cache, in-kernel WASM — ' + wf.name,
+            units:   'MPx/s',
+            meta:    {
+                pixels: npx,
+                lutMode: 'int-wasm-simd',
+                hints: '0 vs auto',
+                baseline: 'its own uncached image path',
+            },
+            columns: ['content', 'adjPct', 'offMpxs', 'autoMpxs', 'autoOverOff', 'cache'],
+            rows:    rows,
+        });
+        console.log('');
+    }
+}
+
 // ---- go ----------------------------------------------------------------
 
 // A --cell child must print its measurement and nothing else — the parent
@@ -727,7 +818,10 @@ if (!CELL) {
 }
 
 if (CELL) runCell(CELL);
-else if (PIXEL_CACHE) runPixelCacheTable();
+else if (PIXEL_CACHE || PIXEL_CACHE_INKERNEL) {
+    if (PIXEL_CACHE) runPixelCacheTable();
+    if (PIXEL_CACHE_INKERNEL) runInKernelPixelCacheTable();
+}
 else if (ISOLATE) runIsolated();
 else runMainTable();
 

@@ -10,11 +10,11 @@
     "release": "10.0.19045",
     "node": "v24.16.0"
   },
-  "run": "2026-08-22T22-31-22",
+  "run": "2026-08-22T23-09-46",
   "snapshot": "2026-08-22",
   "node": "v24.16.0",
   "platform": "win32 x64",
-  "tables": 55,
+  "tables": 61,
   "tests": "full suite passed",
   "note": "Frozen at release. Never edit — it is the record of what this version measured on this machine. Compare releases with scripts/bench_compare.js <newer> --vs bench/history/<older>."
 }

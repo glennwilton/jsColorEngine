@@ -16,7 +16,7 @@
 >     node bench/reproduce.js
 >     node scripts/build_bench_results.js
 >
-> Run `2026-08-22T22-31-22` · measured 2026-08-22 · jsCE 1.6.0 · package now **1.6.0**
+> Run `2026-08-22T23-09-46` · measured 2026-08-22 · jsCE 1.6.0 · package now **1.6.0**
 
 Other pages should **link to a table here** rather than restating its
 numbers: prose keeps the finding, this page owns the figures. The
@@ -92,6 +92,12 @@ runs in its own process with its own warmup.
 - [Pixel cache (BETA), accuracy path — CMYK -> RGB](#table-pixelcache-accuracypath-cmyk-rgb) — `pixelCache.accuracyPath.cmyk-rgb`
 - [Pixel cache (BETA), accuracy path — CMYK -> CMYK](#table-pixelcache-accuracypath-cmyk-cmyk) — `pixelCache.accuracyPath.cmyk-cmyk`
 - [Pixel cache (BETA), accuracy path — RGB -> RGB  (softproof)](#table-pixelcache-accuracypath-rgb-rgb-softproof) — `pixelCache.accuracyPath.rgb-rgb-softproof`
+- [Pixel cache, in-kernel WASM — RGB -> RGB  (matrix)](#table-pixelcache-inkernel-rgb-rgb-matrix) — `pixelCache.inKernel.rgb-rgb-matrix`
+- [Pixel cache, in-kernel WASM — RGB -> Lab](#table-pixelcache-inkernel-rgb-lab) — `pixelCache.inKernel.rgb-lab`
+- [Pixel cache, in-kernel WASM — RGB -> CMYK](#table-pixelcache-inkernel-rgb-cmyk) — `pixelCache.inKernel.rgb-cmyk`
+- [Pixel cache, in-kernel WASM — CMYK -> RGB](#table-pixelcache-inkernel-cmyk-rgb) — `pixelCache.inKernel.cmyk-rgb`
+- [Pixel cache, in-kernel WASM — CMYK -> CMYK](#table-pixelcache-inkernel-cmyk-cmyk) — `pixelCache.inKernel.cmyk-cmyk`
+- [Pixel cache, in-kernel WASM — RGB -> RGB  (softproof)](#table-pixelcache-inkernel-rgb-rgb-softproof) — `pixelCache.inKernel.rgb-rgb-softproof`
 - [Matrix-shaper kernel vs CLUT in the worker pool — noise](#table-pool-matrixshaper-noise) — `pool.matrixShaper.noise`
 - [Matrix-shaper kernel vs CLUT in the worker pool — photo](#table-pool-matrixshaper-photo) — `pool.matrixShaper.photo`
 - [Worker pool — peak speedup vs sequential, by kernel and content](#table-pool-peak) — `pool.peak`
@@ -110,11 +116,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 47.7 | 96.7 | 64.7 | 64.2 | 1.5 |
-| gradient | 75 | 256 | 0.01 | 62.3 | 326.4 | 66.7 | 65 | 4.9 |
-| blocks16 | 93.8 | 4095 | 0.11 | 60.4 | 432.6 | 59 | 66.7 | 7.33 |
-| solid | 100 | 1 | 0 | 62.5 | 480.7 | 68.5 | 71.7 | 7.01 |
-| photo | 13.2 | 41077 | 1.14 | 54.4 | 113 | 66.1 | 66.4 | 1.71 |
+| noise | 0 | 1016892 | 28.3 | 48.3 | 96.6 | 65 | 64.5 | 1.49 |
+| gradient | 75 | 256 | 0.01 | 61.9 | 317.6 | 66.6 | 66.2 | 4.77 |
+| blocks16 | 93.8 | 4095 | 0.11 | 59.2 | 399.8 | 67.1 | 67.5 | 5.96 |
+| solid | 100 | 1 | 0 | 63.4 | 448.9 | 67.7 | 68.2 | 6.63 |
+| photo | 13.2 | 41077 | 1.14 | 53.7 | 111.5 | 67.1 | 66.8 | 1.66 |
 
 <a id="table-js-content-rgb-lab-1024k"></a>
 
@@ -126,11 +132,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 47 | 95.3 | 31.5 | 37 | 3.03 |
-| gradient | 75 | 256 | 0.01 | 60.8 | 313.9 | 64.6 | 48.3 | 4.86 |
-| blocks16 | 93.8 | 4095 | 0.11 | 60.9 | 428.3 | 76.5 | 49.5 | 5.59 |
-| solid | 100 | 1 | 0 | 62.7 | 484.5 | 93.1 | 51.4 | 5.21 |
-| photo | 13.2 | 41077 | 1.14 | 53.9 | 112.9 | 34.6 | 41.9 | 3.26 |
+| noise | 0 | 1016892 | 28.3 | 48 | 96.1 | 31 | 37.9 | 3.1 |
+| gradient | 75 | 256 | 0.01 | 61.8 | 312.1 | 64.1 | 49.6 | 4.87 |
+| blocks16 | 93.8 | 4095 | 0.11 | 60.7 | 403.4 | 75.6 | 48.6 | 5.34 |
+| solid | 100 | 1 | 0 | 63.8 | 449.6 | 89.5 | 51.1 | 5.02 |
+| photo | 13.2 | 41077 | 1.14 | 53.2 | 112.2 | 35 | 41.2 | 3.2 |
 
 <a id="table-js-content-rgb-cmyk-1024k"></a>
 
@@ -142,11 +148,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 43.8 | 98 | 31.9 | 36.1 | 3.08 |
-| gradient | 75 | 256 | 0.01 | 53.9 | 318.6 | 63.9 | 48.4 | 4.99 |
-| blocks16 | 93.8 | 4095 | 0.11 | 51.9 | 407.7 | 77.3 | 45.9 | 5.27 |
-| solid | 100 | 1 | 0 | 54.1 | 455.9 | 84.3 | 48.5 | 5.41 |
-| photo | 13.2 | 41077 | 1.14 | 47.3 | 114.3 | 35.3 | 39.3 | 3.24 |
+| noise | 0 | 1016892 | 28.3 | 42.9 | 97.6 | 31.7 | 35.8 | 3.08 |
+| gradient | 75 | 256 | 0.01 | 54.2 | 299.7 | 64 | 48.6 | 4.68 |
+| blocks16 | 93.8 | 4095 | 0.11 | 50.1 | 379.6 | 77.1 | 46.8 | 4.92 |
+| solid | 100 | 1 | 0 | 55.3 | 419.7 | 83 | 49 | 5.05 |
+| photo | 13.2 | 41077 | 1.14 | 48.5 | 113 | 35 | 39.1 | 3.23 |
 
 <a id="table-js-content-cmyk-rgb-1024k"></a>
 
@@ -158,11 +164,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 32.2 | 67.4 | 21.6 | 22.1 | 3.12 |
-| gradient | 75 | 256 | 0 | 38.4 | 224.8 | 50.4 | 25.7 | 4.46 |
-| blocks16 | 93.8 | 4096 | 0.05 | 38.3 | 354.6 | 69.3 | 25.3 | 5.12 |
-| solid | 100 | 1 | 0 | 38.9 | 451.5 | 93.8 | 26.2 | 4.82 |
-| photo | 13.3 | 35074 | 0.42 | 44.4 | 80.7 | 25.6 | 24.1 | 3.15 |
+| noise | 0 | 1048576 | 12.55 | 30.8 | 67.1 | 21.6 | 21.9 | 3.11 |
+| gradient | 75 | 256 | 0 | 36.5 | 224.7 | 50.5 | 25.2 | 4.45 |
+| blocks16 | 93.8 | 4096 | 0.05 | 35.8 | 323.3 | 69.2 | 25.1 | 4.67 |
+| solid | 100 | 1 | 0 | 38.5 | 443.4 | 93 | 26.3 | 4.77 |
+| photo | 13.3 | 35074 | 0.42 | 44.5 | 81.2 | 25 | 21.1 | 3.25 |
 
 <a id="table-js-content-cmyk-cmyk-1024k"></a>
 
@@ -174,11 +180,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 26.7 | 67.5 | 19.3 | 20.5 | 3.49 |
-| gradient | 75 | 256 | 0 | 32.4 | 222 | 47.7 | 24.4 | 4.65 |
-| blocks16 | 93.8 | 4096 | 0.05 | 32.1 | 343.3 | 68.5 | 24.2 | 5.01 |
-| solid | 100 | 1 | 0 | 32.4 | 426.3 | 85 | 25.1 | 5.02 |
-| photo | 13.3 | 35074 | 0.42 | 37.1 | 81.2 | 23.3 | 23.9 | 3.49 |
+| noise | 0 | 1048576 | 12.55 | 25.8 | 63.9 | 18.4 | 20.5 | 3.48 |
+| gradient | 75 | 256 | 0 | 31.2 | 221.3 | 46.9 | 23.3 | 4.72 |
+| blocks16 | 93.8 | 4096 | 0.05 | 31.7 | 325.8 | 65.5 | 23.2 | 4.97 |
+| solid | 100 | 1 | 0 | 32.4 | 402.5 | 84.1 | 24.1 | 4.79 |
+| photo | 13.3 | 35074 | 0.42 | 36.6 | 81 | 23.2 | 23.9 | 3.49 |
 
 <a id="table-js-content-rgb-rgb-softproof-1024k"></a>
 
@@ -190,11 +196,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.9 | 97 | 33.1 | 37.3 | 2.92 |
-| gradient | 75 | 256 | 0.01 | 62.5 | 329.2 | 58.6 | 47.8 | 5.62 |
-| blocks16 | 93.8 | 4095 | 0.11 | 57.2 | 428.2 | 75.7 | 45.6 | 5.66 |
-| solid | 100 | 1 | 0 | 58.5 | 471.8 | 92.6 | 48.4 | 5.1 |
-| photo | 13.2 | 41077 | 1.14 | 54 | 113.6 | 34.6 | 39.9 | 3.28 |
+| noise | 0 | 1016892 | 28.3 | 47.5 | 97 | 32.8 | 36.5 | 2.96 |
+| gradient | 75 | 256 | 0.01 | 62 | 329.4 | 62.9 | 47.6 | 5.24 |
+| blocks16 | 93.8 | 4095 | 0.11 | 60.8 | 410.4 | 75.5 | 48.9 | 5.43 |
+| solid | 100 | 1 | 0 | 63.6 | 474 | 92.3 | 49.5 | 5.14 |
+| photo | 13.2 | 41077 | 1.14 | 53.6 | 110.6 | 35 | 39.2 | 3.16 |
 
 <a id="table-js-perimage-rgb-rgb-matrix-1024k"></a>
 
@@ -206,11 +212,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 53.5 | 117.7 | 66.1 | 67.5 | 1.78 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.5 | 109.5 | 67.1 | 65.2 | 1.63 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.6 | 140.2 | 62.6 | 67.3 | 2.24 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 53.3 | 109.7 | 67 | 67.1 | 1.64 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 52.2 | 106 | 67.4 | 63.6 | 1.57 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 55.6 | 115.7 | 67.3 | 67.3 | 1.72 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.6 | 106.3 | 67.9 | 67 | 1.57 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 53.5 | 139.2 | 68.1 | 62.9 | 2.04 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 51.8 | 108.8 | 64.2 | 67.4 | 1.7 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.3 | 105.2 | 62.5 | 64.9 | 1.68 |
 
 <a id="table-js-perimage-rgb-lab-1024k"></a>
 
@@ -222,11 +228,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 53.8 | 116 | 37.1 | 42.5 | 3.12 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 51 | 104.1 | 33.6 | 40.9 | 3.1 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.3 | 128.3 | 40.9 | 43.5 | 3.13 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 51.9 | 109.5 | 34.5 | 41 | 3.18 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 52.1 | 102.4 | 34.9 | 40.3 | 2.93 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 54.1 | 115.1 | 34 | 41.9 | 3.39 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 51.9 | 108.6 | 34.8 | 40.7 | 3.12 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.4 | 140.1 | 40.7 | 43.2 | 3.44 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 51.7 | 107.8 | 33.3 | 41.1 | 3.24 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.1 | 105.7 | 31.5 | 39.8 | 3.36 |
 
 <a id="table-js-perimage-rgb-cmyk-1024k"></a>
 
@@ -238,11 +244,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 49 | 118 | 35.5 | 39.9 | 3.32 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 47.3 | 108.2 | 34.3 | 38.7 | 3.16 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 49.7 | 141.2 | 40.4 | 41.4 | 3.5 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 45.6 | 111.8 | 33.7 | 38.9 | 3.32 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 46.8 | 108.5 | 32.4 | 38.1 | 3.35 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 48.9 | 115.6 | 35.8 | 39.5 | 3.23 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 46.6 | 109.5 | 33.9 | 37.7 | 3.23 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 49 | 140.8 | 40.3 | 41.4 | 3.5 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 46.6 | 110.3 | 34.8 | 38.7 | 3.17 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 46.3 | 107.5 | 32 | 38 | 3.36 |
 
 <a id="table-js-perimage-cmyk-rgb-1024k"></a>
 
@@ -254,11 +260,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 37.1 | 83 | 25.5 | 24.9 | 3.26 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 36.7 | 83.4 | 25.6 | 23.7 | 3.26 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 37.4 | 109.1 | 32.2 | 24.5 | 3.38 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 37.8 | 85.5 | 25.7 | 24 | 3.33 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 35.7 | 78.2 | 23.8 | 23.6 | 3.29 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 35.7 | 81.9 | 25.2 | 24.9 | 3.25 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 36.8 | 82.8 | 25.6 | 24 | 3.24 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 37.3 | 107.7 | 31.8 | 24.6 | 3.39 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 36 | 84.9 | 25.8 | 24.6 | 3.3 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 36.2 | 80.1 | 24.5 | 24 | 3.27 |
 
 <a id="table-js-perimage-cmyk-cmyk-1024k"></a>
 
@@ -270,11 +276,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 30.2 | 79.1 | 22.9 | 23.4 | 3.46 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 31.7 | 81 | 23.2 | 23.5 | 3.49 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 31.5 | 104.8 | 29.6 | 25 | 3.54 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 30.5 | 82.3 | 23.3 | 24.2 | 3.54 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 31.2 | 78.6 | 21.8 | 23.8 | 3.61 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 31.2 | 82.4 | 23.2 | 23.8 | 3.54 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 31.5 | 82 | 22.8 | 23.3 | 3.6 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 31.3 | 105.3 | 29.4 | 24 | 3.58 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 31.8 | 82.9 | 23.4 | 23.8 | 3.54 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 31.1 | 79.5 | 22.4 | 23.6 | 3.55 |
 
 <a id="table-js-perimage-rgb-rgb-softproof-1024k"></a>
 
@@ -286,11 +292,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 54 | 102.4 | 34.8 | 38.7 | 2.94 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.1 | 107.4 | 35 | 38 | 3.07 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.4 | 137.3 | 41.5 | 42.4 | 3.31 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.8 | 108.7 | 32.8 | 35.3 | 3.32 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 49.9 | 101 | 32.5 | 36.6 | 3.11 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 54.4 | 116.1 | 34.6 | 38.7 | 3.36 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.7 | 105.5 | 34.4 | 37.9 | 3.06 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.3 | 139.4 | 41.5 | 42.2 | 3.36 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.7 | 108.6 | 35.5 | 36.7 | 3.05 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.6 | 105.4 | 32.8 | 37.6 | 3.21 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-16k"></a>
 
@@ -302,7 +308,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 57.8 | 149.6 | 64.9 | 63.7 | 2.3 |
+| noise | 0 | 16379 | 0.46 | 59.8 | 154.2 | 64.1 | 65.2 | 2.4 |
 
 <a id="table-js-sweep-rgb-lab-16k"></a>
 
@@ -314,7 +320,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 60.7 | 149.5 | 40 | 50.2 | 3.74 |
+| noise | 0 | 16379 | 0.46 | 58.6 | 154.3 | 37.4 | 47.8 | 4.12 |
 
 <a id="table-js-sweep-rgb-cmyk-16k"></a>
 
@@ -326,7 +332,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 50.8 | 143.6 | 32.4 | 29.6 | 4.43 |
+| noise | 0 | 16379 | 0.46 | 48.7 | 141.3 | 36.1 | 42.1 | 3.92 |
 
 <a id="table-js-sweep-cmyk-rgb-16k"></a>
 
@@ -338,7 +344,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16384 | 0.2 | 32 | 80.7 | 22.1 | 22.2 | 3.65 |
+| noise | 0 | 16384 | 0.2 | 31.8 | 83.6 | 22 | 22 | 3.79 |
 
 <a id="table-js-sweep-cmyk-cmyk-16k"></a>
 
@@ -350,7 +356,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16384 | 0.2 | 26.9 | 75.6 | 19.5 | 20.6 | 3.88 |
+| noise | 0 | 16384 | 0.2 | 26.6 | 79 | 19.1 | 20.1 | 4.12 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-16k"></a>
 
@@ -362,7 +368,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 60.9 | 145.8 | 35.1 | 48.4 | 4.15 |
+| noise | 0 | 16379 | 0.46 | 59.5 | 154.8 | 35.3 | 46.5 | 4.39 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-64k"></a>
 
@@ -374,7 +380,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 57 | 94.8 | 55.4 | 65.7 | 1.71 |
+| noise | 0 | 65394 | 1.82 | 56.2 | 93.9 | 65.1 | 61.6 | 1.44 |
 
 <a id="table-js-sweep-rgb-lab-64k"></a>
 
@@ -386,7 +392,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 57.9 | 88.2 | 31.5 | 38.8 | 2.8 |
+| noise | 0 | 65394 | 1.82 | 57.4 | 93.7 | 31.4 | 37.3 | 2.98 |
 
 <a id="table-js-sweep-rgb-cmyk-64k"></a>
 
@@ -398,7 +404,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 50.8 | 95.4 | 32.1 | 37 | 2.97 |
+| noise | 0 | 65394 | 1.82 | 48.9 | 94.1 | 30.2 | 36 | 3.11 |
 
 <a id="table-js-sweep-cmyk-rgb-64k"></a>
 
@@ -410,7 +416,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65536 | 0.78 | 31.5 | 65.5 | 21.8 | 22.2 | 3 |
+| noise | 0 | 65536 | 0.78 | 31 | 64.9 | 21.3 | 21.9 | 3.05 |
 
 <a id="table-js-sweep-cmyk-cmyk-64k"></a>
 
@@ -422,7 +428,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65536 | 0.78 | 26.5 | 65.4 | 18.9 | 20.7 | 3.45 |
+| noise | 0 | 65536 | 0.78 | 24.5 | 65.1 | 19.1 | 20 | 3.41 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-64k"></a>
 
@@ -434,7 +440,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 57.6 | 95.5 | 28.6 | 37.2 | 3.34 |
+| noise | 0 | 65394 | 1.82 | 55.8 | 91.2 | 32.4 | 36.9 | 2.82 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-1024k"></a>
 
@@ -446,7 +452,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 47.8 | 97.4 | 65.5 | 65 | 1.49 |
+| noise | 0 | 1016892 | 28.3 | 47.2 | 95 | 68.9 | 63.5 | 1.38 |
 
 <a id="table-js-sweep-rgb-lab-1024k"></a>
 
@@ -458,7 +464,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.1 | 97.8 | 31.6 | 38.1 | 3.1 |
+| noise | 0 | 1016892 | 28.3 | 47.5 | 96.4 | 32.2 | 36.8 | 3 |
 
 <a id="table-js-sweep-rgb-cmyk-1024k"></a>
 
@@ -470,7 +476,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 43.9 | 98.5 | 32.2 | 36.7 | 3.06 |
+| noise | 0 | 1016892 | 28.3 | 43.1 | 97.3 | 31.4 | 36.2 | 3.1 |
 
 <a id="table-js-sweep-cmyk-rgb-1024k"></a>
 
@@ -482,7 +488,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 32.1 | 68.3 | 22 | 22.2 | 3.11 |
+| noise | 0 | 1048576 | 12.55 | 30.8 | 67.5 | 21.8 | 23.3 | 3.1 |
 
 <a id="table-js-sweep-cmyk-cmyk-1024k"></a>
 
@@ -494,7 +500,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 27.2 | 66.8 | 19.4 | 20.8 | 3.44 |
+| noise | 0 | 1048576 | 12.55 | 25.9 | 67.5 | 19.2 | 20.4 | 3.51 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-1024k"></a>
 
@@ -506,7 +512,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 49 | 97.1 | 33.6 | 37.4 | 2.89 |
+| noise | 0 | 1016892 | 28.3 | 48.7 | 96.5 | 32.7 | 36.9 | 2.95 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-10240k"></a>
 
@@ -518,7 +524,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 48.9 | 97.2 | 65 | 65.5 | 1.5 |
+| noise | 0 | 7810586 | 217.34 | 49 | 96.7 | 65 | 64.9 | 1.49 |
 
 <a id="table-js-sweep-rgb-lab-10240k"></a>
 
@@ -530,7 +536,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 48.4 | 97.4 | 31.6 | 38.3 | 3.08 |
+| noise | 0 | 7810586 | 217.34 | 48 | 88.4 | 31.2 | 37.6 | 2.83 |
 
 <a id="table-js-sweep-rgb-cmyk-10240k"></a>
 
@@ -542,7 +548,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 44.2 | 99.2 | 31.8 | 36.2 | 3.12 |
+| noise | 0 | 7810586 | 217.34 | 44.5 | 98.6 | 31.7 | 36.7 | 3.11 |
 
 <a id="table-js-sweep-cmyk-rgb-10240k"></a>
 
@@ -554,7 +560,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 10485760 | 125.55 | 31.8 | 68.7 | 22 | 21.9 | 3.12 |
+| noise | 0 | 10485760 | 125.55 | 31.6 | 68 | 21.9 | 22.1 | 3.1 |
 
 <a id="table-js-sweep-cmyk-cmyk-10240k"></a>
 
@@ -566,7 +572,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 10485760 | 125.55 | 27 | 66.7 | 18.5 | 20.5 | 3.6 |
+| noise | 0 | 10485760 | 125.55 | 26.6 | 67.6 | 13.7 | 20.7 | 4.93 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-10240k"></a>
 
@@ -578,7 +584,7 @@ runs in its own process with its own warmup.
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 48.3 | 97.9 | 33.6 | 37.3 | 2.91 |
+| noise | 0 | 7810586 | 217.34 | 48.3 | 97.3 | 32.8 | 37.3 | 2.97 |
 
 <a id="table-matrixshaper-accuracy-int16"></a>
 
@@ -624,11 +630,11 @@ runs in its own process with its own warmup.
 
 | Path | Solid | Noise | Photo |
 |---|---:|---:|---:|
-| kernel, SIMD | 334 | 330.6 | 335.1 |
-| kernel, scalar | 203.7 | 69.3 | 185.6 |
-| kernel, plain JS | 94.2 | 58.5 | 90 |
-| CLUT (default lutMode) | 529.9 | 99.1 | 116.7 |
-| JS stage pipeline | 10.2 | 8.3 | 8.9 |
+| kernel, SIMD | 332.2 | 331.9 | 341.8 |
+| kernel, scalar | 205.9 | 71.4 | 187.3 |
+| kernel, plain JS | 96.4 | 59 | 92.6 |
+| CLUT (default lutMode) | 510.3 | 91.6 | 107 |
+| JS stage pipeline | 10.3 | 8.4 | 8.9 |
 
 <a id="table-matrixshaper-ratios-int8"></a>
 
@@ -640,9 +646,9 @@ runs in its own process with its own warmup.
 
 | Content | SIMD / CLUT | SIMD / scalar | SIMD / plain JS | JS / pipeline |
 |---|---:|---:|---:|---:|
-| solid | 0.63 | 1.64 | 3.55 | 9.3 |
-| noise | 3.33 | 4.77 | 5.65 | 7.1 |
-| photo | 2.87 | 1.81 | 3.72 | 10.1 |
+| solid | 0.65 | 1.61 | 3.44 | 9.4 |
+| noise | 3.62 | 4.65 | 5.63 | 7.1 |
+| photo | 3.2 | 1.82 | 3.69 | 10.4 |
 
 <a id="table-matrixshaper-throughput-int16"></a>
 
@@ -654,11 +660,11 @@ runs in its own process with its own warmup.
 
 | Path | Solid | Noise | Photo |
 |---|---:|---:|---:|
-| kernel, SIMD | 231.4 | 205.9 | 220.5 |
-| kernel, scalar | 102.7 | 63.5 | 99.9 |
-| kernel, plain JS | 79.6 | 38.9 | 59.1 |
-| CLUT (default lutMode) | 195.9 | 103.1 | 121.6 |
-| JS stage pipeline | 10 | 8.3 | 8.7 |
+| kernel, SIMD | 240.5 | 207.8 | 215.4 |
+| kernel, scalar | 105.3 | 64.3 | 102.3 |
+| kernel, plain JS | 80.6 | 39.6 | 60.5 |
+| CLUT (default lutMode) | 194.3 | 104.8 | 121.8 |
+| JS stage pipeline | 10.1 | 8.3 | 8.8 |
 
 <a id="table-matrixshaper-ratios-int16"></a>
 
@@ -670,9 +676,9 @@ runs in its own process with its own warmup.
 
 | Content | SIMD / CLUT | SIMD / scalar | SIMD / plain JS | JS / pipeline |
 |---|---:|---:|---:|---:|
-| solid | 1.18 | 2.25 | 2.91 | 7.9 |
-| noise | 2 | 3.24 | 5.29 | 4.7 |
-| photo | 1.81 | 2.21 | 3.73 | 6.8 |
+| solid | 1.24 | 2.28 | 2.98 | 8 |
+| noise | 1.98 | 3.23 | 5.25 | 4.8 |
+| photo | 1.77 | 2.11 | 3.56 | 6.8 |
 
 <a id="table-pixelcache-accuracypath-rgb-rgb-matrix"></a>
 
@@ -684,11 +690,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 253.88 | 6.68 | 6.34 | 0 | -98 |
-| gradient | 75 | 266.6 | 16.52 | 15.68 | 75 | -94 |
-| blocks16 | 93.8 | 268.28 | 25.31 | 23.91 | 94.4 | -91 |
-| solid | 100 | 274.08 | 32.28 | 29.72 | 100 | -89 |
-| photo | 8.6 | 267.71 | 7.49 | 8.48 | 32.8 | -97 |
+| noise | 0 | 258.78 | 260.29 | 255.83 | 0 | -1 |
+| gradient | 75 | 259.1 | 269.16 | 262.69 | 0 | 1 |
+| blocks16 | 93.8 | 275.96 | 273.18 | 277.73 | 0 | 1 |
+| solid | 100 | 279.25 | 277.8 | 278.75 | 0 | 0 |
+| photo | 8.6 | 272.96 | 199.68 | 225 | 0 | -18 |
 
 <a id="table-pixelcache-accuracypath-rgb-lab"></a>
 
@@ -700,11 +706,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7.75 | 6.53 | 6.25 | 0 | -19 |
-| gradient | 75 | 8.31 | 16.58 | 15.42 | 75 | 86 |
-| blocks16 | 93.8 | 8.48 | 25.42 | 23.98 | 94.4 | 183 |
-| solid | 100 | 8.31 | 31.69 | 28.97 | 100 | 249 |
-| photo | 8.6 | 7.95 | 7.23 | 8.24 | 32.8 | 4 |
+| noise | 0 | 7.77 | 6.3 | 5.93 | 0 | -24 |
+| gradient | 75 | 8.19 | 16.11 | 15.45 | 75 | 89 |
+| blocks16 | 93.8 | 8.49 | 25.35 | 24.32 | 94.4 | 187 |
+| solid | 100 | 8.47 | 32.69 | 29.85 | 100 | 252 |
+| photo | 8.6 | 7.98 | 7.11 | 8.46 | 32.8 | 6 |
 
 <a id="table-pixelcache-accuracypath-rgb-cmyk"></a>
 
@@ -716,11 +722,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 4.51 | 4.03 | 3.8 | 0 | -16 |
-| gradient | 75 | 5.28 | 11.26 | 11.3 | 75 | 114 |
-| blocks16 | 93.8 | 5.33 | 21.25 | 20.17 | 94.4 | 279 |
-| solid | 100 | 5.3 | 28.76 | 27.5 | 100 | 419 |
-| photo | 8.6 | 4.77 | 4.61 | 5.64 | 32.8 | 18 |
+| noise | 0 | 4.68 | 4.1 | 3.82 | 0 | -18 |
+| gradient | 75 | 5.17 | 11.95 | 11.5 | 75 | 123 |
+| blocks16 | 93.8 | 5.42 | 20.99 | 19.65 | 94.4 | 263 |
+| solid | 100 | 5.29 | 29.32 | 27.61 | 100 | 422 |
+| photo | 8.6 | 4.99 | 4.57 | 5.37 | 32.8 | 8 |
 
 <a id="table-pixelcache-accuracypath-cmyk-rgb"></a>
 
@@ -732,11 +738,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 5.83 | 4.83 | 4.61 | 0 | -21 |
-| gradient | 75 | 6.81 | 13.91 | 12.86 | 75 | 89 |
-| blocks16 | 93.8 | 6.9 | 22.45 | 21.21 | 94.4 | 207 |
-| solid | 100 | 7.17 | 30.49 | 28.16 | 100 | 293 |
-| photo | 8.6 | 6.17 | 5.46 | 6.07 | 31.4 | -2 |
+| noise | 0 | 5.85 | 4.68 | 4.36 | 0 | -25 |
+| gradient | 75 | 6.93 | 13.7 | 13.1 | 75 | 89 |
+| blocks16 | 93.8 | 6.94 | 23.08 | 20.81 | 94.4 | 200 |
+| solid | 100 | 7.16 | 30.55 | 27.8 | 100 | 288 |
+| photo | 8.6 | 6.45 | 5.69 | 6.54 | 31.4 | 1 |
 
 <a id="table-pixelcache-accuracypath-cmyk-cmyk"></a>
 
@@ -748,11 +754,11 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 5.29 | 4.46 | 4.12 | 0 | -22 |
-| gradient | 75 | 6.54 | 12.52 | 11.93 | 75 | 83 |
-| blocks16 | 93.8 | 6.59 | 20.68 | 19.74 | 94.4 | 200 |
-| solid | 100 | 6.85 | 29 | 25.79 | 100 | 277 |
-| photo | 8.6 | 5.21 | 4.52 | 5.63 | 31.4 | 8 |
+| noise | 0 | 5.24 | 4.39 | 4.23 | 0 | -19 |
+| gradient | 75 | 6.61 | 13.35 | 12.29 | 75 | 86 |
+| blocks16 | 93.8 | 6.59 | 21.22 | 19.8 | 94.4 | 200 |
+| solid | 100 | 7 | 29.29 | 25.89 | 100 | 270 |
+| photo | 8.6 | 6.15 | 5.27 | 6.13 | 31.4 | 0 |
 
 <a id="table-pixelcache-accuracypath-rgb-rgb-softproof"></a>
 
@@ -764,11 +770,101 @@ runs in its own process with its own warmup.
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 2.43 | 2.47 | 2.36 | 0 | -3 |
-| gradient | 75 | 3.09 | 8.32 | 8.22 | 75 | 166 |
-| blocks16 | 93.8 | 3.2 | 17.61 | 17.76 | 94.4 | 455 |
-| solid | 100 | 3.25 | 31.19 | 28.22 | 100 | 767 |
-| photo | 8.6 | 2.99 | 2.91 | 3.54 | 32.8 | 19 |
+| noise | 0 | 2.84 | 2.44 | 2.43 | 0 | -14 |
+| gradient | 75 | 3.23 | 8.82 | 8.24 | 75 | 155 |
+| blocks16 | 93.8 | 3.28 | 17.91 | 17.8 | 94.4 | 443 |
+| solid | 100 | 3.29 | 32.76 | 30.08 | 100 | 814 |
+| photo | 8.6 | 3.04 | 2.87 | 3.64 | 32.8 | 20 |
+
+<a id="table-pixelcache-inkernel-rgb-rgb-matrix"></a>
+
+### Pixel cache, in-kernel WASM — RGB -> RGB  (matrix)
+
+`pixelCache.inKernel.rgb-rgb-matrix` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 185.9 | 482 | 2.59 | 1 |
+| photo | 8.6 | 114.7 | 108.5 | 0.95 | 1 |
+| photo with 5% noise added | 0 | 98.6 | 90.7 | 0.92 | 1 |
+| noise | 0 | 89 | 89.2 | 1 | 1 |
+
+<a id="table-pixelcache-inkernel-rgb-lab"></a>
+
+### Pixel cache, in-kernel WASM — RGB -> Lab
+
+`pixelCache.inKernel.rgb-lab` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 191.4 | 516.1 | 2.7 | 1 |
+| photo | 8.6 | 114.7 | 105.7 | 0.92 | 1 |
+| photo with 5% noise added | 0 | 90.6 | 90.9 | 1 | 1 |
+| noise | 0 | 90.8 | 90.1 | 0.99 | 1 |
+
+<a id="table-pixelcache-inkernel-rgb-cmyk"></a>
+
+### Pixel cache, in-kernel WASM — RGB -> CMYK
+
+`pixelCache.inKernel.rgb-cmyk` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 178.7 | 437 | 2.44 | 1 |
+| photo | 8.6 | 118.2 | 114 | 0.96 | 1 |
+| photo with 5% noise added | 0 | 101.7 | 97.5 | 0.96 | 1 |
+| noise | 0 | 100.7 | 97.2 | 0.97 | 1 |
+
+<a id="table-pixelcache-inkernel-cmyk-rgb"></a>
+
+### Pixel cache, in-kernel WASM — CMYK -> RGB
+
+`pixelCache.inKernel.cmyk-rgb` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 106.3 | 476.3 | 4.48 | 1 |
+| photo | 8.6 | 82.8 | 82.5 | 1 | 1 |
+| photo with 5% noise added | 0 | 72.9 | 71.8 | 0.98 | 1 |
+| noise | 0 | 70.7 | 67.9 | 0.96 | 1 |
+
+<a id="table-pixelcache-inkernel-cmyk-cmyk"></a>
+
+### Pixel cache, in-kernel WASM — CMYK -> CMYK
+
+`pixelCache.inKernel.cmyk-cmyk` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 101.3 | 409.3 | 4.04 | 1 |
+| photo | 8.6 | 79.8 | 79.9 | 1 | 1 |
+| photo with 5% noise added | 0 | 70.5 | 69.4 | 0.99 | 1 |
+| noise | 0 | 66.3 | 65.1 | 0.98 | 1 |
+
+<a id="table-pixelcache-inkernel-rgb-rgb-softproof"></a>
+
+### Pixel cache, in-kernel WASM — RGB -> RGB  (softproof)
+
+`pixelCache.inKernel.rgb-rgb-softproof` · MPx/s · measured by `run.js` · jsCE **1.6.0** · 2026-08-22
+
+**pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
+
+| Content | adj % | Off (0) | Auto | Auto / off | cache |
+|---|---:|---:|---:|---:|---:|
+| solid | 100 | 189.3 | 509 | 2.69 | 1 |
+| photo | 8.6 | 114.5 | 106.9 | 0.93 | 1 |
+| photo with 5% noise added | 0 | 91.4 | 89.9 | 0.98 | 1 |
+| noise | 0 | 89.6 | 98.5 | 1.1 | 1 |
 
 <a id="table-pool-matrixshaper-noise"></a>
 
@@ -776,18 +872,18 @@ runs in its own process with its own warmup.
 
 `pool.matrixShaper.noise` · MPx/s · measured by `bench/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
 
-**content** noise · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 100.5 · **sequentialKernelMpxs** 317.7 · **maxKernelVsClutLsb** 28
+**content** noise · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 100.2 · **sequentialKernelMpxs** 316.3 · **maxKernelVsClutLsb** 28
 
 | Workers | Clut Mpxs | Clut Speedup | Clut Eff Pct | Kernel Mpxs | Kernel Speedup | Kernel Eff Pct | Kernel Over Clut | Exact |
 |---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 90.3 | 0.9 | 90 | 253.8 | 0.8 | 80 | 2.81 | yes |
-| 2 | 176.8 | 1.76 | 88 | 468.2 | 1.47 | 74 | 2.65 | yes |
-| 3 | 258.1 | 2.57 | 86 | 633.5 | 1.99 | 66 | 2.45 | yes |
-| 4 | 334.5 | 3.33 | 83 | 807.8 | 2.54 | 64 | 2.41 | yes |
-| 5 | 356.1 | 3.54 | 71 | 900.9 | 2.84 | 57 | 2.53 | yes |
-| 6 | 434.3 | 4.32 | 72 | 925.6 | 2.91 | 49 | 2.13 | yes |
-| 7 | 471.8 | 4.69 | 67 | 1029.7 | 3.24 | 46 | 2.18 | yes |
-| 8 | 509.5 | 5.07 | 63 | 934.2 | 2.94 | 37 | 1.83 | yes |
+| 1 | 89.2 | 0.89 | 89 | 255.4 | 0.81 | 81 | 2.86 | yes |
+| 2 | 177.3 | 1.77 | 88 | 489.2 | 1.55 | 77 | 2.76 | yes |
+| 3 | 259.7 | 2.59 | 86 | 683.9 | 2.16 | 72 | 2.63 | yes |
+| 4 | 326.1 | 3.25 | 81 | 864.3 | 2.73 | 68 | 2.65 | yes |
+| 5 | 395.7 | 3.95 | 79 | 946.4 | 2.99 | 60 | 2.39 | yes |
+| 6 | 441.3 | 4.4 | 73 | 1161.3 | 3.67 | 61 | 2.63 | yes |
+| 7 | 496.9 | 4.96 | 71 | 1130.5 | 3.57 | 51 | 2.28 | yes |
+| 8 | 552.1 | 5.51 | 69 | 1116.7 | 3.53 | 44 | 2.02 | yes |
 
 <a id="table-pool-matrixshaper-photo"></a>
 
@@ -795,18 +891,18 @@ runs in its own process with its own warmup.
 
 `pool.matrixShaper.photo` · MPx/s · measured by `bench/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
 
-**content** photo · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 118.4 · **sequentialKernelMpxs** 321.5 · **maxKernelVsClutLsb** 25
+**content** photo · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 118.1 · **sequentialKernelMpxs** 327.5 · **maxKernelVsClutLsb** 25
 
 | Workers | Clut Mpxs | Clut Speedup | Clut Eff Pct | Kernel Mpxs | Kernel Speedup | Kernel Eff Pct | Kernel Over Clut | Exact |
 |---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 101.5 | 0.86 | 86 | 245.6 | 0.76 | 76 | 2.42 | yes |
-| 2 | 201.8 | 1.7 | 85 | 491 | 1.53 | 76 | 2.43 | yes |
-| 3 | 282 | 2.38 | 79 | 655.5 | 2.04 | 68 | 2.32 | yes |
-| 4 | 367.8 | 3.11 | 78 | 694.5 | 2.16 | 54 | 1.89 | yes |
-| 5 | 423.5 | 3.58 | 72 | 797.3 | 2.48 | 50 | 1.88 | yes |
-| 6 | 452.8 | 3.82 | 64 | 947.4 | 2.95 | 49 | 2.09 | yes |
-| 7 | 539.5 | 4.55 | 65 | 952.3 | 2.96 | 42 | 1.77 | yes |
-| 8 | 567.2 | 4.79 | 60 | 965.6 | 3 | 38 | 1.7 | yes |
+| 1 | 105.6 | 0.89 | 89 | 258.2 | 0.79 | 79 | 2.45 | yes |
+| 2 | 204.8 | 1.73 | 87 | 501.7 | 1.53 | 77 | 2.45 | yes |
+| 3 | 295 | 2.5 | 83 | 702.3 | 2.14 | 71 | 2.38 | yes |
+| 4 | 381.7 | 3.23 | 81 | 871.6 | 2.66 | 67 | 2.28 | yes |
+| 5 | 445.4 | 3.77 | 75 | 1050 | 3.21 | 64 | 2.36 | yes |
+| 6 | 498.6 | 4.22 | 70 | 1062.8 | 3.25 | 54 | 2.13 | yes |
+| 7 | 563 | 4.77 | 68 | 1013.6 | 3.1 | 44 | 1.8 | yes |
+| 8 | 611.7 | 5.18 | 65 | 1064 | 3.25 | 41 | 1.74 | yes |
 
 <a id="table-pool-peak"></a>
 
@@ -818,15 +914,15 @@ runs in its own process with its own warmup.
 
 | Kernel | Content | Sequential MPx/s | Peak Speedup | At Workers | Peak MPx/s | Efficiency | Exact |
 |---|---|---:|---:|---:|---:|---:|---|
-| int | solid | 57.6 | 4.68 | 8 | 269.9 | 59 | yes |
-| int | noise | 45.8 | 5.85 | 8 | 267.5 | 73 | yes |
-| int | photo | 49.5 | 5.52 | 6 | 272.8 | 92 | yes |
-| int-wasm-scalar | solid | 307.8 | 2.88 | 7 | 887.6 | 41 | yes |
-| int-wasm-scalar | noise | 59.6 | 5.1 | 8 | 304.2 | 64 | yes |
-| int-wasm-scalar | photo | 71 | 4.97 | 8 | 352.8 | 62 | yes |
-| int-wasm-simd | solid | 514.3 | 1.91 | 4 | 980 | 48 | yes |
-| int-wasm-simd | noise | 99.9 | 4.93 | 8 | 492.4 | 62 | yes |
-| int-wasm-simd | photo | 117.1 | 4.53 | 8 | 530.1 | 57 | yes |
+| int | solid | 57.8 | 5.89 | 8 | 340.3 | 74 | yes |
+| int | noise | 45.5 | 6.27 | 8 | 285 | 78 | yes |
+| int | photo | 49.8 | 5.83 | 7 | 290.3 | 83 | yes |
+| int-wasm-scalar | solid | 310.2 | 3.49 | 8 | 1082.3 | 44 | yes |
+| int-wasm-scalar | noise | 60.3 | 5.25 | 8 | 316.4 | 66 | yes |
+| int-wasm-scalar | photo | 71.5 | 5.59 | 8 | 399.7 | 70 | yes |
+| int-wasm-simd | solid | 510.6 | 2.33 | 6 | 1188.6 | 39 | yes |
+| int-wasm-simd | noise | 100.3 | 5.35 | 8 | 536.1 | 67 | yes |
+| int-wasm-simd | photo | 117.2 | 5.18 | 8 | 606.6 | 65 | yes |
 
 <a id="table-pool-scaling"></a>
 
@@ -838,78 +934,78 @@ runs in its own process with its own warmup.
 
 | Kernel | Content | Workers | MPx/s | Speedup | Efficiency | Exact |
 |---|---|---:|---:|---:|---:|---|
-| int | solid | 1 | 52.6 | 0.91 | 91 | yes |
-| int | solid | 2 | 101.8 | 1.77 | 88 | yes |
-| int | solid | 3 | 147.7 | 2.56 | 85 | yes |
-| int | solid | 4 | 191.3 | 3.32 | 83 | yes |
-| int | solid | 5 | 208.8 | 3.62 | 72 | yes |
-| int | solid | 6 | 230.5 | 4 | 67 | yes |
-| int | solid | 7 | 266.1 | 4.62 | 66 | yes |
-| int | solid | 8 | 269.9 | 4.68 | 59 | yes |
-| int | noise | 1 | 43.5 | 0.95 | 95 | yes |
-| int | noise | 2 | 81.5 | 1.78 | 89 | yes |
-| int | noise | 3 | 122.8 | 2.68 | 89 | yes |
-| int | noise | 4 | 166.1 | 3.63 | 91 | yes |
-| int | noise | 5 | 208.8 | 4.56 | 91 | yes |
-| int | noise | 6 | 249.2 | 5.45 | 91 | yes |
-| int | noise | 7 | 246.4 | 5.38 | 77 | yes |
-| int | noise | 8 | 267.5 | 5.85 | 73 | yes |
-| int | photo | 1 | 47.3 | 0.96 | 96 | yes |
-| int | photo | 2 | 91.5 | 1.85 | 92 | yes |
-| int | photo | 3 | 129.2 | 2.61 | 87 | yes |
-| int | photo | 4 | 188.6 | 3.81 | 95 | yes |
-| int | photo | 5 | 224.7 | 4.54 | 91 | yes |
-| int | photo | 6 | 272.8 | 5.52 | 92 | yes |
-| int | photo | 7 | 266.5 | 5.39 | 77 | yes |
-| int | photo | 8 | 260.4 | 5.26 | 66 | yes |
-| int-wasm-scalar | solid | 1 | 240.5 | 0.78 | 78 | yes |
-| int-wasm-scalar | solid | 2 | 438.8 | 1.43 | 71 | yes |
-| int-wasm-scalar | solid | 3 | 546.2 | 1.77 | 59 | yes |
-| int-wasm-scalar | solid | 4 | 805.7 | 2.62 | 65 | yes |
-| int-wasm-scalar | solid | 5 | 835.4 | 2.71 | 54 | yes |
-| int-wasm-scalar | solid | 6 | 871.3 | 2.83 | 47 | yes |
-| int-wasm-scalar | solid | 7 | 887.6 | 2.88 | 41 | yes |
-| int-wasm-scalar | solid | 8 | 737.1 | 2.39 | 30 | yes |
-| int-wasm-scalar | noise | 1 | 56.1 | 0.94 | 94 | yes |
-| int-wasm-scalar | noise | 2 | 108.9 | 1.83 | 91 | yes |
-| int-wasm-scalar | noise | 3 | 159.5 | 2.68 | 89 | yes |
-| int-wasm-scalar | noise | 4 | 205.4 | 3.45 | 86 | yes |
-| int-wasm-scalar | noise | 5 | 235.7 | 3.96 | 79 | yes |
-| int-wasm-scalar | noise | 6 | 279.8 | 4.69 | 78 | yes |
-| int-wasm-scalar | noise | 7 | 298.1 | 5 | 71 | yes |
-| int-wasm-scalar | noise | 8 | 304.2 | 5.1 | 64 | yes |
-| int-wasm-scalar | photo | 1 | 66.1 | 0.93 | 93 | yes |
-| int-wasm-scalar | photo | 2 | 129.5 | 1.82 | 91 | yes |
-| int-wasm-scalar | photo | 3 | 181.8 | 2.56 | 85 | yes |
-| int-wasm-scalar | photo | 4 | 238.5 | 3.36 | 84 | yes |
-| int-wasm-scalar | photo | 5 | 285.9 | 4.02 | 80 | yes |
-| int-wasm-scalar | photo | 6 | 323.1 | 4.55 | 76 | yes |
-| int-wasm-scalar | photo | 7 | 343 | 4.83 | 69 | yes |
-| int-wasm-scalar | photo | 8 | 352.8 | 4.97 | 62 | yes |
-| int-wasm-simd | solid | 1 | 349.3 | 0.68 | 68 | yes |
-| int-wasm-simd | solid | 2 | 630.3 | 1.23 | 61 | yes |
-| int-wasm-simd | solid | 3 | 968.3 | 1.88 | 63 | yes |
-| int-wasm-simd | solid | 4 | 980 | 1.91 | 48 | yes |
-| int-wasm-simd | solid | 5 | 958.9 | 1.86 | 37 | yes |
-| int-wasm-simd | solid | 6 | 901.2 | 1.75 | 29 | yes |
-| int-wasm-simd | solid | 7 | 927.2 | 1.8 | 26 | yes |
-| int-wasm-simd | solid | 8 | 855.1 | 1.66 | 21 | yes |
-| int-wasm-simd | noise | 1 | 91.4 | 0.91 | 91 | yes |
-| int-wasm-simd | noise | 2 | 176.7 | 1.77 | 88 | yes |
-| int-wasm-simd | noise | 3 | 254.3 | 2.55 | 85 | yes |
-| int-wasm-simd | noise | 4 | 330 | 3.3 | 83 | yes |
-| int-wasm-simd | noise | 5 | 395.7 | 3.96 | 79 | yes |
-| int-wasm-simd | noise | 6 | 434.8 | 4.35 | 73 | yes |
-| int-wasm-simd | noise | 7 | 444.7 | 4.45 | 64 | yes |
-| int-wasm-simd | noise | 8 | 492.4 | 4.93 | 62 | yes |
-| int-wasm-simd | photo | 1 | 106.5 | 0.91 | 91 | yes |
-| int-wasm-simd | photo | 2 | 204.4 | 1.75 | 87 | yes |
-| int-wasm-simd | photo | 3 | 294.8 | 2.52 | 84 | yes |
-| int-wasm-simd | photo | 4 | 339.6 | 2.9 | 73 | yes |
-| int-wasm-simd | photo | 5 | 403.8 | 3.45 | 69 | yes |
-| int-wasm-simd | photo | 6 | 494.7 | 4.22 | 70 | yes |
-| int-wasm-simd | photo | 7 | 526.4 | 4.5 | 64 | yes |
-| int-wasm-simd | photo | 8 | 530.1 | 4.53 | 57 | yes |
+| int | solid | 1 | 52.4 | 0.91 | 91 | yes |
+| int | solid | 2 | 103 | 1.78 | 89 | yes |
+| int | solid | 3 | 142.3 | 2.46 | 82 | yes |
+| int | solid | 4 | 189.9 | 3.29 | 82 | yes |
+| int | solid | 5 | 230.5 | 3.99 | 80 | yes |
+| int | solid | 6 | 267.9 | 4.64 | 77 | yes |
+| int | solid | 7 | 305.3 | 5.28 | 75 | yes |
+| int | solid | 8 | 340.3 | 5.89 | 74 | yes |
+| int | noise | 1 | 44 | 0.97 | 97 | yes |
+| int | noise | 2 | 82.8 | 1.82 | 91 | yes |
+| int | noise | 3 | 117.2 | 2.58 | 86 | yes |
+| int | noise | 4 | 182.2 | 4.01 | 100 | yes |
+| int | noise | 5 | 216.6 | 4.76 | 95 | yes |
+| int | noise | 6 | 233.2 | 5.13 | 85 | yes |
+| int | noise | 7 | 259.8 | 5.71 | 82 | yes |
+| int | noise | 8 | 285 | 6.27 | 78 | yes |
+| int | photo | 1 | 46.7 | 0.94 | 94 | yes |
+| int | photo | 2 | 89.9 | 1.8 | 90 | yes |
+| int | photo | 3 | 130.7 | 2.62 | 87 | yes |
+| int | photo | 4 | 177.6 | 3.56 | 89 | yes |
+| int | photo | 5 | 222.9 | 4.47 | 89 | yes |
+| int | photo | 6 | 273.5 | 5.49 | 91 | yes |
+| int | photo | 7 | 290.3 | 5.83 | 83 | yes |
+| int | photo | 8 | 282.3 | 5.67 | 71 | yes |
+| int-wasm-scalar | solid | 1 | 251.5 | 0.81 | 81 | yes |
+| int-wasm-scalar | solid | 2 | 473.6 | 1.53 | 76 | yes |
+| int-wasm-scalar | solid | 3 | 655.3 | 2.11 | 70 | yes |
+| int-wasm-scalar | solid | 4 | 816.2 | 2.63 | 66 | yes |
+| int-wasm-scalar | solid | 5 | 853.3 | 2.75 | 55 | yes |
+| int-wasm-scalar | solid | 6 | 1070.6 | 3.45 | 58 | yes |
+| int-wasm-scalar | solid | 7 | 984.1 | 3.17 | 45 | yes |
+| int-wasm-scalar | solid | 8 | 1082.3 | 3.49 | 44 | yes |
+| int-wasm-scalar | noise | 1 | 55.2 | 0.92 | 92 | yes |
+| int-wasm-scalar | noise | 2 | 108.8 | 1.8 | 90 | yes |
+| int-wasm-scalar | noise | 3 | 159.2 | 2.64 | 88 | yes |
+| int-wasm-scalar | noise | 4 | 194.8 | 3.23 | 81 | yes |
+| int-wasm-scalar | noise | 5 | 231.4 | 3.84 | 77 | yes |
+| int-wasm-scalar | noise | 6 | 195.6 | 3.24 | 54 | yes |
+| int-wasm-scalar | noise | 7 | 306.7 | 5.09 | 73 | yes |
+| int-wasm-scalar | noise | 8 | 316.4 | 5.25 | 66 | yes |
+| int-wasm-scalar | photo | 1 | 65.4 | 0.91 | 91 | yes |
+| int-wasm-scalar | photo | 2 | 126.9 | 1.77 | 89 | yes |
+| int-wasm-scalar | photo | 3 | 188.3 | 2.63 | 88 | yes |
+| int-wasm-scalar | photo | 4 | 243 | 3.4 | 85 | yes |
+| int-wasm-scalar | photo | 5 | 276 | 3.86 | 77 | yes |
+| int-wasm-scalar | photo | 6 | 332.7 | 4.65 | 77 | yes |
+| int-wasm-scalar | photo | 7 | 328.3 | 4.59 | 66 | yes |
+| int-wasm-scalar | photo | 8 | 399.7 | 5.59 | 70 | yes |
+| int-wasm-simd | solid | 1 | 381.3 | 0.75 | 75 | yes |
+| int-wasm-simd | solid | 2 | 666.4 | 1.31 | 65 | yes |
+| int-wasm-simd | solid | 3 | 952.9 | 1.87 | 62 | yes |
+| int-wasm-simd | solid | 4 | 1184.7 | 2.32 | 58 | yes |
+| int-wasm-simd | solid | 5 | 1031.8 | 2.02 | 40 | yes |
+| int-wasm-simd | solid | 6 | 1188.6 | 2.33 | 39 | yes |
+| int-wasm-simd | solid | 7 | 1038.3 | 2.03 | 29 | yes |
+| int-wasm-simd | solid | 8 | 1147.5 | 2.25 | 28 | yes |
+| int-wasm-simd | noise | 1 | 91.9 | 0.92 | 92 | yes |
+| int-wasm-simd | noise | 2 | 180.1 | 1.8 | 90 | yes |
+| int-wasm-simd | noise | 3 | 256.7 | 2.56 | 85 | yes |
+| int-wasm-simd | noise | 4 | 339.1 | 3.38 | 85 | yes |
+| int-wasm-simd | noise | 5 | 394.6 | 3.93 | 79 | yes |
+| int-wasm-simd | noise | 6 | 462.3 | 4.61 | 77 | yes |
+| int-wasm-simd | noise | 7 | 514.7 | 5.13 | 73 | yes |
+| int-wasm-simd | noise | 8 | 536.1 | 5.35 | 67 | yes |
+| int-wasm-simd | photo | 1 | 104.3 | 0.89 | 89 | yes |
+| int-wasm-simd | photo | 2 | 203.7 | 1.74 | 87 | yes |
+| int-wasm-simd | photo | 3 | 295.4 | 2.52 | 84 | yes |
+| int-wasm-simd | photo | 4 | 375.7 | 3.21 | 80 | yes |
+| int-wasm-simd | photo | 5 | 462.8 | 3.95 | 79 | yes |
+| int-wasm-simd | photo | 6 | 519.2 | 4.43 | 74 | yes |
+| int-wasm-simd | photo | 7 | 582.3 | 4.97 | 71 | yes |
+| int-wasm-simd | photo | 8 | 606.6 | 5.18 | 65 | yes |
 
 <a id="table-smalldim-throughput"></a>
 
@@ -921,19 +1017,19 @@ runs in its own process with its own warmup.
 
 | Workflow | Kernel | Output Channels | Grid | MPx/s |
 |---|---|---:|---:|---:|
-| gray -> RGB | kernel1D | 3 | 256 | 91.5 |
-| gray -> CMYK | kernel1D | 4 | 256 | 81.5 |
-| gray -> 6CLR | kernel1D | 6 | 256 | 64.7 |
-| duotone -> RGB | kernel2D | 3 | 256 | 60.8 |
-| duotone -> CMYK | kernel2D | 4 | 256 | 51.1 |
-| duotone -> 6CLR | kernel2D | 6 | 256 | 41.1 |
-| RGB -> RGB | kernel3D | 3 | 33 | 76.9 |
-| RGB -> CMYK | kernel3D | 4 | 33 | 67.4 |
-| RGB -> 6CLR | kernel3D | 6 | 33 | 34.5 |
-| RGB -> 8CLR | kernel3D | 8 | 33 | 29.2 |
-| CMYK -> RGB | kernel4D | 3 | 17 | 42.7 |
-| CMYK -> CMYK | kernel4D | 4 | 17 | 36.1 |
-| CMYK -> 6CLR | kernel4D | 6 | 17 | 22.8 |
+| gray -> RGB | kernel1D | 3 | 256 | 93.2 |
+| gray -> CMYK | kernel1D | 4 | 256 | 82.7 |
+| gray -> 6CLR | kernel1D | 6 | 256 | 65.4 |
+| duotone -> RGB | kernel2D | 3 | 256 | 61.7 |
+| duotone -> CMYK | kernel2D | 4 | 256 | 52.6 |
+| duotone -> 6CLR | kernel2D | 6 | 256 | 41.4 |
+| RGB -> RGB | kernel3D | 3 | 33 | 77.9 |
+| RGB -> CMYK | kernel3D | 4 | 33 | 68.2 |
+| RGB -> 6CLR | kernel3D | 6 | 33 | 35.3 |
+| RGB -> 8CLR | kernel3D | 8 | 33 | 29.8 |
+| CMYK -> RGB | kernel4D | 3 | 17 | 44.6 |
+| CMYK -> CMYK | kernel4D | 4 | 17 | 36.4 |
+| CMYK -> 6CLR | kernel4D | 6 | 17 | 23.8 |
 
 <a id="table-solo-rgb2cmyk"></a>
 
@@ -945,9 +1041,9 @@ runs in its own process with its own warmup.
 
 | Engine | Median Mpxs | Spread Pct | Processes |
 |---|---:|---:|---:|
-| int | 46.8 | 1.7 | 5 |
-| scalar | 66 | 3.9 | 5 |
-| simd | 105.9 | 3.5 | 5 |
+| int | 48 | 2.1 | 5 |
+| scalar | 68.3 | 0.8 | 5 |
+| simd | 109.9 | 0.6 | 5 |
 
 <a id="table-solo-rgb2lab"></a>
 
@@ -959,9 +1055,9 @@ runs in its own process with its own warmup.
 
 | Engine | Median Mpxs | Spread Pct | Processes |
 |---|---:|---:|---:|
-| int | 52.5 | 0.8 | 5 |
-| scalar | 75.8 | 2 | 5 |
-| simd | 107.8 | 3.9 | 5 |
+| int | 53.4 | 2.7 | 5 |
+| scalar | 76.9 | 0.5 | 5 |
+| simd | 112 | 0.5 | 5 |
 
 ## Citation index
 
@@ -1018,6 +1114,12 @@ new or quoted only in prose — both worth knowing before a re-measurement.
 | [`pixelCache.accuracyPath.cmyk-rgb`](#table-pixelcache-accuracypath-cmyk-rgb) | *not cited yet* |
 | [`pixelCache.accuracyPath.cmyk-cmyk`](#table-pixelcache-accuracypath-cmyk-cmyk) | *not cited yet* |
 | [`pixelCache.accuracyPath.rgb-rgb-softproof`](#table-pixelcache-accuracypath-rgb-rgb-softproof) | *not cited yet* |
+| [`pixelCache.inKernel.rgb-rgb-matrix`](#table-pixelcache-inkernel-rgb-rgb-matrix) | *not cited yet* |
+| [`pixelCache.inKernel.rgb-lab`](#table-pixelcache-inkernel-rgb-lab) | *not cited yet* |
+| [`pixelCache.inKernel.rgb-cmyk`](#table-pixelcache-inkernel-rgb-cmyk) | `README.md`, `docs/Bench.md`, `docs/README.md`, `docs/deepdive/PixelCache.md` |
+| [`pixelCache.inKernel.cmyk-rgb`](#table-pixelcache-inkernel-cmyk-rgb) | *not cited yet* |
+| [`pixelCache.inKernel.cmyk-cmyk`](#table-pixelcache-inkernel-cmyk-cmyk) | *not cited yet* |
+| [`pixelCache.inKernel.rgb-rgb-softproof`](#table-pixelcache-inkernel-rgb-rgb-softproof) | *not cited yet* |
 | [`pool.matrixShaper.noise`](#table-pool-matrixshaper-noise) | *not cited yet* |
 | [`pool.matrixShaper.photo`](#table-pool-matrixshaper-photo) | *not cited yet* |
 | [`pool.peak`](#table-pool-peak) | `docs/deepdive/multicore.md`, `docs/pool.md` |

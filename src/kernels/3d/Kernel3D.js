@@ -96,32 +96,39 @@ module.exports = {
         // present, lutMode already demoted by create() to what this host can
         // run). The decision itself is the resolve() switch in
         // kernel3D_table.js next to this file.
-        var keep = function(why){
+        var keep = function(why, extra){
             // Bind happens in create(), after this kernel's WASM is loaded.
             // Yielding first is what stops a matrix-shaper pair compiling
             // tetrahedral modules it will throw away.
-            return { pipeline: pipeline, kernel: null,
-                     meta: { name: 'kernel3D', dimensions: 3, claimed: false, why: why } };
+            var out = { pipeline: pipeline, kernel: null,
+                        meta: { name: 'kernel3D', dimensions: 3, claimed: false, why: why } };
+            if(extra && extra.pixelCache !== undefined) out.pixelCache = extra.pixelCache;
+            return out;
         };
-
-        if(opts.wasmMatrixShaper === 'off')  return keep('wasmMatrixShaper is off');
-        // A forced table (1 / N) is a different execution model — keep the
-        // tetra path. 'auto' is not a decision; this kernel leaves it so
-        // Transform injects nothing. 4/5/6 promote auto to 1 from their init.
-        if(opts.pixelCacheActive)            return keep('a pixel cache is active');
 
         var verdict;
         try { verdict = matrixShaper.inspect(opts.transform); }
         catch(e){ return keep('inspect threw: ' + e); }
 
-        if(!verdict || verdict.ok !== true) return keep(verdict ? verdict.why : null);
+        // Curve + 3×3 + curve is ~3 ns/px. A cache probe costs more than the
+        // pixel, and a forced 1 / N used to refuse the shaper so the caller
+        // landed on the stage walk at ~7 MPx/s (89–98 % slower). Always
+        // return 0 — pixelCacheUsed reports that, inject does not run.
+        if(verdict && verdict.ok === true){
+            if(opts.wasmMatrixShaper === 'off'){
+                return keep('wasmMatrixShaper is off', { pixelCache: 0 });
+            }
+            var instance = Object.create(MatrixShaperKernel);
+            instance.transform = opts.transform;
+            instance.claimed   = true;
+            instance._impl     = undefined;
+            instance._variant  = null;
+            return { pipeline: pipeline, kernel: instance,
+                     meta: instance.info(), pixelCache: 0 };
+        }
 
-        var instance = Object.create(MatrixShaperKernel);
-        instance.transform = opts.transform;
-        instance.claimed   = true;
-        instance._impl     = undefined;
-        instance._variant  = null;
-        return { pipeline: pipeline, kernel: instance, meta: instance.info() };
+        if(opts.wasmMatrixShaper === 'off') return keep('wasmMatrixShaper is off');
+        return keep(verdict ? verdict.why : null);
     },
 
     /**

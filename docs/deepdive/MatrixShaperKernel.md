@@ -690,8 +690,12 @@ Declining is normal, not a failure. `matrixShaper.inspect(transform)` returns
 - the input or output TRC differs per channel — one table per direction cannot
   serve three different curves, and applying red's curve to green would be
   silently wrong rather than merely slow
-- a pixel cache is active
 - WebAssembly is missing entirely
+
+A `pixelCache` of 1 / N does **not** refuse the shaper. The probe
+costs more than the pixel (Chrome: ~270 MPx/s → ~7). Kernel3D
+returns `pixelCache: 0`; `pixelCacheUsed` is 0; `kernelInfo().cache`
+stays `'not-supported'`.
 
 A host without SIMD is **not** on that list: it gets the scalar build.
 

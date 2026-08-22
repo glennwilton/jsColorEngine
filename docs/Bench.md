@@ -347,11 +347,9 @@ tax. Tick it for `'auto'` — WASM 3–6 bind `interp_*_cached`; 4/5/6
 also inject the accuracy-path stage. Solids and logos are the content
 that wins.
 
-Node, this machine, `int-wasm-simd`, 65 K px (so you know what the
-box does): RGB→CMYK solid **2.2×**, photo with 5 % noise **0.96×**,
-photo with 15 % noise **0.94×**. CMYK→RGB solid **3.7×**, photo with
-5 % noise ~1.0×, photo with 15 % noise **0.97×**. Matrix-shaper is
-`'not-supported'` either way.
+Node off-vs-auto (`int-wasm-simd` `array()`, 0 vs `'auto'`) lives in
+[pixelCache.inKernel.*](./BenchResults.md#table-pixelcache-inkernel-rgb-cmyk).
+The Chrome pair stays in the README.
 
 ---
 

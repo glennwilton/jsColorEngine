@@ -1,6 +1,6 @@
 {
   "tool": "bench/matrix_shaper_kernel/throughput.js",
-  "generated": "2026-08-22T22:45:42.674Z",
+  "generated": "2026-08-22T23:31:13.298Z",
   "node": "v24.16.0",
   "platform": "win32 x64",
   "meta": {
@@ -30,32 +30,32 @@
       "rows": [
         {
           "path": "kernel, SIMD",
-          "solid": 334,
-          "noise": 330.6,
-          "photo": 335.1
+          "solid": 332.2,
+          "noise": 331.9,
+          "photo": 341.8
         },
         {
           "path": "kernel, scalar",
-          "solid": 203.7,
-          "noise": 69.3,
-          "photo": 185.6
+          "solid": 205.9,
+          "noise": 71.4,
+          "photo": 187.3
         },
         {
           "path": "kernel, plain JS",
-          "solid": 94.2,
-          "noise": 58.5,
-          "photo": 90
+          "solid": 96.4,
+          "noise": 59,
+          "photo": 92.6
         },
         {
           "path": "CLUT (default lutMode)",
-          "solid": 529.9,
-          "noise": 99.1,
-          "photo": 116.7
+          "solid": 510.3,
+          "noise": 91.6,
+          "photo": 107
         },
         {
           "path": "JS stage pipeline",
-          "solid": 10.2,
-          "noise": 8.3,
+          "solid": 10.3,
+          "noise": 8.4,
           "photo": 8.9
         }
       ]
@@ -81,24 +81,24 @@
       "rows": [
         {
           "content": "solid",
-          "simdOverClut": 0.63,
-          "simdOverScalar": 1.64,
-          "simdOverJs": 3.55,
-          "jsOverPipeline": 9.3
+          "simdOverClut": 0.65,
+          "simdOverScalar": 1.61,
+          "simdOverJs": 3.44,
+          "jsOverPipeline": 9.4
         },
         {
           "content": "noise",
-          "simdOverClut": 3.33,
-          "simdOverScalar": 4.77,
-          "simdOverJs": 5.65,
+          "simdOverClut": 3.62,
+          "simdOverScalar": 4.65,
+          "simdOverJs": 5.63,
           "jsOverPipeline": 7.1
         },
         {
           "content": "photo",
-          "simdOverClut": 2.87,
-          "simdOverScalar": 1.81,
-          "simdOverJs": 3.72,
-          "jsOverPipeline": 10.1
+          "simdOverClut": 3.2,
+          "simdOverScalar": 1.82,
+          "simdOverJs": 3.69,
+          "jsOverPipeline": 10.4
         }
       ]
     },
@@ -125,33 +125,33 @@
       "rows": [
         {
           "path": "kernel, SIMD",
-          "solid": 231.4,
-          "noise": 205.9,
-          "photo": 220.5
+          "solid": 240.5,
+          "noise": 207.8,
+          "photo": 215.4
         },
         {
           "path": "kernel, scalar",
-          "solid": 102.7,
-          "noise": 63.5,
-          "photo": 99.9
+          "solid": 105.3,
+          "noise": 64.3,
+          "photo": 102.3
         },
         {
           "path": "kernel, plain JS",
-          "solid": 79.6,
-          "noise": 38.9,
-          "photo": 59.1
+          "solid": 80.6,
+          "noise": 39.6,
+          "photo": 60.5
         },
         {
           "path": "CLUT (default lutMode)",
-          "solid": 195.9,
-          "noise": 103.1,
-          "photo": 121.6
+          "solid": 194.3,
+          "noise": 104.8,
+          "photo": 121.8
         },
         {
           "path": "JS stage pipeline",
-          "solid": 10,
+          "solid": 10.1,
           "noise": 8.3,
-          "photo": 8.7
+          "photo": 8.8
         }
       ]
     },
@@ -176,23 +176,23 @@
       "rows": [
         {
           "content": "solid",
-          "simdOverClut": 1.18,
-          "simdOverScalar": 2.25,
-          "simdOverJs": 2.91,
-          "jsOverPipeline": 7.9
+          "simdOverClut": 1.24,
+          "simdOverScalar": 2.28,
+          "simdOverJs": 2.98,
+          "jsOverPipeline": 8
         },
         {
           "content": "noise",
-          "simdOverClut": 2,
-          "simdOverScalar": 3.24,
-          "simdOverJs": 5.29,
-          "jsOverPipeline": 4.7
+          "simdOverClut": 1.98,
+          "simdOverScalar": 3.23,
+          "simdOverJs": 5.25,
+          "jsOverPipeline": 4.8
         },
         {
           "content": "photo",
-          "simdOverClut": 1.81,
-          "simdOverScalar": 2.21,
-          "simdOverJs": 3.73,
+          "simdOverClut": 1.77,
+          "simdOverScalar": 2.11,
+          "simdOverJs": 3.56,
           "jsOverPipeline": 6.8
         }
       ]

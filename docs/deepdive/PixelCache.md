@@ -32,6 +32,8 @@ Kernel3D still leaves the *pipeline* hint at `'auto'` (no accuracy-path
 inject on RGB). The image path now binds the in-kernel export on
 `'auto'`: a clean photograph is a ~10 % boost; a photograph with
 5 % noise added is the worst case (~4 %); solids up to 3.94×.
+Node off-vs-auto lives in
+[BenchResults `pixelCache.inKernel.*`](../BenchResults.md#table-pixelcache-inkernel-rgb-cmyk).
 4/5/6 also
 keep their accuracy-path inject for `transform()`. `pixelCache: 0`
 restores the uncached kernel.
@@ -1395,7 +1397,7 @@ does.
 |---|---|---|
 | `'auto'` (default) | ignore | 4/5/6 change it to `1`; 3D / 1D / 2D / identity / ND / matrix-shaper leave it |
 | `0` / `false` | off | leave it |
-| `1` / `true` | single-entry | leave it (3D also keeps tetra — will not yield the shaper) |
+| `1` / `true` | single-entry | leave it, except a 3-D matrix pair forces `0` and still yields the shaper |
 | `16`, `32`, `256`… | that many slots (power of two) | leave it |
 
 After `init()`, `_applyPixelCache()` injects only if the value is then a

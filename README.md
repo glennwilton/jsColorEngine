@@ -567,7 +567,8 @@ as the wins.
   Chrome 151: 100→96 / 71→69); solids **up to 3.94×**
   (CMYK→RGB 104→407). Matrix-shaper declines. Leave on for
   general images; turn off (`pixelCache: 0`) on grainy images
-  for a small speed boost.
+  for a small speed boost. Node off-vs-auto:
+  [pixelCache.inKernel.*](./docs/BenchResults.md#table-pixelcache-inkernel-rgb-cmyk).
   [PixelCache.md](./docs/deepdive/PixelCache.md)
 - **Matrix-shaper WASM kernel** (`wasmMatrixShaper`) — RGB→RGB matrix-shaper
   pairs run as a curve, a 3×3 and another curve rather than through a CLUT:

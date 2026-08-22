@@ -150,6 +150,13 @@ references.
 
 ## Pixel cache
 
+- [`release_matrix/run.js --pixelcache`](./release_matrix/run.js) —
+  **Gate** (reproduce `pixelcache`). Accuracy-path 0 / 1 / 32 **and**
+  in-kernel WASM `0` vs `'auto'` (`int-wasm-simd` `array()`). Emits
+  `pixelCache.accuracyPath.*` and `pixelCache.inKernel.*`.
+  `node bench/release_matrix/run.js --pixelcache --sizes 262144`
+  or `--pixelcache-inkernel` for the image path only.
+
 - [`pixel_cache/`](./pixel_cache/) — **Manual probe** (`verify_cache.js`
   can gate a release). Accuracy-path cache worth, plus n-channel
   break-even, plus byte-identical verify. See

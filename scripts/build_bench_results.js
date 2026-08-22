@@ -104,6 +104,8 @@ function humanColumn(c) {
         simdOverClut: 'SIMD / CLUT', simdOverScalar: 'SIMD / scalar',
         simdOverJs: 'SIMD / plain JS', jsOverPipeline: 'JS / pipeline',
         ratioVsLcms: 'jsCE SIMD / lcms-wasm', coverX: 'cover', adjPct: 'adj %',
+        offMpxs: 'Off (0)', autoMpxs: 'Auto', autoOverOff: 'Auto / off',
+        cache: 'cache',
     };
     if (named[c]) return named[c];
     return c.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, m => m.toUpperCase());

@@ -1,6 +1,6 @@
 {
   "tool": "bench/solo_photo/solo.js",
-  "generated": "2026-08-22T22:51:45.377Z",
+  "generated": "2026-08-22T23:38:33.099Z",
   "node": "v24.16.0",
   "platform": "win32 x64",
   "meta": {
@@ -27,20 +27,20 @@
       "rows": [
         {
           "engine": "int",
-          "medianMpxs": 46.8,
-          "spreadPct": 1.7,
+          "medianMpxs": 48,
+          "spreadPct": 2.1,
           "processes": 5
         },
         {
           "engine": "scalar",
-          "medianMpxs": 66,
-          "spreadPct": 3.9,
+          "medianMpxs": 68.3,
+          "spreadPct": 0.8,
           "processes": 5
         },
         {
           "engine": "simd",
-          "medianMpxs": 105.9,
-          "spreadPct": 3.5,
+          "medianMpxs": 109.9,
+          "spreadPct": 0.6,
           "processes": 5
         }
       ]

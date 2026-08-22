@@ -4,7 +4,7 @@
 > in this repo cold: what the project is, and a per-document summary of
 > where every piece of context and reasoning lives. Regenerate per
 > [`summary-generator.md`](./summary-generator.md).
-> Last regenerated: **2026-08-23** (in-kernel pixel cache in `create()`).
+> Last regenerated: **2026-08-23** (1.6.0 snapshot with native C + in-kernel tables).
 
 > Headline MPx/s below are from the date in **Current state**. Re-run: [`samples/bench/`](../samples/bench/) or `node bench/mpx_summary.js`. Tables: [BenchResults.md](./BenchResults.md).
 
@@ -35,6 +35,8 @@ on-demand WASM compile (`src/wasm/instantiate.js`), and the browser
 worker pool (`jsColorEngineWorker.js`). **Accuracy-path**
 `pixelCache: 'auto'` (4/5/6 inject) is the other implementation of
 the same hint. Native C IT8 matrix testing is next, not a 1.6 gate.
+The 1.6.0 snapshot includes the WSL native C harness text and
+`pixelCache.inKernel.*` (off vs `'auto'`).
 Browser bench headline remains photo with 5 % noise added; the
 **Speed vs Noise** tab is why. LittleCMS comparison:
 `docs/LcmsComparison.md` (`node bench/reproduce.js`). How to measure
@@ -260,9 +262,12 @@ The pixel cache: design space, as-built notes for the accuracy-path
 implementation (`src/cache.js`, default `pixelCache: 'auto'`, kernels
 decide, `pixelCacheUsed` reports) and the in-kernel WASM export
 (`interp_*_cached`) now bound in `create()` when `pixelCache !== 0`.
-Hit rates by content class — photographs 3–41 % (break-even at best
-on 3/4ch), flat graphic content 67 %+ (1.2–3.2×). Why auto is
-single-entry, not a 2+ table, and why `array()` still uses the kernel.
+Node off-vs-auto is
+[pixelCache.inKernel.*](./BenchResults.md#table-pixelcache-inkernel-rgb-cmyk);
+the Chrome pair stays in the project README. Hit rates by content
+class — photographs 3–41 % (break-even at best on 3/4ch), flat
+graphic content 67 %+ (1.2–3.2×). Why auto is single-entry, not a
+2+ table, and why `array()` still uses the kernel.
 
 ### deepdive/multicore.md
 The worker pool, in the order the work happened: the two candidate
