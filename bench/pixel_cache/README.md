@@ -8,6 +8,25 @@ node bench/pixel_cache/cache_bench.js
 
 Options: `--pixels <n>` (default 250000), `--iters <n>` (default 3).
 
+## Above 4 channels
+
+```bash
+node bench/pixel_cache/nchannel_bench.js
+```
+
+A separate harness, because it is a separate regime. `cache_bench.js` is RGB
+and CMYK, where a CLUT is built and a miss is one interpolation. Above 4 input
+channels `KernelND` declines the LUT, every pixel walks the full pipeline, and
+a miss costs roughly fifty times more — which moves the break-even hit rate
+from ~29 % at 4 channels to ~6 % at 8.
+
+It prints that break-even per width, derived from the noise and flat-16 rows,
+and **that is the number to take away**. The 25× on 16-colour content is not a
+workload. Options: `--widths 4,5,8,12`, `--slots <n>`, `--px <n>`,
+`--iters <n>`, `--out <channels>`.
+
+Needs the synthetic profiles: `node scripts/make_test_profiles.js`.
+
 ## Correctness first
 
 ```bash
@@ -52,10 +71,10 @@ The synthetic generators deliberately match the native lcms harness so
 results line up with the LittleCMS content-sensitivity measurements in
 [docs/LcmsComparison.md](../../docs/LcmsComparison.md).
 
-## Two ways to get a wrong answer
+## Four ways to get a wrong answer
 
-Both of these produced convincing but false results before being caught,
-so the harness now guards against them:
+All of these produced convincing but false results before being caught,
+so the harnesses now guard against them:
 
 **Do not trust `samples/images/`.** Those three PNGs are AI-generated
 and adjusted, with unnaturally smooth gradients and large flat
@@ -71,13 +90,28 @@ warning when it crops. Striding would sample evenly but destroy
 adjacency, which is exactly what the `slots=1` column measures, so the
 fix is to raise `--pixels`, not to stride.
 
+**Do not time N passes over one buffer through one `Transform`.** Pass 2
+finds pass 1's entries still resident, so unique content arrives with a
+full table's head start and "best of three" picks the most warmed pass.
+It reads as tens of percent of reuse that the data does not contain.
+`nchannel_bench.js` builds a fresh `Transform` per timed pass and warms
+the JIT on a throwaway one.
+
+**Do not generate noise from an LCG's low byte.** `seed & 0xff` has a
+short period and repeats far more than random, which flatters the cache
+into near-perfect hits on supposedly-unique pixels. Both harnesses take
+`(seed >>> 16) & 0xff`; `nchannel_bench.js` also prints the distinct
+colour count per row, so a lying generator is visible in the output.
+
 ## Results
 
 Recorded in
 [docs/deepdive/PixelCache.md](../../docs/deepdive/PixelCache.md).
-Short version: photographs 3–41 % (0.84–1.05×), flat graphic content
-67 % (1.22×), synthetic solid/checkerboard up to 3.2×, pure noise the
-floor at 0.82×.
+Short version, 3- and 4-channel: photographs 3–41 % (0.84–1.05×), flat
+graphic content 67 % (1.22×), synthetic solid/checkerboard up to 3.2×,
+pure noise the floor at 0.82×. Above 4 channels the same content is
+worth far more — break-even ~6 % at 8 channels, flat content 21–26× —
+but noise still never pays.
 
 Five images is still not a corpus — screenshots, halftones and
 print-origin scans are the classes most likely to favour the cache and

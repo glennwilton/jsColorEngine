@@ -19,7 +19,7 @@
     var convert = require('./convert');
     var defs = require('./def');
     var wasmLifecycle = require('./kernels/wasmLifecycle');
-    var lutKernelTable = require('./lutKernelTable');
+    // var lutKernelTable = require('./lutKernelTable');
     var _pool = require('./pool.js');
 
     var eIntent = defs.eIntent;
@@ -4041,140 +4041,27 @@
         }
 
         /**
-         * IMAGE-GRADE FAST PATH. Converts an array of 8-bit pixel data through
-         * the prebuilt CLUT using the unrolled tetrahedral interpolators in this
-         * file. This is the entry point you want for canvas data, video frames,
-         * and anything pixel-shaped.
+         * Convert a batch. Native units only — the container matches
+         * `dataFormat`. For a different container after the fact, see
+         * {@link Transform.reformat} or the sixth argument of
+         * {@link Transform#transformArray}.
          *
-         * Throughput (V8 / x64, measured via bench/mpx_summary.js, GRACoL2006):
-         * ~70 Mpx/s RGB→RGB and ~60 Mpx/s RGB→CMYK on 3D LUTs; ~50-60 Mpx/s
-         * on 4D LUTs (CMYK input). `lutMode: 'int'` adds another 4-16 % on top.
+         * Hands the kernel the batch when it can take it (identity, a claimed
+         * kernel, or an int8/int16 CLUT). Otherwise walks the pipeline per
+         * pixel: colour objects for `object` / `objectFloat`, a flat numeric
+         * array for everything else.
          *
-         * Routing inside this method picks the most specialised inner loop:
+         * `preserveAlpha` is a preference. Omitted, it follows `outputHasAlpha`;
+         * it is then clamped to what the input actually has.
          *
-         *      input → output channels       inner loop
-         *      ───────────────────────       ───────────────────────────────────
-         *      1     → N                     linearInterp1DArray_NCh_loop
-         *      2     → N                     bilinearInterp2DArray_NCh_loop
-         *      3     → 3   (RGB→RGB,  Lab)   tetrahedralInterp3DArray_3Ch_loop
-         *      3     → 4   (RGB→CMYK)       tetrahedralInterp3DArray_4Ch_loop
-         *      3     → N   (RGB→6+ch)       tetrahedralInterp3DArray_NCh_loop
-         *      4     → 3   (CMYK→RGB, Lab)  tetrahedralInterp4DArray_3Ch_loop
-         *      4     → 4   (CMYK→CMYK)      tetrahedralInterp4DArray_4Ch_loop
-         *      4     → N                    tetrahedralInterp4DArray_NCh_loop
-         *
-         *  INPUT CONTRACT — these are NOT validated in the per-pixel inner loop
-         *
-         *   - inputArray must be a Uint8ClampedArray or Uint8Array.
-         *   - Values must be 0..255. Out-of-range values produce undefined
-         *     behaviour (garbage colours, no exception thrown).
-         *   - Length must equal pixelCount * inputChannelsPerPixel (where the
-         *     "+1 for alpha" is included if `inputHasAlpha` is true).
-         *   - The Transform must have been created with `buildLut: true` and
-         *     `dataFormat: 'int8'` (otherwise this throws 'No LUT loaded').
-         *
-         *  ALPHA HANDLING
-         *
-         *   - inputHasAlpha:  if true, every (channels+1)th byte of the input is
-         *                     treated as alpha and skipped (or copied — see
-         *                     preserveAlpha).
-         *   - outputHasAlpha: if true, the output is written with an alpha slot
-         *                     after each pixel.
-         *   - preserveAlpha:  if true, copy alpha from input to output (requires
-         *                     both the above to be true). If undefined, defaults
-         *                     to `outputHasAlpha && inputHasAlpha`.
-         *
-         *  TODO (future enhancements)
-         *   - Pixel-format strings: 'RGB', 'RGBA', 'BGRA', 'CMYK', 'CMYKA'
-         *     to make the alpha-handling triple-boolean less error-prone.
-         *   - Optional `out` buffer parameter to avoid the per-call
-         *     `new Uint8ClampedArray(...)` allocation (matters for
-         *     real-time soft-proofing of video / repeated canvas redraws).
-         *   - Reactivate the *_loop_16bit variants for 16-bit input (currently
-         *     commented out at the routing switch below). Requires fixing the
-         *     `(inputN === 255)` boundary check in the loops first — see the
-         *     HOT PATH header above tetrahedralInterp3DArray_4Ch_loop.
-         *
-         * @param {Uint8ClampedArray|Uint8Array} inputArray
-         * @param {boolean} inputHasAlpha   Input bytes-per-pixel includes alpha.
-         * @param {boolean} outputHasAlpha  Output bytes-per-pixel should include alpha.
-         * @param {boolean} [preserveAlpha] Copy alpha through unchanged. Defaults
-         *                                  to (outputHasAlpha && inputHasAlpha).
-         * @param {number}  [pixelCount]    Pixels to convert. Defaults to
-         *                                  Math.floor(inputArray.length / inputBPP).
-         * @returns {Uint8ClampedArray}     A new Uint8ClampedArray of length
-         *                                  pixelCount * outputBytesPerPixel.
-         * @throws {string} 'No LUT loaded' if the Transform was built without
-         *                  buildLut: true.
-         */
-
-        /**
-         * Generic array transform. Routes to the right path based on dataFormat
-         * and whether a LUT was prebuilt. This is the recommended entry point for
-         * any "I have N colours, convert them all" workload — it'll automatically
-         * pick the fastest legitimate path.
-         *
-         *  ROUTING TABLE
-         *
-         *   dataFormat === 'int8' AND LUT prebuilt
-         *      → transformArrayViaLUT()  — the IMAGE FAST PATH (~45-215 Mpx/s).
-         *        outputFormat is ignored (always Uint8ClampedArray out).
-         *
-         *   dataFormat === 'object' OR 'objectFloat'
-         *      → per-pixel ACCURACY PATH walking the full pipeline.
-         *        inputArray is an array of colour objects, output is too.
-         *        `outputFormat` is ignored.
-         *
-         *   dataFormat === 'int8' / 'int16' / 'device' AND no LUT
-         *      → per-pixel ACCURACY PATH walking the full pipeline over a flat
-         *        numeric array. SLOW for image data — if you're processing
-         *        pixels, rebuild the Transform with `buildLut: true` so you get
-         *        routed to the fast path above.
-         *
-         *  WASM MEMORY & OUTPUT BUFFER REUSE
-         *
-         *   When routed to the LUT fast path with a WASM lutMode, WASM linear
-         *   memory is retained between calls at the high-water mark of the
-         *   largest image processed (WASM pages cannot shrink by spec). Pass
-         *   `outputArray` to reuse a pre-allocated buffer and avoid per-call
-         *   JS allocation / GC pressure.
-         *
-         *   Memory is automatically capped at 128 MB by default
-         *   (wasmMaxMemory) — anything beyond that is compacted on the next
-         *   call. See transformArrayViaLUT() JSDoc for all reclaim methods
-         *   (compactWasmMemory, setWasmShrinkRatio, setWasmMaxMemory,
-         *   releaseWasmMemory, wasmMemoryBytes) and
-         *   docs/deepdive/WasmKernels.md for full details.
-         *
-         *  OUTPUT FORMAT
-         *
-         *   `outputFormat` controls the output container type for the flat-array
-         *   paths:
-         *      'int8'    → Uint8ClampedArray
-         *      'int16'   → Uint16Array
-         *      'float32' → Float32Array
-         *      'float64' → Float64Array
-         *      'same'    → match inputArray's typed-array constructor
-         *      undefined → plain Array (default)
-         *
-         *  TODO (future enhancements)
-         *   - Pixel-format strings: 'RGB', 'RGBA', 'BGRA', 'CMYK', 'CMYKA'
-         *     replacing the current inputHasAlpha/outputHasAlpha/preserveAlpha
-         *     triple-boolean.
-         *
-         * @param {Uint8ClampedArray|Uint8Array|Uint16Array|Float32Array|Float64Array|Array} inputArray
+         * @param {TypedArray|Array} inputArray
          * @param {boolean} inputHasAlpha
          * @param {boolean} outputHasAlpha
          * @param {boolean} [preserveAlpha]
          * @param {number}  [pixelCount]
-         * @param {string}  [outputFormat]  See OUTPUT FORMAT above.
-         * @param {Uint8ClampedArray|Uint16Array} [outputArray]
-         *                  Optional reusable destination buffer. Only used when
-         *                  transformArray() routes to transformArrayViaLUT().
-         * @returns {Uint8ClampedArray|Uint16Array|Float32Array|Float64Array|Array}
-         * @throws {string} 'No Pipeline' if create()/createMultiStage() hasn't run.
-         * @throws {string} 'forwardArray can only be used with int8 or int16
-         *                  dataFormat' for invalid combinations.
+         * @param {TypedArray|Array} [outputArray]  reused when the type matches
+         * @returns {TypedArray|Array}
+         * @throws {string} 'No Pipeline' if there is neither a pipeline nor a LUT
          */
         array(inputArray, inputHasAlpha, outputHasAlpha, preserveAlpha, pixelCount, outputArray){
 
@@ -4237,7 +4124,11 @@
             //
             // A pixel cache excludes all of them: the per-pixel walk below
             // resolves through the cache, and a batch kernel would bypass it.
-            if(this.kernel && this._pixelCacheData === null){
+            // Colour objects are not a kernel batch: Identity.array() copies
+            // channels as a flat buffer, and a claimed matrix shaper expects
+            // int8/int16 pixels. The walk below is the object path.
+            var isObjectFmt = this.dataFormat === 'object' || this.dataFormat === 'objectFloat';
+            if(this.kernel && this._pixelCacheData === null && !isObjectFmt){
                 var batchLut = this.lut || null;
                 var canBatch = this.isIdentity
                     || this.kernel.claimed === true
@@ -4249,10 +4140,6 @@
                         batchLut, inputHasAlpha, outputHasAlpha, preserveAlpha);
                     if(batched) return batched;
                 }
-            }
-
-            if(this.dataFormat === 'object' || this.dataFormat === 'objectFloat'){
-                throw 'forwardArray can only be used with int8 or int16 dataFormat';
             }
 
 
@@ -4340,6 +4227,10 @@
                 : (this.dataFormat === 'int16') ? new Uint16Array(pixelCount * outputItemsPerPixel)
                 : new Array(pixelCount * outputItemsPerPixel));
 
+            // Same rule as KernelIdentity.array(): fill-alpha is opaque in
+            // this dataFormat, not always 8-bit 255.
+            var opaque = (this.dataFormat === 'int16') ? 65535 : 255;
+
             switch(inputChannels){
                 case 1:
                     for(i = 0; i < pixelCount; i++){
@@ -4357,7 +4248,7 @@
                         } else {
                             if(inputHasAlpha)  { inputPos++;  }
                             if(outputHasAlpha) {
-                                outputArray[outputPos++] = 255;
+                                outputArray[outputPos++] = opaque;
                             }
                         }
                     }
@@ -4379,7 +4270,7 @@
                         } else {
                             if(inputHasAlpha)  { inputPos++;  }
                             if(outputHasAlpha) {
-                                outputArray[outputPos++] = 255;
+                                outputArray[outputPos++] = opaque;
                             }
                         }
                     }
@@ -4402,7 +4293,7 @@
                         } else {
                             if(inputHasAlpha)  { inputPos++;  }
                             if(outputHasAlpha) {
-                                outputArray[outputPos++] = 255;
+                                outputArray[outputPos++] = opaque;
                             }
                         }
                     }
@@ -4426,7 +4317,7 @@
                         } else {
                             if(inputHasAlpha)  { inputPos++;  }
                             if(outputHasAlpha) {
-                                outputArray[outputPos++] = 255;
+                                outputArray[outputPos++] = opaque;
                             }
                         }
                     }
@@ -4464,7 +4355,7 @@
                         } else {
                             if(inputHasAlpha)  { inputPos++;  }
                             if(outputHasAlpha) {
-                                outputArray[outputPos++] = 255;
+                                outputArray[outputPos++] = opaque;
                             }
                         }
                     }
@@ -4495,10 +4386,11 @@
          * here touches colour. The numbers mean the same thing afterwards;
          * only the container they live in has changed.
          *
-         * FORMATS. 'int8' is 0-255, 'int16' is 0-65535, 'float32' and
-         * 'float64' are 0..1. Integer widths convert by 257 rather than 256 --
+         * FORMATS. 'int8' is 0-255, 'int16' is 0-65535, 'float32' / 'float64'
+         * / 'device' are 0..1. Integer widths convert by 257 rather than 256 --
          * 0xFF maps to 0xFFFF, so white stays white; scaling by 256 would put
-         * it at 0xFF00 and drift the whole range.
+         * it at 0xFF00 and drift the whole range. 'device' is this engine's
+         * 0..1 dataFormat: same numbers as float64, a plain Array out.
          *
          * DEVICE BUFFERS ONLY. IT DOES NOT GUESS LAB. PCS Lab in ICC v2 tops
          * out at 0xFF00, not 0xFFFF -- L* 100 is 65280 and the codes above it
@@ -4522,18 +4414,19 @@
          * the numbers are PCS.
          *
          * @param {TypedArray|Array} input
-         * @param {string} fromFormat  int8 | int16 | float32 | float64
-         * @param {string} toFormat    int8 | int16 | float32 | float64
-         * @param {TypedArray} [out]   write here instead of allocating
-         * @returns {TypedArray} `out` when given, otherwise a new array
+         * @param {string} fromFormat  int8 | int16 | float32 | float64 | device
+         * @param {string} toFormat    int8 | int16 | float32 | float64 | device
+         * @param {TypedArray|Array} [out]   write here instead of allocating
+         * @returns {TypedArray|Array} `out` when given, otherwise a new array
          */
         static reformat(input, fromFormat, toFormat, out){
-            const SCALE = { int8: 255, int16: 65535, float32: 1, float64: 1 };
+            const SCALE = { int8: 255, int16: 65535, float32: 1, float64: 1, device: 1 };
             const MAKE  = {
                 int8:    n => new Uint8ClampedArray(n),
                 int16:   n => new Uint16Array(n),
                 float32: n => new Float32Array(n),
                 float64: n => new Float64Array(n),
+                device:  n => new Array(n),
             };
             if(!(fromFormat in SCALE)) throw new Error('Transform.reformat: unknown fromFormat "' + fromFormat + '"');
             if(!(toFormat in SCALE))   throw new Error('Transform.reformat: unknown toFormat "' + toFormat + '"');
@@ -4547,7 +4440,8 @@
                 out = MAKE[toFormat](input.length);
             }
             if(fromFormat === toFormat){
-                out.set(input);
+                if(typeof out.set === 'function') out.set(input);
+                else for(var c = 0; c < input.length; c++) out[c] = input[c];
                 return out;
             }
 

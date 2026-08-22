@@ -9,6 +9,39 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Documented — the pixel cache is a different proposition above 4 channels
+
+`pixelCache` was measured on RGB and CMYK, because those were the only
+profiles that existed. With the synthetic set it can be measured on wide
+input, and the recommendation does not scale across — it inverts.
+
+Above 4 input channels `KernelND` declines the CLUT, so every pixel walks
+the pipeline and a miss costs roughly fifty times what it costs in RGB.
+Both halves of the trade move together: the lookup added to a miss is a
+6 % tax at 8 channels against 31 % at 4, while a hit skips 29× the work
+instead of 5×. **Break-even hit rate falls from ~29 % at 4 channels to
+~6 % at 8.**
+
+`docs/Transform.md` said break-even was around 40 %, "which flat graphic
+content clears easily and photographs generally do not" — photographs
+measured 3–41 %. Against a 6 % bar most of that range clears, so the
+option row now states the bar per width. Pure noise still never pays at
+any width; this cache rewards reuse and cannot manufacture it.
+
+New harness `bench/pixel_cache/nchannel_bench.js`, which prints the
+break-even per width rather than only the headline speed-up. It also
+carries the three ways this measurement goes wrong, one of which produced
+a published number that had to be withdrawn: timing N passes over one
+buffer through one `Transform` lets pass 2 find pass 1's entries
+resident, so unique content arrives with a full table's head start. It
+read as 17 % reuse on data that has none. Fresh `Transform` per timed
+pass, JIT warmed on a throwaway one.
+
+Also `__tests__/pixelcache.tests.js` now covers 35 input×output width
+combinations from 1 to 15 channels in both depths — cached output
+byte-identical to uncached, the cache verified to actually engage at
+those widths, and the declining case verified still correct.
+
 ### Changed — every kernel now chooses its own interpolator
 
 Phase 3 of [the kernel contract](docs/deepdive/KernelContract.md).

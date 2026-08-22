@@ -266,6 +266,13 @@ describe('Transform.reformat', () => {
         expect(Array.from(got)).toEqual([1, 2, 3]);
     });
 
+    test('device is 0..1 in a plain Array, same scale as float64', () => {
+        const got = Transform.reformat(new Uint8ClampedArray([0, 255]), 'int8', 'device');
+        expect(Array.isArray(got)).toBe(true);
+        expect(got[0]).toBeCloseTo(0, 6);
+        expect(got[1]).toBeCloseTo(1, 6);
+    });
+
     test('refuses an unknown format or an undersized buffer', () => {
         expect(() => Transform.reformat(new Uint8ClampedArray(3), 'int8', 'int12'))
             .toThrow(/unknown toFormat/);

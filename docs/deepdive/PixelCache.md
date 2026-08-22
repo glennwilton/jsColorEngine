@@ -449,6 +449,10 @@ and this doesn't.
 
 ## Where it probably pays: standard loops, not hot loops
 
+> Everything in this section is 3- and 4-channel. Above 4 input channels the
+> LUT is declined and the arithmetic changes — see
+> [N-channel input is a different regime](#n-channel-input-is-a-different-regime).
+
 Working hypothesis, and the thing to test first:
 
 **A cache's payoff scales with the cost of the work it skips.** The
@@ -1242,6 +1246,123 @@ never ran), custom stages present (a hit would skip their side
 effects), no numeric-array position before the output conversion, or
 the output marker lost to the optimiser.
 
+## N-channel input is a different regime
+
+Everything measured above is 3- and 4-channel, because those were the only
+profiles that existed. With the synthetic set (see
+[SyntheticProfiles.md](./SyntheticProfiles.md)) the wide inputs can be measured
+too, and the answer is not a scaled-up version of the RGB one.
+
+`KernelND` declines the LUT — an A2B bake is `grid^n` cells — so every pixel
+walks the pipeline at ~0.8 MPx/s rather than tens. **A miss therefore costs
+roughly fifty times what it costs in RGB**, and the whole economic argument
+moves with it.
+
+Reproduce with:
+
+```bash
+node bench/pixel_cache/nchannel_bench.js
+```
+
+4096 slots, int8, N → 3 channels, 60k px. `off` and `on` are MPx/s:
+
+| in | content | distinct | off | on | gain | hit% |
+|---:|---|---:|---:|---:|---:|---:|
+| 4 | noise | 60000 | 6.38 | 4.86 | 0.76× | 0% |
+| 4 | flat, 256 colours | 251 | 7.50 | 26.42 | 3.52× | 99% |
+| 4 | flat, 16 colours | 16 | 7.74 | 28.83 | 3.72× | 100% |
+| 5 | noise | 60000 | 3.06 | 2.66 | 0.87× | 0% |
+| 5 | flat, 256 colours | 252 | 3.40 | 22.84 | 6.72× | 99% |
+| 5 | flat, 16 colours | 16 | 3.45 | 26.07 | **7.55×** | 100% |
+| 8 | noise | 60000 | 0.75 | 0.70 | 0.94× | 0% |
+| 8 | flat, 256 colours | 256 | 0.81 | 17.11 | 21.23× | 99% |
+| 8 | flat, 16 colours | 16 | 0.83 | 21.50 | **25.79×** | 100% |
+| 12 | noise | 60000 | 0.68 | 0.63 | 0.93× | 0% |
+| 12 | flat, 256 colours | 256 | 0.76 | 13.57 | 17.87× | 99% |
+| 12 | flat, 16 colours | 16 | 0.88 | 18.37 | **20.82×** | 100% |
+
+(The 4-channel row runs with `buildLut: false`, because the cache lives on the
+accuracy path and a CMYK transform would otherwise take the CLUT and never
+reach it. It is the comparator, not the CMYK recommendation.)
+
+### The number that transfers is the break-even
+
+The 25× is not the finding — 16 distinct colours is not a workload. The finding
+is underneath it. Two ends of the same measurement give the whole model: the
+noise rows are a pure miss (`off` without a cache, `on` with the lookup and
+store the cache adds), and the flat-16 `on` row is a pure hit. Solve for the
+rate at which they cancel:
+
+    h·tHit + (1−h)·tMiss = tOff
+
+| input width | miss tax | hit vs the maths | break-even hit rate |
+|---:|---:|---:|---:|
+| 4 | 31% | 5× | **~29%** |
+| 5 | 15% | 9× | **~14%** |
+| 8 | 6% | 29× | **~6%** |
+| 12 | 8% | 27× | **~8%** |
+
+Two independent runs put 4 channels at 29–40%, 5 at 14–20%, and 8–12 at 6–12%,
+so read these as a shape rather than as constants. The shape is unambiguous:
+**break-even falls by roughly a factor of four once the LUT is declined.**
+
+Both terms move in the same direction, which is why the effect is that large.
+A miss on the per-pixel path is so expensive that the lookup added to it barely
+registers — a 31% tax in CMYK becomes 6% at 8 channels — while a hit skips a
+correspondingly larger amount of work, 5× the maths in CMYK against 29× at 8
+channels. Cheaper to be wrong, and far more valuable to be right.
+
+The practical consequence is a threshold change, not a speed change.
+`docs/Transform.md` says break-even is around 40% for RGB, "which flat graphic
+content clears easily and photographs generally do not" — photographs measured
+3–41%. **Against a 6% bar, most of that range clears.** Content this cache was
+correctly judged not worth enabling for is worth enabling for above 4 channels,
+and the crossover sits between 4 and 5, exactly where `KernelND` starts
+declining the LUT. That is not a coincidence: it is the same cause.
+
+What has not changed is that **pure noise never pays, at any width**. The cost
+shrinks with width — 0.76× at 4 channels, 0.94× at 8 — but it stays a cost.
+This cache rewards reuse; it cannot manufacture it.
+
+### Three ways to measure this wrong
+
+All three produced convincing numbers before being caught, and the first
+version of this section was published with the third one in it.
+
+**`pixelCache: true` is ONE slot.** It resolves to `1`, not "on with a sensible
+default" — a single-entry cache, which is a real mode and not the one intended
+here. Pass a count: `pixelCache: 4096`. Reading a 13% hit rate on content with
+eight distinct colours is the symptom, because a single entry hits 1-in-8.
+
+**An LCG's low byte has a short period.** Generating "noise" as `s & 0xff`
+produces content that repeats far more than random, which flatters the cache
+into reporting near-perfect hits on supposedly-unique pixels. Take the high
+bits — `(seed >>> 16) & 0xff`, which is what `cache_bench.js` already did — and
+print the distinct-colour count to check what was actually generated.
+
+**Timing N passes over one buffer warms the cache between them.** This is the
+one that produced a wrong published result, and it is the least visible: build
+one `Transform`, run the same image through it three times, take the best. Pass
+2 finds pass 1's entries resident, so unique content arrives with a 4096-entry
+head start and "best of three" selects the most warmed pass. It read as 17%
+reuse on data that has none, and turned a 0.94× cost at 8 channels into a
+reported 1.20× gain — which then supported a conclusion about photographic
+content that the data did not actually contain. The harness now builds a fresh
+`Transform` per timed pass and warms the JIT on a throwaway one.
+
+The correct conclusion survived; the number under it did not. The
+break-even framing above is the version that holds, and it is stronger — it
+says *why* the width matters instead of asserting that it does.
+
+### Correctness
+
+`__tests__/pixelcache.tests.js` covers 35 input×output width combinations from
+1 to 15 channels, both depths, asserting cached output is byte-identical to
+uncached — plus that the cache genuinely engages at those widths rather than
+quietly declining, and that where it *does* decline (an identity pair, where
+the optimiser replaces the output boundary it needs) the conversion is still
+correct.
+
 ## Open questions
 
 - Does the accuracy-path hypothesis hold? (Cheapest, highest-value
@@ -1254,52 +1375,3 @@ the output marker lost to the optimiser.
   their justification and (1) is the whole story.
 - Interaction with `preserveAlpha` and the identity `_kernelCopy`
   path — both already skip work; confirm no double-counting.
-
-## N-channel input is a different regime
-
-Everything measured above is 3- and 4-channel, because those were the only
-profiles that existed. With the synthetic set (see
-[SyntheticProfiles.md](./SyntheticProfiles.md)) the wide inputs can be measured
-too, and they do not behave the same way.
-
-`KernelND` declines the LUT — an A2B bake is `grid^n` cells — so every pixel
-walks the pipeline at ~0.8 MPx/s rather than tens. **A miss therefore costs
-roughly fifty times what it costs in RGB**, and that moves the break-even.
-
-8-channel input, 4096 slots:
-
-| content | distinct colours | off | on | gain | hit% |
-|---|---|---|---|---|---|
-| noise | 6000 | 0.79 | 0.94 | **1.20×** | 17% |
-| flat, 256 colours | 256 | 0.78 | 9.28 | 11.95× | 96% |
-| flat, 16 colours | 16 | 0.79 | 17.60 | **22.29×** | 100% |
-
-The headline is not the 22×. It is that **17% reuse still pays at 8 channels**,
-where the same hit rate at 5 channels is a 0.82× *loss* and for RGB the
-equivalent is "break-even at best". Photographic content that this cache was
-originally judged not worth enabling for is worth enabling for here.
-
-By input width, at that same 17% hit rate: 5 channels 0.82×, 8 channels 1.20×,
-12 channels 1.22×. The crossover sits between 5 and 8.
-
-### Two things worth knowing before repeating the measurement
-
-**`pixelCache: true` is ONE slot.** It resolves to `1`, not "on with a sensible
-default" — a single-entry cache, which is a real mode and not what you want for
-this. Pass a count: `pixelCache: 4096`. Reading 13% hit rate on content with
-eight distinct colours is the symptom, because a single entry hits 1-in-8.
-
-**An LCG's low byte has a short period.** Generating "noise" as `s & 0xff`
-produces content that repeats far more than random, which flatters the cache
-into reporting 100% hits on supposedly-unique pixels. Take the high bits, and
-count the distinct colours to check what you actually generated.
-
-### Correctness
-
-`__tests__/pixelcache.tests.js` covers 35 input×output width combinations from
-1 to 15 channels, both depths, asserting cached output is byte-identical to
-uncached — plus that the cache genuinely engages at those widths rather than
-quietly declining, and that where it *does* decline (an identity pair, where
-the optimiser replaces the output boundary it needs) the conversion is still
-correct.
-
