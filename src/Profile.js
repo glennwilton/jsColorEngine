@@ -335,6 +335,9 @@ class Profile {
 
     /**
      * Decode a profile already in memory as a `Uint8Array`. Synchronous.
+     * A view into a larger buffer (`byteOffset !== 0`, e.g. a TIFF 34675
+     * tag or JPEG APP2 slice) is copied to a compact array first so
+     * decode does not read the host file's header as ICC bytes.
      *
      * @param {Uint8Array} binary             Raw profile bytes.
      * @param {function(Profile):void} [afterLoad]
@@ -890,6 +893,11 @@ class Profile {
                 data = new Uint8Array(data);
             }
         }
+
+        // Typed-array view into a larger file (TIFF tag, JPEG APP2, Node
+        // Buffer.subarray). Indexing is view-relative; buffer.slice() is
+        // not. Compact-copy so decodeICC never reads the host file.
+        data = _compactIccBytes(data);
 
         var _this = this;
         var start = 0;
@@ -2047,6 +2055,16 @@ function base64ToUint8Array(base64) {
 // embedded in a JPEG APP2 or TIFF tag may be padded to a block boundary
 // by the host application, so naively hashing the whole buffer would
 // produce a different fingerprint for the same logical profile.
+function _compactIccBytes(bytes) {
+    if (!bytes || typeof bytes.byteOffset !== 'number' || !bytes.buffer) {
+        return bytes;
+    }
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+        return bytes;
+    }
+    return new Uint8Array(bytes);
+}
+
 function _profileFnv1a32(bytes, declaredSize) {
     // ICC headers are at least 128 bytes. If declaredSize is 0, corrupted, or
     // claims more bytes than we have, fall back to hashing the whole buffer.

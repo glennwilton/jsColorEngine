@@ -145,6 +145,8 @@ if (!p.loaded) throw p.lastError;
 ### `profile.loadBinary(binary, afterLoad?, searchForProfile?)`
 
 Decode an already-in-memory `Uint8Array` containing ICC binary.
+A view into a larger `ArrayBuffer` (`byteOffset !== 0`) is copied
+before decode — pass the TIFF/JPEG slice as-is.
 
 * `searchForProfile = true` — scan the buffer for an embedded profile
   signature (`acsp`) instead of treating offset 0 as the profile start.

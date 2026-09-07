@@ -7,6 +7,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- ICC load from a `Uint8Array` view with non-zero `byteOffset` (embedded
+  profile in TIFF tag 34675, JPEG APP2, etc.) no longer silently
+  mis-parses against the host file's `ArrayBuffer`. Profile compact-copies
+  the view; `decodeICC` readers honour `byteOffset`. ([#9](https://github.com/glennwilton/jsColorEngine/issues/9))
+
+---
+
 ## [1.6.0] — 2026-08-23
 
 ### UMD size

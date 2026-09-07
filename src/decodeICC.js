@@ -42,11 +42,12 @@
  *    index into it. Readers are stateless — no streaming, no cursor.
  *    Callers compute offsets from the tag table.
  *
- *  - `binary.byteOffset` is assumed to be 0 (i.e. `binary` is NOT a
- *    sub-view created by `.subarray()`). Profile.js always constructs a
- *    fresh `new Uint8Array(arrayBuffer)`, which satisfies this. If you
- *    ever pass a sub-view, the typed-array readers (`uInt8Array`,
- *    `uInt16Array`) will read from the wrong place.
+ *  - `binary` may be a view into a larger buffer (`byteOffset !== 0`).
+ *    Indexing (`binary[i]`) is already view-relative. `uInt8Array`,
+ *    `uInt16Array`, `float32` and `float64` add `binary.byteOffset`
+ *    when they slice `binary.buffer`. Profile.js also compact-copies
+ *    non-zero-offset views before decode (embedded ICC from TIFF /
+ *    JPEG / PSD).
  *
  *  - Returned objects use the field names from the ICC.1:2010 spec where
  *    practical (`sig`, `inputChannels`, `gridPoints`, ...).
@@ -192,28 +193,27 @@ module.exports = {
     /**
      * Slice `length` bytes into a fresh `Uint8Array`. The underlying buffer
      * is copied via `ArrayBuffer.prototype.slice`, so the result is
-     * independent of `binary`.
-     *
-     * Caller contract: `binary.byteOffset === 0` (see file header).
+     * independent of `binary`. Honours `binary.byteOffset`.
      * @returns {Uint8Array}
      */
     uInt8Array: function (binary, offset, length) {
-        return new Uint8Array(binary.buffer.slice(offset, offset + length));
+        var start = binary.byteOffset + offset;
+        return new Uint8Array(binary.buffer.slice(start, start + length));
     },
     /**
      * Slice `length` 16-bit big-endian samples into a fresh `Uint16Array`.
      * Bytes are swapped in place into a temp buffer and then re-viewed,
      * which is faster than building each sample with `DataView.getUint16`.
-     *
-     * Caller contract: `binary.byteOffset === 0` (see file header) AND
-     * `offset` lands on an even byte (16-bit alignment).
+     * Honours `binary.byteOffset`. `offset` should land on an even byte
+     * (16-bit alignment).
      * @returns {Uint16Array}
      */
     uInt16Array: function (binary, offset, length) {
         // Double the length to get the number of bytes
         var bytes = length * 2;
+        var start = binary.byteOffset + offset;
 
-        var u8TempArray = new Uint8Array(binary.buffer.slice(offset, offset + bytes));
+        var u8TempArray = new Uint8Array(binary.buffer.slice(start, start + bytes));
 
         // the data is in littleEndian format so we need to invert the data - Quick and easier than using DataView???
         for (var i = 0; i < bytes; i += 2) {
@@ -275,14 +275,14 @@ module.exports = {
      * @returns {number}
      */
     float32: function (binary, offset) {
-        return new DataView(binary.buffer).getFloat32(offset);
+        return new DataView(binary.buffer, binary.byteOffset, binary.byteLength).getFloat32(offset);
     },
     /**
      * Read an IEEE-754 float64 at `offset`. Big-endian.
      * @returns {number}
      */
     float64: function (binary, offset) {
-        return new DataView(binary.buffer).getFloat64(offset);
+        return new DataView(binary.buffer, binary.byteOffset, binary.byteLength).getFloat64(offset);
     },
     /**
      * Decode an `sf32` (s15Fixed16ArrayType) tag body. The number of values
