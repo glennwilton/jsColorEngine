@@ -7,7 +7,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [1.6.1] — 2026-09-10
+
+Parser fix only. Throughput numbers are unchanged from 1.6.0
+(`bench/history/1.6.0/`).
 
 ### Fixed
 

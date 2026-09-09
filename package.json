@@ -1,6 +1,6 @@
 {
   "name": "jscolorengine",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Fast ICC colour engine for JavaScript. WASM-SIMD LUT kernels (~80–120 MPx/s on photographs) and a fused matrix-shaper kernel (~330 MPx/s) on one core, plus a worker pool for batches of images. Accurate to within 1 LSB of LittleCMS, and 3.1–3.6x faster than lcms-wasm. Full f64 accuracy pipeline, portable LUT JSON, TIFF visual editing. ICC v2/v4, all intents, BPC, N-channel 5–6CLR WASM, pixel cache, soft-proof, prepress, zero native deps, browser + Node.",
   "author": "Glenn Wilton <support@o2creative.co.nz>",
   "main": "src/main.js",
@@ -44,7 +44,10 @@
     "bench-browser-watch": "esbuild samples/benchmark/browser-entry.js --bundle --platform=browser --format=iife --global-name=_jsceBench --outfile=samples/benchmark/bench.bundle.js --external:http --external:https --external:fs --external:path --external:util --external:child_process --watch"
   },
   "jest": {
-    "testPathIgnorePatterns": ["/node_modules/", "/__tests__/helpers/"]
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/__tests__/helpers/"
+    ]
   },
   "type": "commonjs",
   "devDependencies": {
