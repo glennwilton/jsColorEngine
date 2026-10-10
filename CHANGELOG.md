@@ -7,6 +7,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.6.2] — 2026-10-11
+
+Hardening only. Throughput numbers are unchanged from 1.6.0
+(`bench/history/1.6.0/`).
+
+### Fixed
+
+- Hardening: v4 LUT curve and matrix stages treat missing sets
+  consistently (no crash on an undefined `aCurves` / `mCurves` /
+  `bCurves` / `matrix`). DeviceLink already used a truthy check;
+  `Device_to_PCS` and `PCS_to_Device` now match. `isPassThrough` and
+  `isIdentityMatrix` return the skip-stage result for a missing set.
+
+---
+
 ## [1.6.1] — 2026-09-10
 
 Parser fix only. Throughput numbers are unchanged from 1.6.0

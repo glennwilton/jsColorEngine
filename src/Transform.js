@@ -6514,7 +6514,7 @@
             }
 
             // A Curve
-            if(lut.aCurves !== false && !this.isPassThrough(lut.aCurves)){
+            if(lut.aCurves && !this.isPassThrough(lut.aCurves)){
                 this.addStage(
                     encoding.device,
                     'stage_curves_v4',
@@ -6554,7 +6554,7 @@
             }
 
             //M Curves
-            if(lut.mCurves !== false && !this.isPassThrough(lut.mCurves)){
+            if(lut.mCurves && !this.isPassThrough(lut.mCurves)){
                 this.addStage(
                     pcsInfo.pcsEncoding,
                     'stage_curves_v4',
@@ -6566,19 +6566,17 @@
             }
 
             //M Matrix
-            if(lut.matrix !== false){
-                if(!this.isIdentityMatrix(lut.matrix)){
-                    this.addStage(
-                        pcsInfo.pcsEncoding,
-                        'stage_Matrix',
-                        (this.matrixHasOffsets(lut.matrix)) ? this.stage_matrix_v4 : this.stage_matrix_v4_noOffsets,
-                        lut.matrix,
-                        pcsInfo.pcsEncoding,
-                        '  [V4_Device_to_PCSv4 : Matrix : {name}]|({last}) > ({data}) ({data:f>16})'
-                    );
-                }
+            if(lut.matrix && !this.isIdentityMatrix(lut.matrix)){
+                this.addStage(
+                    pcsInfo.pcsEncoding,
+                    'stage_Matrix',
+                    (this.matrixHasOffsets(lut.matrix)) ? this.stage_matrix_v4 : this.stage_matrix_v4_noOffsets,
+                    lut.matrix,
+                    pcsInfo.pcsEncoding,
+                    '  [V4_Device_to_PCSv4 : Matrix : {name}]|({last}) > ({data}) ({data:f>16})'
+                );
             }
-            if(lut.bCurves !== false && !this.isPassThrough(lut.bCurves)){
+            if(lut.bCurves && !this.isPassThrough(lut.bCurves)){
                 this.addStage(
                     pcsInfo.pcsEncoding,
                     'stage_curves_v4',
@@ -6646,6 +6644,11 @@
         };
 
         isPassThrough(curves){
+            // Missing / empty set = no curve stage. decodeICC writes `false`
+            // for an absent offset; hand-made LUTs (and JSON round-trips) often
+            // leave the field undefined. Do not treat a hole *inside* a real
+            // set as pass-through — only the whole set being absent.
+            if(!curves || !curves.length) return true;
             var passThrough = true;
             for(var i = 0; i < curves.length; i++){
                 passThrough = passThrough && curves[i].passThrough;
@@ -6790,7 +6793,7 @@
             // PCS is now PCSv2 or PCSXYZ
 
             // B Curves
-            if(lut.bCurves !== false && !this.isPassThrough(lut.bCurves)){
+            if(lut.bCurves && !this.isPassThrough(lut.bCurves)){
                 this.addStage(
                     pcsInfo.pcsEncoding,
                     'stage_curves_v4',
@@ -6802,21 +6805,19 @@
             }
 
             //M Matrix
-            if(lut.matrix !== false){
-                if(!this.isIdentityMatrix(lut.matrix)) {
-                    this.addStage(
-                        pcsInfo.pcsEncoding,
-                        'stage_Matrix',
-                        (this.matrixHasOffsets(lut.matrix)) ? this.stage_matrix_v4 : this.stage_matrix_v4_noOffsets,
-                        lut.matrix,
-                        pcsInfo.pcsEncoding,
-                        '  [PCSv4_to_Device_via_V4LUT : Matrix : {name}]|({last}) > ({data}) ({data:f>16})'
-                    );
-                }
+            if(lut.matrix && !this.isIdentityMatrix(lut.matrix)){
+                this.addStage(
+                    pcsInfo.pcsEncoding,
+                    'stage_Matrix',
+                    (this.matrixHasOffsets(lut.matrix)) ? this.stage_matrix_v4 : this.stage_matrix_v4_noOffsets,
+                    lut.matrix,
+                    pcsInfo.pcsEncoding,
+                    '  [PCSv4_to_Device_via_V4LUT : Matrix : {name}]|({last}) > ({data}) ({data:f>16})'
+                );
             }
 
             //M Curves
-            if(lut.mCurves !== false && !this.isPassThrough(lut.mCurves)){
+            if(lut.mCurves && !this.isPassThrough(lut.mCurves)){
                 this.addStage(
                     pcsInfo.pcsEncoding,
                     'stage_curves_v4',
@@ -6841,7 +6842,7 @@
             }
 
             // A Curve
-            if(lut.aCurves !== false && !this.isPassThrough(lut.aCurves)){
+            if(lut.aCurves && !this.isPassThrough(lut.aCurves)){
                 this.addStage(
                     encoding.device,
                     'stage_curves_v4',
@@ -6857,6 +6858,7 @@
         };
 
         isIdentityMatrix(matrix){
+            if(!matrix || matrix.length < 9) return true;
             return (matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 &&
                     matrix[3] === 0 && matrix[4] === 1 && matrix[5] === 0 &&
                     matrix[6] === 0 && matrix[7] === 0 && matrix[8] === 1 &&
@@ -6867,6 +6869,7 @@
         }
 
         matrixHasOffsets(matrix){
+            if(!matrix || matrix.length < 12) return false;
             return (matrix[9] !== 0 || matrix[10] !== 0 || matrix[11] !== 0);
         }
 
