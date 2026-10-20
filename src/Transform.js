@@ -4177,7 +4177,12 @@
          * @returns {object|number[]}
          */
         forward(cmsColor){
-            console.warn('jsColorEngine: forward is deprecated')
+            // Once per process. Callers converting colours in a loop used
+            // to print this on every call.
+            if(!Transform._forwardDeprecationWarned){
+                Transform._forwardDeprecationWarned = true;
+                console.warn('jsColorEngine: forward is deprecated');
+            }
             return this.transform(cmsColor);
         }
 
@@ -4956,12 +4961,14 @@
 
             // Pixel-cache boundary marker: the FIRST stage of the output
             // conversion, held as a stage REFERENCE because optimisePipeline()
-            // shifts every index. The first output stage is used rather than
-            // the last maths stage because no optimiser pattern matches
-            // stage_device_to_*, so this reference always survives — whereas
-            // the maths boundary is routinely consumed by a fusion (e.g.
-            // LabD50_to_PCSv4 + PCSv4_to_PCSXYZ collapse, and the PCSv4
-            // position between them stops existing).
+            // shifts every index. Lab/PCS object output is added here
+            // (stage_PCSv2_to_cmsLab / stage_PCSv4_to_cmsLab), same as
+            // stage_device_to_RGB. The optimiser then fuses that stage
+            // (PCSv2_to_PCSv4 + PCSv4_to_cmsLab → PCSv2_to_cmsLab, and the
+            // int path replaces stage_device_to_int with a new object).
+            // optimiseFindPattern() retargets this reference onto the
+            // replacement. A dangling reference used to make STORE sit after
+            // the object conversion and cache {L,a,b}.
             if(this.pixelCache){
                 this._pcOutputFirst = (pixelCacheOutputAt < this.pipeline.length)
                     ? this.pipeline[pixelCacheOutputAt] : null;
@@ -5286,7 +5293,25 @@
                     var previous = (i > 1) ? this.pipeline[i-1] : false;
                     var next = this.pipeline[i+1];
 
-                    var insert = replaceFunction(this.pipeline[i],next, previous);
+                    var stageA = this.pipeline[i];
+                    var insert = replaceFunction(stageA, next, previous);
+
+                    // Keep the pixel-cache output marker on the stage that
+                    // still performs the output conversion. The second of the
+                    // matched pair is the output side (cmsLab, device_to_int),
+                    // so it maps to the last replacement; the first of the
+                    // pair maps to the first replacement. An empty replacement
+                    // means the conversion was cancelled.
+                    var marker = this._pcOutputFirst;
+                    if(marker === stageA || marker === next){
+                        if(!insert || insert.length === 0){
+                            this._pcOutputFirst = null;
+                        } else if(marker === next){
+                            this._pcOutputFirst = insert[insert.length - 1];
+                        } else {
+                            this._pcOutputFirst = insert[0];
+                        }
+                    }
 
                     // Remove the section and insert the replacement stages
                     var first = this.pipeline.slice(0,i);
@@ -7757,8 +7782,11 @@
             // Create a round trip. Define a Transform BT for all x in L*a*b*
             // PCS -> PCS round trip transform, always uses relative intent on the device -> pcs
             var labProfile = new Profile('*Lab');
-            var transformLab2Device = new Transform({precision: 3});
-            var transformDevice2Lab = new Transform({precision: 3});
+            // pixelCache off: this is a one-shot L* ramp, not image data.
+            // A CMYK→Lab hit was returning [undefined] and shifting the
+            // measured black (Uncoated FOGRA29, Japan Color 2001 Coated).
+            var transformLab2Device = new Transform({precision: 3, pixelCache: 0});
+            var transformDevice2Lab = new Transform({precision: 3, pixelCache: 0});
 
             // Disable black point compensation Auto Enable in these temp transforms
             // or else we end up in an infinite loop and run out of stack
@@ -7989,7 +8017,8 @@
             }
 
             var labD50 = new Profile('*Lab');
-            var transformDevice2Lab = new Transform({precision: 3});
+            // No pixel cache on this probe. See detectOutputBlackpoint.
+            var transformDevice2Lab = new Transform({precision: 3, pixelCache: 0});
 
             // Disable auto BPC in these temp transforms
             transformDevice2Lab._BPCAutoEnable = false;
@@ -8026,8 +8055,9 @@
 
             var labD50 = new Profile('*Lab');
 
-            var transformLab2Device = new Transform({precision: 3});
-            var transformDevice2Lab = new Transform({precision: 3});
+            // No pixel cache on these probes. See detectOutputBlackpoint.
+            var transformLab2Device = new Transform({precision: 3, pixelCache: 0});
+            var transformDevice2Lab = new Transform({precision: 3, pixelCache: 0});
 
             // Disable auto BPC in these temp transforms
             transformDevice2Lab._BPCAutoEnable = false;

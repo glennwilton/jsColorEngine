@@ -7,6 +7,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.6.3] — 2026-10-20
+
+Bugfix. Throughput numbers are unchanged from 1.6.0
+(`bench/history/1.6.0/`). The kernels were not touched.
+
+### Fixed
+
+- Pixel cache on a repeated CMYK (LUT) → Lab object conversion returned
+  `[undefined]`. The optimiser fuses the PCS→cmsLab stage and dropped
+  the output marker, so the cache stored the `{L,a,b}` object. The
+  marker now follows that rewrite, and a non-array seed declines the
+  cache instead of being stored.
+- `forward()` warns that it is deprecated once per process, not on
+  every call.
+- BPC black-point probes build their temporary transforms with
+  `pixelCache: 0`. The default cache was on for those CMYK→Lab walks,
+  and a repeated sample returned `[undefined]`, which moved the
+  measured black (Uncoated FOGRA29, Japan Color 2001 Coated).
+
+---
+
 ## [1.6.2] — 2026-10-11
 
 Hardening only. Throughput numbers are unchanged from 1.6.0

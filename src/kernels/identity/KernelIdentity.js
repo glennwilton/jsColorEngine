@@ -229,8 +229,18 @@ module.exports = {
                                null, encoding.device, '  [identity copy]');
         }
 
+        // Same output-conversion marker createPipeline() records. Identity
+        // returns before that code runs, so without this STORE sat at the
+        // end and the seed was the caller's object ({R,G,B} / {C,M,Y,K}).
+        var pixelCacheOutputAt = transform.pipeline.length;
         if(wrapEnds){
             transform.createPipeline_Device_to_Output(pcsInfo, transform.outputProfile);
+        }
+        if(transform.pixelCache){
+            transform._pcOutputFirst = (pixelCacheOutputAt < transform.pipeline.length)
+                ? transform.pipeline[pixelCacheOutputAt] : null;
+        } else {
+            transform._pcOutputFirst = null;
         }
 
         if(transform.optimise){

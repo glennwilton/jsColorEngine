@@ -143,6 +143,41 @@ describe('BPC', () => {
         expect(b.C === a.C && b.M === a.M && b.Y === a.Y && b.K === a.K).toBe(false);
     });
 
+    test('probe transforms are built with the pixel cache off', () => {
+        // The L* ramp repeats CMYK samples. With the default cache those
+        // repeats came back as [undefined] and the fitted black moved.
+        const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'Transform.js'), 'utf8');
+        const ctors = src.match(/new Transform\(\{precision: 3[^}]*\}\)/g);
+        expect(ctors).toEqual([
+            'new Transform({precision: 3, pixelCache: 0})',
+            'new Transform({precision: 3, pixelCache: 0})',
+            'new Transform({precision: 3, pixelCache: 0})',
+            'new Transform({precision: 3, pixelCache: 0})',
+            'new Transform({precision: 3, pixelCache: 0})',
+        ]);
+    });
+
+    test('Uncoated FOGRA29 with BPC yields a finite CMYK, distinct from BPC off', () => {
+        const file = path.join(__dirname, '..', 'testbed', 'profiles', 'cmyk', 'UncoatedFOGRA29.icc');
+        if (!fs.existsSync(file)) return;
+        const fogra = new Profile();
+        fogra.loadFile(file);
+
+        const off = new Transform({ dataFormat: 'object', buildLut: false, BPC: false });
+        off.create('*sRGB', fogra, eIntent.relative);
+        const on = new Transform({ dataFormat: 'object', buildLut: false, BPC: true });
+        on.create('*sRGB', fogra, eIntent.relative);
+
+        expect(on.usesBPC).toBe(true);
+        const dark = color.RGB(20, 18, 16);
+        const a = off.transform(dark);
+        const b = on.transform(Object.assign({}, dark));
+        for (const ch of ['C', 'M', 'Y', 'K']) {
+            expect(Number.isFinite(b[ch])).toBe(true);
+        }
+        expect(b.C === a.C && b.M === a.M && b.Y === a.Y && b.K === a.K).toBe(false);
+    });
+
     test('does not apply to a matrix → matrix pair, even when asked', () => {
         const t = new Transform({ dataFormat: 'object', BPC: true });
         t.create('*sRGB', '*AdobeRGB', eIntent.relative);

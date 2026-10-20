@@ -449,9 +449,9 @@
             if(this._pcOutputFirst){
                 storeAt = pipeline.indexOf(this._pcOutputFirst);
                 if(storeAt === -1){
-                    // LUT + stage_device_to_int is a legal fusion — the
-                    // interpolator now emits the output encoding itself.
-                    // Store at the end; the hit path must copy.
+                    // The marked stage was removed and not replaced. Store
+                    // at the end only if the seed below is a numeric array
+                    // of outputChannels; an object-shaped result declines.
                     storeAt = length;
                 }
             }
@@ -576,7 +576,11 @@
                 console.warn('jsColorEngine: pixelCache disabled — probe colour threw while seeding: ' + seedError);
                 return false;
             }
-            if(!cacheStages.isCacheableColour(seedValue, seedValue && seedValue.length)){
+            // outputChannels, not seedValue.length. A Lab object has no
+            // length, so `undefined === undefined` and the old guard
+            // accepted it. The cached sample is the numeric PCS/device
+            // array sitting in front of the output conversion.
+            if(!cacheStages.isCacheableColour(seedValue, this.outputChannels)){
                 console.warn('jsColorEngine: pixelCache disabled — probe produced no usable value to seed with');
                 return false;
             }
@@ -598,17 +602,21 @@
         },
 
         /**
-         * True when a value can serve as a cache key: a plain numeric array
-         * (or typed array) of exactly the expected length. Objects such as
-         * {L, a, b} have no `length` and are correctly rejected.
+         * True when a value can serve as a cache key or a cached sample:
+         * a plain Array or typed array of exactly `channels` numbers.
+         *
+         * A colour object such as {L, a, b} is not an array. It used to
+         * pass when `channels` was also undefined (`value.length` is
+         * undefined, and the per-channel loop then runs zero times).
          *
          * @param {*}      value
-         * @param {number} channels  expected component count
+         * @param {number} channels  expected component count, > 0
          * @returns {boolean}
          */
         isCacheableColour(value, channels){
-            if(value === null || typeof value !== 'object'){ return false; }
-            if(value.length !== channels){ return false; }
+            if(!Array.isArray(value) && !ArrayBuffer.isView(value)){ return false; }
+            if(typeof channels !== 'number' || !(channels > 0)){ return false; }
+            if(typeof value.length !== 'number' || value.length !== channels){ return false; }
             for(var c = 0; c < channels; c++){
                 if(typeof value[c] !== 'number'){ return false; }
             }

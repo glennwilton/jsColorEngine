@@ -1230,9 +1230,12 @@ third arm (`if pipelineDebug … else if cache … else …`) that reads
    `_buildValidationInput()` at build time and taking the first
    position holding a numeric array of the right length — the same
    technique `validatePipeline()` already uses. The store position uses
-   a marker to the **first output-conversion stage**. LUT +
-   `stage_device_to_int` is a legal fusion — if the marker is gone,
-   inject stores at the end of the pipeline and the hit path copies.
+   a marker to the **first output-conversion stage**. When the optimiser
+   rewrites that stage it retargets the marker, so a fused
+   `stage_PCSv*_to_cmsLab` still stores the numeric PCS array in front
+   of the object conversion. If the marker is gone entirely, inject
+   stores at the end only when that value is a numeric array; an object
+   seed declines the cache.
 
 2. **A fixed quantiser in the hash is a bug, not a detail.** The first
    hash used `(value * 65536) | 0`, assuming device floats in 0..1.
@@ -1263,8 +1266,10 @@ third arm (`if pipelineDebug … else if cache … else …`) that reads
 **Declines rather than misbehaves** when it cannot guarantee
 correctness: `pipelineDebug` on (a jump would fabricate a history that
 never ran), custom stages present (a hit would skip their side
-effects), or no numeric-array position before the store. A fused
-output conversion no longer declines — store goes at the end.
+effects), no numeric-array position before the store, or a seed
+that is not a numeric array of `outputChannels` (a `{L,a,b}` object
+used to pass that guard). A fused Lab output conversion keeps its
+marker, so the store stays in front of `stage_PCSv*_to_cmsLab`.
 
 ## N-channel input is a different regime
 
