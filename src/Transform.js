@@ -224,6 +224,11 @@
      *      gamut check. Swap in `convert.deltaE2000`, `convert.deltaCMC`,
      *      or a custom function.
      *
+     *  @param {number}             [options.lutGridPoints1D]
+     *      Grid points for 1D (gray) LUTs. Defaults to 256 for int8, where
+     *      every input code lands on a grid point and the LUT is exact, and
+     *      4096 otherwise. Follows lutGridPoints3D if only that is set.
+     *
      *  @param {number}             [options.lutGridPoints3D=33]
      *      Grid points per axis for 3D LUTs. 17 / 33 / 65 are typical. Above
      *      65 you hit memory cost without measurable accuracy gain.
@@ -800,6 +805,12 @@
 
             this.lutGridPoints3D = (isNaN(Number(options.lutGridPoints3D))) ? 33 : Number(options.lutGridPoints3D);
             this.lutGridPoints4D = (isNaN(Number(options.lutGridPoints4D))) ? 17 : Number(options.lutGridPoints4D);
+            // A 1D table costs nothing to make dense, and a TRC with infinite
+            // slope at black needs it. 256 at int8 puts a node on every code;
+            // a larger grid would be worse there, because the nodes stop lining up.
+            this.lutGridPoints1D = !isNaN(Number(options.lutGridPoints1D)) ? Number(options.lutGridPoints1D)
+                : !isNaN(Number(options.lutGridPoints3D)) ? this.lutGridPoints3D
+                : (options.dataFormat === 'int8') ? 256 : 4096;
 
             // LUT image-hot-path kernel selector. See JSDoc above for full
             // semantics. v1.2+ ships 'auto' (default), 'float', 'int',
@@ -2516,7 +2527,9 @@
                 buildLut:                   this.builtLut === true,
                 lutMode:                    this.lutMode,
                 lutModeRequested:           this.lutModeRequested,
-                lutGridPoints:              this.lutGridPoints,
+                lutGridPoints1D:            this.lutGridPoints1D,
+                lutGridPoints3D:            this.lutGridPoints3D,
+                lutGridPoints4D:            this.lutGridPoints4D,
                 BPC:                        this.BPC,
                 interpolation:              this.interpolation,
                 interpolationFast:          this.interpolationFast,
@@ -3415,8 +3428,8 @@
             switch(this.inputProfile.type){
                 case eProfileType.Gray:
                     inputChannels = 1;
-                    CLUT = this.create1DDeviceLUT(outputChannels, this.lutGridPoints3D);
-                    gridPoints = [this.lutGridPoints3D];
+                    CLUT = this.create1DDeviceLUT(outputChannels, this.lutGridPoints1D);
+                    gridPoints = [this.lutGridPoints1D];
                     break;
                 case eProfileType.Duo:
                     inputChannels = 2;
@@ -3440,9 +3453,8 @@
                     // not up-res to lutGridPoints3D (33^5 is not a LUT).
                     inputChannels = this.getProfileChannels(this.inputProfile);
                     var a2b = this.inputProfile.A2B && (this.inputProfile.A2B[1] || this.inputProfile.A2B[0]);
-                    // The densest axis, so an X*Y*Z table keeps its detail.
                     var nGrid = (a2b && a2b.gridPoints && a2b.gridPoints[0])
-                        ? Math.max.apply(null, a2b.gridPoints)
+                        ? this.nChannelLutGrid(a2b.gridPoints, outputChannels)
                         : Profile.gridFor(inputChannels);
                     CLUT = this.createNDDeviceLUT(outputChannels, nGrid, inputChannels);
                     gridPoints = [];
@@ -3549,6 +3561,27 @@
                     version: profile.version
                 }
             }
+        };
+
+        /**
+         * Grid size for baking a 5- or 6-channel LUT from a profile table.
+         *
+         * The densest axis, so an X*Y*Z table keeps its detail, but cells grow
+         * as grid^channels and one fine axis must not set the size of all the
+         * others: 17x3x3x3x3x3 would bake 17^6 cells, 579 MB of Float64. Sized
+         * down to stay under 16M values, which every real table measured fits.
+         *
+         * @param {number[]} gridPoints   the table's grid, per axis
+         * @param {number} outputChannels
+         * @returns {number} points per axis
+         */
+        nChannelLutGrid(gridPoints, outputChannels){
+            var maxValues = 16e6;
+            var grid = Math.max.apply(null, gridPoints);
+            while(grid > 2 && Math.pow(grid, gridPoints.length) * outputChannels > maxValues){
+                grid--;
+            }
+            return grid;
         };
 
         /**

@@ -621,6 +621,41 @@ describe('matrix black point', () => {
     });
 });
 
+describe('gray LUT density', () => {
+    const gray = () => fromBytes(Profile.createGrayICC({gamma: 1.8}));
+    const bake = (options) => {
+        const transform = new Transform(Object.assign({buildLut: true}, options));
+        transform.create(gray(), fromBytes(readBytes(GRACOL)), eIntent.relative);
+        return transform;
+    };
+
+    test('int8 has a node on every code, so the LUT is exact', () => {
+        const codes = new Uint8Array(256).map((_, code) => code);
+        const walked = new Transform({dataFormat: 'int8', pixelCache: 0});
+        walked.create(gray(), fromBytes(readBytes(GRACOL)), eIntent.relative);
+        const baked = bake({dataFormat: 'int8'});
+        expect(baked.lut.gridPoints).toEqual([256]);
+        expect(Array.from(baked.array(codes, false, false)))
+            .toEqual(Array.from(walked.array(codes, false, false)));
+    });
+
+    test('other formats default to 4096', () => {
+        expect(bake({dataFormat: 'int16'}).lut.gridPoints).toEqual([4096]);
+    });
+
+    test('lutGridPoints1D wins, and lutGridPoints3D alone still applies', () => {
+        expect(bake({dataFormat: 'int8', lutGridPoints1D: 129}).lut.gridPoints).toEqual([129]);
+        expect(bake({dataFormat: 'int8', lutGridPoints3D: 65}).lut.gridPoints).toEqual([65]);
+    });
+
+    test('getOptions reports the grid sizes', () => {
+        const options = bake({dataFormat: 'int8'}).getOptions();
+        expect(options.lutGridPoints1D).toBe(256);
+        expect(options.lutGridPoints3D).toBe(33);
+        expect(options.lutGridPoints4D).toBe(17);
+    });
+});
+
 describe('small fixes', () => {
     test('reformat clamps into containers that would wrap', () => {
         expect(Array.from(Transform.reformat([1.2, -0.1, 0.5], 'device', 'int16'))).toEqual([65535, 0, 32768]);
@@ -823,6 +858,15 @@ describe('X*Y*Z CLUT grids', () => {
         const transform = new Transform({dataFormat: 'device', pixelCache: 0});
         transform.create(gridProfile('RGB ', [9, 9, 9], [9, 9, 9]), new Profile('*Lab'), eIntent.relative);
         expect(transform.getStageNames()).not.toMatch(/InterpND/);
+    });
+
+    test('an n-channel bake uses the densest axis, within the size limit', () => {
+        const transform = new Transform({});
+        expect(transform.nChannelLutGrid([9, 9, 9, 9, 9, 9], 4)).toBe(9);
+        expect(transform.nChannelLutGrid([3, 2, 2, 2, 5], 3)).toBe(5);
+        const grid = transform.nChannelLutGrid([17, 3, 3, 3, 3, 3], 3);
+        expect(grid).toBe(13);
+        expect(Math.pow(grid, 6) * 3).toBeLessThanOrEqual(16e6);
     });
 
     test('a 5-channel bake uses the densest axis', () => {

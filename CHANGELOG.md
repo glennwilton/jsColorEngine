@@ -37,6 +37,10 @@ kernels were not touched. Two of these change default output; see Changed.
 
 ### Added
 
+- `lutGridPoints1D`. Gray LUTs now default to 256 points at int8, where the LUT
+  is exact, and 4096 otherwise, up from 33. Measured worst case on a gray to
+  CMYK conversion: 10 to 0 LSB at int8, 11.3 to 0.07 on the 16-bit path.
+  `lutGridPoints3D` still sets the gray grid if it is passed on its own.
 - `mAB` / `mBA` LUTs with a different grid size per axis (ICC.1:2022 10.12.3,
   10.13.5), which failed or converted wrongly before. They run through the
   generic per-axis stages on the accuracy path, tetrahedral for device input

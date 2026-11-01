@@ -267,6 +267,7 @@ new Transform(options)
 | `interpolation4D` | String | `'tetrahedral'` | Same, for 4D (CMYK) LUTs. |
 | `LUTinterpolation3D` | String | (= `interpolation3D`) | Override the interpolation used inside the prebuilt LUT. |
 | `LUTinterpolation4D` | String | (= `interpolation4D`) | Same, for 4D. |
+| `lutGridPoints1D` | Number | `256` at int8, else `4096` | Grid points for 1D (gray) LUTs. 256 at int8 puts a node on every input code, so the LUT is exact. Follows `lutGridPoints3D` if only that is set. |
 | `lutGridPoints3D` | Number | `33` | Grid points per axis for 3D LUTs. 17 / 33 / 65 are typical; above 65 you hit memory cost without measurable accuracy gain. |
 | `lutGridPoints4D` | Number | `17` | Grid points per axis for 4D (CMYK) LUTs. 11 / 17 / 33 typical. 4D grows as N⁴ in memory — be cautious above 33. |
 | `labAdaptation` | Boolean | `false` | If `true`, object-based Lab input is adapted to D50 before entering the pipeline (e.g. LabD65 → LabD50). |
