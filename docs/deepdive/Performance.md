@@ -1760,10 +1760,13 @@ pixels. See `bench/wasm_poc/README.md` for the full analysis.
 
 ## 6. What's not on the roadmap
 
-Full "explicitly not doing" list (GPU shaders, Lab-input integer
-kernels, Web Workers, profile-decode optimisation, asm.js /
-SharedArrayBuffer-only paths) lives in
+Full "explicitly not doing" list (GPU shaders, LUT packing / Morton /
+8-bit tables, Lab-input integer kernels, Web Workers, profile-decode
+optimisation, asm.js / SharedArrayBuffer-only paths) lives in
 [Roadmap.md § What we are explicitly NOT doing](../Roadmap.md#what-we-are-explicitly-not-doing).
+The packing conversation — why 8 ms/MPx is already enough, and why
+the clever layouts lose — is
+[InterpolationLimits.md](./InterpolationLimits.md).
 
 ---
 

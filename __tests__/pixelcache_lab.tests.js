@@ -19,6 +19,9 @@
  *   - A printer conversion (sRGB → FOGRA29) with BPC on does not
  *     depend on the caller's pixel cache. The probes are built with
  *     the cache off.
+ *   - The black-point L* ramp itself (256 Lab → device → Lab steps,
+ *     the walk BPC actually runs) matches with the cache off, at 1
+ *     slot, and at 32 slots, including the repeated blacks.
  */
 
 const fs = require('fs');
@@ -225,4 +228,92 @@ describe('pixel cache — BPC black point does not depend on it', () => {
             expectCacheAgrees('*sRGB', japan, colour, eIntent.relative, false, false);
         }
     });
+});
+
+/**
+ * The walk detectOutputBlackpoint() actually runs: 256 steps up L*,
+ * Lab → device at the requested intent, then device → Lab at relative.
+ * Same Lab object reused, same as the probe. Cache off is the
+ * reference. One slot and 32 slots must match it at every step,
+ * including where the device colour repeats and the cache hits.
+ */
+function rampRoundTrip(profile, intent, pixelCache) {
+    const labProfile = new Profile('*Lab');
+    const toDevice = new Transform({ precision: 3, buildLut: false, pixelCache: pixelCache, BPC: false });
+    const toLab = new Transform({ precision: 3, buildLut: false, pixelCache: pixelCache, BPC: false });
+    toDevice._BPCAutoEnable = false;
+    toLab._BPCAutoEnable = false;
+    toDevice.create(labProfile, profile, intent);
+    toLab.create(profile, labProfile, eIntent.relative);
+    toLab.resetPixelCacheStats();
+
+    const lab = convert.Lab(0, 0, 0);
+    const rows = [];
+    let repeats = 0;
+    let previousKey = null;
+    for (let step = 0; step < 256; step++) {
+        lab.L = (step * 100) / 255;
+        const device = toDevice.transform(lab);
+        const key = device.C + ',' + device.M + ',' + device.Y + ',' + device.K;
+        if (key === previousKey) repeats++;
+        previousKey = key;
+        const back = toLab.transform(device);
+        rows.push({
+            device: [device.C, device.M, device.Y, device.K],
+            lab: back && [back.L, back.a, back.b],
+            isArray: Array.isArray(back),
+        });
+    }
+    return {
+        rows: rows,
+        repeats: repeats,
+        used: toLab.pixelCacheUsed,
+        hits: toLab.getPixelCacheStats().hits,
+    };
+}
+
+function expectRampAgrees(profile) {
+    for (const [, intent] of INTENTS) {
+        const off = rampRoundTrip(profile, intent, 0);
+        expect(off.rows).toHaveLength(256);
+        for (const slots of [1, 32]) {
+            const on = rampRoundTrip(profile, intent, slots);
+            expect(on.used).toBe(slots);
+            expect(on.rows).toHaveLength(256);
+            for (let step = 0; step < 256; step++) {
+                expect(on.rows[step].isArray).toBe(false);
+                expect(on.rows[step].lab.map(Number.isFinite)).toEqual([true, true, true]);
+                expect(on.rows[step].device).toEqual(off.rows[step].device);
+                expect(on.rows[step].lab).toEqual(off.rows[step].lab);
+            }
+            if (off.repeats > 0) expect(on.hits).toBeGreaterThan(0);
+        }
+    }
+}
+
+describe('pixel cache — BPC L* ramp, all 256 steps', () => {
+
+    test('GRACoL v2 ramp matches with the cache off, 1 slot, and 32 slots', () => {
+        expectRampAgrees(load(GRACOL));
+    });
+
+    test('v4 CMYK ramp matches with the cache off, 1 slot, and 32 slots', () => {
+        expectRampAgrees(load(CMYK_V4));
+    });
+
+    test('Uncoated FOGRA29 ramp matches with the cache off, 1 slot, and 32 slots', () => {
+        if (!fs.existsSync(FOGRA29)) return;
+        expectRampAgrees(load(FOGRA29));
+    });
+
+    const optional = [
+        ['Coated FOGRA39', FOGRA39],
+        ['Japan Color 2001 Coated', JAPAN],
+    ];
+    for (const [name, file] of optional) {
+        const runner = fs.existsSync(file) ? test : test.skip;
+        runner(name + ' ramp matches with the cache off, 1 slot, and 32 slots', () => {
+            expectRampAgrees(load(file));
+        });
+    }
 });

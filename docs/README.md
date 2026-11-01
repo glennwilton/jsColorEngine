@@ -4,7 +4,7 @@
 > in this repo cold: what the project is, and a per-document summary of
 > where every piece of context and reasoning lives. Regenerate per
 > [`summary-generator.md`](./summary-generator.md).
-> Last regenerated: **2026-08-23** (1.6.0 snapshot with native C + in-kernel tables).
+> Last regenerated: **2026-08-25** (added `deepdive/InterpolationLimits.md`).
 
 > Headline MPx/s below are from the date in **Current state**. Re-run: [`samples/bench/`](../samples/bench/) or `node bench/mpx_summary.js`. Tables: [BenchResults.md](./BenchResults.md).
 
@@ -195,6 +195,12 @@ Identity / NOP detection: profile-equality strategies (binary hash,
 virtual name, matrix compare), chain collapse, and `KernelIdentity` at
 `kernels[0]` (`arrayFn` bound from `dataFormat`; no Transform-level
 `transformArrayFn`).
+
+### deepdive/InterpolationLimits.md
+August 2026 note: the interpolator ladder (f64 walker → unrolled
+LUT → integer JS → WASM scalar → SIMD), the pool and matrix-shaper
+as context, and why packing tricks are not the next 10×. Mature on
+speed; remaining work is bugs and delivery, not a thinner cube.
 
 ### deepdive/JitInspection.md
 V8 emitted-assembly walkthroughs of the hot kernels: instruction mix,

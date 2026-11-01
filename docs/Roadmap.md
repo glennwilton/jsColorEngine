@@ -2683,6 +2683,14 @@ we're on.
   opt-in browser-only kernel for callers who already have a GPU
   pipeline up and want to fuse colour-management into it; not on
   the near roadmap.
+- **LUT micro-layout as a speed project** (Morton / tiled cubes,
+  8-bit or 10-10-10 packed CLUTs, GPU 3D textures as the `array()`
+  backend). The kernels are already ~8 ms/MPx on photographs; the
+  web bottleneck is decode and the page, not `go2`. Same-size tiles
+  cannot make every overlapping 2×2×2 contiguous; shrinking the cube
+  to fit L1 fights 33³ accuracy; 8-bit nodes band. Receipts:
+  [deepdive/InterpolationLimits.md](./deepdive/InterpolationLimits.md).
+  GPU shaders as a portable CMS remain parked in the bullet above.
 - **Lab whitepoint awareness in the integer kernels.** Lab a/b are
   signed; our integer kernels assume unsigned u8/u16 inputs. We
   sidestep this by always going through device color (RGB or CMYK)

@@ -31,7 +31,7 @@ If you're here you probably:
 
 ## Shallow dive — the cheeky TL;DR
 
-Four things we learned writing this that we didn't expect going in. Each one
+Things we learned writing this that we didn't expect going in. Each one
 has a deep-dive page behind it if you want the receipts.
 
 - **Modern JS JITs emit *wicked* good assembly when the loop is well-shaped.**
@@ -77,6 +77,13 @@ has a deep-dive page behind it if you want the receipts.
   float-precision peer, not a port. →
   [Accuracy](./Accuracy.md)
 
+- **The interpolator is no longer the product bottleneck.** ~100–120
+  MPx/s on photographs is ~8 ms per megapixel. Decode, paint, and the
+  rest of the page dominate a web preview; huge CMYK jobs want cores,
+  not a cleverer LUT layout. Morton tiles, 8-bit / 10-10-10 packing,
+  and GPU 3D textures as a CMS backend are documented dead-ends, not
+  a roadmap. → [Limits of interpolation speed](./InterpolationLimits.md)
+
 The rest of this folder is the evidence. If any of these claims smell
 wrong, the detail pages carry the asm dumps, bench scripts, and repro
 recipes.
@@ -93,6 +100,7 @@ recipes.
 | [Accuracy](./Accuracy.md)                        | jsColorEngine vs Little CMS — the `bench/lcms_compat` harness, methodology, headline numbers (130/150 files sub-LSB), the one localised divergence we found, and the design philosophy that keeps jsCE an independent engine rather than an lcms reimplementation |
 | [Custom LUT Builder](./Luts.md)                  | Custom LUT creation, TIFF-based visual editing, lcms-wasm bridge, portable JSON serialisation format, and the architecture for CMS-agnostic LUT capture and redistribution. Companion how-to: [`samples/LutBuilder/lutbuilder.md`](../../samples/LutBuilder/lutbuilder.md).            |
 | [Identity / NOP detection](./Identity.md)        | How same-profile pairs are detected (binary hash, virtual name, matrix comparison), how multi-stage chains are collapsed, the identity pipeline and `kernelCopy` path, and the connection to kernel binding.                                                      |
+| [Limits of interpolation speed](./InterpolationLimits.md) | Ladder from ~2 MPx/s f64 walker to ~120 MPx/s SIMD LUT and ~1000 pooled matrix-shaper; then the packing graveyard. Mature on speed; do not thin the cube. |
 | [The kernel contract](./KernelContract.md)       | **As-built v1.6.** Transform owns the pipeline; the kernel owns both surfaces (`floatFor` + `array()`). Dense registry `kernels[0..15]` (Identity at 0); Kernel3D may yield the matrix shaper; batch-size dispatch is the kernel's secret. Includes the journey from the v1.5 file split, a “do not reinvent” table, coverage, and the N-channel oracle gap. |
 | [Kernel modules](./KernelModules.md)             | **Stub.** v1.5 snapshot retired; redirects to [KernelContract.md](./KernelContract.md). |
 | [Synthetic profiles](./SyntheticProfiles.md)     | Three of five kernels had no second opinion, because real ICC profiles are licensed and this repo ships two. So the engine writes its own: `encodeICC.js`, fifteen dual-table profiles at 1-15 channels, handed to Little CMS. Also: `gridFor` is a fixture budget, not an ICC rule — real 5/6/7 A2B tables are typically 9 / 7–9 / 5 pts/axis; 2-pt at 11+ is ours. |
