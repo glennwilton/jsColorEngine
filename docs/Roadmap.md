@@ -144,26 +144,26 @@ and will land iteratively.
   image wrapper (MIT-licensed) that owns the "I have an image, I
   want to proof / inspect it" workflow. Immutable, always
   profile-tagged, lazy + cached transforms. Full API reference:
-  [`samples/ICCImage/ICCImage.md`](../samples/ICCImage/ICCImage.md).
+  [`samples/ICCImage/ICCImage.md`](https://github.com/glennwilton/jsICCImage/blob/main/docs/API.md).
 - **Baked gamut-mapping LUT** — new `lutGamutMode` option
   (`'none'` / `'color'` / `'map'` / `'colorMap'`) bakes gamut
   visualisation into the LUT at build time. Zero per-pixel cost.
   Powers the live-video demo's real-time gamut warnings.
 - **Browser samples** — three shipped demos plus a landing page:
-  [`live-video-softproof.html`](../samples/live-video-softproof.html)
+  [`live-video-softproof.html`](https://www.o2creative.co.nz/jscolorengine/samples/live-video-softproof.html)
   (real-time video soft-proofing at 40+ fps, the headline demo),
-  [`softproof.html`](../samples/softproof.html) (image soft-proof +
+  [`softproof.html`](https://www.o2creative.co.nz/jscolorengine/samples/softproof.html) (image soft-proof +
   plate previews + colour picker),
-  [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html)
+  [`softproof-vs-lcms.html`](https://www.o2creative.co.nz/jscolorengine/samples/softproof-vs-lcms.html)
   (pixel-level accuracy comparison with lcms-wasm),
-  [`index.html`](../samples/index.html) (project landing) and
-  [`samples.html`](../samples/samples.html) (demo index).
+  [`index.html`](https://www.o2creative.co.nz/jscolorengine/samples/index.html) (project landing) and
+  [`samples.html`](https://www.o2creative.co.nz/jscolorengine/samples/samples.html) (demo index).
 - **License: GPL-3.0 → MPL-2.0.** File-level copyleft removes the
   main adoption blocker GPL posed for commercial embedders.
 - **Sample infrastructure** — `samples/serve.js` dev server,
   `samples/styles/styles.css`, bundled CMYK ICC profiles.
 - **Docs** — [`docs/Samples.md`](./Samples.md) live demo index,
-  [`samples/ICCImage/ICCImage.md`](../samples/ICCImage/ICCImage.md) API reference.
+  [`samples/ICCImage/ICCImage.md`](https://github.com/glennwilton/jsICCImage/blob/main/docs/API.md) API reference.
 - **Tests** — `__tests__/transform_lut_gamut.tests.js` covering
   all four gamut modes, threshold behaviour, and custom ΔE
   functions.
@@ -251,6 +251,12 @@ lcms comparison corrections after upstream review
 lcms default flags, 100 % within 1 LSB on all four image workflows).
 488 tests. Full notes: [CHANGELOG.md](../CHANGELOG.md).
 
+**Repository split (2026-11-01)** — the test harness, the demos and the image helper
+each moved to their own repository:
+[jsColorEngine-harness](https://github.com/glennwilton/jsColorEngine-harness),
+[jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples) and
+[jsICCImage](https://github.com/glennwilton/jsICCImage).
+
 **v1.7.0 (2026-11-01)** — the review pass: profile-handling fixes found by sweeping
 the testbed against LittleCMS, X×Y×Z CLUT grids, stricter loading, sampled
 and parametric TRCs on the matrix kernel, denser gray LUTs. See
@@ -296,12 +302,12 @@ browser uploads and dtype mismatches.
 > the sample suite first means even if v1.5 slips, the project keeps
 > growing visible surface area on the back of v1.3's perf story.
 
-Lives in [`samples/ICCImage/iccimage.js`](../samples/ICCImage/iccimage.js), exported
+Lives in [`samples/ICCImage/iccimage.js`](https://github.com/glennwilton/jsICCImage/blob/main/iccimage.js), exported
 as `ICCImage`. Lives in `samples/` (not `src/`) deliberately — it's
 **helper-grade**, MIT-licensed (separate from the engine's MPL-2.0
-— see [`samples/LICENSE`](../samples/LICENSE)), and double-billed
+— see [`samples/LICENSE`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LICENSE)), and double-billed
 as living documentation of how to drive the core engine on real
-image data. Full API reference: [`samples/ICCImage/ICCImage.md`](../samples/ICCImage/ICCImage.md).
+image data. Full API reference: [`samples/ICCImage/ICCImage.md`](https://github.com/glennwilton/jsICCImage/blob/main/docs/API.md).
 
 ### Status
 
@@ -442,7 +448,7 @@ via `<script>`, work from `file://` so devs can just download + open):
   to one we've used before is ~0 ms on the second look. Replaces the
   originally-separate `rgb-to-cmyk-separations.html` and
   `soft-proof-image.html` briefs — they were splitting one workflow
-  in half. Live: [`samples/softproof.html`](../samples/softproof.html).
+  in half. Live: [`samples/softproof.html`](https://www.o2creative.co.nz/jscolorengine/samples/softproof.html).
 - **`colour-calculator.html`** 🔧 *WIP* — interactive converter between
   RGB / Lab / XYZ / LCH / CMYK with live round-trip display. Primary
   showcase for `ICCImage.pixel(x, y)` (the no-LUT accuracy path) plus
@@ -1115,7 +1121,7 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 - **DONE — Portable LUT JSON format.** `transform.toJSON()` (instance, auto-called by `JSON.stringify`), `Transform.fromJSON(input, opts)` (static factory), `Transform.lutToJSON(lut, opts)` / `Transform.jsonToLut(input)` (static encode/decode helpers). Default `dataType: 'u16'` (lossless ~650 KB for a 4D LUT); `dataType: 'u8'` halves the size. `opts.verify: true` on `setLut`/`fromJSON` checks the content signature.
 - **DONE — `Transform.setLut()` as LUT authority.** Re-resolves `lutMode`, normalises any CLUT type (Uint16Array, Uint8Array, Float64Array, base64) to canonical f64 [0..1], regenerates strides from `gridPoints + outputChannels`. No longer requires `buildLut: true` in the constructor.
 - **DONE — Content signatures.** FNV-1a 32-bit (`Math.imul`-based, ~1.3 ms for a 33-pt 3D LUT) over chain + grid + u16 pixel data. Format `"FNV1A:<8 hex>"` — algorithm-prefixed for future upgradability. Lazy-stamped at `toJSON()` time; hot-path unchanged. `Transform.signLut` / `verifyLut` static + instance methods.
-- **DONE — `LutBuilder` helper** (`samples/LutBuilder/LutBuilder.js`, MIT). Full lifecycle — `create()` (callback), `createIdentity()`, `createFromLCMS()` (auto-detects Emscripten batch API: one `_cmsDoTransform` call over the whole grid, ~80× faster than per-cell), `editLut()` (per-cell mutation, auto-appends timestamped breadcrumb), `clone()`, `toJSON()`, `fromJSON()`. Dual CJS/browser-global export. Deep-dive: [`docs/deepdive/Luts.md`](./deepdive/Luts.md). User guide: [`samples/LutBuilder/lutbuilder.md`](../samples/LutBuilder/lutbuilder.md).
+- **DONE — `LutBuilder` helper** (`samples/LutBuilder/LutBuilder.js`, MIT). Full lifecycle — `create()` (callback), `createIdentity()`, `createFromLCMS()` (auto-detects Emscripten batch API: one `_cmsDoTransform` call over the whole grid, ~80× faster than per-cell), `editLut()` (per-cell mutation, auto-appends timestamped breadcrumb), `clone()`, `toJSON()`, `fromJSON()`. Dual CJS/browser-global export. Deep-dive: [`docs/deepdive/Luts.md`](./deepdive/Luts.md). User guide: [`samples/LutBuilder/lutbuilder.md`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LutBuilder/lutbuilder.md).
 - **DONE — Bugfix: `create4DDeviceLUT` pipeline chaining.** Each pipeline stage was fed the original `src` instead of the previous stage's output — caused CMYK white paper to render as black RGB (inverted output) for any real ICC CMYK profile. Fixed by replacing the broken inline loop with `this.forward(src)` (matches `create3DDeviceLUT`). Regression test added.
 - **DONE — ICC header `date` / `version` parsing.** `header.date` now parses ICC 12-byte date to a JS `Date` (JSON → ISO string). `header.version` now parses to `"M.m.b"` string (e.g. `"2.1.0"`) with `header.versionMajor` integer for engine routing.
 - **DONE — JSON wire format cleanup.** Strides removed from serialised form (derived, regenerated on decode). `inputScale`/`outputScale` forced to canonical 1/1 (were leaking kernel-internal u8 scaling values into the wire).
@@ -1126,7 +1132,7 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 ## v1.4.4 — LutBuilder TIFF workflow + CLI tool (shipped 2026-05-02)
 
 - **LutBuilder Stage 3 — TIFF visual editing workflow.** Export an identity LUT as a TIFF image (ZIP-compressed, embedded ICC, XMP metadata), edit in any colour-managed application (Photoshop, Affinity, GIMP, macOS Preview), reimport the edited pixels as a modified LUT. The editor's CMS becomes your LUT's colour math, captured at grid resolution and dispatched at WASM-SIMD speed. Mean ΔP < 1 u8 unit vs Photoshop ground truth on a real sRGB→CMYK conversion. See [`docs/deepdive/Luts.md` §4](./deepdive/Luts.md#4-the-tiff-workflow--visual-lut-editing).
-- **`lut-tiff-cli.js`** — CLI tool (`--create`, `--import`, `--validate`, `--compare`, `--apply`, `--make-samples`). Builds and imports LUT TIFFs, runs accuracy validation with ΔP reporting and delta image output, applies LUTs to arbitrary images. See [`samples/LutBuilder/lutbuilder.md`](../samples/LutBuilder/lutbuilder.md) CLI quick reference.
+- **`lut-tiff-cli.js`** — CLI tool (`--create`, `--import`, `--validate`, `--compare`, `--apply`, `--make-samples`). Builds and imports LUT TIFFs, runs accuracy validation with ΔP reporting and delta image output, applies LUTs to arbitrary images. See [`samples/LutBuilder/lutbuilder.md`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LutBuilder/lutbuilder.md) CLI quick reference.
 - **`builder.analyze()` / `LutBuilder.comparePixels()`** — pixel-level accuracy analysis. ΔP report (mean, max, RMSE, p95, p99, per-channel, grade), optional amplified delta TIFF images and plain-text report file.
 - **`LutBuilder.pixelsToTIFF()`** — static helper to write raw pixel buffers as TIFF files.
 - **Three sample TIFFs** (`npm run tiff-samples`): sRGB N=33, GRACoL CMYK N=17, Gray tone curve N=255. All with embedded ICC profiles and Photoshop-compatible XMP metadata.
@@ -1460,7 +1466,7 @@ Also on that page:
   hot batch. Primitive: `samples/bench/browserFocus.js`.
 - **Pool demo** tab — 15-image queue through `transformImages()`.
 
-Run [`samples/bench/`](../samples/bench/) — the **Speed vs Noise**
+Run [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) — the **Speed vs Noise**
 tab is why headline content is photo with 5 % noise added. Photo
 with 15 % noise added is the same plateau; legacy is ~1.8× faster
 because the LCG is L1-resident. Guide: [Bench.md](./Bench.md).

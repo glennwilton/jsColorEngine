@@ -13,7 +13,7 @@
 >
 > Headline: **6.2x peak** (noise/int), **787 MPx/s** peak throughput
 > (solid/wasm-simd), byte-identical in all 72 cells. Figures are from the
-> date in the status — re-run: browser [`samples/bench/`](../../samples/bench/)
+> date in the status — re-run: browser [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/)
 > or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md).
 > Current tables are generated into
 > [BenchResults](../BenchResults.md#table-pool-peak); the analysis below

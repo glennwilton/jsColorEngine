@@ -2,14 +2,14 @@
 
 The `samples/` directory holds runnable HTML demos of `jsColorEngine` plus
 the small helper module they all share. Directory map and license:
-[`samples/README.md`](../samples/README.md).
+[`samples/README.md`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/README.md).
 
 > **Live demos:** <https://www.o2creative.co.nz/jscolorengine/samples/>
 >
 > **Source:** <https://github.com/glennwilton/jsColorEngine/tree/main/samples>
 >
 > **License:** the engine in `src/` is **MPL-2.0**; everything in `samples/`
-> is **MIT** (see [`samples/LICENSE`](../samples/LICENSE)). Copy the
+> is **MIT** (see [`samples/LICENSE`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LICENSE)). Copy the
 > samples freely.
 
 ## Calling the engine
@@ -30,30 +30,30 @@ See [Transform.md](./Transform.md) and the usage guide at the top of
 
 | File | Purpose |
 |---|---|
-| [`samples/ICCImage/iccimage.js`](../samples/ICCImage/iccimage.js) | Small immutable image wrapper (`ICCImage`). The thing every demo loads. |
-| [`samples/ICCImage/ICCImage.md`](../samples/ICCImage/ICCImage.md) | Full API reference for the helper. |
+| [`samples/ICCImage/iccimage.js`](https://github.com/glennwilton/jsICCImage/blob/main/iccimage.js) | Small immutable image wrapper (`ICCImage`). The thing every demo loads. |
+| [`samples/ICCImage/ICCImage.md`](https://github.com/glennwilton/jsICCImage/blob/main/docs/API.md) | Full API reference for the helper. |
 
 `ICCImage` exists to make the "I have an image, I want to display / proof /
 inspect it" workflow a one-liner. It is *not* a general-purpose image
-library — see [`ICCImage.md`](../samples/ICCImage/ICCImage.md) for the design tenets
+library — see [`ICCImage.md`](https://github.com/glennwilton/jsICCImage/blob/main/docs/API.md) for the design tenets
 and the explicit list of what's deliberately missing.
 
 ## Demos
 
 | File | Status | Demonstrates |
 |---|---|---|
-| [`live-video-softproof.html`](../samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame through a pre-built 3D CLUT via `transformArrayViaLUT` — JavaScript + WASM SIMD, one thread. |
-| [`softproof.html`](../samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + C / M / Y / K plates. Colour picker with Lab, sRGB, CMYK, ΔE. |
-| [`softproof-vs-lcms.html`](../samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm. Pixel-by-pixel diff, signed RGB, accuracy stats, speed ratio. |
-| [`colour-calculator.html`](../samples/colour-calculator.html) | Ready | ICC-aware Lab / XYZ / RGB / CMYK converter on the accuracy path. |
-| [`lut-cmyk-to-rgb.html`](../samples/lut-cmyk-to-rgb.html) | Ready | CMYK → RGB via a pre-baked portable LUT. |
-| [`lut-tiff-builder.html`](../samples/lut-tiff-builder.html) | Ready | Generate / import LUT TIFFs ([LutBuilder](../samples/LutBuilder/lutbuilder.md)). |
-| [`index.html`](../samples/index.html) | Ready | Project landing page. |
-| [`samples.html`](../samples/samples.html) | Ready | Sample hub. |
+| [`live-video-softproof.html`](https://www.o2creative.co.nz/jscolorengine/samples/live-video-softproof.html) | Ready | **Real-time video soft-proofing.** Every frame through a pre-built 3D CLUT via `transformArrayViaLUT` — JavaScript + WASM SIMD, one thread. |
+| [`softproof.html`](https://www.o2creative.co.nz/jscolorengine/samples/softproof.html) | Ready | Soft-proof an sRGB image through a CMYK profile + C / M / Y / K plates. Colour picker with Lab, sRGB, CMYK, ΔE. |
+| [`softproof-vs-lcms.html`](https://www.o2creative.co.nz/jscolorengine/samples/softproof-vs-lcms.html) | Ready | Side-by-side jsColorEngine vs lcms-wasm. Pixel-by-pixel diff, signed RGB, accuracy stats, speed ratio. |
+| [`colour-calculator.html`](https://www.o2creative.co.nz/jscolorengine/samples/colour-calculator.html) | Ready | ICC-aware Lab / XYZ / RGB / CMYK converter on the accuracy path. |
+| [`lut-cmyk-to-rgb.html`](https://www.o2creative.co.nz/jscolorengine/samples/lut-cmyk-to-rgb.html) | Ready | CMYK → RGB via a pre-baked portable LUT. |
+| [`lut-tiff-builder.html`](https://www.o2creative.co.nz/jscolorengine/samples/lut-tiff-builder.html) | Ready | Generate / import LUT TIFFs ([LutBuilder](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LutBuilder/lutbuilder.md)). |
+| [`index.html`](https://www.o2creative.co.nz/jscolorengine/samples/index.html) | Ready | Project landing page. |
+| [`samples.html`](https://www.o2creative.co.nz/jscolorengine/samples/samples.html) | Ready | Sample hub. |
 
 ### Plugins
 
-[`samples/plugins/identity-plugin.js`](../samples/plugins/identity-plugin.js)
+[`samples/plugins/identity-plugin.js`](./Plugin.md#complete-example)
 is a `Transform.register` demo (custom `lutMode`, builder + kernel).
 Run with `node samples/plugins/identity-plugin.js`. Same-file pairs need
 `detectIdentity: false` or the built-in identity kernel takes the batch

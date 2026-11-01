@@ -2,7 +2,7 @@
 
 > **This page is historical.** Figures are performance at the time of
 > writing. Re-run on your machine: browser
-> [`samples/bench/`](../../samples/bench/) (live:
+> [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) (live:
 > https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node
 > `node bench/mpx_summary.js`. Quote current throughput from
 > **[Bench.md](../Bench.md)** and **[BenchResults.md](../BenchResults.md)**.

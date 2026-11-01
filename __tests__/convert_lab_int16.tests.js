@@ -178,7 +178,7 @@ describe('Transform Lab int16 wrappers', function () {
         xformRgbToCmyk = new Transform({ dataFormat: 'int16', buildLut: true });
         var gracol = new Profile();
         gracol.loadBinary(require('fs').readFileSync(
-            require('path').join(__dirname, '..', 'samples', 'profiles', 'CoatedGRACoL2006.icc')
+            require('path').join(__dirname, 'GRACoL2006_Coated1v2.icc')
         ));
         xformRgbToCmyk.create('*srgb', gracol, eIntent.relative);
     });

@@ -6,7 +6,7 @@
 > [`summary-generator.md`](./summary-generator.md).
 > Last regenerated: **2026-08-25** (added `deepdive/InterpolationLimits.md`).
 
-> Headline MPx/s below are from the date in **Current state**. Re-run: [`samples/bench/`](../samples/bench/) or `node bench/mpx_summary.js`. Tables: [BenchResults.md](./BenchResults.md).
+> Headline MPx/s below are from the date in **Current state**. Re-run: [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) or `node bench/mpx_summary.js`. Tables: [BenchResults.md](./BenchResults.md).
 
 ## Project Overview
 
@@ -306,7 +306,7 @@ management, and reproduction recipes.
 [`../README.md`](../README.md) — positioning, features, headline
 numbers · [`../CHANGELOG.md`](../CHANGELOG.md) — release notes
 (`[1.7.0]` latest tagged) · [`../CLAUDE.md`](../CLAUDE.md) — AI session entry
-rules · [`../samples/README.md`](../samples/README.md) — samples index
+rules · [`../samples/README.md`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/README.md) — samples index
 (per-tool folders) · `samples/LutBuilder/lutbuilder.md` — LutBuilder
 user guide · `samples/ICCImage/ICCImage.md` — ICCImage API ·
 [`../bench/README.md`](../bench/README.md) — Node/C harness inventory

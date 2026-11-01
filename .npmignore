@@ -20,6 +20,7 @@ speed_tests/
 __tests__/
 bench/
 harness/
+jsICCImage/
 docs/
 samples/
 http/

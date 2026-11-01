@@ -27,7 +27,7 @@ profile files for examples that load from disk; the
 [`__tests__/GRACoL2006_Coated1v2.icc`](../__tests__/GRACoL2006_Coated1v2.icc)
 profile shipped with the repo works for every CMYK example here.
 
-> Self-contained HTML demos live in [`samples/`](../samples/) and are
+> Self-contained HTML demos live in [`samples/`](https://www.o2creative.co.nz/jscolorengine/samples/) and are
 > [running online](https://www.o2creative.co.nz/jscolorengine/samples/) —
 > this page covers code-snippet-level recipes.
 

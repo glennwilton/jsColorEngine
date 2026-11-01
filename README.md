@@ -64,7 +64,7 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   and no pipeline build. Chain and content fingerprint travel with
   the file. See
   [Portable LUTs](#portable-luts--lutbuilder) ·
-  [`LutBuilder`](./samples/LutBuilder/lutbuilder.md) ·
+  [`LutBuilder`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LutBuilder/lutbuilder.md) ·
   [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).
 
 - **Three ways, one `Transform`.** `transform(colorObj)` for one colour
@@ -80,6 +80,9 @@ rendered into [docs/BenchResults.md](./docs/BenchResults.md), which also carries
 the conditions and says when a table is older than the code.</sub>
 
 ---
+
+
+**Related projects:** [jsICCImage](https://github.com/glennwilton/jsICCImage) (colour-managed images, MIT) · [jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples) (demos and LUT tools) · [jsColorEngine-harness](https://github.com/glennwilton/jsColorEngine-harness) (accuracy and speed testing)
 
 ## Table of contents
 
@@ -105,7 +108,7 @@ the conditions and says when a table is older than the code.</sub>
 ### Benchmark it yourself
 
 You do not have to take any of these figures on trust. The in-browser
-bench at [`samples/bench/`](./samples/bench/) — live at
+bench at [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) — live at
 [the sample demos](https://www.o2creative.co.nz/jscolorengine/samples/bench/)
 — runs every `lutMode` against `lcms-wasm` on *your* hardware, in
 *your* browser. Zero upload, zero telemetry.
@@ -243,9 +246,9 @@ node samples/LutBuilder/lut-tiff-cli.js --validate --original srgb.tiff --edited
 
 **Validate and compare.** `builder.analyze()` and `LutBuilder.comparePixels()` produce ΔP reports (mean, max, RMSE, p95/p99, per-channel, grade) and optional amplified delta TIFF images for visual diagnosis. Use `--compare` to benchmark jsCE vs lcms vs Photoshop conversions of the same source.
 
-The [`LutBuilder`](./samples/LutBuilder/lutbuilder.md) guide covers the full lifecycle, CLI reference, and error handling.
+The [`LutBuilder`](https://github.com/glennwilton/jsColorEngine-samples/tree/main/LutBuilder/lutbuilder.md) guide covers the full lifecycle, CLI reference, and error handling.
 Format spec, emulation architecture, and the reasoning behind the design are in [`docs/deepdive/Luts.md`](./docs/deepdive/Luts.md).
-The [`samples/lut-cmyk-to-rgb.html`](./samples/lut-cmyk-to-rgb.html) demo shows the build-once / ship-anywhere workflow end-to-end with measured numbers.
+The [`samples/lut-cmyk-to-rgb.html`](https://www.o2creative.co.nz/jscolorengine/samples/lut-cmyk-to-rgb.html) demo shows the build-once / ship-anywhere workflow end-to-end with measured numbers.
 
 ---
 
@@ -1044,7 +1047,7 @@ everyday colour management. Things outside that scope:
 |---|---|
 | **[Benchmark results](./docs/BenchResults.md)** | **Generated** — every measured table with its conditions, the engine version it was measured on, and an index of which document cites which table |
 | **[Parallel worker pool](./docs/pool.md)** | `transformImages()` — batching, per-image callbacks, cancellation, backpressure, deployment, and what the pool costs |
-| **[Bench](./samples/benchmark/bench.html)** | Current in-browser harness — baselines + jsCE directions × LUT modes. Older vs-lcms UI: [`samples/bench/`](./samples/bench/) ([docs/Bench.md](./docs/Bench.md)) |
+| **[Bench](https://www.o2creative.co.nz/jscolorengine/samples/benchmark/bench.html)** | Current in-browser harness — baselines + jsCE directions × LUT modes. Older vs-lcms UI: [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) ([docs/Bench.md](./docs/Bench.md)) |
 | **[Deep dive](./docs/deepdive/)** | How it works, why it's fast — pipeline model, lutMode internals, JIT inspection, WASM kernel design |
 | **[Performance](./docs/deepdive/Performance.md)** | Historical measurement retrospective — the journey, not current tables |
 | **[Samples](./docs/Samples.md)** | Live demos — video soft-proof, image soft-proof, jsCE vs lcms-wasm comparison ([live](https://www.o2creative.co.nz/jscolorengine/samples/)) |
@@ -1071,7 +1074,7 @@ authoritative reference for method signatures and parameter types:
 
 ### Benchmark your own machine
 
-**In the browser** — [`samples/benchmark/`](./samples/benchmark/bench.html).
+**In the browser** — [`samples/benchmark/`](https://www.o2creative.co.nz/jscolorengine/samples/benchmark/bench.html).
 Hardware baselines, then the jsColorEngine directions × LUT modes.
 After `npm run browser && npm run serve`, open
 <http://localhost:8080/samples/benchmark/bench.html>.
@@ -1085,7 +1088,7 @@ node scripts/build_bench_results.js "bobs pc"   # → docs/BenchResults-bobs-pc.
 ```
 
 `--quick` is the short pass (~15 min). The older five-tab vs-lcms UI
-is still at [`samples/bench/`](./samples/bench/)
+is still at [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/)
 ([docs/Bench.md](./docs/Bench.md)).
 
 If your numbers differ meaningfully from the tables we want to know —

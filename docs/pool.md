@@ -11,7 +11,7 @@
 
 ---
 
-> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](./Bench.md). Canonical tables: [BenchResults.md](./BenchResults.md).
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](./Bench.md). Canonical tables: [BenchResults.md](./BenchResults.md).
 
 `transformImages()` converts a batch of images, across a pool of worker
 threads when one is available and sequentially when it is not — **the same

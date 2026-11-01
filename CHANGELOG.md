@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+The npm package does not change. The demos and LutBuilder moved to
+[jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples), and
+`ICCImage` became [jsICCImage](https://github.com/glennwilton/jsICCImage), its own MIT
+project built on the engine. The plugin example is now in `docs/Plugin.md`.
+
+---
+
 ## [1.7.1] — 2026-11-01
 
 The benchmarks and the Little CMS comparison tools moved to their own repository,

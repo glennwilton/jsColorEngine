@@ -85,6 +85,10 @@ CLAUDE.md
 
 # Loose reproduce/pool logs and one-off dumps beside the timestamped runs.
 
-# The test harness is its own repository, cloned here.
+# Separate repositories, cloned here so the folders stay together.
 # https://github.com/glennwilton/jsColorEngine-harness
+# https://github.com/glennwilton/jsColorEngine-samples
+# https://github.com/glennwilton/jsICCImage
 /harness/
+/samples/
+/jsICCImage/

@@ -35,18 +35,22 @@
     "browser": "esbuild src/main.js --bundle --platform=browser --format=iife --global-name=jsColorEngine --minify --external:http --external:https --external:fs --external:path --external:util --external:child_process --outfile=browser/jsColorEngineWeb.js && npm run browser-worker && npm run copy-browser",
     "browser-worker": "esbuild src/poolWorker.js --bundle --platform=browser --format=iife --minify --external:http --external:https --external:fs --external:path --external:util --external:child_process --outfile=browser/jsColorEngineWorker.js",
     "browser-watch": "esbuild src/main.js --bundle --platform=browser --format=iife --global-name=jsColorEngine --sourcemap --external:http --external:https --external:fs --external:path --external:util --external:child_process --outfile=browser-dev/jsColorEngineWeb.js --watch",
-    "copy-browser": "node -e \"const fs=require('fs');fs.mkdirSync('samples/browser',{recursive:true});['jsColorEngineWeb.js','jsColorEngineWorker.js'].forEach(f=>{const s='browser/'+f;if(fs.existsSync(s)){fs.copyFileSync(s,'samples/browser/'+f);console.log('copied → samples/browser/'+f);}});\"",
+    "copy-browser": "node -e \"const fs=require('fs');if(!fs.existsSync('samples'))process.exit(0);fs.mkdirSync('samples/browser',{recursive:true});['jsColorEngineWeb.js','jsColorEngineWorker.js'].forEach(f=>{const s='browser/'+f;if(fs.existsSync(s)){fs.copyFileSync(s,'samples/browser/'+f);console.log('copied → samples/browser/'+f);}});\"",
     "test": "jest --verbose",
-    "serve": "node samples/serve.js",
-    "tiff-samples": "node samples/lut-tiff-cli.js --make-samples",
-    "archive": "node scripts/pull-bundle.js",
-    "bench-browser": "esbuild samples/benchmark/browser-entry.js --bundle --platform=browser --format=iife --global-name=_jsceBench --outfile=samples/benchmark/bench.bundle.js --external:http --external:https --external:fs --external:path --external:util --external:child_process",
-    "bench-browser-watch": "esbuild samples/benchmark/browser-entry.js --bundle --platform=browser --format=iife --global-name=_jsceBench --outfile=samples/benchmark/bench.bundle.js --external:http --external:https --external:fs --external:path --external:util --external:child_process --watch"
+    "archive": "node scripts/pull-bundle.js"
   },
   "jest": {
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/__tests__/helpers/"
+      "/__tests__/helpers/",
+      "<rootDir>/samples/",
+      "<rootDir>/harness/",
+      "<rootDir>/jsICCImage/"
+    ],
+    "modulePathIgnorePatterns": [
+      "<rootDir>/samples/",
+      "<rootDir>/harness/",
+      "<rootDir>/jsICCImage/"
     ]
   },
   "type": "commonjs",
@@ -54,7 +58,6 @@
     "canvas": "^3.2.3",
     "esbuild": "^0.28.0",
     "jest": "^29.7.0",
-    "utif": "^3.1.0",
     "wabt": "^1.0.39"
   }
 }

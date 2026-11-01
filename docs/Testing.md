@@ -31,6 +31,9 @@ npx jest channel_matrix          # 225 widths, does it run
 npx jest transform_guards        # array / ViaLUT / reformat / lastUsedKernel
 ```
 
+The LutBuilder tests live with LutBuilder in
+[jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples).
+
 Oracles (not Jest), from the
 [harness repository](https://github.com/glennwilton/jsColorEngine-harness):
 

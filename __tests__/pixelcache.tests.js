@@ -353,7 +353,7 @@ describe('pixelCache — safety', () => {
         // The exhaustive version (every content type, four transform shapes,
         // 250k pixels) is harness/pixel_cache/verify_cache.js.
         const fs = require('fs');
-        const imagePath = path.join(__dirname, '..', 'samples', 'images', 'skin.png');
+        const imagePath = path.join(__dirname, '..', 'bench', 'images', 'jacek-dylag-559115_STRAWBERRIES-unsplash.jpg');
         if (!fs.existsSync(imagePath)) return;
 
         let rgba, width, height;

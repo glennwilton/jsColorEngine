@@ -14,7 +14,7 @@
 
 **Don't trust our numbers — run them yourself.** Figures on this page are performance at the time of writing.
 
-[`samples/bench/`](../samples/bench/) is a fully self-contained, zero-
+[`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) is a fully self-contained, zero-
 upload, in-browser benchmark. Clone the repo, start a tiny local
 static server, open <http://localhost:8080/samples/bench/>, and the page runs every
 `lutMode` × every direction × the real lcms-wasm library right there
@@ -511,7 +511,7 @@ hear about it than keep quoting biased numbers.
   SIMD rows land where they do
 - [Deep dive / LUT modes](./deepdive/LutModes.md) — what each
   `lutMode` actually does inside
-- [`samples/bench/`](../samples/bench/) — the bench source; each
+- [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) — the bench source; each
   file's role is documented in its header comment
 - Other benches shipping in the repo:
   [`bench/mpx_summary.js`](../bench/mpx_summary.js) (Node headline

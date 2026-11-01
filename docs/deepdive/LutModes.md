@@ -19,7 +19,7 @@
 
 ---
 
-> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](../../samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
+> **Figures on this page are from the date in the status/header.** Performance at the time of writing — re-run on your machine: browser [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) (live: https://www.o2creative.co.nz/jscolorengine/samples/bench/) or Node `node bench/mpx_summary.js`. Methodology: [Bench.md](../Bench.md). Canonical tables: [BenchResults.md](../BenchResults.md).
 
 When the image hot-path is active (`buildLut: true, dataFormat: 'int8'`),
 the `lutMode` constructor option picks which inner-loop kernel runs. Five
@@ -154,7 +154,7 @@ does all that redundant rounding work every pixel.
 
 From `bench/mpx_summary.js` on Node 20 / V8 / x64 using the GRACoL2006 ICC
 profile. Expect absolute numbers to shift on other engines/machines — the
-[browser bench](../../samples/bench/) measures in-browser and reports live
+[browser bench](https://www.o2creative.co.nz/jscolorengine/samples/bench/) measures in-browser and reports live
 numbers with a copy-to-markdown export.
 
 ### Where the 10–15 % comes from in production
