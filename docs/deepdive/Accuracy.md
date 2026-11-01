@@ -41,12 +41,9 @@
     precision)
   - **CMYK ink**: 0.04 % ink (well below dot-gain measurement noise)
   - **2C spot**: 2.88e-4 fraction (noise floor)
-- **One structural divergence** — `* → ISOcoated_v2_grey1c_bas.ICC`
-  Perceptual without BPC shows ~17 LSB drift in the shadows. Localised
-  to the final `PCSXYZ → grayTRC` stage. Root cause is lcms's
-  perceptual A2B0 table for that profile hard-pinning shadows to paper
-  white below sRGB ~25; jsCE's linear extension is also a defensible
-  reading of the profile data.
+- **No structural divergence since the BPC rule was corrected.** The
+  ~17 LSB drift on `* → ISOcoated_v2_grey1c_bas.ICC` Perceptual was
+  jsCE forcing BPC on a v4 source; see Outliers §2.
 - **Two diagnostic tools** in
   [`bench/lcms_compat/`](../../bench/lcms_compat) cover the full
   triage surface:
@@ -391,7 +388,15 @@ orders; the f64 round-off is unavoidable.
 
 **Decision:** below visibility, document and move on.
 
-### 2. The grey-1c Perceptual case — fully diagnosed
+### 2. The grey-1c Perceptual case — diagnosed wrongly, kept as the record
+
+**Correction.** The analysis below is wrong about the cause.
+`ISOcoated_v2_grey1c_bas.ICC` has no A2B0 or any other LUT, only a `kTRC`, so
+lcms has no perceptual table to bake a lift into. The drift was jsCE forcing BPC
+because the SOURCE (`*sRGB`, `*Lab`) is v4, on a step whose destination is v2,
+where lcms does not force it. Enabling BPC "fixed" it because that gave lcms the
+same scaling. With BPC auto-enable keyed on the destination, both directions are
+under 0.02 LSB.
 
 | Direction | Files | Max | Mean | p99 | Tight threshold breaches | OOG |
 |---|---:|---:|---:|---:|---:|---:|
@@ -583,15 +588,12 @@ LUT-based B2A) where the divergence lives.
 | BPC on Absolute | OFF | OFF | spec-defined |
 | BPC on Devicelink | OFF | OFF | spec-defined |
 | BPC on V4 Perceptual | ON (forced) when the destination is v4 | ON (forced) when the destination is v4 | spec-defined |
-| BPC on RGB Matrix → Matrix | OFF | OFF (lcms 2.x) | spec-permissive, both engines agree |
+| BPC on RGB Matrix → Matrix | black from the TRCs | black from the TRCs | zero for most profiles, so usually no effect; a calibrated display's TRC may not start at 0 |
 | BPC on Duotone | OFF | OFF | spec-defined |
 | OOG output values | clamped to [0,1] | unclamped | jsCE: usability; lcms: low-level building block |
 | V4 Perceptual black point | spec PRMG | spec PRMG | spec-defined (both correct) |
-| Perceptual A2B0 table on 1c grey output | uses `kTRC` directly | uses A2B0 table | spec-permissive, engines diverge |
 
-The harness covers all of these. The only one that produces
-headline drift is the last — the grey-1c Perceptual case discussed
-above.
+The harness covers all of these. None produces headline drift.
 
 ## What the skipped files tell us
 

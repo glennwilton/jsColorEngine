@@ -117,7 +117,10 @@ class Loader {
 
         if (!profile.loadError) {
             try {
-                return await profile.load(this.profiles[index].url);
+                // load() returns before a URL fetch finishes; only the
+                // promise form can be awaited on every source.
+                await profile.loadPromise(this.profiles[index].url);
+                return profile.loaded;
             } catch (error) {
                 return false;
             }

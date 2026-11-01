@@ -19,6 +19,12 @@ jsCE an independent engine rather than an lcms port.
 
 ## Conclusion — jsColorEngine is a faithful float-precision peer of lcms
 
+> **Correction.** The grey-1c divergence described on this page was not lcms
+> behaviour. jsCE was forcing BPC because the source (`*sRGB`, `*Lab`) is v4,
+> on a step whose destination is v2, and that profile has no A2B0 table. With
+> BPC auto-enable keyed on the destination it is under 0.02 LSB. See
+> [Accuracy deepdive § Outliers](../../docs/deepdive/Accuracy.md#outliers--what-we-found).
+
 jsColorEngine's float pipeline matches Little CMS's float pipeline
 within visual-noise levels across the full 130-file ICC oracle
 suite. On Lab outputs the worst case is **0.06 ΔE76** — sixteen

@@ -23,9 +23,25 @@ kernels were not touched. Two of these change default output; see Changed.
 - `*AppleRGB` is gamma 1.8. It was 2.2, which did not match Apple RGB or
   `AppleRGB.icc` (L* 54 against 60.7 on mid grey).
 - Version 3 profiles load, read as version 2.
+- BPC on a matrix profile takes its black from the TRCs instead of assuming
+  RGB 0 is XYZ 0, and matrix to matrix transforms are no longer excluded. Only
+  profiles whose curves do not start at zero change, typically calibrated
+  displays. A v4 gray TRC profile does the same.
+- A truncated profile now fails to load, with `lastError` set. Up to three
+  bytes short is tolerated, for the last tag's pad bytes; bytes past the
+  declared size are ignored. A LUT tag of an unreadable type also fails the
+  load rather than converting everything to black.
 - The matrix-shaper kernel claims sampled and parametric TRCs. `sRGB2014.icc`
   and the classic sRGB `.icm` go from the ~10 MPx/s pipeline to ~310 MPx/s
   (one quick run, 1 MPx noise, within 1 LSB of the pipeline).
+
+### Added
+
+- `mAB` / `mBA` LUTs with a different grid size per axis (ICC.1:2022 10.12.3,
+  10.13.5), which failed or converted wrongly before. They run through the
+  generic per-axis stages on the accuracy path, tetrahedral for device input
+  and multilinear for Lab input, and `buildLut` bakes the usual fixed grid.
+  The image kernels are unchanged.
 
 ### Fixed
 
@@ -54,11 +70,18 @@ kernels were not touched. Two of these change default output; see Changed.
 - Decode errors escaped `loadBinary` as raw throws. They are now a failed load
   with `lastError` set, as is an RGB matrix profile with no `wtpt`.
 
-### Known
-
-- Non-uniform `mAB` / `mBA` CLUT grids are still treated as uniform.
-- DeviceLink `toJSON()` output is still refused by `fromJSON()`.
-- A truncated profile can still report `loaded: true`.
+- DeviceLink `toJSON()` output is accepted by `fromJSON()`, and baking a
+  DeviceLink LUT uses the link's output channel count, not its input's.
+- The quadratic black point fit returned 0 whenever its curve was flat
+  (`Math.min(0, Math.max(50, x))`), and treated a negative `a` as flat.
+- The compiled Duo stage wrote `a` twice and never `b`.
+- `Loader` lazy loading failed for any URL, because it awaited the callback
+  form of `load()`.
+- `Transform.reformat()` wrapped out-of-range values in `Uint16Array` and
+  `Uint8Array` instead of clamping.
+- `Spectral.toSpectral()` derived a negative step when `nmStep` was omitted.
+- 1-D LUTs ignored `lutGamutMode`.
+- `stage_curves_v4` returned four values for one or two curves.
 
 ---
 

@@ -283,7 +283,8 @@ class Profile {
 
     /**
      * Promise-flavoured wrapper around `load()`. Resolves with the
-     * `Profile` instance on success, rejects with an Error on failure.
+     * `Profile` instance once the load has finished, including a failed
+     * one, so check `.loaded` and `.lastError` afterwards.
      * Use this when you want `await profile.loadPromise(url)` rather
      * than callback wiring.
      *
@@ -914,6 +915,7 @@ class Profile {
         var acsp = [97, 99, 115, 112];
         var ascpPos = scan(data, start, acsp);
         if (ascpPos === -1) {
+            this.lastError = {err: 121, text: 'No ICC profile signature found'};
             return false;
         }
 
@@ -1120,6 +1122,51 @@ class Profile {
     };
 
     /**
+     * Refuse a profile that ends before its own header or tag table says it
+     * should. Without this a truncated file loads, and the tags past the cut
+     * decode from `undefined` bytes into a LUT of zeros.
+     *
+     * The ICC size field is exact, pad bytes included (ICC.1:2022 7.2.2), and
+     * the last tag may carry up to three of them. Writers disagree about
+     * counting those, so three bytes short is tolerated. Bytes PAST the
+     * declared size are not checked at all: hosts pad embedded profiles.
+     *
+     * @param {Uint8Array} binary
+     * @returns {boolean}
+     */
+    checkProfileExtent(binary) {
+        var padTolerance = 3;
+        var truncated = function(profile, detail) {
+            profile.lastError = {err: 130, text: 'Truncated profile: ' + detail};
+            return false;
+        };
+
+        if (binary.length < 132) {
+            return truncated(this, binary.length + ' bytes is smaller than a header and tag count');
+        }
+
+        var declaredSize = decode.uint32(binary, 0) >>> 0;
+        if (declaredSize > binary.length + padTolerance) {
+            return truncated(this, 'header declares ' + declaredSize + ' bytes, got ' + binary.length);
+        }
+
+        var tagCount = decode.uint32(binary, 128) >>> 0;
+        if (132 + tagCount * 12 > binary.length) {
+            return truncated(this, 'tag table of ' + tagCount + ' tags does not fit');
+        }
+
+        for (var i = 0; i < tagCount; i++) {
+            var entry = 132 + i * 12;
+            var tagEnd = (decode.uint32(binary, entry + 4) >>> 0) + (decode.uint32(binary, entry + 8) >>> 0);
+            if (tagEnd > binary.length + padTolerance) {
+                return truncated(this, 'tag ' + decode.chars(binary, entry, 4) + ' ends at ' + tagEnd
+                    + ', got ' + binary.length + ' bytes');
+            }
+        }
+        return true;
+    };
+
+    /**
      * Walk the ICC tag table and dispatch each tag signature to the
      * appropriate `decodeICC.js` reader, populating `this.rgb`,
      * `this.A2B`, `this.B2A`, `this.Gray`, `this.B2D`, `this.D2B`,
@@ -1143,6 +1190,10 @@ class Profile {
      * @returns {boolean}  true if the profile is structurally valid.
      */
     decodeFile(binary) {
+        if (!this.checkProfileExtent(binary)) {
+            return false;
+        }
+
         this.header = this.decodeHeader(binary);
         this.unsuportedTags = [];
         // Keep the corrected-name alias pointing at the fresh array so
@@ -1443,6 +1494,16 @@ class Profile {
         if (this.A2B[eIntent.saturation] === null) {
             this.A2B[eIntent.saturation] = this.A2B[eIntent.perceptual];
         } // No Saturation - use Perceptual
+
+        // decode.lut() returns a zero-filled sentinel for a type it cannot
+        // read, which would convert every colour to black.
+        var luts = this.A2B.concat(this.B2A);
+        for (i = 0; i < luts.length; i++) {
+            if (luts[i] && luts[i].invalid) {
+                this.lastError = {err: 132, text: 'Unreadable LUT tag: ' + luts[i].errorReason};
+                return false;
+            }
+        }
 
         if (!(this.header.pClass === 'prtr' ||
             this.header.pClass === 'mntr' ||

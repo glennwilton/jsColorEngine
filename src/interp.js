@@ -2744,6 +2744,60 @@
         }
 
         /**
+         * N-dimensional multilinear interpolation with a grid size per axis.
+         *
+         * Sibling of tetrahedralInterpND_NCh for LUTs indexed by Lab, where
+         * the fixed-grid path uses trilinear for the reason given in
+         * Kernel3D.floatFor. Only reached by a profile LUT whose axes differ
+         * in size. Reads the same LUT fields, and runs per colour on the
+         * pipeline walk, so it is written for clarity rather than speed.
+         *
+         * @param {number[]|TypedArray} input  n channels
+         * @param {object} lut
+         * @returns {number[]} new array of length lut.outputChannels
+         */
+        multilinearInterpND_NCh(input, lut) {
+            const dims    = lut.inputChannels;
+            const outCh   = lut.outputChannels;
+            const CLUT    = lut.CLUT;
+            const gPoints = lut.gridPoints;
+
+            const stride = new Array(dims);
+            stride[dims - 1] = outCh;
+            for (let d = dims - 2; d >= 0; d--) {
+                stride[d] = stride[d + 1] * gPoints[d + 1];
+            }
+
+            const idx = new Array(dims);
+            const fx  = new Array(dims);
+            for (let d = 0; d < dims; d++) {
+                const gm = gPoints[d] - 1;
+                const v  = Math.min(Math.max(input[d] * lut.inputScale, 0), 1) * gm;
+                const i0 = Math.floor(v);
+                idx[d] = (i0 >= gm) ? (gm > 0 ? gm - 1 : 0) : i0;
+                fx[d]  = v - idx[d];
+            }
+
+            const result = new Array(outCh);
+            for (let c = 0; c < outCh; c++) result[c] = 0;
+
+            const corners = 1 << dims;
+            for (let m = 0; m < corners; m++) {
+                let w = 1, off = 0;
+                for (let d = 0; d < dims; d++) {
+                    const up = (m >> d) & 1;
+                    w *= up ? fx[d] : (1 - fx[d]);
+                    off += (idx[d] + up) * stride[d];
+                }
+                if (w === 0) continue;
+                for (let c = 0; c < outCh; c++) result[c] += w * CLUT[off + c];
+            }
+
+            for (let c = 0; c < outCh; c++) result[c] *= lut.outputScale;
+            return result;
+        }
+
+        /**
          * N-dimensional Kuhn simplex interpolation. NOT THE DEFAULT.
          *
          * Sort the fractional coordinates, walk the n+1 corners of the simplex

@@ -221,7 +221,7 @@
         emit_js_stage_device_to_Duo(index, stage){
             return `return {\n` +
                 `a: (device[0] * 100),\n` +
-                `a: (device[1] * 100),\n` +
+                `b: (device[1] * 100),\n` +
                 `type: eColourType.Duo\n` +
                 `}\n`
         };
@@ -1529,8 +1529,10 @@
             var channels = curves.length;
             if(channels === 3){
                 output = [0.0, 0.0, 0.0];
-            } else {
+            } else if(channels === 4){
                 output = [0.0, 0.0, 0.0, 0.0];
+            } else {
+                output = new Array(channels);
             }
             for(var i=0; i < channels; i++){
                 var c = curves[i];

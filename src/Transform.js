@@ -1511,8 +1511,15 @@
         setLut(lut, opts){
             this.lut = lut;
 
-            if(!Array.isArray(lut.chain) || lut.chain.length < 3 || lut.chain.length % 2 === 0){
-                throw 'Invalid LUT - chain must be [profile, intent, profile, ...] with odd length >= 3';
+            // A DeviceLink bakes a single-profile chain. One entry is valid only
+            // for that class, and only with the channel counts it cannot
+            // recover from a descriptor.
+            var linkSlot = Array.isArray(lut.chain) && lut.chain.length === 1 ? lut.chain[0] : null;
+            var isDeviceLinkLut = !!(linkSlot && linkSlot.header && linkSlot.header.pClass === 'link'
+                && lut.inputChannels > 0 && lut.outputChannels > 0);
+
+            if(!isDeviceLinkLut && (!Array.isArray(lut.chain) || lut.chain.length < 3 || lut.chain.length % 2 === 0)){
+                throw 'Invalid LUT - chain must be [profile, intent, profile, ...] with odd length >= 3, or a single DeviceLink profile';
             }
 
             // Normalise chain to canonical format: [profileDescriptor, intentNumber, profileDescriptor, ...]
@@ -1592,6 +1599,15 @@
                 } else {
                     this.lutMode = 'float';
                 }
+            }
+
+            if(isDeviceLinkLut){
+                // A descriptor has no decoded channel counts, and the header
+                // PCS field is the output space, so take them from the LUT.
+                inputProfile.deviceLinkInputChannels = this.lut.inputChannels;
+                inputProfile.outputChannels = this.lut.outputChannels;
+                this.createMultiStage([inputProfile]);
+                return;
             }
 
             this.create(inputProfile, outputProfile, intent);
@@ -2074,7 +2090,10 @@
             this.inputProfile = profileChain[0];
             this.outputProfile = profileChain[chainEnd];
 
-            if(isDeviceLink){
+            var isDeviceLinkLut = this.lut !== false && profileChain.length === 1
+                && !!profileChain[0].header && profileChain[0].header.pClass === 'link';
+
+            if(isDeviceLink || isDeviceLinkLut){
                 // Input side = header space field (decoded to
                 // deviceLinkInputChannels); output side = header PCS field
                 // (decoded to outputChannels). See Profile.decodeFile.
@@ -2092,7 +2111,7 @@
             // to nothing, route to a copy path and skip the LUT entirely.
             // Never for DeviceLink — its 1-profile chain IS the transform.
             this.isIdentity = false;
-            if(this.detectIdentity && this.lut === false && !isDeviceLink){
+            if(this.detectIdentity && this.lut === false && !isDeviceLink && !isDeviceLinkLut){
                 this._collapseIdentityChain(profileChain);
                 if(profileChain.length <= 1){
                     this.isIdentity = true;
@@ -3388,6 +3407,11 @@
                     throw 'Create Lut Invalid output profile type ' + this.outputProfile.type;
             }
 
+            // A DeviceLink's type comes from its INPUT space.
+            if(this.outputProfile.header.pClass === 'link'){
+                outputChannels = this.outputChannels;
+            }
+
             switch(this.inputProfile.type){
                 case eProfileType.Gray:
                     inputChannels = 1;
@@ -3416,8 +3440,9 @@
                     // not up-res to lutGridPoints3D (33^5 is not a LUT).
                     inputChannels = this.getProfileChannels(this.inputProfile);
                     var a2b = this.inputProfile.A2B && (this.inputProfile.A2B[1] || this.inputProfile.A2B[0]);
+                    // The densest axis, so an X*Y*Z table keeps its detail.
                     var nGrid = (a2b && a2b.gridPoints && a2b.gridPoints[0])
-                        ? a2b.gridPoints[0]
+                        ? Math.max.apply(null, a2b.gridPoints)
                         : Profile.gridFor(inputChannels);
                     CLUT = this.createNDDeviceLUT(outputChannels, nGrid, inputChannels);
                     gridPoints = [];
@@ -3863,6 +3888,11 @@
                 if (hasIn) src = this._applyLutHooks(inHooks, src);
                 var device = this.transform(src);
                 if (hasOut) device = this._applyLutHooks(outHooks, device, src);
+
+                if(this.lutGamutMode !== 'none'){
+                    device = this.gamutCheck(src, device, outputChannels);
+                }
+
                 for(o = 0; o < outputChannels; o++){
                     CLUT[position++] = device[o];
                 }
@@ -4575,9 +4605,12 @@
 
             const factor = SCALE[toFormat] / SCALE[fromFormat];
             const rounding = (toFormat === 'int8' || toFormat === 'int16');
+            const maximum = SCALE[toFormat];
             for(let i = 0; i < input.length; i++){
                 const v = input[i] * factor;
-                out[i] = rounding ? Math.round(v) : v;
+                // Clamped here: Uint16Array and Uint8Array wrap, only
+                // Uint8ClampedArray saturates.
+                out[i] = rounding ? Math.min(maximum, Math.max(0, Math.round(v))) : v;
             }
             return out;
         }
@@ -5021,6 +5054,7 @@
                 'trilinearInterp4D',
                 'tetrahedralInterp4D',
                 'tetrahedralInterpND',
+                'multilinearInterpND',
             ]
 
             while (Opt === true){
@@ -6098,11 +6132,6 @@
 
             if(outputProfile.type === eProfileType.Duo ||  inputProfile.type === eProfileType.Duo){
                 // No BPC for Duotone
-                return;
-            }
-
-            if( inputProfile.type === eProfileType.RGBMatrix && outputProfile.type === eProfileType.RGBMatrix){
-                // No BPC RGB Matrix > RGB Matrix transforms
                 return;
             }
 
@@ -7657,6 +7686,23 @@
             // returning it from the kernel keeps the two from drifting apart.
             //
             // See docs/deepdive/KernelContract.md.
+            // X*Y*Z GRIDS. mAB and mBA may give each axis its own point count
+            // (ICC.1:2022 10.12.3, 10.13.5), still evenly spaced along it. The
+            // kernels assume N*N*N, and they are right to: every LUT they run
+            // is one we built. These go through the generic per-axis stages,
+            // which is the accuracy path, and createLut() walks that path to
+            // bake a fixed grid for the image kernels.
+            if(this.hasUnequalGridAxes(lut)){
+                var labIndexed = useTrilinearFor3ChInput && lut.inputChannels === 3
+                    && (inputEncoding === encoding.PCSv4 || inputEncoding === encoding.PCSv2);
+                var multilinear = labIndexed || (lut.inputChannels === 3 && this.interpolation3D === 'trilinear');
+                this.addStage(inputEncoding,
+                    multilinear ? 'multilinearInterpND' : 'tetrahedralInterpND',
+                    multilinear ? this.multilinearInterpND_NCh : this.tetrahedralInterpND_NCh,
+                    lut, outputEncoding, debugFormat);
+                return;
+            }
+
             var descriptor = Transform.kernels[lut.inputChannels];
             if(!descriptor || typeof descriptor.floatFor !== 'function'){
                 throw 'Unsupported number of input channels "' + lut.inputChannels + '"';
@@ -7678,6 +7724,20 @@
             });
 
             this.addStage(inputEncoding, bind.stageName, bind.funct, lut, outputEncoding, debugFormat);
+        };
+
+        /**
+         * @param {object} lut
+         * @returns {boolean} true if the grid is X*Y*Z rather than N*N*N
+         */
+        hasUnequalGridAxes(lut){
+            var grid = lut.gridPoints;
+            for(var axis = 1; grid && axis < grid.length; axis++){
+                if(grid[axis] !== grid[0]){
+                    return true;
+                }
+            }
+            return false;
         };
 
         /**
@@ -7756,7 +7816,7 @@
             }
 
             if(profile.type === eProfileType.RGBMatrix){
-                return XYZ0;
+                return this.detectMatrixBlackpoint(profile);
             }
 
             // v4 + perceptual & saturation intents have their own defined black point, and it is
@@ -7764,11 +7824,7 @@
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
                 if(this.isGreyTRCwithNOLUT(profile, intent)){
-                    return XYZ0;
-                }
-                if(profile.type === eProfileType.RGBMatrix){
-                    blackLab = this.RGBDevice_to_PCSv4_or_LabD50([0,0,0], profile, true);
-                    return this.Lab2XYZ(blackLab);
+                    return this.Lab2XYZ(this.findMaxColourantBlackpoint(profile, eIntent.relative));
                 }
 
                 // V4 perceptual black is predefined by the spec
@@ -7945,8 +8001,11 @@
                 b = res[1];
                 c = res[0];
 
-                if (a < 1.0E-10) {
-                    return Math.min(0, Math.max(50, -c/b ));
+                if (Math.abs(a) < 1.0E-10) {
+                    if (Math.abs(b) < 1.0E-10) {
+                        return 0;
+                    }
+                    return Math.max(0, Math.min(50, -c/b));
                 } else {
                     d = b * b - 4.0 * a * c;
                     if (d <= 0) {
@@ -7983,7 +8042,7 @@
             }
 
             if(profile.type === eProfileType.RGBMatrix){
-                return XYZ0;
+                return this.detectMatrixBlackpoint(profile);
             }
 
             // v4 + perceptual & saturation intents does have its own black point, and it is
@@ -7991,10 +8050,7 @@
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
                 if(this.isGreyTRCwithNOLUT(profile, intent)){
-                    return XYZ0;
-                }
-                if(profile.type === eProfileType.RGBMatrix){
-                    return this.Lab2XYZ(this.RGBDevice_to_PCSv4_or_LabD50([0,0,0], profile, true));
+                    return this.Lab2XYZ(this.findMaxColourantBlackpoint(profile, eIntent.relative));
                 }
 
                 // V4 perceptual black is predefined by the spec
@@ -8011,6 +8067,26 @@
 
         };
 
+        /**
+         * Black point of a matrix profile. RGB 0 is XYZ 0 only if the curves
+         * say so, and a calibrated display's measured TRC usually does not
+         * start at zero.
+         *
+         * @param {Profile} profile
+         * @returns {_cmsXYZ}
+         */
+        detectMatrixBlackpoint(profile){
+            var rgb = profile.rgb;
+            if(!rgb.rTRC || !(rgb.rTRC.use || rgb.gTRC.use || rgb.bTRC.use)){
+                return this.XYZ(0,0,0);
+            }
+            var black = this.stage_curves_v4([0,0,0], [rgb.rTRC, rgb.gTRC, rgb.bTRC]);
+            if(black[0] === 0 && black[1] === 0 && black[2] === 0){
+                return this.XYZ(0,0,0);
+            }
+            return this.Lab2XYZ(this.findMaxColourantBlackpoint(profile, eIntent.relative));
+        };
+
         findMaxColourantBlackpoint(profile, intent){
             var deviceWhite,deviceBlack;
 
@@ -8025,6 +8101,7 @@
                     deviceBlack = convert.Duo(0,0);
                     break;
                 case eProfileType.RGBLut:
+                case eProfileType.RGBMatrix:
                     deviceWhite = convert.RGB(255,255,255);
                     deviceBlack = convert.RGB(0,0,0);
                     break;
@@ -8084,7 +8161,7 @@
             var transformDevice2Lab = new Transform({precision: 3, pixelCache: 0});
 
             // Disable auto BPC in these temp transforms
-            transformDevice2Lab._BPCAutoEnable = false;
+            transformLab2Device._BPCAutoEnable = false;
             transformDevice2Lab._BPCAutoEnable = false;
 
             //TODO change a multistep transform

@@ -385,7 +385,7 @@ class Spectral {
      * calculateXYZ() expects.
      *
      * If `nmStep` is omitted it is computed from the start/end and array
-     * length — but see the TODO below; pass it explicitly to be safe.
+     * length.
      *
      * Use this for spectrophotometer output. Common spectro grids:
      *   380 - 730 nm @ 10 nm  (36 values)  — i1 Pro classic / many older instruments
@@ -397,20 +397,15 @@ class Spectral {
      * k normaliser inside calculateXYZ scales the result so that a perfect
      * diffuser (R(λ) = 1 everywhere) returns Y = 100 under any illuminant.
      *
-     * TODO (bug): nmStep auto-derivation has a sign error — the formula
-     * should be `(endnm - startnm) / (data.length - 1)`, not the reverse.
-     * As written it returns a negative step. Workaround: always pass
-     * `nmStep` explicitly. Fix when next touching the file.
-     *
      * @param {number}   startnm  First wavelength sample, in nm.
      * @param {number}   endnm    Last  wavelength sample, in nm.
      * @param {number[]} data     Sample values at startnm, startnm+step, ...
-     * @param {number}  [nmStep]  Spacing in nm. Recommended.
+     * @param {number}  [nmStep]  Spacing in nm.
      * @returns {_SpectralData}
      */
     toSpectral = function (startnm, endnm, data, nmStep) {
         if (!nmStep) {
-            nmStep = (startnm - endnm) / (data.length - 1);
+            nmStep = (endnm - startnm) / (data.length - 1);
         }
         return {
             startnm: startnm,

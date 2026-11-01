@@ -493,3 +493,348 @@ describe('loading', () => {
         expect(profile.version).toBe(2);
     });
 });
+
+describe('truncated and padded files', () => {
+    const icc = () => readBytes(ADOBE);
+
+    test('short of the declared size fails, with a reason', () => {
+        const bytes = icc();
+        const profile = fromBytes(bytes.slice(0, bytes.length - 4));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/truncated/i);
+    });
+
+    test('up to three missing pad bytes are tolerated', () => {
+        const bytes = icc();
+        expect(fromBytes(bytes.slice(0, bytes.length - 3)).loaded).toBe(true);
+    });
+
+    test('zeros past the declared size are ignored', () => {
+        const bytes = icc();
+        const padded = new Uint8Array(bytes.length + 512);
+        padded.set(bytes);
+        expect(fromBytes(padded).loaded).toBe(true);
+    });
+
+    test('a tag ending past the data fails even if the size field agrees', () => {
+        const bytes = icc();
+        bytes.set([0x00, 0x10, 0x00, 0x00], 132 + 8); // first tag's length
+        const profile = fromBytes(bytes);
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/truncated/i);
+    });
+
+    test('a file smaller than a header fails', () => {
+        expect(fromBytes(icc().slice(0, 130)).loaded).toBe(false);
+    });
+
+    test('an unreadable LUT tag fails rather than converting to black', () => {
+        const unknown = [];
+        enc.chars(unknown, 'xxxx', 4);
+        enc.zeros(unknown, 60);
+        const bytes = enc.assemble({colorSpace: 'RGB ', profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+            ['A2B0', unknown], ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('bad')],
+            ['wtpt', enc.XYZType(enc.D50)],
+        ]);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const profile = fromBytes(bytes);
+        warn.mockRestore();
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/LUT/);
+    });
+});
+
+describe('DeviceLink LUT JSON', () => {
+    const rgbToCmykLink = () => {
+        const grid = 3;
+        const cells = [];
+        const ink = (index) => Math.min(65535, 32768 * (2 - index));
+        for(let r = 0; r < grid; r++){
+            for(let g = 0; g < grid; g++){
+                for(let b = 0; b < grid; b++){
+                    cells.push(ink(r), ink(g), ink(b), 0);
+                }
+            }
+        }
+        return fromBytes(enc.assemble({colorSpace: 'RGB ', profileClass: 'link', pcs: 'CMYK', intent: 0}, [
+            ['A2B0', enc.lut16Type({inputChannels: 3, outputChannels: 4, gridPoints: grid, CLUT: cells})],
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('link')],
+        ]));
+    };
+    const pixels = new Uint8Array([10, 20, 30, 200, 100, 50]);
+
+    test('a baked link keeps the output channel count', () => {
+        const link = rgbToCmykLink();
+        const baked = new Transform({dataFormat: 'int8', buildLut: true});
+        baked.create(link);
+        const walked = new Transform({dataFormat: 'int8', pixelCache: 0});
+        walked.create(link);
+        const bakedOut = baked.array(pixels, false, false);
+        const walkedOut = walked.array(pixels, false, false);
+        expect(bakedOut.length).toBe(8);
+        bakedOut.forEach((value, index) => {
+            expect(Math.abs(value - walkedOut[index])).toBeLessThanOrEqual(1);
+        });
+    });
+
+    test('toJSON output round trips through fromJSON', () => {
+        const baked = new Transform({dataFormat: 'int8', buildLut: true});
+        baked.create(rgbToCmykLink());
+        const restored = Transform.fromJSON(JSON.parse(JSON.stringify(baked.toJSON())), {dataFormat: 'int8'});
+        expect(Array.from(restored.array(pixels, false, false)))
+            .toEqual(Array.from(baked.array(pixels, false, false)));
+    });
+
+    test('a one-entry chain is refused unless it is a DeviceLink', () => {
+        const baked = new Transform({dataFormat: 'int8', buildLut: true});
+        baked.create(new Profile('*sRGB'), new Profile('*AdobeRGB'), eIntent.relative);
+        const json = JSON.parse(JSON.stringify(baked.toJSON()));
+        json.chain = [json.chain[0]];
+        let refusal = '';
+        try { Transform.fromJSON(json); } catch(error) { refusal = String(error); }
+        expect(refusal).toMatch(/DeviceLink/);
+    });
+});
+
+describe('matrix black point', () => {
+    const lifted = () => curvTable(gammaSamples(2.2).map((value) => Math.max(value, 2000)));
+
+    test('comes from the curves when they do not start at zero', () => {
+        const profile = fromBytes(matrixProfile(lifted(), lifted(), lifted()));
+        expect(new Transform({}).detectBlackpoint(profile, eIntent.relative).Y).toBeGreaterThan(0);
+    });
+
+    test('BPC runs between matrix profiles when a black differs', () => {
+        const transform = new Transform({dataFormat: 'object', BPC: true});
+        transform.create(fromBytes(matrixProfile(lifted(), lifted(), lifted())),
+            fromBytes(readBytes(ADOBE)), eIntent.relative);
+        expect(transform.usesBPC).toBe(true);
+    });
+
+    test('a curve starting at zero stays on the fast kernel under BPC', () => {
+        const curve = () => curvTable(gammaSamples(2.2));
+        const transform = new Transform({dataFormat: 'int8', BPC: true});
+        transform.create(fromBytes(matrixProfile(curve(), curve(), curve())),
+            fromBytes(readBytes(ADOBE)), eIntent.relative);
+        transform.array(new Uint8Array(30), false, false);
+        expect(transform.lastUsedKernel).toBe('matrix-shaper');
+    });
+});
+
+describe('small fixes', () => {
+    test('reformat clamps into containers that would wrap', () => {
+        expect(Array.from(Transform.reformat([1.2, -0.1, 0.5], 'device', 'int16'))).toEqual([65535, 0, 32768]);
+        expect(Array.from(Transform.reformat([1.2, -0.1], 'device', 'int8', new Uint8Array(2)))).toEqual([255, 0]);
+    });
+
+    test('toSpectral derives a positive step', () => {
+        const Spectral = require('../src/Spectral');
+        expect(new Spectral().toSpectral(380, 730, new Array(36).fill(1)).step).toBe(10);
+    });
+
+    test('stage_curves_v4 returns one value per curve', () => {
+        const passThrough = {curveFn: false, dataf: [], gamma: 1};
+        const transform = new Transform({});
+        expect(transform.stage_curves_v4([0.5], [passThrough]).length).toBe(1);
+        expect(transform.stage_curves_v4([0.5, 0.5], [passThrough, passThrough]).length).toBe(2);
+    });
+
+    test('a 1-D LUT honours lutGamutMode', () => {
+        const build = (lutGamutMode) => {
+            const transform = new Transform({dataFormat: 'int8', buildLut: true, lutGamutMode});
+            transform.create(fromBytes(Profile.createGrayICC({gamma: 2.2})), new Profile('*sRGB'), eIntent.relative);
+            return Array.from(transform.array(new Uint8Array([100]), false, false));
+        };
+        expect(build('map')).not.toEqual(build('none'));
+    });
+
+    test('the compiled Duo stage writes b', () => {
+        const source = new Transform({}).emit_js_stage_device_to_Duo(0, {});
+        expect(source).toMatch(/b: \(device\[1\]/);
+    });
+
+    test('Loader lazy load waits for a URL', async () => {
+        const http = require('http');
+        const { Loader } = require('../src/main');
+        const server = http.createServer((request, response) => {
+            setTimeout(() => { response.writeHead(200); response.end(readBytes(ADOBE)); }, 10);
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const loader = new Loader();
+            loader.add('http://127.0.0.1:' + server.address().port + '/profile.icc', 'adobe', false);
+            expect((await loader.get('adobe')).loaded).toBe(true);
+        } finally {
+            server.close();
+        }
+    });
+
+    test('Loader.loadAll counts a bad profile and carries on', async () => {
+        const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+        const loader = new (require('../src/main').Loader)();
+        loader.add('*NotAProfile', 'bad', true);
+        loader.add('*sRGB', 'good', true);
+        await loader.loadAll();
+        log.mockRestore();
+        expect(loader.loadCount).toBe(1);
+        expect(loader.errorCount).toBe(1);
+    });
+});
+
+describe('X*Y*Z CLUT grids', () => {
+    // A table linear in every channel: any correct interpolator returns the
+    // function itself, so the expected answer comes from the formula and from
+    // neither engine. An axis or stride error cannot land on the right value.
+    const toPcs = (x) => [
+        0.2 + 0.7 * x[0],
+        0.3 + 0.4 * x[1 % x.length],
+        0.25 + 0.5 * x[x.length - 1],
+    ];
+    const toDevice = (outputChannels) => (lab) => {
+        const device = [];
+        for(let c = 0; c < outputChannels; c++){
+            device.push(0.1 + 0.8 * lab[c % 3]);
+        }
+        return device;
+    };
+
+    function gridTag(signature, dims, outputChannels, fn) {
+        const inputChannels = dims.length;
+        const out = [];
+        enc.chars(out, signature, 4);
+        enc.zeros(out, 4);
+        enc.u8(out, inputChannels);
+        enc.u8(out, outputChannels);
+        enc.u16(out, 0);
+
+        const curveSet = (count) => {
+            const curves = [];
+            for(let c = 0; c < count; c++){ curves.push(...paraTag(0, [1.0])); }
+            return curves;
+        };
+        const bCurves = curveSet(signature === 'mAB ' ? outputChannels : inputChannels);
+        const aCurves = curveSet(signature === 'mAB ' ? inputChannels : outputChannels);
+        const bOffset = 32;
+        const aOffset = bOffset + bCurves.length;
+        enc.u32(out, bOffset); enc.u32(out, 0); enc.u32(out, 0);
+        enc.u32(out, aOffset + aCurves.length); enc.u32(out, aOffset);
+        out.push(...bCurves, ...aCurves);
+
+        for(let axis = 0; axis < 16; axis++){ out.push(dims[axis] || 0); }
+        enc.u8(out, 2);
+        enc.zeros(out, 3);
+
+        const index = new Array(inputChannels).fill(0);
+        const walk = (axis) => {
+            if(axis === inputChannels){
+                fn(index.map((value, d) => value / (dims[d] - 1)))
+                    .forEach((value) => enc.u16(out, Math.round(value * 65535)));
+                return;
+            }
+            for(let i = 0; i < dims[axis]; i++){
+                index[axis] = i;
+                walk(axis + 1);
+            }
+        };
+        walk(0);
+        enc.pad4(out);
+        return out;
+    }
+
+    function gridProfile(space, inputDims, outputDims) {
+        const a2b = gridTag('mAB ', inputDims, 3, toPcs);
+        const b2a = gridTag('mBA ', outputDims, inputDims.length, toDevice(inputDims.length));
+        return fromBytes(asV4(enc.assemble({colorSpace: space, profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+            ['A2B0', a2b], ['A2B1', a2b], ['B2A0', b2a], ['B2A1', b2a],
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('xyz grid')],
+            ['wtpt', enc.XYZType(enc.D50)],
+        ])));
+    }
+
+    const expectLab = (result, device) => {
+        const pcs = toPcs(device);
+        expect(result.L).toBeCloseTo(pcs[0] * 100, 2);
+        expect(result.a).toBeCloseTo(pcs[1] * 255 - 128, 2);
+        expect(result.b).toBeCloseTo(pcs[2] * 255 - 128, 2);
+    };
+
+    test.each([
+        ['RGB ', [5, 9, 17], [0.13, 0.62, 0.81]],
+        ['RGB ', [17, 9, 5], [0.77, 0.41, 0.29]],
+        ['CMYK', [5, 9, 7, 11], [0.13, 0.62, 0.81, 0.37]],
+    ])('%s %j device to Lab', (space, dims, device) => {
+        const transform = new Transform({dataFormat: 'device', pixelCache: 0});
+        transform.create(gridProfile(space, dims, [5, 9, 17]), new Profile('*Lab'), eIntent.relative);
+        expect(transform.getStageNames()).toMatch(/tetrahedralInterpND/);
+        const encoded = transform.transform(device);
+        expectLab({L: encoded[0] * 100, a: encoded[1] * 255 - 128, b: encoded[2] * 255 - 128}, device);
+    });
+
+    test('2-channel input takes the same route', () => {
+        const device = [0.3, 0.7];
+        const transform = new Transform({dataFormat: 'device', pixelCache: 0});
+        transform.create(gridProfile('2CLR', [5, 9], [5, 9, 17]), new Profile('*Lab'), eIntent.relative);
+        const encoded = transform.transform(device);
+        expectLab({L: encoded[0] * 100, a: encoded[1] * 255 - 128, b: encoded[2] * 255 - 128}, device);
+    });
+
+    test('Lab input is multilinear, as the fixed-grid path is', () => {
+        const transform = new Transform({dataFormat: 'device', pixelCache: 0});
+        transform.create(new Profile('*Lab'), gridProfile('RGB ', [5, 5, 5], [5, 9, 17]), eIntent.relative);
+        expect(transform.getStageNames()).toMatch(/multilinearInterpND/);
+        const lab = [0.42, 0.58, 0.47];
+        const expected = toDevice(3)(lab);
+        transform.transform(lab).forEach((value, channel) => {
+            expect(value).toBeCloseTo(expected[channel], 4);
+        });
+    });
+
+    test('integer pixels go through the walk with the right scales', () => {
+        const device = [64, 128, 200];
+        const transform = new Transform({dataFormat: 'int16', pixelCache: 0});
+        transform.create(gridProfile('RGB ', [5, 9, 17], [9, 17, 5]), new Profile('*Lab'), eIntent.relative);
+        const encoded = transform.transform(device.map((value) => value * 257));
+        const pcs = toPcs(device.map((value) => value / 255));
+        Array.from(encoded).slice(0, 3).forEach((value, channel) => {
+            expect(Math.abs(value / 65535 - pcs[channel])).toBeLessThan(0.001);
+        });
+    });
+
+    test('a baked LUT lands on the fixed grid and the image kernels', () => {
+        const profile = gridProfile('RGB ', [5, 9, 17], [9, 17, 5]);
+        const baked = new Transform({dataFormat: 'int8', buildLut: true});
+        baked.create(profile, new Profile('*AdobeRGB'), eIntent.relative);
+        expect(new Set(baked.lut.gridPoints).size).toBe(1);
+
+        const walked = new Transform({dataFormat: 'int8', pixelCache: 0});
+        walked.create(profile, new Profile('*AdobeRGB'), eIntent.relative);
+
+        const pixels = new Uint8Array(300);
+        for(let i = 0; i < pixels.length; i++){ pixels[i] = (i * 2654435761) >>> 24; }
+        const bakedOut = baked.array(pixels, false, false);
+        expect(baked.lastUsedKernel).toBe('kernel3D');
+        const walkedOut = walked.array(pixels, false, false);
+        for(let i = 0; i < bakedOut.length; i++){
+            expect(Math.abs(bakedOut[i] - walkedOut[i])).toBeLessThanOrEqual(3);
+        }
+    });
+
+    test('an N*N*N LUT keeps its kernel', () => {
+        const transform = new Transform({dataFormat: 'device', pixelCache: 0});
+        transform.create(gridProfile('RGB ', [9, 9, 9], [9, 9, 9]), new Profile('*Lab'), eIntent.relative);
+        expect(transform.getStageNames()).not.toMatch(/InterpND/);
+    });
+
+    test('a 5-channel bake uses the densest axis', () => {
+        const dims = [3, 2, 2, 2, 5];
+        const a2b = gridTag('mAB ', dims, 3, toPcs);
+        const bytes = asV4(enc.assemble({colorSpace: '5CLR', profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+            ['A2B0', a2b], ['A2B1', a2b],
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('5clr')],
+            ['wtpt', enc.XYZType(enc.D50)],
+        ]));
+        const baked = new Transform({dataFormat: 'int8', buildLut: true});
+        baked.create(fromBytes(bytes), new Profile('*sRGB'), eIntent.relative);
+        expect(baked.lut.gridPoints).toEqual([5, 5, 5, 5, 5]);
+    });
+});
