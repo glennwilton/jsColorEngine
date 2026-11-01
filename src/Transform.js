@@ -4282,7 +4282,7 @@
                 // why the file is named.
                 this.lastUsedKernel = 'cache';
                 return this._transformArrayCached(inputArray, inputHasAlpha, outputHasAlpha,
-                    preserveAlpha, pixelCount);
+                    preserveAlpha, pixelCount, outputArray);
             }
 
             var pipeline = this.pipeline;
@@ -4899,15 +4899,12 @@
                             switch (step.intent) {
                                 case eIntent.saturation:
                                 case eIntent.perceptual:
-                                    //BPC applies always on V4 perceptual and saturation intents
-                                    if (step.inputProfile.version === 4 || step.outputProfile.version === 4) {
+                                    //BPC applies always on V4 perceptual and saturation intents.
+                                    //Keyed on the destination of this step, as lcms keys it.
+                                    if (step.outputProfile.version === 4) {
                                         useBPC = true;
                                     }
 
-                                    //If gray TRC profile force BPC on to replicate LCMS Behavor
-                                    if (this.isGreyTRCwithNOLUT(step.inputProfile, step.intent)) {
-                                        useBPC = true;
-                                    }
 
                                     break;
                                 case eIntent.absolute:
@@ -5034,6 +5031,10 @@
 
                     // Stage Nulls are used to keep track of the input and output encoding
                     // so we need to update the input and output encoding of the next stage
+                    if(stage0 === false){
+                        stage2.inputEncoding = stage1.inputEncoding;
+                        return [stage2];
+                    }
                     stage0.outputEncoding = stage2.inputEncoding;
                     stage0.stageName += ' >> ALIAS ' + encodingStr[stage2.inputEncoding];
                     stage0.optimised = true;
@@ -5197,7 +5198,10 @@
                     var interpND = interp3DList[i];
                     // Simplify Int to LUT, we can use the LUT's inputscale directly instead of converting to device
                     var _foldIntIn = function(stage1,stage2){
-                        var lut = stage2.stageData;
+                        // this.lut is ours and the kernels read these scales
+                        // off it. Anything else belongs to a Profile, which
+                        // later Transforms will share, so it gets a copy.
+                        var lut = (stage2.stageData === _this.lut) ? stage2.stageData : Object.assign({}, stage2.stageData);
                         var intValue = stage1.stageData; // 255 or 65535
                         lut.inputScale = 1 / intValue;
                         return [_this.createStage(
@@ -5216,7 +5220,8 @@
                     // We can use the LUT's output directly instead of
                     // This only saves a few multiplications and if statements, so not much of a saving
                     Opt |= this.optimiseFindPattern(interpND, 'stage_device_to_int', function(stage1,stage2){
-                        var lut = stage1.stageData;
+                        // Same ownership rule as _foldIntIn.
+                        var lut = (stage1.stageData === _this.lut) ? stage1.stageData : Object.assign({}, stage1.stageData);
                         var intValue = stage2.stageData; // 255 or 65535
 
                         lut.outputScale = lut.outputScale * intValue;
@@ -5290,7 +5295,7 @@
         optimiseFindPattern(stageName1, StageName2, replaceFunction){
             for(var i = 0; i < this.pipeline.length - 1; i++){
                 if(this.pipeline[i].stageName === stageName1 && (this.pipeline[i+1].stageName === StageName2 || StageName2 === false)  ){
-                    var previous = (i > 1) ? this.pipeline[i-1] : false;
+                    var previous = (i > 0) ? this.pipeline[i-1] : false;
                     var next = this.pipeline[i+1];
 
                     var stageA = this.pipeline[i];
@@ -6070,8 +6075,8 @@
                         'stage_ChromaticAdaptation',
                         this.stage_chromaticAdaptation,
                         {
-                            inputWhitePoint: inputProfile.mediaWhitePoint,
-                            outputWhitePoint: outputProfile.mediaWhitePoint,
+                            inWhitePoint: inputProfile.mediaWhitePoint,
+                            outWhitePoint: outputProfile.mediaWhitePoint,
                         },
                         encoding.PCSXYZ,
                         '  [ChromaticAdaptation : {name}]|({last}) > ({data})'
@@ -6387,7 +6392,8 @@
                 // We need to scale the input so the resulting conversion is in PCSXYZ scaling
                 var inputMatrix_PCSXYZ = convert.matrixScaleValues(inputMatrix, 1/1.999969482421875);
 
-                if(inputProfile.rgb.rTRC && inputProfile.rgb.rTRC.use ){
+                if(inputProfile.rgb.rTRC && (inputProfile.rgb.rTRC.use || inputProfile.rgb.gTRC.use || inputProfile.rgb.bTRC.use
+                    || inputProfile.rgb.rTRC.gamma !== inputProfile.rgb.gTRC.gamma || inputProfile.rgb.rTRC.gamma !== inputProfile.rgb.bTRC.gamma)){
                     // Use curves provided
                     this.addStage(
                         encoding.device,
@@ -6484,7 +6490,7 @@
             if(inputProfile.pcs === 'XYZ'){
                 pcsInfo.pcsEncoding =  encoding.PCSXYZ;
             } else {
-                pcsInfo.pcsEncoding = (inputProfile.PCSDecode === 2) ? encoding.PCSv2 : encoding.PCSv4;
+                pcsInfo.pcsEncoding = (inputProfile.PCSDecode === 2 && lut.precision !== 8) ? encoding.PCSv2 : encoding.PCSv4;
             }
 
             switch(lut.inputChannels){
@@ -6557,7 +6563,7 @@
             }
 
             // CLUT
-            if(lut.CLUT4 !== false) {
+            if(lut.CLUT !== false) {
                 switch (lut.inputChannels) {
                     case 1:
                     case 2:
@@ -6576,6 +6582,10 @@
                         );
                         break;
                 }
+            } else {
+                // No CLUT to move the encoding from device to PCS, and the
+                // curve stages below may all be pass-through.
+                this.addStage(encoding.device, 'stage_null', this.stage_null, null, pcsInfo.pcsEncoding, '  [V4_Device_to_PCSv4 : no CLUT]');
             }
 
             //M Curves
@@ -6753,7 +6763,8 @@
                     true
                 )
 
-                if(outputProfile.rgb.rTRCInv && outputProfile.rgb.rTRCInv.use){
+                if(outputProfile.rgb.rTRCInv && (outputProfile.rgb.rTRCInv.use || outputProfile.rgb.gTRCInv.use || outputProfile.rgb.bTRCInv.use
+                    || outputProfile.rgb.rTRCInv.gamma !== outputProfile.rgb.gTRCInv.gamma || outputProfile.rgb.rTRCInv.gamma !== outputProfile.rgb.bTRCInv.gamma)){
                     // Use curves provided might also be parametric fn
                     this.addStage(
                         encoding.device,
@@ -6854,7 +6865,7 @@
             }
 
             // CLUT - PCS is always 3 channel input
-            if(lut.CLUT4 !== false) {
+            if(lut.CLUT !== false) {
                 this.addStageLUT(
                     true,
                     pcsInfo.pcsEncoding,
@@ -6863,6 +6874,7 @@
                     '  [PCSv4_to_Device_via_V4LUT : LUT : {name}]|({last}) > ({data})'
                 );
             } else {
+                this.addStage(pcsInfo.pcsEncoding, 'stage_null', this.stage_null, null, encoding.device, '  [PCSv4_to_Device_via_V4LUT : no CLUT]');
                 pcsInfo.pcsEncoding = encoding.device;
             }
 
@@ -6989,6 +7001,10 @@
                 // if Absolute Colorimetric then apply Adaptation
                 this.createPipeline_Absolute_Adaptation_Output_Any_to_PCSv4(pcsInfo, outputProfile, intent);
 
+                // After BPC the PCS is XYZ, which this stage must not read as L.
+                if(pcsInfo.pcsEncoding === encoding.PCSXYZ){
+                    this.pipeline_Convert_PCS_to(pcsInfo, encoding.PCSv4);
+                }
                 // PCSv2 and PCSv4 L is close enough not to warrant a conversion
                 this.addStage(
                     pcsInfo.pcsEncoding,
@@ -7747,6 +7763,9 @@
             // well specified enough to use it. Black point tag is deprecated in V4.
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
+                if(this.isGreyTRCwithNOLUT(profile, intent)){
+                    return XYZ0;
+                }
                 if(profile.type === eProfileType.RGBMatrix){
                     blackLab = this.RGBDevice_to_PCSv4_or_LabD50([0,0,0], profile, true);
                     return this.Lab2XYZ(blackLab);
@@ -7971,6 +7990,9 @@
             // well specified enough to use it. Black point tag is deprecated in V4.
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
+                if(this.isGreyTRCwithNOLUT(profile, intent)){
+                    return XYZ0;
+                }
                 if(profile.type === eProfileType.RGBMatrix){
                     return this.Lab2XYZ(this.RGBDevice_to_PCSv4_or_LabD50([0,0,0], profile, true));
                 }
@@ -8012,6 +8034,8 @@
                     break;
                 case eProfileType.Lab:
                     throw new Error('Lab profiles not supported by Black Point Compensation');
+                case eProfileType.NChannel:
+                    return this.Lab(0, 0, 0);
                 default:
                     throw new Error( profile.type + ' not supported by Black Point Compensation');
             }

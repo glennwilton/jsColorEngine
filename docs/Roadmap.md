@@ -1948,10 +1948,12 @@ caused entirely by random access into the 64 KB output table. SIMD moves 4%
 (346 vs 333) because twelve independent gathers hide the latency.
 
 **But no profile in the testbed trips it.** Probing every RGB profile in
-`testbed/profiles/rgb/`, the guard fired zero times. Three declined for an
-unrelated and already-documented reason — `sRGB2014.icc`, `sRGB Color Space
-Profile.icm` and `sRGB_v4_ICC_preference.icc` are LUT-BASED profiles, so the
-pipeline is not a matrix shaper at all. The remaining five were all claimed.
+`testbed/profiles/rgb/`, the guard fired zero times. Only
+`sRGB_v4_ICC_preference.icc` declines, because it is a LUT-BASED profile and
+the pipeline is not a matrix shaper at all. `sRGB2014.icc` and `sRGB Color
+Space Profile.icm` are matrix profiles with 1024-point TRC tables; the kernel
+used to decline them too, for carrying their curves in `stage_curves_v4`, and
+claims them since that was fixed. The other five were always claimed.
 
 So this is coverage insurance, not a measured win. The workload that would
 justify it is a **calibrated display profile**, where distinct R/G/B curves are

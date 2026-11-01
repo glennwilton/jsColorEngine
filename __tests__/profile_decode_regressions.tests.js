@@ -1,0 +1,495 @@
+/**
+ * Profile shapes the shipped fixtures do not reach. Every one of these passed
+ * validation silently, or crashed, until a sweep against Little CMS over the
+ * full testbed found them: the two profiles this repo ships are both mft2 v2
+ * with all three intents present, so they cannot exercise any of this.
+ *
+ * Fixtures are written here with src/encodeICC.js so nothing depends on the
+ * gitignored testbed.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { Transform, eIntent, convert } = require('../src/main');
+const Profile = require('../src/Profile');
+const decode = require('../src/decodeICC');
+const enc = require('../src/encodeICC');
+
+const GRACOL = path.join(__dirname, 'GRACoL2006_Coated1v2.icc');
+const ADOBE = path.join(__dirname, 'AdobeRGB1998.icc');
+const NCHANNEL = path.join(__dirname, 'profiles', 'synthetic_06ch.icc');
+
+const SRGB_D50 = {
+    r: {X: 0.4360747, Y: 0.2225045, Z: 0.0139322},
+    g: {X: 0.3850649, Y: 0.7168786, Z: 0.0971045},
+    b: {X: 0.1430804, Y: 0.0606169, Z: 0.7141733},
+};
+const SRGB_PARAMS = [2.4, 1 / 1.055, 0.055 / 1.055, 1 / 12.92, 0.04045];
+
+function fromBytes(bytes) {
+    const profile = new Profile();
+    profile.loadBinary(new Uint8Array(bytes), () => {});
+    return profile;
+}
+
+function readBytes(file) {
+    return new Uint8Array(fs.readFileSync(file));
+}
+
+function paraTag(functionType, params) {
+    const out = [];
+    enc.chars(out, 'para', 4);
+    enc.zeros(out, 4);
+    enc.u16(out, functionType);
+    enc.u16(out, 0);
+    params.forEach((value) => enc.s15Fixed16(out, value));
+    return out;
+}
+
+function curvGamma(gamma) {
+    const out = [];
+    enc.chars(out, 'curv', 4);
+    enc.zeros(out, 4);
+    enc.u32(out, 1);
+    enc.u8Fixed8(out, gamma);
+    return out;
+}
+
+function curvTable(samples) {
+    const out = [];
+    enc.chars(out, 'curv', 4);
+    enc.zeros(out, 4);
+    enc.u32(out, samples.length);
+    samples.forEach((value) => enc.u16(out, value));
+    enc.pad4(out);
+    return out;
+}
+
+function gammaSamples(gamma) {
+    return Array.from({length: 1024}, (_, index) => Math.round(Math.pow(index / 1023, gamma) * 65535));
+}
+
+function asV4(bytes) {
+    bytes[8] = 4;
+    bytes[9] = 0x20;
+    return bytes;
+}
+
+function matrixProfile(redCurve, greenCurve, blueCurve, withWhitePoint) {
+    const tags = [
+        ['bTRC', blueCurve], ['bXYZ', enc.XYZType(SRGB_D50.b)],
+        ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('test')],
+        ['gTRC', greenCurve], ['gXYZ', enc.XYZType(SRGB_D50.g)],
+        ['rTRC', redCurve], ['rXYZ', enc.XYZType(SRGB_D50.r)],
+    ];
+    if(withWhitePoint !== false){
+        tags.push(['wtpt', enc.XYZType(enc.D50)]);
+    }
+    return enc.assemble({colorSpace: 'RGB ', profileClass: 'mntr', pcs: 'XYZ ', intent: 0}, tags);
+}
+
+function identityGammaCurves(){
+    const curves = [];
+    for(let channel = 0; channel < 3; channel++){
+        curves.push(...paraTag(0, [1.0]));
+    }
+    return curves;
+}
+
+/** lutAToB / lutBToA with passThrough curves around an optional u16 CLUT. */
+function v4LutTag(signature, gridPerAxis, cells) {
+    const out = [];
+    enc.chars(out, signature, 4);
+    enc.zeros(out, 4);
+    enc.u8(out, 3);
+    enc.u8(out, 3);
+    enc.u16(out, 0);
+
+    const curves = identityGammaCurves();
+    const bOffset = 32;
+    if(!cells){
+        enc.u32(out, bOffset); enc.u32(out, 0); enc.u32(out, 0); enc.u32(out, 0); enc.u32(out, 0);
+        out.push(...curves);
+        return out;
+    }
+    const aOffset = bOffset + curves.length;
+    const clutOffset = aOffset + curves.length;
+    enc.u32(out, bOffset); enc.u32(out, 0); enc.u32(out, 0); enc.u32(out, clutOffset); enc.u32(out, aOffset);
+    out.push(...curves, ...curves);
+    for(let axis = 0; axis < 16; axis++){
+        out.push(axis < 3 ? gridPerAxis : 0);
+    }
+    enc.u8(out, 2);
+    enc.zeros(out, 3);
+    cells.forEach((value) => enc.u16(out, value));
+    enc.pad4(out);
+    return out;
+}
+
+/** RGB <-> Lab v4 LUT profile with curves the pipeline drops as passThrough. */
+function v4LutProfile() {
+    const grid = 5;
+    const toLab = [];
+    const toDevice = [];
+    for(let r = 0; r < grid; r++){
+        for(let g = 0; g < grid; g++){
+            for(let b = 0; b < grid; b++){
+                toLab.push(Math.round((r + g + b) / (3 * (grid - 1)) * 65535), 32896, 32896);
+                const level = Math.round(r / (grid - 1) * 65535);
+                toDevice.push(level, level, level);
+            }
+        }
+    }
+    const a2b = v4LutTag('mAB ', grid, toLab);
+    const b2a = v4LutTag('mBA ', grid, toDevice);
+    return asV4(enc.assemble({colorSpace: 'RGB ', profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+        ['A2B0', a2b], ['A2B1', a2b], ['B2A0', b2a], ['B2A1', b2a],
+        ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('v4 lut')],
+        ['wtpt', enc.XYZType(enc.D50)],
+    ]));
+}
+
+function mft1Tag(inputChannels, outputChannels, grid, cells) {
+    const out = [];
+    enc.chars(out, 'mft1', 4);
+    enc.zeros(out, 4);
+    enc.u8(out, inputChannels);
+    enc.u8(out, outputChannels);
+    enc.u8(out, grid);
+    enc.u8(out, 0);
+    [1, 0, 0, 0, 1, 0, 0, 0, 1].forEach((value) => enc.s15Fixed16(out, value));
+    for(let channel = 0; channel < inputChannels; channel++){
+        for(let entry = 0; entry < 256; entry++){ out.push(entry); }
+    }
+    cells.forEach((value) => out.push(value));
+    for(let channel = 0; channel < outputChannels; channel++){
+        for(let entry = 0; entry < 256; entry++){ out.push(entry); }
+    }
+    return out;
+}
+
+function mft1Profile() {
+    const grid = 5;
+    const toLab = [];
+    const toDevice = [];
+    for(let r = 0; r < grid; r++){
+        for(let g = 0; g < grid; g++){
+            for(let b = 0; b < grid; b++){
+                toLab.push(Math.round((r + g + b) / (3 * (grid - 1)) * 255), 128, 128);
+                const level = Math.round(r / (grid - 1) * 255);
+                toDevice.push(level, level, level);
+            }
+        }
+    }
+    const a2b = mft1Tag(3, 3, grid, toLab);
+    const b2a = mft1Tag(3, 3, grid, toDevice);
+    return enc.assemble({colorSpace: 'RGB ', profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+        ['A2B0', a2b], ['A2B1', a2b], ['A2B2', a2b], ['B2A0', b2a], ['B2A1', b2a], ['B2A2', b2a],
+        ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('mft1')],
+        ['wtpt', enc.XYZType(enc.D50)],
+    ]);
+}
+
+function renameTags(bytes, renames) {
+    const out = new Uint8Array(bytes);
+    const tagCount = (out[128] << 24) | (out[129] << 16) | (out[130] << 8) | out[131];
+    for(let tag = 0; tag < tagCount; tag++){
+        const at = 132 + tag * 12;
+        const signature = String.fromCharCode(out[at], out[at + 1], out[at + 2], out[at + 3]);
+        if(renames[signature]){
+            for(let c = 0; c < 4; c++){ out[at + c] = renames[signature].charCodeAt(c); }
+        }
+    }
+    return out;
+}
+
+describe('curve decoding', () => {
+    test('parametric type 2 is (aX+b)^g + c, forward and inverse', () => {
+        const tag = new Uint8Array(paraTag(2, [2.2, 1, 0, 0.1]));
+        const forward = decode.curve(tag, 0);
+        const inverse = decode.curve(tag, 0, true);
+        const expected = Math.pow(0.5, 2.2) + 0.1;
+        expect(forward.curveFn(forward.params, 0.5)).toBeCloseTo(expected, 4);
+        expect(inverse.curveFn(inverse.params, expected)).toBeCloseTo(0.5, 4);
+    });
+
+    test('a 2-point curve inverts to its own ramp', () => {
+        const inverse = decode.curve(new Uint8Array(curvTable([0, 65535])), 0, true);
+        expect(inverse.passThrough).toBe(true);
+        expect(inverse.dataf[2048]).toBeCloseTo(2048 / 4095, 6);
+        expect(Number.isNaN(inverse.gamma)).toBe(false);
+    });
+
+    test('inversion reaches the last segment of the curve', () => {
+        const inverse = decode.curve(new Uint8Array(curvTable([0, 20000, 65535])), 0, true);
+        const y = 0.8;
+        const start = 20000 / 65535;
+        expect(inverse.dataf[Math.round(y * 4095)])
+            .toBeCloseTo(0.5 + 0.5 * ((y - start) / (1 - start)), 3);
+    });
+});
+
+describe('LUT tags', () => {
+    test('building a Transform leaves the Profile LUT alone', () => {
+        const profile = fromBytes(v4LutProfile());
+        const lab = new Profile('*Lab');
+        const before = [profile.A2B[1].inputScale, profile.A2B[1].outputScale,
+                        profile.B2A[1].inputScale, profile.B2A[1].outputScale];
+
+        const run = () => {
+            const transform = new Transform({dataFormat: 'int8', pixelCache: 0});
+            transform.create(lab, profile, eIntent.relative);
+            return Array.from(transform.transform(convert.Lab(50, 0, 0)));
+        };
+        const first = run();
+        expect(run()).toEqual(first);
+
+        const toLab = new Transform({dataFormat: 'int8', pixelCache: 0});
+        toLab.create(profile, lab, eIntent.relative);
+
+        expect([profile.A2B[1].inputScale, profile.A2B[1].outputScale,
+                profile.B2A[1].inputScale, profile.B2A[1].outputScale]).toEqual(before);
+
+        const afterwards = new Transform({dataFormat: 'object'});
+        afterwards.create(lab, profile, eIntent.relative);
+        expect(afterwards.transform(convert.Lab(50, 0, 0)).R).toBeLessThanOrEqual(255);
+    });
+
+    test.each([
+        ['relative', eIntent.relative],
+        ['absolute', eIntent.absolute],
+        ['perceptual', eIntent.perceptual],
+        ['saturation', eIntent.saturation],
+    ])('tag 0 alone serves %s', (name, intent) => {
+        const profile = fromBytes(renameTags(readBytes(GRACOL),
+            {A2B1: 'xxx1', A2B2: 'xxx2', B2A1: 'yyy1', B2A2: 'yyy2'}));
+        const lab = new Profile('*Lab');
+
+        const forward = new Transform({dataFormat: 'object'});
+        forward.create(profile, lab, intent);
+        expect(Number.isFinite(forward.transform(convert.CMYK(0, 100, 0, 0)).L)).toBe(true);
+
+        const backward = new Transform({dataFormat: 'object'});
+        backward.create(lab, profile, intent);
+        expect(Number.isFinite(backward.transform(convert.Lab(50, 20, 20)).C)).toBe(true);
+    });
+
+    test('mAB and mBA with no CLUT run their curves', () => {
+        const a2b = v4LutTag('mAB ');
+        const b2a = v4LutTag('mBA ');
+        const profile = fromBytes(asV4(enc.assemble(
+            {colorSpace: 'RGB ', profileClass: 'mntr', pcs: 'XYZ ', intent: 0}, [
+                ['A2B0', a2b], ['A2B1', a2b], ['B2A0', b2a], ['B2A1', b2a],
+                ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('no clut')],
+                ['wtpt', enc.XYZType(enc.D50)],
+            ])));
+        const lab = new Profile('*Lab');
+
+        const forward = new Transform({dataFormat: 'object'});
+        forward.create(profile, lab, eIntent.relative);
+        expect(Number.isFinite(forward.transform(convert.RGB(128, 128, 128)).L)).toBe(true);
+
+        const backward = new Transform({dataFormat: 'object'});
+        backward.create(lab, profile, eIntent.relative);
+        expect(Number.isFinite(backward.transform(convert.Lab(50, 0, 0)).R)).toBe(true);
+    });
+
+    test('mft1 A2B uses the 8-bit Lab encoding, not the 16-bit v2 one', () => {
+        const transform = new Transform({dataFormat: 'object'});
+        transform.create(fromBytes(mft1Profile()), new Profile('*Lab'), eIntent.relative);
+        const white = transform.transform(convert.RGB(255, 255, 255));
+        expect(white.L).toBeCloseTo(100, 6);
+        expect(white.a).toBeCloseTo(0, 6);
+        expect(white.b).toBeCloseTo(0, 6);
+    });
+
+    test('a null stage at the head of the pipeline is folded, not thrown on', () => {
+        const transform = new Transform({dataFormat: 'device'});
+        transform.create(new Profile('*Lab'), fromBytes(mft1Profile()), eIntent.relative);
+        expect(transform.transform([0.5, 0.5, 0.5]).length).toBe(3);
+    });
+});
+
+describe('matrix profiles', () => {
+    const parametric = () => paraTag(3, SRGB_PARAMS);
+
+    test('parametric output TRCs clamp out of gamut colours', () => {
+        const target = fromBytes(asV4(matrixProfile(parametric(), parametric(), parametric())));
+        const transform = new Transform({dataFormat: 'object'});
+        transform.create(new Profile('*ProPhotoRGB'), target, eIntent.relative);
+        const green = transform.transform(convert.RGB(0, 255, 0));
+        expect([green.R, green.G, green.B]).toEqual([0, 255, 0]);
+    });
+
+    test('a pure power parametric TRC does not go NaN on a negative channel', () => {
+        const power = () => paraTag(1, [2.2, 1, 0]);
+        const target = fromBytes(asV4(matrixProfile(power(), power(), power())));
+        const transform = new Transform({dataFormat: 'object'});
+        transform.create(new Profile('*ProPhotoRGB'), target, eIntent.relative);
+        const green = transform.transform(convert.RGB(0, 255, 0));
+        expect(Number.isNaN(green.R)).toBe(false);
+        expect(Number.isNaN(green.B)).toBe(false);
+    });
+
+    test('int16 out of gamut no longer wraps', () => {
+        const target = fromBytes(asV4(matrixProfile(parametric(), parametric(), parametric())));
+        const transform = new Transform({dataFormat: 'int16'});
+        transform.create(new Profile('*ProPhotoRGB'), target, eIntent.relative);
+        const out = transform.array(new Uint16Array([0, 65535, 0]), false, false);
+        expect(Array.from(out)).toEqual([0, 65535, 0]);
+    });
+
+    test('three different single-gamma TRCs stay three', () => {
+        const toLab = (profile) => {
+            const transform = new Transform({dataFormat: 'object'});
+            transform.create(profile, new Profile('*Lab'), eIntent.relative);
+            return transform.transform(convert.RGB(128, 128, 128));
+        };
+        const gamma = toLab(fromBytes(matrixProfile(curvGamma(1.8), curvGamma(2.2), curvGamma(2.6))));
+        const sampled = toLab(fromBytes(matrixProfile(curvTable(gammaSamples(1.8)),
+            curvTable(gammaSamples(2.2)), curvTable(gammaSamples(2.6)))));
+        expect(gamma.L).toBeCloseTo(sampled.L, 1);
+        expect(gamma.a).toBeCloseTo(sampled.a, 1);
+        expect(gamma.b).toBeCloseTo(sampled.b, 1);
+    });
+
+    test('*AppleRGB is gamma 1.8', () => {
+        expect(new Profile('*AppleRGB').RGBMatrix.gamma).toBe(1.8);
+    });
+
+    test.each([
+        ['sampled', () => curvTable(gammaSamples(2.2))],
+        ['parametric', parametric],
+    ])('the matrix shaper claims %s TRCs within 1 LSB of the pipeline', (name, curve) => {
+        const profile = fromBytes(asV4(matrixProfile(curve(), curve(), curve())));
+        const pixels = new Uint8Array(3000);
+        for(let i = 0; i < pixels.length; i++){ pixels[i] = (i * 2654435761) >>> 24; }
+
+        const fast = new Transform({dataFormat: 'int8'});
+        fast.create(profile, new Profile('*AdobeRGB'), eIntent.relative);
+        const fastOut = fast.array(pixels, false, false);
+        expect(fast.lastUsedKernel).toBe('matrix-shaper');
+
+        const slow = new Transform({dataFormat: 'int8', wasmMatrixShaper: false, pixelCache: 0});
+        slow.create(profile, new Profile('*AdobeRGB'), eIntent.relative);
+        const slowOut = slow.array(pixels, false, false);
+        for(let i = 0; i < fastOut.length; i++){
+            expect(Math.abs(fastOut[i] - slowOut[i])).toBeLessThanOrEqual(1);
+        }
+    });
+});
+
+describe('gray kTRC with a Lab PCS', () => {
+    const grayLab = () => {
+        const bytes = Profile.createGrayICC({gamma: 1.0});
+        bytes.set([76, 97, 98, 32], 20); // PCS 'Lab '
+        return fromBytes(bytes);
+    };
+
+    test('neutral stays neutral', () => {
+        const transform = new Transform({dataFormat: 'object', BPC: false});
+        transform.create(grayLab(), new Profile('*Lab'), eIntent.relative);
+        const result = transform.transform(convert.Gray(128));
+        expect(result.a).toBeCloseTo(0, 6);
+        expect(result.b).toBeCloseTo(0, 6);
+    });
+
+    test('BPC does not feed XYZ to the L curve', () => {
+        const gracol = fromBytes(readBytes(GRACOL));
+        const convertWith = (BPC) => {
+            const transform = new Transform({dataFormat: 'object', BPC});
+            transform.create(gracol, grayLab(), eIntent.relative);
+            return transform.transform(convert.CMYK(0, 0, 0, 60)).G;
+        };
+        expect(Math.abs(convertWith(true) - convertWith(false))).toBeLessThan(30);
+    });
+});
+
+describe('black point compensation', () => {
+    test.each([
+        ['into', (nChannel) => ['*sRGB', nChannel, [0.5, 0.5, 0.5]]],
+        ['out of', (nChannel) => [nChannel, '*sRGB', [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]]],
+    ])('runs %s an n-channel profile', (name, route) => {
+        const [input, output, colour] = route(fromBytes(readBytes(NCHANNEL)));
+        const transform = new Transform({dataFormat: 'device', BPC: true});
+        transform.create(input, output, eIntent.relative);
+        expect(transform.transform(colour).length).toBeGreaterThan(0);
+    });
+
+    test('a v4 source does not force BPC on a v2 destination', () => {
+        const transform = new Transform({dataFormat: 'object'});
+        transform.create(fromBytes(v4LutProfile()), fromBytes(readBytes(ADOBE)), eIntent.perceptual);
+        expect(transform.usesBPC).toBe(false);
+    });
+
+    test('a v4 gray TRC takes its black from the curve', () => {
+        const gray = fromBytes(asV4(Profile.createGrayICC({gamma: 2.2})));
+        const adobe = fromBytes(readBytes(ADOBE));
+        const convertAt = (intent) => {
+            const transform = new Transform({dataFormat: 'object', BPC: true});
+            transform.create(gray, adobe, intent);
+            return transform.transform(convert.Gray(20)).R;
+        };
+        expect(convertAt(eIntent.perceptual)).toBeCloseTo(convertAt(eIntent.relative), 6);
+    });
+});
+
+describe('array() through the pixel cache', () => {
+    const cmykToRgb = (dataFormat) => {
+        const transform = new Transform({dataFormat});
+        transform.create(fromBytes(readBytes(GRACOL)), new Profile('*sRGB'), eIntent.relative);
+        return transform;
+    };
+
+    test('a filled alpha channel is allocated', () => {
+        const transform = cmykToRgb('int8');
+        const out = transform.array(new Uint8Array(12), false, true);
+        expect(transform.lastUsedKernel).toBe('cache');
+        expect(out.length).toBe(12);
+        expect(out[11]).toBe(255);
+    });
+
+    test('filled alpha is opaque in the dataFormat', () => {
+        const out = cmykToRgb('int16').array(new Uint16Array(4), false, true);
+        expect(out[3]).toBe(65535);
+    });
+
+    test("the caller's output buffer is used", () => {
+        const buffer = new Uint8ClampedArray(9);
+        expect(cmykToRgb('int8').array(new Uint8Array(12), false, false, false, 3, buffer)).toBe(buffer);
+    });
+});
+
+describe('loading', () => {
+    test('displayChromaticAdaptation builds and runs', () => {
+        const transform = new Transform({dataFormat: 'object', displayChromaticAdaptation: true});
+        transform.create(fromBytes(readBytes(GRACOL)), fromBytes(readBytes(ADOBE)), eIntent.relative);
+        expect(Number.isFinite(transform.transform(convert.CMYK(0, 0, 0, 0)).R)).toBe(true);
+    });
+
+    test('searchForProfile decodes from the embedded profile', () => {
+        const icc = readBytes(ADOBE);
+        const host = new Uint8Array(1000 + icc.length);
+        host.set([73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0, 1, 1], 500); // ICC_PROFILE
+        host.set(icc, 514);
+        const profile = new Profile();
+        profile.loadBinary(host, () => {}, true);
+        expect(profile.loaded).toBe(true);
+        expect(profile.colorSpace).toBe('RGB');
+    });
+
+    test('a decode failure is a failed load, not a throw', () => {
+        const curve = () => curvGamma(2.2);
+        const profile = fromBytes(matrixProfile(curve(), curve(), curve(), false));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/decode failed/i);
+    });
+
+    test('version 3 reads as version 2', () => {
+        const bytes = readBytes(ADOBE);
+        bytes[8] = 3;
+        const profile = fromBytes(bytes);
+        expect(profile.loaded).toBe(true);
+        expect(profile.version).toBe(2);
+    });
+});

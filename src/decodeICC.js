@@ -640,7 +640,7 @@ module.exports = {
             var i;
             if (curve[0] < curve[curve.length - 1]) {
                 // increasing overall, but maybe not at local point
-                for (i = 0; i < curve.length - 2; i++) {
+                for (i = 0; i < curve.length - 1; i++) {
                     if (y >= curve[i] && y <= curve[i + 1]) {
                         // increasing at local point
                         return i;
@@ -655,7 +655,7 @@ module.exports = {
                 }
             } else {
                 // decreasing overall, but maybe not at local point
-                for (i = 0; i < curve.length - 2; i++) {
+                for (i = 0; i < curve.length - 1; i++) {
                     if (curve[i] <= curve[i + 1]) {
                         if (y >= curve[i] && y <= curve[i + 1]) {
                             // increasing at local point
@@ -742,6 +742,7 @@ module.exports = {
                         // flag for use
                         curve.use = true;
                         curve.data = this.uInt16Array(binary, offset + 12, curve.count);
+                        var sourceCount = curve.count;
 
                         curve.dataf = new Float64Array(curve.count);
                         for (i = 0; i < curve.data.length; i++) {
@@ -764,12 +765,12 @@ module.exports = {
                         // curves keep their .data/.dataf for actual eval.
                         // FIX (P2): index must be an integer; `count / 2`
                         // produced `undefined` for odd counts → NaN gamma.
-                        if (curve.count > 3) {
-                            var y = curve.data[Math.floor(curve.count / 2)];
+                        if (sourceCount > 3) {
+                            var y = curve.data[Math.floor(sourceCount / 2)];
                             curve.gamma = 0.0 - Math.log(y / 65535.0) / 0.69315;
                         }
 
-                        if (curve.count === 2) {
+                        if (sourceCount === 2) {
                             if (curve.data[0] === 0 && curve.data[1] === 65535) {
                                 // curve.passThrough indicates that this curve can be ignored
                                 curve.passThrough = true;
@@ -860,34 +861,27 @@ module.exports = {
 
                     case 2:// IEC 61966‐3
                         if (useInverse) {
-                            // X=((Y^1/g-b)/a)    | Y >= (ad+b)^g
-                            // X=Y/c              | Y< (ad+b)^g
+                            // X = ((Y-c)^1/g - b) / a   | Y > c
+                            // X = -b/a                  | Y <= c
                             curve.curveFn = function (params, y) {
                                 //y = Math.max(0.0, Math.min(1.0, y));
-                                var e = params[1] * params[4] + params[2];
-                                var disc = 0;
-                                if (e >= 0) {
-                                    disc = Math.pow(e, params[0]);
+                                var e = y - params[3];
+                                if (e <= 0) {
+                                    return -params[2] / params[1];
                                 }
-                                if (y >= disc) {
-                                    return (Math.pow(y, 1.0 / params[0]) - params[2]) / params[1];
-                                }
-                                return y / params[3];
+                                return (Math.pow(e, 1.0 / params[0]) - params[2]) / params[1];
                             }
                         } else {
 
-                            // Y = (aX + b)^Gamma | X >= d
-                            // Y = cX             | X < d
+                            // Y = (aX + b)^Gamma + c | X >= -b/a
+                            // Y = c                  | else
                             curve.curveFn = function (params, x) {
                                 //x = Math.max(0.0, Math.min(1.0, x));
-                                if (x >= params[4]) {
-                                    var e = params[1] * x + params[2];
-                                    if (e > 0) {
-                                        return Math.pow(e, params[0]);
-                                    }
-                                    return 0;
+                                var e = params[1] * x + params[2];
+                                if (e > 0) {
+                                    return Math.pow(e, params[0]) + params[3];
                                 }
-                                return params[3] * x;
+                                return params[3];
                             }
                         }
                         break;

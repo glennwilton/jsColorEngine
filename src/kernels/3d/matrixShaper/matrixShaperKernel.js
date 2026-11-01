@@ -203,18 +203,22 @@ function inspect(transform){
     }
     if(transform.lut) return {ok: false, why: 'a LUT was built; the CLUT path owns this'};
 
+    // Decoded profiles carry their TRC in stage_curves_v4 (sampled or
+    // parametric). curveAt() runs either form, so both are claimed.
+    var stages = transform.pipeline;
+    var isCurve = function(stage, name){ return stage.stageName === name || stage.stageName === 'stage_curves_v4'; };
     var sIn  = stageNamed(transform, 'stage_Int_to_Device');
-    var sInv = stageNamed(transform, 'stage_Gamma_Inverse');
+    var sInv = (stages.length === 5 && isCurve(stages[1], 'stage_Gamma_Inverse')) ? stages[1] : null;
     var sMat = stageNamed(transform, 'stage_matrix_rgb');
-    var sFwd = stageNamed(transform, 'stage_Gamma');
+    var sFwd = (stages.length === 5 && isCurve(stages[3], 'stage_Gamma')) ? stages[3] : null;
     var sOut = stageNamed(transform, 'stage_device_to_int');
     if(!sIn || !sInv || !sMat || !sFwd || !sOut) return {ok: false, why: 'not a matrix-shaper pipeline'};
 
     // Exactly those five stages, in that order. Anything else — a custom stage,
     // a gamut hook, an abstract profile in the chain — means the pipeline is
     // doing something this kernel does not model.
-    var want = ['stage_Int_to_Device', 'stage_Gamma_Inverse', 'stage_matrix_rgb',
-                'stage_Gamma', 'stage_device_to_int'];
+    var want = ['stage_Int_to_Device', sInv.stageName, 'stage_matrix_rgb',
+                sFwd.stageName, 'stage_device_to_int'];
     if(transform.pipeline.length !== want.length) return {ok: false, why: 'extra pipeline stages'};
     for(var i = 0; i < want.length; i++){
         if(transform.pipeline[i].stageName !== want[i]) return {ok: false, why: 'unexpected stage order'};

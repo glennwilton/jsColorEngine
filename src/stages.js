@@ -998,8 +998,8 @@
         stage_grayTRC_to_PCSV4_Via_L(input, curves ){
             return [
                 this.stage_curves_v4([input[0]], curves)[0],
-                0.5,
-                0.5
+                128 / 255, // a* = 0 in PCSv4, which is not 0.5
+                128 / 255
             ];
         };
 
@@ -1539,7 +1539,8 @@
                     // Use Parametric Function,
                     // These are automatically inverted at creation in mAB or mAB
                     //
-                    output[i] = c.curveFn(c.params, input[i]);
+                    var curveInput = input[i];
+                    output[i] = c.curveFn(c.params, curveInput < 0 ? 0 : (curveInput > 1 ? 1 : curveInput));
                 } else if(c.dataf.length > 0){
                     //
                     // Interpolate the sampled curve.

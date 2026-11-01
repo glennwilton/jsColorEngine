@@ -550,7 +550,7 @@ class Profile {
      *   `srgb`                       — sRGB working space (gamma 2.2 + sRGB special)
      *   `adobe` / `adobergb` /
      *   `adobe1998` / `adobe1998rgb` — Adobe RGB (1998), gamma 2.2
-     *   `apple` / `applergb`         — Apple RGB, gamma 2.2
+     *   `apple` / `applergb`         — Apple RGB, gamma 1.8
      *   `colormatch` / `colormatchrgb` — ColorMatch RGB, gamma 1.8, D50
      *   `prophoto` / `prophotorgb`   — ProPhoto RGB, gamma 1.8, D50
      *
@@ -756,7 +756,7 @@ class Profile {
                 this.name = 'Apple RGB';
                 this.description = 'Apple RGB is based on the classic Apple 13" RGB monitor. Because of its popularity and similar Trinitronbased monitors that followed, many key publishing applications, including Adobe Photoshop and Illustrator, used it as the default RGB space in the past.<br>Encompasses roughly 33.5% of the visible colors specified by the Lab color space';
                 this.mediaWhitePoint = mediaWhitePoint;
-                computeRGBProfile(this,2.2, redxxY, greenxyY,  bluexyY, false);
+                computeRGBProfile(this,1.8, redxxY, greenxyY,  bluexyY, false);
                 return true;
 
             case 'colormatchrgb':
@@ -917,8 +917,15 @@ class Profile {
             return false;
         }
 
+        if (searchForProfile) { data = _compactIccBytes(data.subarray(ascpPos - 36)); }
         // extract the core profile data
-        var result = this.decodeFile(data);
+        var result;
+        try {
+            result = this.decodeFile(data);
+        } catch (decodeError) {
+            this.lastError = {err: 120, text: 'Profile decode failed: ' + (decodeError && decodeError.message || decodeError)};
+            result = false;
+        }
 
         if (result === true) {
             // update whitepoint
@@ -957,6 +964,12 @@ class Profile {
                 _this.rgb.gTRC &&
                 _this.rgb.bTRC
             ) {
+                if (!this.mediaWhitePoint) {
+                    this.lastError = {err: 120, text: 'Profile decode failed: RGB matrix profile has no wtpt tag'};
+                    this.loaded = false;
+                    return false;
+                }
+
                 // Convert to an RGBMatrix type profile.
                 this.createRGBMatrix();
             }
@@ -1122,9 +1135,9 @@ class Profile {
      * Unknown tag signatures are not an error — they are pushed onto
      * `this.unsuportedTags` (sic — Pr3) for diagnostic inspection.
      *
-     * Per-intent fallbacks: if perceptual or saturation B2A/A2B is
-     * absent, falls back to the colorimetric (relative) entry — same
-     * convention LittleCMS uses.
+     * Per-intent fallbacks: a missing perceptual or saturation B2A/A2B
+     * falls back to the colorimetric (relative) entry, and a missing
+     * relative one to perceptual. A2B0 alone is a complete input profile.
      *
      * @param {Uint8Array} binary
      * @returns {boolean}  true if the profile is structurally valid.
@@ -1153,6 +1166,8 @@ class Profile {
             return false;
         }
 
+        // v3 is the v2 tag set and Lab encoding under another number.
+        if (this.version === 3) { this.version = 2; }
         if (!(this.version === 2 || this.version === 4)) {
             this.lastError = {err: 101, text: 'Unsupported Profile Version [' + this.version + ']'};
             return false;
@@ -1411,6 +1426,13 @@ class Profile {
         if (this.B2A[eIntent.perceptual] === null) {
             this.B2A[eIntent.perceptual] = this.B2A[eIntent.relative];
         } // No Perceptual, use Colorimetric
+        // Tag 0 alone is legal, and relative is what absolute reads too.
+        if (this.B2A[eIntent.relative] === null) {
+            this.B2A[eIntent.relative] = this.B2A[eIntent.perceptual];
+        }
+        if (this.A2B[eIntent.relative] === null) {
+            this.A2B[eIntent.relative] = this.A2B[eIntent.perceptual];
+        }
         if (this.B2A[eIntent.saturation] === null) {
             this.B2A[eIntent.saturation] = this.B2A[eIntent.perceptual];
         } // No Saturation - use Perceptual

@@ -553,17 +553,14 @@ matching the spec, not following lcms.
 
 ### `isGreyTRCwithNOLUT` — where we deliberately do follow lcms
 
-The contrasting case. For grey profiles that have a `kTRC` tag but
-no `A2B` LUT, jsCE force-enables BPC even when the user didn't ask
-for it:
-
-```text
-src/Transform.js:2460
-  // If gray TRC profile force BPC on to replicate LCMS Behavor
-  if (this.isGreyTRCwithNOLUT(step.inputProfile, step.intent)) {
-      useBPC = true;
-  }
-```
+**Correction.** jsCE used to force BPC on for grey profiles with a `kTRC`
+tag and no `A2B` LUT, reasoning that lcms did the same. It does not. lcms
+forces BPC on perceptual and saturation only when the DESTINATION of the step
+is v4, and the grey case was measured against `*Lab`, a v4 destination, which
+is what made it look grey-specific. jsCE now uses the destination rule, and a
+v4 grey TRC profile takes its black from the curve rather than the perceptual
+reference black, as lcms does. The original reasoning is kept below as the
+record of how the rule got here.
 
 The ICC spec doesn't require this. lcms does it because without it,
 grey TRC profiles produce visibly-darker output than every existing
@@ -585,10 +582,9 @@ LUT-based B2A) where the divergence lives.
 |---|---|---|---|
 | BPC on Absolute | OFF | OFF | spec-defined |
 | BPC on Devicelink | OFF | OFF | spec-defined |
-| BPC on V4 Perceptual | ON (forced) | ON (forced) | spec-defined |
+| BPC on V4 Perceptual | ON (forced) when the destination is v4 | ON (forced) when the destination is v4 | spec-defined |
 | BPC on RGB Matrix → Matrix | OFF | OFF (lcms 2.x) | spec-permissive, both engines agree |
 | BPC on Duotone | OFF | OFF | spec-defined |
-| BPC on Gray-TRC (no LUT) input | ON (forced) | ON (forced) | de facto, jsCE explicitly mirrors lcms |
 | OOG output values | clamped to [0,1] | unclamped | jsCE: usability; lcms: low-level building block |
 | V4 Perceptual black point | spec PRMG | spec PRMG | spec-defined (both correct) |
 | Perceptual A2B0 table on 1c grey output | uses `kTRC` directly | uses A2B0 table | spec-permissive, engines diverge |

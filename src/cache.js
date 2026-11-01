@@ -356,10 +356,10 @@
             var inputChannels = this.inputChannels;
             var outputChannels = this.outputChannels;
             var inputItemsPerPixel = inputHasAlpha ? inputChannels + 1 : inputChannels;
-            var outputItemsPerPixel = preserveAlpha ? outputChannels + 1 : outputChannels;
+            var outputItemsPerPixel = outputChannels + ((preserveAlpha || outputHasAlpha) ? 1 : 0);
             var inputPos = 0;
             var outputPos = 0;
-            var outputArray;
+            var opaque = (this.dataFormat === 'int16') ? 65535 : 255;
             var result;
             var pixel;
             var i, c;
@@ -398,7 +398,7 @@
                     outputArray[outputPos++] = inputArray[inputPos++];
                 } else {
                     if(inputHasAlpha){ inputPos++; }
-                    if(outputHasAlpha){ outputArray[outputPos++] = 255; }
+                    if(outputHasAlpha){ outputArray[outputPos++] = opaque; }
                 }
             }
 

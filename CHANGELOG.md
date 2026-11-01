@@ -7,6 +7,61 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+Profile-handling fixes found by sweeping the testbed against Little CMS. The
+kernels were not touched. Two of these change default output; see Changed.
+
+### Changed
+
+- BPC auto-enable on perceptual and saturation now follows the destination of
+  each step, as lcms does. A v4 source into a v2 destination no longer forces
+  BPC. Gray TRC profiles are no longer forced either: that rule was measured
+  against `*Lab`, which is a v4 destination. A v4 gray TRC profile takes its
+  black from the curve. Conversions from v4 perceptual sources to v2
+  destinations now match lcms, so their shadows change.
+- `*AppleRGB` is gamma 1.8. It was 2.2, which did not match Apple RGB or
+  `AppleRGB.icc` (L* 54 against 60.7 on mid grey).
+- Version 3 profiles load, read as version 2.
+- The matrix-shaper kernel claims sampled and parametric TRCs. `sRGB2014.icc`
+  and the classic sRGB `.icm` go from the ~10 MPx/s pipeline to ~310 MPx/s
+  (one quick run, 1 MPx noise, within 1 LSB of the pipeline).
+
+### Fixed
+
+- Building a Transform wrote scale values into the Profile's own LUT, so later
+  Transforms on that Profile were wrong (all 255 on a v4 CMYK output with
+  pass-through A curves).
+- Profiles with only A2B0 / B2A0 crashed on relative and absolute, and on any
+  conversion into them.
+- Parametric output TRCs were not clamped: negative values, NaN, and wrapped
+  values at int16 for out-of-gamut colours.
+- `mft1` A2B in a v2 Lab profile was decoded with the 16-bit Lab encoding.
+- Parametric curve type 2 used the type 3 formula.
+- Numeric curve inversion skipped the last segment; a 2-point curve inverted to
+  zeros.
+- Different single-gamma `curv` TRCs per channel all used red's gamma.
+- Gray kTRC with a Lab PCS: a/b came out as -0.5, and with BPC the X value was
+  read as L.
+- `array()` through the pixel cache under-allocated a filled alpha channel,
+  ignored the caller's output buffer, and filled int16 alpha with 255.
+- `mAB` / `mBA` with no CLUT failed to build.
+- `displayChromaticAdaptation` failed to build.
+- BPC threw on 5-15 channel profiles.
+- `searchForProfile` found the embedded profile, then decoded from byte 0.
+- A null stage at the head of a pipeline threw in the optimiser (Lab input to a
+  v2 `mft1` output at `dataFormat: 'device'`).
+- Decode errors escaped `loadBinary` as raw throws. They are now a failed load
+  with `lastError` set, as is an RGB matrix profile with no `wtpt`.
+
+### Known
+
+- Non-uniform `mAB` / `mBA` CLUT grids are still treated as uniform.
+- DeviceLink `toJSON()` output is still refused by `fromJSON()`.
+- A truncated profile can still report `loaded: true`.
+
+---
+
 ## [1.6.3] — 2026-10-20
 
 Bugfix. Throughput numbers are unchanged from 1.6.0
