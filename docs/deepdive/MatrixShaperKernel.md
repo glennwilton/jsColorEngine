@@ -697,7 +697,9 @@ costs more than the pixel (Chrome: ~270 MPx/s → ~7). Kernel3D
 returns `pixelCache: 0`; `pixelCacheUsed` is 0; `kernelInfo().cache`
 stays `'not-supported'`.
 
-A host without SIMD is **not** on that list: it gets the scalar build.
+A host without SIMD is **not** on that list: it gets the scalar build. Nor is a
+sampled or parametric TRC: the curve stages may be `stage_Gamma*` or
+`stage_curves_v4`, so `sRGB2014.icc` and a v4 parametric profile are claimed.
 
 In `'prefer'` mode there are three more refusals, all of the same kind —
 *something depends on the LUT existing*:

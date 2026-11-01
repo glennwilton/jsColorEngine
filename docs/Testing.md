@@ -6,12 +6,16 @@
 [Synthetic profiles](./deepdive/SyntheticProfiles.md) ·
 [LittleCMS comparison](./LcmsComparison.md)
 
-Jest is the engine gate: `npx jest` (currently ~1010 tests, 41 files).
+Jest is the engine gate: `npx jest` (currently ~1170 tests, 50 files).
 It is **not** a line-coverage map. The holes that have actually bitten
 this engine were combinatorial — a missing `default` above 4 channels,
 int16 wide output, an optimiser that concatenated `'stage_device' + N`
 — and those lines were already “covered” by a 3-channel walk through
 the same file. Do not gate on `jest --coverage`.
+
+`profile_decode_regressions.tests.js` covers profile shapes the shipped
+fixtures cannot reach, written with `src/encodeICC.js`. Where it can, it
+checks against a formula rather than another engine.
 
 Accuracy against another CMS is `bench/lcms-comparison/`, not Jest.
 Throughput is `node bench/mpx_summary.js`. This page lists **what Jest

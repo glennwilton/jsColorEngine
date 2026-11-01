@@ -130,6 +130,10 @@ from the prefix of the string:
 `afterLoad` is an optional callback `(profile) => {}` invoked when
 loading finishes. For URL / file loads it fires asynchronously. Inspect
 `profile.loaded` and `profile.lastError` to tell success from failure.
+A truncated file, an unreadable LUT tag or a decode error is a failed
+load, not a throw. Up to three bytes short of the declared size is
+tolerated, for the last tag's pad bytes, and bytes past that size are
+ignored. Version 3 profiles read as version 2.
 
 ### `profile.loadPromise(dataOrUrl)`
 

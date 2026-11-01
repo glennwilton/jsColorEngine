@@ -27,7 +27,10 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-08-23):** **1.6.0.** v1.5.5 shipped the
+**Current state (2026-11-01):** **1.6.3** plus an unreleased review
+pass: profile-handling fixes from a sweep against LittleCMS, X×Y×Z
+CLUT grids, stricter loading, and sampled and parametric TRCs on the
+matrix kernel (`CHANGELOG.md`). v1.5.5 shipped the
 **matrix-shaper WASM kernel** and **multicore** (`transformImages()`).
 1.6 adds **Kernel5D / Kernel6D** (int8 WASM scalar), the **in-kernel
 WASM pixel cache** (`interp_*_cached`, bound when `pixelCache !== 0`),
@@ -302,7 +305,7 @@ management, and reproduction recipes.
 
 [`../README.md`](../README.md) — positioning, features, headline
 numbers · [`../CHANGELOG.md`](../CHANGELOG.md) — release notes
-(`[Unreleased]` current; `[1.5.5]` latest tagged) · [`../CLAUDE.md`](../CLAUDE.md) — AI session entry
+(`[Unreleased]` current; `[1.6.3]` latest tagged) · [`../CLAUDE.md`](../CLAUDE.md) — AI session entry
 rules · [`../samples/README.md`](../samples/README.md) — samples index
 (per-tool folders) · `samples/LutBuilder/lutbuilder.md` — LutBuilder
 user guide · `samples/ICCImage/ICCImage.md` — ICCImage API ·

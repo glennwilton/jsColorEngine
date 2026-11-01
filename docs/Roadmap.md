@@ -251,6 +251,11 @@ lcms comparison corrections after upstream review
 lcms default flags, 100 % within 1 LSB on all four image workflows).
 488 tests. Full notes: [CHANGELOG.md](../CHANGELOG.md).
 
+**Review pass (unreleased)** — profile-handling fixes found by sweeping
+the testbed against LittleCMS, X×Y×Z CLUT grids, stricter loading, sampled
+and parametric TRCs on the matrix kernel, denser gray LUTs. See
+[CHANGELOG.md](../CHANGELOG.md).
+
 **v1.6.0 (2026-08-23)** — Kernel5D / Kernel6D int8 WASM; in-kernel
 pixel cache in `create()`; on-demand WASM compile; browser worker
 pool. Native C IT8 oracle is next. Full notes:
@@ -1891,6 +1896,12 @@ came apart:
 
 ### Automated profile oracle — build on synthetics
 
+**Next:** the review pass ran every testbed profile, in all intents, BPC on and
+off, both directions, against live `lcms-wasm`. It found more than the Jest suite
+did, but it lived in a throwaway script. Bring it into `bench/lcms-comparison/`.
+Treat lcms as evidence and the ICC spec as the authority: a disagreement means
+checking the spec, not copying lcms.
+
 The TOC item was written when the gap was "no second CMS for 1 / 2 /
 5–15 channels." That hole is closed.
 [SyntheticProfiles.md](./deepdive/SyntheticProfiles.md) already ships
@@ -2336,6 +2347,11 @@ generalises this to:
 Status: **acknowledged Achilles' heel, parked until a production
 incident or external audit forces the issue.** Boring but important;
 new features are cooler, but this is worth doing eventually.
+
+> **Partly done in the review pass.** The minimum bar below has landed: decode
+> errors are a failed load with `lastError` set. So have the file size and tag
+> bounds checks from the better tier, and unreadable LUT tags are refused. Still
+> open: absurd element counts inside a tag, and the rest of the tag-level checks.
 
 ### The problem
 

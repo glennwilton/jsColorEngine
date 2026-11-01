@@ -35,7 +35,8 @@ dl.load('MyDeviceLink.icc', () => {
   intent argument is ignored.
 - Passing further profiles alongside a DeviceLink throws — there is no
   PCS to link through.
-- `buildLut: true` works (the baked LUT carries a single-profile chain);
+- `buildLut: true` works (the baked LUT carries a single-profile chain),
+  and `toJSON()` output loads back through `fromJSON()`;
   identity detection never collapses a link.
 
 ## How it works

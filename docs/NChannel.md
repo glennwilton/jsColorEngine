@@ -29,7 +29,7 @@ preview / measurement, not an image kernel.
 
 5CLR and 6CLR *input* are the exception: Hexachrome / 5-colour proofing
 is common enough that `Kernel5D` / `Kernel6D` bake at the profile A2B
-density and run **int8 JS + int8 WASM scalar**. No SIMD, no int16
+density (its densest axis, kept under 16M values) and run **int8 JS + int8 WASM scalar**. No SIMD, no int16
 kernel — every binary ships, and 16-bit HiFi input is not worth a
 second ladder (~1.6× on a rare format). `dataFormat: 'int16'` still
 works; it lands on the float LUT. 7–15 input does not get a kernel,

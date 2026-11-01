@@ -723,8 +723,8 @@ only pays decode cost — runtime is identical.
 > drift is well below visible threshold across both paths and the
 > remaining outliers are documented and explained — see
 > [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md) for the
-> full methodology, headline numbers, the one structural divergence
-> we found, and the philosophy that keeps jsColorEngine an
+> full methodology, headline numbers, the divergences we found and
+> corrected, and the philosophy that keeps jsColorEngine an
 > independent engine rather than an lcms reimplementation.
 
 jsColorEngine has **two accuracy paths** and a separate validation
@@ -748,10 +748,9 @@ error per output type:
 
 `node bench/lcms_compat/run.js` reproduces this in ~1.3 s on a
 current laptop. Per-pixel triage for any divergence is in
-`bench/lcms_compat/probe-pixel.js`. Full writeup, including the one
-documented outlier (`* → ISOcoated_v2_grey1c_bas.ICC` Perceptual
-without BPC — a profile-table-interpretation difference, both
-readings spec-permissive) is in
+`bench/lcms_compat/probe-pixel.js`. Full writeup, including the
+`* → ISOcoated_v2_grey1c_bas.ICC` Perceptual outlier that turned out
+to be jsColorEngine forcing BPC and is now fixed, is in
 [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md).
 
 ### 2. Image-path LUT vs lcms-wasm (`bench/lcms-comparison/`)

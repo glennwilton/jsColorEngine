@@ -71,9 +71,9 @@ has a deep-dive page behind it if you want the receipts.
 - **And the *answers* match too — jsCE's float pipeline agrees with
   lcms's float pipeline within visual-noise levels** across a
   130-file ICC oracle suite (worst case 0.06 ΔE76 on Lab outputs,
-  1.24 LSB on RGB, 0.04 % ink on CMYK). The one structural
-  divergence (~17 LSB on a niche grey-1c Perceptual path) is fully
-  diagnosed and parked with a documented reason. We're a faithful
+  1.24 LSB on RGB, 0.04 % ink on CMYK). The grey-1c
+  Perceptual divergence once parked here (~17 LSB) turned out to be
+  jsCE forcing BPC, and is fixed. We're a faithful
   float-precision peer, not a port. →
   [Accuracy](./Accuracy.md)
 
