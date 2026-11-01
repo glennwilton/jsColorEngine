@@ -46,7 +46,7 @@ const path = require('path');
 const { machineId, machineDetail } = require('./lib/machine.js');
 
 const ROOT     = path.join(__dirname, '..');
-const RESULTS  = path.join(ROOT, 'bench', 'results');
+const RESULTS  = path.join(ROOT, 'harness', 'results');
 const BASELINE = path.join(ROOT, 'bench', 'baseline');
 
 // ---- arguments ----------------------------------------------------------
@@ -111,7 +111,7 @@ function newestRun(){
         .filter(n => /^\d{4}-\d{2}-\d{2}T/.test(n))
         .filter(n => fs.existsSync(path.join(RESULTS, n, 'json')))
         .sort();
-    if(!stamped.length) throw new Error('no results folder holds a json/ subfolder — run `node bench/reproduce.js` first');
+    if(!stamped.length) throw new Error('no results folder holds a json/ subfolder — run `node harness/reproduce.js` first');
     return path.join(RESULTS, stamped[stamped.length - 1]);
 }
 
@@ -138,7 +138,7 @@ function pinnedBaseline(){
             lines.push('  No pins exist yet. Establish one for this machine:');
         }
         lines.push('');
-        lines.push('      node bench/reproduce.js');
+        lines.push('      node harness/reproduce.js');
         lines.push('      node scripts/pin_baseline.js <results-dir> --why "..."');
         lines.push('');
         lines.push('  Or compare two runs directly, which needs no pin:');

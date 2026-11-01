@@ -10,10 +10,10 @@
 ---
 
 > **Generated file — do not edit.** Every table was written by the bench
-> that measured it (`bench/lib/emit.cjs`) and rendered by
+> that measured it (`harness/lib/emit.cjs`) and rendered by
 > `scripts/build_bench_results.js`. To refresh:
 >
->     node bench/reproduce.js
+>     node harness/reproduce.js
 >     node scripts/build_bench_results.js
 >
 > Run `2026-08-22T23-09-46` · measured 2026-08-22 · jsCE 1.6.0 · package now **1.6.0**
@@ -590,7 +590,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, accuracy against the exact pipeline, int16
 
-`matrixShaper.accuracy.int16` · LSB · measured by `bench/matrix_shaper_kernel/accuracy.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.accuracy.int16` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 16 · **coloursPerPair** 113157 · **reference** buildLut:false, wasmMatrixShaper:false
 
@@ -607,7 +607,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, accuracy against the exact pipeline, int8
 
-`matrixShaper.accuracy.int8` · LSB · measured by `bench/matrix_shaper_kernel/accuracy.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.accuracy.int8` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 8 · **coloursPerPair** 262144 · **reference** buildLut:false, wasmMatrixShaper:false
 
@@ -624,7 +624,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, int8, *prophoto -> *sRGB
 
-`matrixShaper.throughput.int8` · MPx/s · measured by `bench/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.throughput.int8` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 8 · **pixels** 4194304 · **reps** 5 · **pair** *prophoto → *sRGB · **best** best of 5
 
@@ -640,7 +640,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel ratios, int8
 
-`matrixShaper.ratios.int8` · x · measured by `bench/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.ratios.int8` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 8 · **pair** *prophoto → *sRGB
 
@@ -654,7 +654,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, int16, *prophoto -> *sRGB
 
-`matrixShaper.throughput.int16` · MPx/s · measured by `bench/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.throughput.int16` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 16 · **pixels** 4194304 · **reps** 5 · **pair** *prophoto → *sRGB · **best** best of 5
 
@@ -670,7 +670,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel ratios, int16
 
-`matrixShaper.ratios.int16` · x · measured by `bench/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
+`matrixShaper.ratios.int16` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.6.0** · 2026-08-22
 
 **bits** 16 · **pair** *prophoto → *sRGB
 
@@ -870,7 +870,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT in the worker pool — noise
 
-`pool.matrixShaper.noise` · MPx/s · measured by `bench/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
+`pool.matrixShaper.noise` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
 
 **content** noise · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 100.2 · **sequentialKernelMpxs** 316.3 · **maxKernelVsClutLsb** 28
 
@@ -889,7 +889,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT in the worker pool — photo
 
-`pool.matrixShaper.photo` · MPx/s · measured by `bench/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
+`pool.matrixShaper.photo` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.6.0** · 2026-08-22
 
 **content** photo · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 118.1 · **sequentialKernelMpxs** 327.5 · **maxKernelVsClutLsb** 25
 
@@ -908,7 +908,7 @@ runs in its own process with its own warmup.
 
 ### Worker pool — peak speedup vs sequential, by kernel and content
 
-`pool.peak` · x · measured by `bench/multicore_matrix/run.js` · jsCE **1.6.0** · 2026-08-22
+`pool.peak` · x · measured by `harness/multicore_matrix/run.js` · jsCE **1.6.0** · 2026-08-22
 
 **pixels** 4194304 · **maxWorkers** 8
 
@@ -928,7 +928,7 @@ runs in its own process with its own warmup.
 
 ### Worker pool — every worker count
 
-`pool.scaling` · MPx/s · measured by `bench/multicore_matrix/run.js` · jsCE **1.6.0** · 2026-08-22
+`pool.scaling` · MPx/s · measured by `harness/multicore_matrix/run.js` · jsCE **1.6.0** · 2026-08-22
 
 **pixels** 4194304
 
@@ -1011,7 +1011,7 @@ runs in its own process with its own warmup.
 
 ### Throughput on synthetic LUTs — narrow input and wide output
 
-`smallDim.throughput` · MPx/s · measured by `bench/small_dim/run.js` · jsCE **1.6.0** · 2026-08-22
+`smallDim.throughput` · MPx/s · measured by `harness/small_dim/run.js` · jsCE **1.6.0** · 2026-08-22
 
 **pixels** 1048576 · **grid** 256 · **reps** 5 · **lutMode** float · **dataFormat** int8
 
@@ -1035,7 +1035,7 @@ runs in its own process with its own warmup.
 
 ### Solo control bench — one image, one engine, one process (rgb2cmyk)
 
-`solo.rgb2cmyk` · MPx/s · measured by `bench/solo_photo/solo.js` · jsCE **1.6.0** · 2026-08-22
+`solo.rgb2cmyk` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.6.0** · 2026-08-22
 
 **image** jacek-dylag-559115_STRAWBERRIES-unsplash · **workflow** rgb2cmyk · **pixels** 1000000 · **warmupMs** 3000 · **samples** 7
 
@@ -1049,7 +1049,7 @@ runs in its own process with its own warmup.
 
 ### Solo control bench — one image, one engine, one process (rgb2lab)
 
-`solo.rgb2lab` · MPx/s · measured by `bench/solo_photo/solo.js` · jsCE **1.6.0** · 2026-08-22
+`solo.rgb2lab` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.6.0** · 2026-08-22
 
 **image** jacek-dylag-559115_STRAWBERRIES-unsplash · **workflow** rgb2lab · **pixels** 1000000 · **warmupMs** 3000 · **samples** 7
 

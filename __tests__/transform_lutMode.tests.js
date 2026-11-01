@@ -15,8 +15,8 @@
  *      an incompatible intLut rather than silently producing wrong pixels
  *
  * Accuracy budgets are derived from the bench files:
- *   - bench/int_vs_float.js     (3D, ≤1 LSB at u8)
- *   - bench/int_vs_float_4d.js  (4D, ≤3 LSB at u8 due to extra K-LERP rounding)
+ *   - harness/int_vs_float.js     (3D, ≤1 LSB at u8)
+ *   - harness/int_vs_float_4d.js  (4D, ≤3 LSB at u8 due to extra K-LERP rounding)
  *
  * 4D drift is slightly higher than 3D because the K-axis adds one more
  * integer rounding step. This is well below JND (~5-8 LSB in midtones).
@@ -201,7 +201,7 @@ test("lutMode='int': CMYK->sRGB matches float within 1 LSB (4D)", async () => {
     //      true (g1-1)/255 ratio is preserved through rx/ry/rz/rk.
     // Without either fix, CMYK→RGB showed up to 3 LSB drift with 100 %
     // of errors going int>float. See src/Transform.js buildIntLut
-    // JSDoc and bench/diag_cmyk_to_rgb.js for the diagnostic trail.
+    // JSDoc and harness/diag_cmyk_to_rgb.js for the diagnostic trail.
     expect(maxAbsDiff(oInt, oFloat)).toBeLessThanOrEqual(1);
 });
 

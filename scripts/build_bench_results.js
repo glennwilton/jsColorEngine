@@ -6,7 +6,7 @@
  * WHY. Throughput figures used to be transcribed by hand into whichever page
  * needed them, so the same number could exist in three vintages at once and
  * nothing said which was current. The benches now emit structured rows
- * (`bench/lib/emit.cjs`); this renders them into one page that owns the
+ * (`harness/lib/emit.cjs`); this renders them into one page that owns the
  * numbers, and every other page links to a table instead of restating it.
  *
  * STALENESS IS PART OF THE OUTPUT. Every table carries the jsColorEngine
@@ -31,7 +31,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const ROOT    = path.join(__dirname, '..');
-const RESULTS = path.join(ROOT, 'bench', 'results');
+const RESULTS = path.join(ROOT, 'harness', 'results');
 const DOCS    = path.join(ROOT, 'docs');
 
 const PKG_VERSION = JSON.parse(
@@ -46,7 +46,7 @@ function newestRun() {
         .sort();
     if (!stamped.length) {
         throw new Error('no results folder holds a json/ subfolder — run ' +
-                        '`node bench/reproduce.js` first');
+                        '`node harness/reproduce.js` first');
     }
     return path.join(RESULTS, stamped[stamped.length - 1]);
 }
@@ -217,10 +217,10 @@ page.push('');
 page.push('---');
 page.push('');
 page.push('> **Generated file — do not edit.** Every table was written by the bench');
-page.push('> that measured it (`bench/lib/emit.cjs`) and rendered by');
+page.push('> that measured it (`harness/lib/emit.cjs`) and rendered by');
 page.push('> `scripts/build_bench_results.js`. To refresh:');
 page.push('>');
-page.push('>     node bench/reproduce.js');
+page.push('>     node harness/reproduce.js');
 page.push('>     node scripts/build_bench_results.js');
 page.push('>');
 page.push('> Run `' + runName + '`' +

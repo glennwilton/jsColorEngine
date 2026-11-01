@@ -15,7 +15,7 @@ something else.
 
 ## The shape of the hole
 
-`bench/lcms-comparison/accuracy.js` measures jsColorEngine against Little CMS
+`harness/lcms-comparison/accuracy.js` measures jsColorEngine against Little CMS
 for RGB and CMYK. It is the most valuable test in the repo. It covers two
 channel counts.
 
@@ -351,7 +351,7 @@ answers a different one, which is why both are worth having.
 
 ## What the profiles made measurable
 
-Once fifteen widths exist, `bench/channel_matrix/run.js` can measure all 225
+Once fifteen widths exist, `harness/channel_matrix/run.js` can measure all 225
 combinations. It is **not a gate** — 3- and 4-channel input is where the
 throughput work is, and where the pinned baseline lives. This is a map of the
 correctness path: how slow is it, and where are the cliffs.
@@ -429,7 +429,7 @@ against `grid^n` memory and a 20–97 ms build for that much, declining was the
 right answer **while the interpolator was the same**. That measurement is why
 KernelND (7–15) still returns `false`.
 
-5/6 now have a *different* interpolator. `bench/nch_56/run.js` (photo RGB +
+5/6 now have a *different* interpolator. `harness/nch_56/run.js` (photo RGB +
 derived extras + 5 % grain, 65 536 px, median of 5, Node on this machine):
 
 | in | pipeline | float LUT | int8 JS | int8 WASM | WASM / JS | WASM / pipeline |
@@ -600,7 +600,7 @@ exercise decode; they are not interpolators.
 ```bash
 node scripts/make_test_profiles.js            # regenerate, deterministic
 node scripts/make_test_profiles.js --check    # verify, write nothing
-cd bench/lcms-comparison
+cd harness/lcms-comparison
 node accuracy_gray.js        # 1 channel, kTRC profiles
 node accuracy_nchannel.js    # 2-10 channels, device -> PCS
 node accuracy_b2a.js         # 2-15 channels, PCS -> device, both depths
@@ -610,7 +610,7 @@ and the coverage matrix, which is an ordinary test:
 
 ```bash
 npx jest channel_matrix                    # 225 combinations, does it work
-node bench/channel_matrix/run.js           # 225 combinations, how fast
+node harness/channel_matrix/run.js           # 225 combinations, how fast
 ```
 
 The profiles are ordinary ICC files. Open them in any inspector — a
@@ -628,8 +628,8 @@ profile*, *not for production*.
 ## See also
 
 - [KernelContract.md](./KernelContract.md) — the kernel boundary these test
-- `bench/channel_matrix/run.js` — the 225-combination throughput map
-- `bench/nch_56/run.js` — 5CLR / 6CLR int8 JS vs WASM vs float
+- `harness/channel_matrix/run.js` — the 225-combination throughput map
+- `harness/nch_56/run.js` — 5CLR / 6CLR int8 JS vs WASM vs float
 - [LcmsComparison.md](../LcmsComparison.md) — the RGB/CMYK oracle
 - `__tests__/encodeICC.tests.js` — what the writer guarantees on its own
 - [`Profile.gridFor`](../../src/Profile.js) — the fixture table above; not an industry recommendation

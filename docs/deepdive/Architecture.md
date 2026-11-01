@@ -158,7 +158,7 @@ When the image path is active, the inner loop is selected by `lutMode`.
 Each mode trades safety, accuracy, and speed differently. All four
 produce bit-identical output for 8-bit input within their respective
 kernel families (verified across a 6-configuration matrix in
-[`bench/wasm_poc/`](../../bench/wasm_poc)).
+[`harness/wasm_poc/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc)).
 
 | `lutMode` | CLUT storage | Math | Where the code lives |
 |---|---|---|---|

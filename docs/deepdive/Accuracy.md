@@ -21,8 +21,8 @@
 ---
 
 > **Status: shipped, oracle frozen.** The endpoint-diff harness
-> (`bench/lcms_compat/run.js`) and the per-pixel triage tool
-> (`bench/lcms_compat/probe-pixel.js`) are live and pass against a
+> (`harness/lcms_compat/run.js`) and the per-pixel triage tool
+> (`harness/lcms_compat/probe-pixel.js`) are live and pass against a
 > committed reference oracle of 150 `.it8` files generated from
 > Little CMS 2.16's full f64 float pipeline. This page is the post-hoc
 > writeup: what we built, how it works, what the numbers say, what we
@@ -45,7 +45,7 @@
   ~17 LSB drift on `* → ISOcoated_v2_grey1c_bas.ICC` Perceptual was
   jsCE forcing BPC on a v4 source; see Outliers §2.
 - **Two diagnostic tools** in
-  [`bench/lcms_compat/`](../../bench/lcms_compat) cover the full
+  [`harness/lcms_compat/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat) cover the full
   triage surface:
   - `run.js` — the wide net. 130 files × ~9k samples ÷ 1.3 s wall.
   - `probe-pixel.js` — the deep dive. Per-stage in/out trace from both
@@ -120,7 +120,7 @@ The harness is what makes the third category visible at all.
 ## What the harness is
 
 ```
-bench/lcms_compat/
+harness/lcms_compat/
 ├── reference/         150 CGATS .it8 files — the oracle (generated locally)
 ├── stimuli/           6 grid-sweep input files — public data (committed)
 ├── profiles/          27 ICC profiles — gitignored, see profiles/README
@@ -134,7 +134,7 @@ bench/lcms_compat/
 Three things matter about the layout:
 
 1. **The reference oracle is committed.** 150 `.it8` files at
-   `bench/lcms_compat/reference/` with ~1.4 M reference
+   `harness/lcms_compat/reference/` with ~1.4 M reference
    `(input, output)` pairs. They're the textual numerical output of
    lcms2 2.16 running its full f64 pipeline on six profiles × three
    directions × five intent/BPC variants × ~9k samples per file.
@@ -146,7 +146,7 @@ Three things matter about the layout:
    whatever's present and skips the rest. CI runs against whatever
    subset is available; missing profiles aren't failures, just lower
    coverage. See
-   [`profiles/README.md`](../../bench/lcms_compat/profiles/README.md)
+   [`profiles/README.md`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/profiles/README.md)
    for canonical sources.
 3. **The reference is bit-tight to lcms's float pipeline.** This is
    discussed in detail in [the references appendix](#why-the-references-are-tight-to-lcmss-float-pipeline-not-its-u16-path).
@@ -161,10 +161,10 @@ Three things matter about the layout:
 ## How `run.js` works (the wide net)
 
 ```bash
-node bench/lcms_compat/run.js
-node bench/lcms_compat/run.js --quiet            # summary only
-node bench/lcms_compat/run.js --filter Relative  # filter filename
-node bench/lcms_compat/run.js --no-md            # skip last-run.md
+node harness/lcms_compat/run.js
+node harness/lcms_compat/run.js --quiet            # summary only
+node harness/lcms_compat/run.js --filter Relative  # filter filename
+node harness/lcms_compat/run.js --no-md            # skip last-run.md
 ```
 
 For each of the 150 `.it8` files:
@@ -175,7 +175,7 @@ For each of the 150 `.it8` files:
    shortcuts (`srgb`, `srgb_virt`, `lab`, `labd50`). Intents are tried
    longest-suffix-first so `_Relative_BPC` wins over `_Relative`.
 2. **Load both profiles.** File profiles come from
-   `bench/lcms_compat/profiles/`; virtuals come from jsCE's built-in
+   `harness/lcms_compat/profiles/`; virtuals come from jsCE's built-in
    `*sRGB` / `*Lab` factories. Missing files log as SKIP and the
    harness moves on.
 3. **Build the matching `Transform`.** Always `dataFormat:
@@ -238,7 +238,7 @@ quantises to u8 / u16 boundaries. Measuring those kernels against
 lcms's float oracle would be measuring "LUT quantisation error +
 math difference" instead of just "math difference". So we point the
 harness at the float path. The integer kernels have their own
-bit-exactness regression test in `bench/compile_poc/` and don't need
+bit-exactness regression test in `harness/compile_poc/` and don't need
 the lcms oracle to validate.
 
 ## How `probe-pixel.js` works (the deep dive)
@@ -247,7 +247,7 @@ When `run.js` flags an outlier file, `probe-pixel.js` resolves it
 to a per-stage breakdown for any single pixel:
 
 ```bash
-node bench/lcms_compat/probe-pixel.js \
+node harness/lcms_compat/probe-pixel.js \
      --src "*sRGB" --dst CoatedGRACoL2006.icc \
      --intent Relative --in 128,2,99
 ```
@@ -257,9 +257,9 @@ node bench/lcms_compat/probe-pixel.js \
 > emitted by `transicc -v3`. **Stock lcms 2.16 does not print this
 > trace** — `-v3` in upstream is just "more verbose error messages",
 > not stage-level instrumentation. The `transicc.exe` shipped at
-> `bench/lcms_exposed/lcms2-2.16/bin/transicc.exe` is built from a
+> `harness/lcms_exposed/lcms2-2.16/bin/transicc.exe` is built from a
 > jsColorEngine-vendored fork of the lcms2 2.16 source tree
-> (`bench/lcms_exposed/lcms2-2.16/`) with `printf` calls added at
+> (`harness/lcms_exposed/lcms2-2.16/`) with `printf` calls added at
 > every pipeline-stage evaluator (`cmsEvalMatrix`, `cmsEvalCurves`,
 > `cmsEvalCLUTfloatIn16`, `cmsEvalXYZ2Lab`, etc.) inside
 > `src/cmslut.c` and friends. The patched binary is committed to the
@@ -273,7 +273,7 @@ Mechanism:
 
 1. **Drives the patched `transicc.exe`** (the custom-built lcms
    binary described above) at
-   `bench/lcms_exposed/lcms2-2.16/bin/transicc.exe` via piped stdin.
+   `harness/lcms_exposed/lcms2-2.16/bin/transicc.exe` via piped stdin.
    No recompile needed — transicc's interactive prompts are guarded
    by `xisatty(stdin)`, so any pipe input bypasses them and `scanf`
    just consumes whitespace-separated tokens. We send
@@ -362,7 +362,7 @@ swing in an 8-bit image channel — sub-LSB drift is below what the
 output format can even represent.
 
 Per-direction rollups are in
-[`bench/lcms_compat/last-run.md`](../../bench/lcms_compat/last-run.md).
+[`harness/lcms_compat/last-run.md`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/last-run.md).
 The two interesting outliers in the per-direction table are covered
 next.
 
@@ -581,15 +581,39 @@ agreement to <0.001 ΔE. It's the *opposite* direction
 *doesn't* fire because the grey is on the OUTPUT side and has a
 LUT-based B2A) where the divergence lives.
 
+### Latest run (1.7.1, LittleCMS 2.20)
+
+`node oracle/generate.js` then `node lcms_compat/run.js` in the
+[harness](https://github.com/glennwilton/jsColorEngine-harness): 1,670 reference files
+from 84 profiles, 1,650 of them counted below. The other 20 are `Probev2_ICCv4.icc`,
+where LittleCMS uses MPE tags that jsColorEngine skips by design. Figures are the
+float accuracy path, on in-gamut rows, because lcms does not clamp out-of-gamut
+floats. Duotone BPC references are pinned to 2.16, see `oracle/pins.json`.
+
+| Output | Conversions | Result |
+|---|---:|---|
+| Lab | 415 | worst 0.31 ΔE76 |
+| RGB, gray, CMYK, 2-colour | 1,235 | 1,220 within 1 LSB at 8 bits, worst 2.1 |
+
+The 15 above 1 LSB are `srgb → AdobeRGB1998` and its Compact ICC twin at 1.24, and
+`lab → DCI-P3-v4.icc` at 2.1 near black, where jsColorEngine holds the exact power
+curve. CMYK is reported in % ink; its worst of 0.39 % is about 1 LSB.
+
+`lcms-wasm` (LittleCMS 2.16) matches the C 2.20 build on 1,650 of the same files,
+apart from `Probev1_ICCv2.icc` with BPC, where the black point rule changed after 2.16.
+
 ### Summary table
 
 | Behaviour | jsCE | lcms | Reason |
 |---|---|---|---|
 | BPC on Absolute | OFF | OFF | spec-defined |
 | BPC on Devicelink | OFF | OFF | spec-defined |
+| MPE tags (`D2Bx`, `B2Dx`) | ignored | preferred over `A2Bx` | optional in the spec, see multiProcessElements.md. `Probev2_ICCv4.icc` differs for this reason |
+| Gamma `curv` on output, near black | exact power | tabulated inverse | up to ~2 LSB near zero on `DCI-P3-v4.icc`; jsCE is the exact value |
+| Absolute on a matrix profile | scales by media white, except v2 display | same | v2 `wtpt` on a display is the unadapted monitor white |
 | BPC on V4 Perceptual | ON (forced) when the destination is v4 | ON (forced) when the destination is v4 | spec-defined |
 | BPC on RGB Matrix → Matrix | black from the TRCs | black from the TRCs | zero for most profiles, so usually no effect; a calibrated display's TRC may not start at 0 |
-| BPC on Duotone | OFF | OFF | spec-defined |
+| BPC on Duotone | OFF | ON since 2.19 | The ICC spec does not cover BPC. lcms 2.19 extended it to multi-channel spaces, and on a duotone that gives out-of-range results such as RGB -407, so jsCE stays OFF and the harness pins these references to 2.16 |
 | OOG output values | clamped to [0,1] | unclamped | jsCE: usability; lcms: low-level building block |
 | V4 Perceptual black point | spec PRMG | spec PRMG | spec-defined (both correct) |
 
@@ -672,7 +696,7 @@ question:
 > quantisation noise — there's nothing else for it to be.
 
 That's what
-[`bench/int16_poc/accuracy_v1_7_self.js`](../../bench/int16_poc/accuracy_v1_7_self.js)
+[`harness/int16_poc/accuracy_v1_7_self.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_poc/accuracy_v1_7_self.js)
 does (the filename keeps its `v1_7` suffix as a development-cycle
 artefact — Q0.13 was the v1.7 internal kernel-design milestone that
 shipped under the v1.3 project release). Both transforms are built
@@ -761,24 +785,24 @@ the way through (way more precision than Q0.16 could).
 ### Run it yourself
 
 ```bash
-cd bench/int16_poc
+cd harness/int16_poc
 npm install
 npm run accuracy:v1_7
 ```
 
 Add or modify workflows in
-[`accuracy_v1_7_self.js`](../../bench/int16_poc/accuracy_v1_7_self.js)
+[`accuracy_v1_7_self.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_poc/accuracy_v1_7_self.js)
 to test against your own profiles. The bench is single-file, no
 fixtures beyond the GRACoL profile already in `__tests__/`.
 
 The test gate that ships with the engine is
-[`bench/int16_identity.js`](../../bench/int16_identity.js) — a
+[`harness/int16_identity.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_identity.js) — a
 synthetic identity-CLUT round-trip that passes if and only if the
 kernels round at the u16 LSB and never wider. Run it any time you
 touch the int16 kernel code:
 
 ```bash
-node bench/int16_identity.js
+node harness/int16_identity.js
 ```
 
 It exits non-zero on any kernel that loses an LSB, so it's safe to
@@ -814,38 +838,38 @@ this oracle without ambiguity about whose answer is "correct".
 
 ```bash
 # Endpoint diff across the whole reference set (1.3 s):
-node bench/lcms_compat/run.js
+node harness/lcms_compat/run.js
 
 # Single-pixel triage:
-node bench/lcms_compat/probe-pixel.js \
+node harness/lcms_compat/probe-pixel.js \
      --src "*sRGB" \
      --dst CoatedGRACoL2006.icc \
      --intent Relative \
      --in 128,2,99
 
 # Common variants:
-node bench/lcms_compat/probe-pixel.js --src "*Lab" --dst grey1c.icc \
+node harness/lcms_compat/probe-pixel.js --src "*Lab" --dst grey1c.icc \
      --intent Perceptual --in 50,0,0
-node bench/lcms_compat/probe-pixel.js --src "*sRGB" --dst "*Lab" \
+node harness/lcms_compat/probe-pixel.js --src "*sRGB" --dst "*Lab" \
      --intent Relative --bpc --in 128,2,99
 ```
 
-Both tools assume `bench/lcms_compat/profiles/` contains the ICC
+Both tools assume `harness/lcms_compat/profiles/` contains the ICC
 files referenced by filename (gitignored — see
-[`profiles/README.md`](../../bench/lcms_compat/profiles/README.md)
+[`profiles/README.md`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/profiles/README.md)
 for canonical sources).
 
 `probe-pixel.js` additionally needs the **stage-instrumented build
 of `transicc.exe`** at
-`bench/lcms_exposed/lcms2-2.16/bin/transicc.exe` — this is a custom
+`harness/lcms_exposed/lcms2-2.16/bin/transicc.exe` — this is a custom
 build of lcms 2.16 with `printf` calls added at every pipeline-stage
 evaluator (stock upstream `transicc -v3` does *not* emit a stage
 trace). The patched binary is already vendored in the repo so no
 rebuild is needed for triage; the diff against upstream lives at
-`bench/lcms_exposed/lcms2-2.16/` and gets formalised as a regen-able
-patch in `bench/lcms_compat/lcms_patch/` as part of v1.3.
+`harness/lcms_exposed/lcms2-2.16/` and gets formalised as a regen-able
+patch in `harness/lcms_compat/lcms_patch/` as part of v1.3.
 
 `run.js` writes
-[`bench/lcms_compat/last-run.md`](../../bench/lcms_compat/last-run.md)
+[`harness/lcms_compat/last-run.md`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/last-run.md)
 on every invocation; that file is committed so the headline numbers
 in this doc always match the latest run.

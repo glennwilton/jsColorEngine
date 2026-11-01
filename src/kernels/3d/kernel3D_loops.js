@@ -957,7 +957,7 @@ module.exports = {
                 pz = Math.imul(input2, gps);
 
                 // Per-axis input===65535 boundary patch (u16 sibling of the
-                // u8 input===255 patch — see bench/int_vs_float.js FINDING #2).
+                // u8 input===255 patch — see harness/int_vs_float.js FINDING #2).
                 // Same maxX/Y/Z grid-index offsets as u8 path (bit-width
                 // independent).
                 if (input0 === 65535) { X0 = maxX; X1 = maxX; rx = 0; }

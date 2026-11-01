@@ -358,7 +358,7 @@
      *                               executed by a hand-written WebAssembly
      *                               kernel. Bit-exact against 'int' across
      *                               millions of verified pixels (6-config
-     *                               matrix in `bench/wasm_poc/`). ~1.40×
+     *                               matrix in `harness/wasm_poc/`). ~1.40×
      *                               over 'int' on x64 for 3D tetrahedral
      *                               workloads; see docs/deepdive/Performance.md
      *                               "WASM scalar — measured" section.
@@ -400,7 +400,7 @@
      *                               internal Q0.12 iteration during v1.3
      *                               development). Bit-exact against the JS
      *                               'int16' kernel across the 6-config matrix
-     *                               (`bench/wasm_poc/tetra3d_int16_run.js`).
+     *                               (`harness/wasm_poc/tetra3d_int16_run.js`).
      *                               1.07–1.38× over 'int16' on x64 for 3D
      *                               tetrahedral; 1.96–2.53× over lcms-wasm
      *                               u16; see docs/deepdive/Performance.md
@@ -445,7 +445,7 @@
      *      The integer kernels are NOT recommended for color-measurement
      *      workflows that compare transformed pixel values to reference
      *      targets — pin `lutMode: 'float'` (or `buildLut: false` for the
-     *      f64 pipeline) for that. See `bench/fastLUT_real_world.js` for
+     *      f64 pipeline) for that. See `harness/fastLUT_real_world.js` for
      *      accuracy/speed numbers on real profiles.
      *
      *  @param {Object} [options.wasmCache]
@@ -3635,7 +3635,7 @@
          *     extra 8 bits of precision vs Q0.8 eliminate a systematic
          *     int>float bias on monotonically-decreasing axes)
          *   - precompute maxX, maxY, maxZ[, maxK] for the input===255 boundary
-         *     patch (see bench/int_vs_float.js FINDING #2)
+         *     patch (see harness/int_vs_float.js FINDING #2)
          *
          * Then the kernel is pure ALU: Math.imul + bit shifts, no float ops,
          * no per-pixel divisions.
@@ -3723,7 +3723,7 @@
             // The two are intentionally independent CLUT scales — sharing
             // a single scale-65280 CLUT across both paths (an early v1.3
             // u8-style approach) capped u16 output precision at u8-equivalent
-            // and produced visible banding. See bench/int16_identity.js for
+            // and produced visible banding. See harness/int16_identity.js for
             // the proof.
             var isU16Mode = (this.lutMode === 'int16'
                           || this.lutMode === 'int16-wasm-scalar'
@@ -3791,7 +3791,7 @@
             var gps_fixed_u16 = isU16Mode ? Math.round(((g1 - 1) << 13) / 65535) : 0;
 
             // Per-axis maxima for the input===255 boundary patch — see
-            // bench/int_vs_float.js FINDING #2 for why this is non-optional.
+            // harness/int_vs_float.js FINDING #2 for why this is non-optional.
             // The 4D K-axis (go3) needs the same treatment when present.
             // Same maxX/Y/Z/K serve the u16 kernel (input===65535 boundary)
             // since they are pure grid-index offsets, independent of input
@@ -3850,7 +3850,7 @@
             //           quantization noise. Replaced an unshipped
             //           scale=65280, gpsPrecisionBits=16 u16 build that had
             //           ≤17 LSB identity error and visible banding — see
-            //           bench/int16_identity.js)
+            //           harness/int16_identity.js)
             lut.intLut = {
                 // --- format tag ---
                 version: 1,                       // v1.1 integer encoding (field set unchanged across u8/u16)
@@ -6376,6 +6376,9 @@
 
                 case eProfileType.RGBMatrix:
                     this.createPipeline_Device_to_PCS_via_RGBMatrix(pcsInfo, inputProfile, outputProfile);
+                    if(this.mediaWhiteDiffersFromPCS(inputProfile.absoluteAdaptationIn)){
+                        this.createPipeline_Absolute_Adaptation_Input(pcsInfo, inputProfile, intent);
+                    }
                     break;
 
                 case eProfileType.Gray:
@@ -6418,6 +6421,18 @@
             }
 
             return pcsInfo;
+        };
+
+        /**
+         * Should a matrix profile take the absolute intent scaling? Most have
+         * a D50 white, where the scale is 1 and the stages would only cost the
+         * matrix-shaper kernel its pipeline shape. Virtual profiles have none.
+         *
+         * @param {{Xa:number, Ya:number, Za:number}} [adaptation]
+         * @returns {boolean}
+         */
+        mediaWhiteDiffersFromPCS(adaptation){
+            return !!adaptation && (adaptation.Xa !== 1 || adaptation.Ya !== 1 || adaptation.Za !== 1);
         };
 
         createPipeline_Device_to_PCS_via_Lab(pcsInfo, inputProfile){
@@ -6772,6 +6787,9 @@
                     return
 
                 case eProfileType.RGBMatrix:
+                    if(this.mediaWhiteDiffersFromPCS(outputProfile.absoluteAdaptationOut)){
+                        this.createPipeline_Absolute_Adaptation_Output_Any_to_PCSv4(pcsInfo, outputProfile, intent);
+                    }
                     this.createPipeline_PCS_to_Device_via_RGBMatrix(pcsInfo, inputProfile, outputProfile);
                     return
 
@@ -7865,7 +7883,7 @@
             }
 
             // not a LUT based profile then calc as per input
-            var hasLUT = !!profile.B2A[this.intent2LUTIndex(intent)];
+            var hasLUT = this.hasIntentTable(profile, 'B2A', intent);
 
             var colorSpaceCanUseBPC = (
                 profile.type === eProfileType.Gray ||
@@ -8121,25 +8139,21 @@
         };
 
         findMaxColourantBlackpoint(profile, intent){
-            var deviceWhite,deviceBlack;
+            var deviceBlack;
 
             switch(profile.type){
                 case eProfileType.Gray:
-                    deviceWhite = convert.Gray(100);
                     deviceBlack = convert.Gray(0);
                     break;
                 case eProfileType.Duo:
                    // throw new Error('Duo profiles not supported by Black Point Compensation');
-                    deviceWhite = convert.Duo(100,100);
                     deviceBlack = convert.Duo(0,0);
                     break;
                 case eProfileType.RGBLut:
                 case eProfileType.RGBMatrix:
-                    deviceWhite = convert.RGB(255,255,255);
                     deviceBlack = convert.RGB(0,0,0);
                     break;
                 case eProfileType.CMYK:
-                    deviceWhite = convert.CMYK(0, 0, 0, 0);
                     deviceBlack = convert.CMYK(100, 100, 100, 100);
                     break;
                 case eProfileType.Lab:
@@ -8148,6 +8162,14 @@
                     return this.Lab(0, 0, 0);
                 default:
                     throw new Error( profile.type + ' not supported by Black Point Compensation');
+            }
+
+            // A LUT profile with no table of its own for this intent has no
+            // black point to offer. A fallback table still converts colours,
+            // but it is a different rendering.
+            if(profile.type !== eProfileType.RGBMatrix && !this.isGreyTRCwithNOLUT(profile, intent)
+               && !this.hasIntentTable(profile, 'A2B', intent)){
+                return this.Lab(0, 0, 0);
             }
 
             var labD50 = new Profile('*Lab');
@@ -8159,20 +8181,33 @@
 
             transformDevice2Lab.create(profile, labD50, intent);
             var blackLab = transformDevice2Lab.transform(deviceBlack);
-            var whiteLab = transformDevice2Lab.transform(deviceWhite);
 
-            if(whiteLab.L < blackLab.L){
-                // Just in case of inversion in number??
-                blackLab = whiteLab;
-            }
-
+            // Neutral, and limited to L* 50. Above 95 the darkest colorant is
+            // nearly white, which is a synthetic negative profile, not a black.
             blackLab.a = 0;
             blackLab.b = 0;
-            if(blackLab.L > 50 || blackLab.L < 0){
+            if(blackLab.L > 95 || blackLab.L < 0){
                 blackLab.L = 0;
+            } else if(blackLab.L > 50){
+                blackLab.L = 50;
             }
 
             return blackLab;
+        };
+
+        /**
+         * True if the profile carries its own table for this intent, not one
+         * borrowed by the fallbacks in Profile.decodeFile. Absolute reads the
+         * relative table.
+         *
+         * @param {Profile} profile
+         * @param {string} prefix  'A2B' or 'B2A'
+         * @param {number} intent
+         * @returns {boolean}
+         */
+        hasIntentTable(profile, prefix, intent){
+            var signature = prefix + this.intent2LUTIndex(intent);
+            return profile.tags.some(function(tag){ return tag.sig === signature; });
         };
 
         findInkLimitedBlackpoint(profile){
@@ -8187,14 +8222,19 @@
             ink-limit embedded in the profile. CMYK profiles used as input
             can use this method.*/
 
+            if(!this.hasIntentTable(profile, 'A2B', eIntent.perceptual)){
+                return this.Lab(0, 0, 0);
+            }
+
             var labD50 = new Profile('*Lab');
 
             // No pixel cache on these probes. See detectOutputBlackpoint.
             var transformLab2Device = new Transform({precision: 3, pixelCache: 0});
             var transformDevice2Lab = new Transform({precision: 3, pixelCache: 0});
 
-            // Disable auto BPC in these temp transforms
-            transformLab2Device._BPCAutoEnable = false;
+            // Auto BPC stays ON for the Lab to device leg. A v4 profile's
+            // perceptual table is built on the reference medium black, so that
+            // leg needs it, and lcms links this round trip the same way.
             transformDevice2Lab._BPCAutoEnable = false;
 
             //TODO change a multistep transform
@@ -9197,7 +9237,7 @@
     // kernel is actually faster.
     //
     // Chosen at 256 as an initial conservative value — will be profiled and
-    // re-tuned in the v1.2 main work using bench/wasm_dispatch_threshold.js
+    // re-tuned in the v1.2 main work using harness/wasm_dispatch_threshold.js
     // (sweeping 100/200/300/400 pixel-counts, per user plan). Setting this
     // from outside (Transform.WASM_DISPATCH_MIN_PIXELS = 0) is a valid
     // escape hatch for pathological test cases that want to force WASM on

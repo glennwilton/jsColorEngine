@@ -17,7 +17,7 @@
 > 21.6 % adjacency, against a 33³ CLUT of 35,937 cells, so the
 > interpolation table never leaves L1. It also found that measuring
 > several workloads in one process moved an identical measurement by
-> 27 %. (`bench/compile_poc/` used `Math.random` and was unaffected.)
+> 27 %. (`harness/compile_poc/` used `Math.random` and was unaffected.)
 >
 > **Treat both the absolute figures AND the ratios on this page as
 > provisional.** The defect hit every engine — identical bytes went to
@@ -141,7 +141,7 @@ roadmap at the bottom.
 JS-side numbers measured with `bench/mpx_summary.js` against the
 GRACoL2006 ICC profile (65 K pixels per iter, 5 batches × 100 iters
 median, 500 iter warmup). WASM scalar and SIMD numbers come from the
-shipped kernel matrix (`bench/wasm_poc/tetra3d_simd_run.js` +
+shipped kernel matrix (`harness/wasm_poc/tetra3d_simd_run.js` +
 `tetra4d_simd_run.js`, 33-grid configs which are the closest match
 to a real ICC LUT shape — full per-grid matrix in
 [deep-dive / WASM kernels](./WasmKernels.md)). All four
@@ -174,7 +174,7 @@ design, are documented in [deep-dive / WASM kernels](./WasmKernels.md):
 > + `buildLut: true` transparently picks `'int-wasm-simd'` with the
 > full demotion chain; everything else resolves to `'float'`. The
 > native-lcms2 head-to-head [has now been measured](#measured--vs-native-littlecms-same-hardware-same-run)
-> via [`bench/lcms_c/`](../../bench/lcms_c) — jsColorEngine `'int'` beats
+> via [`harness/lcms_c/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c) — jsColorEngine `'int'` beats
 > native vanilla lcms2 on 3 of 4 workflows in pure JS, and the WASM
 > SIMD default wins on all four by 2–5×. v1.2 is feature-complete.
 
@@ -262,9 +262,9 @@ The mechanics, because it's worth understanding and not just trusting:
 - ❌ Don't trust speedups from single-shot runs. Use median of N
   batches and report the spread.
 
-The `bench/fastLUT_real_world.js` numbers are the "honest" ones:
+The `harness/fastLUT_real_world.js` numbers are the "honest" ones:
 class-method-to-class-method, warm-up + 5 batch median, same LUT
-shapes and dispatch paths users hit. The `bench/int_vs_float*.js` POC
+shapes and dispatch paths users hit. The `harness/int_vs_float*.js` POC
 numbers are useful as **"what is this kernel's intrinsic ceiling if
 you bypass the engine's tricks"** — handy for evaluating WASM or
 SIMD headroom — but they are **not** a prediction of production
@@ -574,32 +574,32 @@ deps:
 
 ```bash
 # Op-count and instruction-mix tables (§2.1)
-node --allow-natives-syntax bench/jit_inspection.js
+node --allow-natives-syntax harness/jit_inspection.js
 
 # Full emitted x64 asm dump (~15 MB) + classifier scripts (§2.1)
 node --allow-natives-syntax --print-opt-code --code-comments \
-     bench/jit_inspection.js 2>&1 > bench/jit_asm_dump.txt
-pwsh bench/jit_asm_boundscheck.ps1   # compute / moves / safety mix
-pwsh bench/jit_asm_spillcheck.ps1    # spills vs real memory traffic
+     harness/jit_inspection.js 2>&1 > harness/jit_asm_dump.txt
+pwsh harness/jit_asm_boundscheck.ps1   # compute / moves / safety mix
+pwsh harness/jit_asm_spillcheck.ps1    # spills vs real memory traffic
 
 # Just the core line (§2.1) — fastest path to the asm snippets
 node --allow-natives-syntax --print-opt-code --code-comments \
-     bench/jit_asm_core_line.js 2>&1 > bench/jit_asm_core_dump.txt
+     harness/jit_asm_core_line.js 2>&1 > harness/jit_asm_core_dump.txt
 
 # Throughput through the shipped dispatcher, all four lutModes (§1)
 node bench/mpx_summary.js
 
 # WASM 3D scalar matrix — 6 configs × bit-exact vs JS int (§2.3)
-node bench/wasm_poc/tetra3d_run.js
+node harness/wasm_poc/tetra3d_run.js
 
 # WASM 3D SIMD matrix — 6 configs × bit-exact vs JS + WASM scalar (§2.4)
-node bench/wasm_poc/tetra3d_simd_run.js
+node harness/wasm_poc/tetra3d_simd_run.js
 
 # WASM 4D scalar matrix — 6 configs × bit-exact (§2.3)
-node bench/wasm_poc/tetra4d_nch_run.js
+node harness/wasm_poc/tetra4d_nch_run.js
 
 # WASM 4D SIMD matrix — 6 configs × bit-exact (§2.5)
-node bench/wasm_poc/tetra4d_simd_run.js
+node harness/wasm_poc/tetra4d_simd_run.js
 
 # In-browser comparison vs lcms-wasm (§4) — opens a UI at localhost:8080
 npm run serve
@@ -685,7 +685,7 @@ grew from 1.9 KB to 2.5 KB; peak perf jumped 60 %.
 The v1.3 roadmap originally had WASM SIMD for matrix-shaper
 pipelines only and declared LUT kernels scalar-only under WASM. That
 decision came from a 1D POC
-([`bench/wasm_poc/`](../../bench/wasm_poc/), still preserved) that
+([`harness/wasm_poc/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/), still preserved) that
 vectorised *across pixels*: four pixels' LUT lookups packed into one
 v128 per lane. The POC measured **0.89×** — slower than scalar —
 because each lane needed its own LUT gather, and x64 pre-AVX2 has
@@ -783,7 +783,7 @@ Setup for fairness:
   within ±1.5 % of `flags = 0` so the throughput conclusions are
   unaffected; the `flags = 0` column is the representative lcms
   number. (The same correction *improved* the accuracy comparison —
-  see `bench/lcms-comparison/README.md`.)
+  see `harness/lcms-comparison/README.md`.)
 - **Pinned WASM heap buffers** — `_malloc` input and output buffers
   once outside the loop and call `_cmsDoTransform` directly, so we
   don't time a `malloc`/`memcpy`/`free` on every iteration. This is
@@ -791,7 +791,7 @@ Setup for fairness:
 - Seeded PRNG input bytes (identical on both sides), 65536 pixels
   per iter, warmup 300 iters, median of 5 × 100 iters.
 
-Speed (Node 20.13.1, Win x64, `bench/lcms-comparison/bench.js`):
+Speed (Node 20.13.1, Win x64, `harness/lcms-comparison/bench.js`):
 
 | Workflow | jsColorEngine `int` | jsColorEngine `float` | lcms-wasm (HIGHRES + pinned) | `int` speedup |
 |---|---|---|---|---|
@@ -800,7 +800,7 @@ Speed (Node 20.13.1, Win x64, `bench/lcms-comparison/bench.js`):
 | CMYK → RGB   (GRACoL → sRGB)   | **51.9 Mpx/s** | 47.9 Mpx/s | 24.5 Mpx/s | **2.12×** |
 | CMYK → CMYK  (GRACoL → GRACoL) | **44.3 Mpx/s** | 41.3 Mpx/s | 22.1 Mpx/s | **2.00×** |
 
-Accuracy (9^N grid + named reference colours, `bench/lcms-comparison/accuracy.js`):
+Accuracy (9^N grid + named reference colours, `harness/lcms-comparison/accuracy.js`):
 
 | Workflow | exact match | within 1 LSB | within 2 LSB | max Δ | mean Δ |
 |---|---|---|---|---|---|
@@ -901,19 +901,19 @@ Native lcms2 measurement, same methodology as the `lcms-wasm`
 comparison above (same profiles, same 65k-pixel seeded PRNG input,
 same warmup + median-of-5-batches timing loop, same
 `INTENT_RELATIVE_COLORIMETRIC`, all `TYPE_*_8`). Harness is
-[`bench/lcms_c/`](../../bench/lcms_c); any reader can reproduce this
+[`harness/lcms_c/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c); any reader can reproduce this
 on their own hardware in ~5 minutes from a fresh WSL2 install.
 
 **Reference run** (below) — WSL2 Ubuntu 20.04 on Windows 11,
 gcc 10.5.0 with `-O3 -march=native -fno-strict-aliasing -DNDEBUG`,
 `taskset -c 0`, Intel x86_64. jsColorEngine / `lcms-wasm` numbers
 are from the same host, same session, same 65k pixels —
-`node bench/lcms-comparison/bench.js` running against the identical
+`node harness/lcms-comparison/bench.js` running against the identical
 profile and input generator.
 
 > **Steelmanning lcms2 (measured).** The release flags above match
 > lcms2's own autotools build. To verify that wasn't already leaving
-> perf on the floor, `bench/lcms_c/Makefile` has a `make steelman`
+> perf on the floor, `harness/lcms_c/Makefile` has a `make steelman`
 > target that appends **`-ffast-math -funroll-loops -flto`** on top
 > of the release flags — every compiler trick short of PGO. Measured
 > on this CPU with the same compiler on both builds, **steelman lifted
@@ -924,8 +924,8 @@ profile and input generator.
 > "best native C" number, so the ratios below credit lcms2 with every
 > compiler win it can reach.
 >
-> To reproduce: `cd bench/lcms_c && make steelman && ./bench_lcms`.
-> Flag details: [`bench/lcms_c/README.md`](../../bench/lcms_c/README.md#make-steelman--native-lcms2-ceiling).
+> To reproduce: `cd harness/lcms_c && make steelman && ./bench_lcms`.
+> Flag details: [`harness/lcms_c/README.md`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c/README.md#make-steelman--native-lcms2-ceiling).
 
 > **Bench correction (v1.5+).** The original C bench tested *RGB → Lab*
 > (sRGB → LabD50) as workflow 1 while `bench/mpx_summary.js` tests
@@ -1014,7 +1014,7 @@ estimate:**
 
 Ranges are workflow-dependent; all jsCE / lcms-native / lcms-wasm
 rows are from the same run, same hardware, same inputs. Re-run on
-your hardware via `bench/lcms_c/` + `bench/lcms-comparison/` — the
+your hardware via `harness/lcms_c/` + `harness/lcms-comparison/` — the
 ratios are stable across CPUs even when the absolute numbers shift.
 
 ### What the gap actually is
@@ -1127,7 +1127,7 @@ widening first.
 
 The comparison table above listed fast_float as *estimated* at
 `≈ 150–500 MPx/s (vanilla × 3–8)`, taken from the maintainer's
-documentation. We built `make fastfloat` in `bench/lcms_c/` to
+documentation. We built `make fastfloat` in `harness/lcms_c/` to
 replace that estimate with actual measurements — and the build turned
 up something more useful than the measurement.
 
@@ -1141,7 +1141,7 @@ The C bench has been corrected to match; `make fastfloat` (and `make`,
 Not catching this earlier was an oversight worth naming — if you're
 cross-checking two benches, make sure they measure the same thing.
 
-**fast_float splits sharply by profile type.** To reproduce: `cd bench/lcms_c && make fastfloat`. Results on the same reference hardware (WSL2 Ubuntu, gcc 9.3.0, same seeded input, same warmup-and-median methodology as §4 above):
+**fast_float splits sharply by profile type.** To reproduce: `cd harness/lcms_c && make fastfloat`. Results on the same reference hardware (WSL2 Ubuntu, gcc 9.3.0, same seeded input, same warmup-and-median methodology as §4 above):
 
 | Workflow | Profile type | lcms2 vanilla | lcms2 + fast_float | Speedup |
 |---|---|---|---|---|
@@ -1523,7 +1523,7 @@ runtime checks.
   Bit-exact against both u16 siblings.
 
 **Headless bench (Node 20 / V8, 65 K pixels/iter, GRACoL2006 +
-sRGB, `bench/int16_poc/bench_int16_simd_vs_scalar.js`):**
+sRGB, `harness/int16_poc/bench_int16_simd_vs_scalar.js`):**
 
 | Workflow                       | jsCE `int16` | `int16-wasm-scalar` | **`int16-wasm-simd`** | lcms-wasm best | SIMD vs scalar | SIMD vs lcms |
 |--------------------------------|-------------:|--------------------:|----------------------:|---------------:|---------------:|-------------:|
@@ -1575,16 +1575,16 @@ its slower siblings, and a ~4× lift over the closest `lcms-wasm`
 **Three accuracy gates ship with the kernels** — none is optional;
 all three pass at every release of the engine:
 
-- [`bench/int16_identity.js`](../../bench/int16_identity.js) — synthetic
+- [`harness/int16_identity.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_identity.js) — synthetic
   identity-CLUT round-trip. Asserts every kernel rounds at the u16
   LSB and never wider. Exits non-zero on failure; safe to wire into
   CI or a pre-commit hook.
-- [`bench/int16_poc/accuracy_v1_7_self.js`](../../bench/int16_poc/accuracy_v1_7_self.js)
+- [`harness/int16_poc/accuracy_v1_7_self.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_poc/accuracy_v1_7_self.js)
   — jsCE float-LUT vs jsCE int16-LUT, same source profile, kernel
   is the only variable. **Pure kernel quantisation noise** measured
   in u16 LSB. Headline numbers in
   [Accuracy.md § 16-bit kernel accuracy](./Accuracy.md#16-bit-kernel-accuracy-v13--near-perfect-no-corners-cut).
-- [`bench/lcms_compat/run.js`](../../bench/lcms_compat/run.js) — jsCE
+- [`harness/lcms_compat/run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/run.js) — jsCE
   float pipeline vs lcms2 2.16 float pipeline across a 130-file
   reference oracle. Confirms the math underneath the kernels is
   correct (any int16 quantisation lands on top of an already-correct
@@ -1610,7 +1610,7 @@ reusable output buffer parameter that eliminates per-call typed-array
 allocation.
 
 **Dispatcher: table-driven vs legacy cascade
-(`bench/dispatcher_compare_bench.js` — bench since retired; dispatch
+(`harness/dispatcher_compare_bench.js` — bench since retired; dispatch
 now resolves onto per-Transform kernel instances at create() time,
 see [deepdive/KernelContract.md](./KernelContract.md) — Node
 20, Win x64, 65 K pixels/iter, median of 5 × 100 iters, 500 iter
@@ -1645,7 +1645,7 @@ against a millisecond kernel), but remove unnecessary work from
 the hot path on principle.
 
 **Reusable output buffer
-(`bench/transformArray_reuse_output_bench.js`, Node 20, Win x64,
+(`harness/transformArray_reuse_output_bench.js`, Node 20, Win x64,
 1 Mi pixels/iter, sRGB → AdobeRGB RGB→RGB, median of 6 × 12
 iters, 40 iter warmup):**
 
@@ -1731,7 +1731,7 @@ tetrahedral kernel (§2.3).
 | WASM SIMD (no LUT, pure math) | 25 180 | **67.7×** |
 
 All four kernels were bit-exact against each other across 1 Mi
-pixels. See `bench/wasm_poc/README.md` for the full analysis.
+pixels. See `harness/wasm_poc/README.md` for the full analysis.
 
 **Four findings that still drive the roadmap:**
 

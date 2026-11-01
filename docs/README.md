@@ -42,7 +42,7 @@ The 1.6.0 snapshot includes the WSL native C harness text and
 `pixelCache.inKernel.*` (off vs `'auto'`).
 Browser bench headline remains photo with 5 % noise added; the
 **Speed vs Noise** tab is why. LittleCMS comparison:
-`docs/LcmsComparison.md` (`node bench/reproduce.js`). How to measure
+`docs/LcmsComparison.md` (`node harness/reproduce.js`). How to measure
 without fooling yourself: `deepdive/benchmark.md` §§20–21. Measured and
 not built: `SharedArrayBuffer` delivery (`deepdive/multicore.md`).
 Good / Bad / Ugly is archived under
@@ -142,7 +142,7 @@ JSON, and contributor notes for the hot loops.
 written by the bench that measured it and rendered by
 `scripts/build_bench_results.js`: conditions, the engine version each table was
 measured against (so a stale one says so), and a citation index of which
-document links to which table. Refresh with `node bench/reproduce.js` then
+document links to which table. Refresh with `node harness/reproduce.js` then
 `node scripts/build_bench_results.js`.
 
 ### pool.md
@@ -165,7 +165,7 @@ Float-pipeline validation against an lcms2 f64 oracle: methodology (150
 CGATS reference files), headline numbers, the one diagnosed outlier
 (grey-1c Perceptual), and where jsCE deliberately diverges from lcms.
 The image-path oracle methodology lives in
-`bench/lcms-comparison/README.md`.
+`harness/lcms-comparison/README.md`.
 
 ### deepdive/Architecture.md
 The pipeline model: how a profile becomes stages, stages become a LUT,
@@ -310,9 +310,9 @@ rules · [`../samples/README.md`](../samples/README.md) — samples index
 (per-tool folders) · `samples/LutBuilder/lutbuilder.md` — LutBuilder
 user guide · `samples/ICCImage/ICCImage.md` — ICCImage API ·
 [`../bench/README.md`](../bench/README.md) — Node/C harness inventory
-(what each script in `bench/` measures) ·
-`bench/lcms-comparison/README.md` — lcms-wasm speed+accuracy harness
-(image-path oracle methodology) · `bench/lcms_c/README.md` — native
+(what stays with the engine) ·
+`harness/lcms-comparison/README.md` — lcms-wasm speed+accuracy harness
+(image-path oracle methodology) · `harness/lcms_c/README.md` — native
 lcms2 harness (build, runtime knobs, content generators).
 
 ## Global notes

@@ -22,8 +22,8 @@ var interp = require('../../interp.js');
 //   'simplex'      one Kuhn simplex across all n axes. O(n), so the cost is
 //                  FLAT: 0.98 MPx/s at 5 channels, 0.53 at 15.
 //
-// Measured, mean MPx/s by input width (bench/channel_matrix/run.js), against
-// LSB from lcms (bench/lcms-comparison/accuracy_nchannel.js):
+// Measured, mean MPx/s by input width (harness/channel_matrix/run.js), against
+// LSB from lcms (harness/lcms-comparison/accuracy_nchannel.js):
 //
 //    ch   tetrahedral      simplex          who wins
 //     5   2.50  m 0.197    0.98  m 0.177    tetrahedral, 2.6x faster

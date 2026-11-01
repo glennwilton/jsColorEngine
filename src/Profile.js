@@ -939,16 +939,22 @@ class Profile {
             // DeviceLink profiles have no wtpt tag — mediaWhitePoint stays
             // null and absolute adaptation does not apply (no PCS).
             if (this.mediaWhitePoint) {
+                // A v2 display profile's wtpt is the unadapted monitor white,
+                // not a media white relative to D50, so absolute does not
+                // scale by it. Little CMS treats those as D50 for this reason.
+                var v2Display = this.version === 2 && this.header.pClass === 'mntr';
+                var white = v2Display ? this.header.PCSilluminant : this.mediaWhitePoint;
+
                 this.absoluteAdaptationIn = {
-                    Xa: this.mediaWhitePoint.X / this.header.PCSilluminant.X,
-                    Ya: this.mediaWhitePoint.Y / this.header.PCSilluminant.Y,
-                    Za: this.mediaWhitePoint.Z / this.header.PCSilluminant.Z
+                    Xa: white.X / this.header.PCSilluminant.X,
+                    Ya: white.Y / this.header.PCSilluminant.Y,
+                    Za: white.Z / this.header.PCSilluminant.Z
                 };
 
                 this.absoluteAdaptationOut = {
-                    Xa: this.header.PCSilluminant.X / this.mediaWhitePoint.X,
-                    Ya: this.header.PCSilluminant.Y / this.mediaWhitePoint.Y,
-                    Za: this.header.PCSilluminant.Z / this.mediaWhitePoint.Z
+                    Xa: this.header.PCSilluminant.X / white.X,
+                    Ya: this.header.PCSilluminant.Y / white.Y,
+                    Za: this.header.PCSilluminant.Z / white.Z
                 };
             }
 

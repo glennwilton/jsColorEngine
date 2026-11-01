@@ -17,7 +17,7 @@
  *
  * Same fused 3x3 and the same curves the WASM kernel reads, off
  * `stage_matrix_rgb.stageData` and the two gamma stages. Measured at
- * 62 MPx/s at int8 and 57 at int16 (`bench/js_matrix_shaper/`), against 8 for
+ * 62 MPx/s at int8 and 57 at int16 (`harness/js_matrix_shaper/`), against 8 for
  * the stage pipeline it replaces and 329 / 220 for WASM.
  *
  * IT IS NOT A FALLBACK FOR SLOW HOSTS. It is here for two things WASM cannot
@@ -33,7 +33,7 @@
  *
  * SHAPE, and why it is this shape — every point below was measured, and three
  * of them contradict the guidance that holds for the tetrahedral kernels
- * (`bench/js_matrix_shaper/run.js`):
+ * (`harness/js_matrix_shaper/run.js`):
  *
  *   - INPUT TABLE INDEXED BY THE RAW CODE. Exact, one entry per possible
  *     input, and identical source at both bit depths — only the table length

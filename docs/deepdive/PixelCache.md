@@ -391,7 +391,7 @@ self-aligning at 8 slots per line.
 
 Tempting, because it's true that the kernel doesn't actually compute
 16 bits of precision: the int16 POC keeps **Q0.8 frac**, so only 8 of
-the 16 fractional bits weight the interpolation (`bench/int16_poc/
+the 16 fractional bits weight the interpolation (`harness/int16_poc/
 RESULTS.md`, "Accuracy ceiling"). So a 16-bit-exact key is arguably
 over-precise relative to what the kernel produces, and masking down to
 10+10+10 (or the display-style 10+11+10) fits one int32 again.
@@ -593,7 +593,7 @@ cache, which is the default anyway.
 
 ### Validated by the POC — and it is the answer to the data-type axis
 
-`bench/pixel_cache_kernel_poc/` builds its cached kernel exactly this
+`harness/pixel_cache_kernel_poc/` builds its cached kernel exactly this
 way (`toString()` → insert → `new Function`) and produces byte-identical
 output, so the mechanism is no longer hypothetical.
 
@@ -656,7 +656,7 @@ Corpus must include:
 - **dithered / halftone content** — otherwise the bench looks better
   than reality, since that is the branch-mispredict case
 - the noise / gradient / solid synthetics, mirroring `BENCH_INPUT` in
-  the native harness (`bench/lcms_c/`) so results line up with the
+  the native harness (`harness/lcms_c/`) so results line up with the
   lcms measurements
 
 Then, only if the hit rate justifies it: the miss-path tax on the
@@ -668,7 +668,7 @@ from a slightly worse baseline than the noise numbers suggest.
 
 ## Measured — accuracy path, 2026-08-17
 
-`node bench/pixel_cache/cache_bench.js` — sRGB → AdobeRGB,
+`node harness/pixel_cache/cache_bench.js` — sRGB → AdobeRGB,
 `buildLut: false`. Hit rate is the transferable figure; the MPx/s
 columns describe this path only.
 
@@ -839,7 +839,7 @@ exists to address.
 
 ### POC result — the kernel cache is much better than this path
 
-Built and measured: `bench/pixel_cache_kernel_poc/`, a DeviceLink
+Built and measured: `harness/pixel_cache_kernel_poc/`, a DeviceLink
 CMYK→CMYK against `tetrahedralInterp4DArray_4Ch_intLut_loop`, with the
 cached variant produced by source-transforming the real kernel so the
 cascade is identical to production.
@@ -1174,7 +1174,7 @@ you are willing to pay memory for, then ask whether the content clears
 ~40 %. Single-entry has a lower break-even (~24 %) but a ceiling so low
 that it only wins on near-solid content.
 
-**Verified, not assumed.** `bench/pixel_cache/verify_cache.js` compares
+**Verified, not assumed.** `harness/pixel_cache/verify_cache.js` compares
 cached against uncached output byte for byte — every content type
 above, four transform shapes (3- and 4-channel output, int8 and int16),
 all cache modes: 108 whole-image comparisons, every byte identical,
@@ -1289,7 +1289,7 @@ still applies when `buildLut` is off or the kernel is KernelND.
 Reproduce with:
 
 ```bash
-node bench/pixel_cache/nchannel_bench.js
+node harness/pixel_cache/nchannel_bench.js
 ```
 
 4096 slots, int8, N → 3 channels, 60k px. `off` and `on` are MPx/s:

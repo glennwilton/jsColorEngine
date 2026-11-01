@@ -1177,7 +1177,7 @@
             // Math.cbrt is used in place of Math.pow(x, 1.0/3.0): same value to
             // within 1 ULP and roughly 4-5x faster on V8 (cbrt is a dedicated
             // intrinsic; pow runs a generic polynomial path even for fixed
-            // exponents). Verified: bench/compile_poc/bench_body_variants.js
+            // exponents). Verified: harness/compile_poc/bench_body_variants.js
             // shows ~35% body-time reduction from this single substitution.
             var k        = 1.999969482421875;
             var WX       = 0.96422;

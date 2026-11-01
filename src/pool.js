@@ -54,7 +54,7 @@ try { path = require('path'); } catch(e){ /* browser bundle — path is unused t
 var settings = require('./settings.js');
 
 // ---- measured defaults -------------------------------------------------
-// Changing these without re-running bench/multicore_poc/ is how a 30% loss
+// Changing these without re-running harness/multicore_poc/ is how a 30% loss
 // gets shipped. Each is justified in docs/deepdive/multicore.md.
 var DEFAULTS = {
     cores: 'auto',            // ~50% of logical = physical count on SMT parts

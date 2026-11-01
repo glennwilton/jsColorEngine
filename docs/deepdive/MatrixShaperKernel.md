@@ -132,7 +132,7 @@ Beyond throughput:
 
 ## Scaling in the worker pool — the faster kernel scales *worse*
 
-`bench/matrix_shaper_kernel/multicore.js`, int8, `*prophoto → *sRGB`, 4 MPx,
+`harness/matrix_shaper_kernel/multicore.js`, int8, `*prophoto → *sRGB`, 4 MPx,
 1–8 workers, medians of 5, CLUT and kernel interleaved so drift hits both.
 Output checked byte-identical against each path's own sequential result.
 
@@ -190,7 +190,7 @@ efficiency in this table is also the row that finishes first.
 
 ### The JS implementation across cores — the slower kernel scales better
 
-`bench/matrix_shaper_kernel/multicore_js.js`, int8 photo, 4 MPx. Workers are
+`harness/matrix_shaper_kernel/multicore_js.js`, int8 photo, 4 MPx. Workers are
 pinned by `JSCE_MATRIX_SHAPER_VARIANT` because `useVariant()` sets a
 module-level value and a worker is a separate module instance in a separate
 thread. Byte-identical to sequential at every count, both arms.
@@ -222,7 +222,7 @@ deserve the least trust.
 ### Would a different fragment size help? Measured: no
 
 The obvious first thought is that the kernel wants larger fragments, since each
-one now carries less work. `bench/matrix_shaper_kernel/overhead.js` sweeps it —
+one now carries less work. `harness/matrix_shaper_kernel/overhead.js` sweeps it —
 8 workers, 4 MPx photo, `tasksPerWorker` moved with `bufferPx` / `minSlicePx`
 to reach the extremes:
 
@@ -888,7 +888,7 @@ future optimisation.
 
 ## POC: what we learned measuring it
 
-Runnable: `node bench/matrix_shaper_poc/bench_matrix_shaper.js`
+Runnable: `node harness/matrix_shaper_poc/bench_matrix_shaper.js`
 
 The bench compiles several WASM modules at startup and measures 1 M pixels ×
 20 timed runs on Node. Four SIMD variants were explored in sequence; each round
@@ -1013,7 +1013,7 @@ pattern is identical — only the table sizes and index scale change.
 **~200 MPx/s** is the stable ceiling for the Node JIT. V5 is the production
 design: same speed as v4, 4× better output precision.
 
-**Browser numbers (Chrome/V8 TurboFan WASM SIMD, `bench/matrix_shaper_poc/bench_browser.html`):**
+**Browser numbers (Chrome/V8 TurboFan WASM SIMD, `harness/matrix_shaper_poc/bench_browser.html`):**
 
 | Variant | 65K px/call | 4M px/call |
 |---|---|---|
@@ -1045,8 +1045,8 @@ evicted from L2 as large images exceed L3 capacity, dropping jsCE from
 V8 TurboFan gives ~26% over Node on this loop shape (202 → 257 MPx/s), consistent
 with the 20–40% prediction.
 
-To reproduce: `node bench/matrix_shaper_poc/prebuild.js` then open
-`bench/matrix_shaper_poc/bench_browser.html` via the dev server (`node samples/serve.js`).
+To reproduce: `node harness/matrix_shaper_poc/prebuild.js` then open
+`harness/matrix_shaper_poc/bench_browser.html` via the dev server (`node samples/serve.js`).
 
 ---
 

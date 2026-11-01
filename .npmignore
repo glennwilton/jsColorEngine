@@ -19,6 +19,7 @@ speed_tests/
 # this file; the tarball should be a couple of hundred KB.
 __tests__/
 bench/
+harness/
 docs/
 samples/
 http/

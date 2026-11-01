@@ -7,6 +7,33 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.7.1] — 2026-11-01
+
+The benchmarks and the Little CMS comparison tools moved to their own repository,
+[jsColorEngine-harness](https://github.com/glennwilton/jsColorEngine-harness). The
+npm package is unchanged in size and has no runtime dependencies, as before. The
+image kernels were not touched.
+
+### Changed
+
+- The harness runs against Little CMS 2.20, on 1680 reference files from 84 profiles
+  where it had 130 from a handful. References are generated from any folder of
+  profiles, and both jsColorEngine and `lcms-wasm` are compared against the same
+  files. All differences from Little CMS are under about 1 LSB except where listed
+  in `docs/deepdive/Accuracy.md`.
+- BPC black point detection follows Little CMS in two more cases. A darkest colorant
+  is limited to L* 50, or treated as 0 above L* 95. A LUT profile with no table of
+  its own for the intent has no black point, so relative BPC on an A2B0-only profile
+  is a no-op rather than using the perceptual table's black.
+
+### Fixed
+
+- Absolute intent on a matrix profile ignored the media white point. It now scales
+  by it, except on v2 display profiles, whose `wtpt` is the unadapted monitor white.
+  That matches Little CMS. Any matrix profile with a D50 white is unaffected.
+
+---
+
 ## [1.7.0] — 2026-11-01
 
 A review pass: profile-handling fixes found by sweeping the testbed against

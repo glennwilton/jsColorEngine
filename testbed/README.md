@@ -20,7 +20,7 @@ Not tracked, and deliberately:
   inherits the restriction is unsettled, so it is treated as if it does.
   Generate them locally from your own profiles.
 
-Same split as [`bench/lcms_compat/`](../bench/lcms_compat/), for the same
+Same split as [`harness/lcms_compat/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/), for the same
 reason.
 
 ## Where this is going

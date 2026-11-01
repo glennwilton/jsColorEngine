@@ -424,7 +424,7 @@ back to `samples/lcms-wasm-dist/lcms.wasm`
 - **Same input bytes both sides.** Seeded PRNG (seed =
   `0x13579bdf`, LCG with the same constants as
   [`bench/mpx_summary.js`](../bench/mpx_summary.js) and
-  [`bench/lcms-comparison/bench.js`](../bench/lcms-comparison/bench.js))
+  [`harness/lcms-comparison/bench.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms-comparison/bench.js))
   produces identical pixel buffers for jsColorEngine and lcms-wasm.
   Cache effects are the same on both sides.
 - **Same intent, same depth.** `INTENT_RELATIVE_COLORIMETRIC`,
@@ -516,10 +516,10 @@ hear about it than keep quoting biased numbers.
 - Other benches shipping in the repo:
   [`bench/mpx_summary.js`](../bench/mpx_summary.js) (Node headline
   throughput),
-  [`bench/jit_inspection.js`](../bench/jit_inspection.js) (V8 op-count
+  [`harness/jit_inspection.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/jit_inspection.js) (V8 op-count
   and deopt analysis),
-  [`bench/wasm_poc/`](../bench/wasm_poc/) (WASM kernel matrix),
-  [`bench/lcms-comparison/`](../bench/lcms-comparison/) (Node
+  [`harness/wasm_poc/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/) (WASM kernel matrix),
+  [`harness/lcms-comparison/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms-comparison/) (Node
   head-to-head vs lcms-wasm),
-  [`bench/lcms_c/`](../bench/lcms_c/) (native-C lcms2 baseline —
+  [`harness/lcms_c/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c/) (native-C lcms2 baseline —
   requires gcc / clang via WSL2 or MinGW-w64)

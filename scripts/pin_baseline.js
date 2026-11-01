@@ -65,7 +65,7 @@ try {
     if(/QUICK/i.test(fs.readFileSync(path.join(runDir, 'conditions.md'), 'utf8')) && !has('force')){
         console.error('\n  That run was measured in --quick mode (reduced sizes and repeats).');
         console.error('  A pin must be a full run, or every later comparison inherits its gaps.');
-        console.error('  Re-run `node bench/reproduce.js` without --quick.\n');
+        console.error('  Re-run `node harness/reproduce.js` without --quick.\n');
         process.exit(1);
     }
 } catch(e){ /* older runs have no conditions.md */ }

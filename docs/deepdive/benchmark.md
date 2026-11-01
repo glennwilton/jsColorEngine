@@ -1414,7 +1414,7 @@ Three things this audit established that reading had not:
   extraction — giving 105 colours at 21.6 % adjacency. So the headline
   210/270 MPx/s figures were measured on the least demanding input in
   the repository.
-- **"Every bench" was an overstatement.** `bench/compile_poc/` used
+- **"Every bench" was an overstatement.** `harness/compile_poc/` used
   `Math.random` throughout and was always fine. The correct scope is
   "every bench built on the seeded PRNG", which is most but not all of
   them. Recorded because the original claim went into a commit message

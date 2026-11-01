@@ -58,8 +58,8 @@ if WASM couldn't clear that bar, the port wouldn't justify its complexity.
 
 ### The experiment
 
-[`bench/wasm_poc/tetra3d_nch.wat`](../../bench/wasm_poc/tetra3d_nch.wat) +
-[`bench/wasm_poc/tetra3d_run.js`](../../bench/wasm_poc/tetra3d_run.js)
+[`harness/wasm_poc/tetra3d_nch.wat`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra3d_nch.wat) +
+[`harness/wasm_poc/tetra3d_run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra3d_run.js)
 (Apr 2026):
 
 A hand-written `.wat` port of `tetrahedralInterp3DArray_3Ch_intLut_loop`,
@@ -67,7 +67,7 @@ same int Q0.16 gps + u16 CLUT + `(x + 0x80) >> 8`-twice rounding, but with
 the channel axis **rolled** into a `for(o = 0; o < cMax; o++)` loop
 (n-channel form from `tetrahedralInterp3D_NCh`, rather than the production
 kernel's fully-unrolled 3× body). Plus a sibling
-[`tetra3d_3ch_preload.wat`](../../bench/wasm_poc/tetra3d_3ch_preload.wat)
+[`tetra3d_3ch_preload.wat`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra3d_3ch_preload.wat)
 that replicates the JS kernel's "pre-load `c0, c1, c2` before case dispatch"
 pattern, to test whether that pattern matters on WASM.
 
@@ -255,8 +255,8 @@ entire *point* for cMax=4.
 
 ### Measured results
 
-[`bench/wasm_poc/tetra3d_simd.wat`](../../bench/wasm_poc/tetra3d_simd.wat) +
-[`bench/wasm_poc/tetra3d_simd_run.js`](../../bench/wasm_poc/tetra3d_simd_run.js).
+[`harness/wasm_poc/tetra3d_simd.wat`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra3d_simd.wat) +
+[`harness/wasm_poc/tetra3d_simd_run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra3d_simd_run.js).
 
 All six configs bit-exact against both the JS `_3Ch_intLut_loop` /
 `_4Ch_intLut_loop` production kernels **and** the shipping WASM scalar
@@ -355,11 +355,11 @@ engineering call.
 We built the 4D scalar kernel first (SIMD follows in the same v1.2
 milestone) to validate the hoisted-prologue + flag-gated K-plane loop
 shape end-to-end before porting it to v128. Source is
-[`bench/wasm_poc/tetra4d_nch.wat`](../../bench/wasm_poc/tetra4d_nch.wat)
+[`harness/wasm_poc/tetra4d_nch.wat`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra4d_nch.wat)
 (one rolled n-channel kernel; the JS sibling has fully unrolled `_3Ch`
 / `_4Ch` variants).
 
-[`bench/wasm_poc/tetra4d_nch_run.js`](../../bench/wasm_poc/tetra4d_nch_run.js),
+[`harness/wasm_poc/tetra4d_nch_run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra4d_nch_run.js),
 Node 20.13, 2^20 pixels/pass, 1.25 B pixels over 5×50 batches per config:
 
 ```
@@ -515,8 +515,8 @@ amortised against the ~70-cycle per-pixel 4D budget).
 
 ### Measured results
 
-[`bench/wasm_poc/tetra4d_simd.wat`](../../bench/wasm_poc/tetra4d_simd.wat) +
-[`bench/wasm_poc/tetra4d_simd_run.js`](../../bench/wasm_poc/tetra4d_simd_run.js),
+[`harness/wasm_poc/tetra4d_simd.wat`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra4d_simd.wat) +
+[`harness/wasm_poc/tetra4d_simd_run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/tetra4d_simd_run.js),
 Node 20.13, 2^20 pixels/pass, 1.25 B pixels over 5×50 batches per config:
 
 ```
@@ -584,24 +584,24 @@ output mode. That's the v1.3 hook — same SIMD plumbing, different tail.
 ## If you want to verify yourself
 
 Every number in this page is reproducible with shipped tooling in
-[`bench/wasm_poc/`](../../bench/wasm_poc/):
+[`harness/wasm_poc/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc/):
 
 ```bash
 # WASM 3D tetrahedral matrix — 6 configs (g1 x cMax), bit-exact verification
 # + speed vs the production JS int kernel. This is where the 1.40x number
 # comes from:
-node bench/wasm_poc/tetra3d_run.js
+node harness/wasm_poc/tetra3d_run.js
 
 # WASM SIMD 3D tetrahedral matrix — same 6 configs, JS + WASM scalar + WASM
 # SIMD side by side. This is where the 3.25x average number comes from.
 # Bit-exact vs BOTH JS production and the shipping WASM scalar kernel:
-node bench/wasm_poc/tetra3d_simd_run.js
+node harness/wasm_poc/tetra3d_simd_run.js
 
 # WASM scalar 4D — the function-call-cost lesson bench (1.22x avg):
-node bench/wasm_poc/tetra4d_nch_run.js
+node harness/wasm_poc/tetra4d_nch_run.js
 
 # WASM SIMD 4D — the flag-gated loop + K0-in-v128 design (2.39x avg):
-node bench/wasm_poc/tetra4d_simd_run.js
+node harness/wasm_poc/tetra4d_simd_run.js
 
 # End-to-end throughput (MPx/s) through the shipped dispatcher across
 # all four lutModes, routed through Transform.transformArray():
@@ -752,7 +752,7 @@ memory pressure, deciding when to compact, or logging.
 
 ### Benchmarked cost of auto-compact (post-run)
 
-`bench/wasm_shrink_ratio_bench.js` measures the worst case: alternating
+`harness/wasm_shrink_ratio_bench.js` measures the worst case: alternating
 big/small images every call so compact fires after every large image.
 
 | Scenario | Overhead (scalar) | Overhead (SIMD) | Memory saved |

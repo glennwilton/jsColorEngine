@@ -29,7 +29,7 @@ module.exports = {
             // 1-D and 2-D loops. This used to call tetrahedralInterp4D_NCh once
             // per pixel, which returned a fresh `new Array(outputChannels)`
             // every time -- and it is the CMYK -> 6CLR / n-colour separation
-            // path, the slowest row in bench/small_dim.
+            // path, the slowest row in harness/small_dim.
             //
             // THE SCRATCH IS NOT TIDINESS. A 4-D interpolation evaluates two
             // 3-D ones at the bracketing K planes. When interpK is true the
@@ -1165,7 +1165,7 @@ module.exports = {
          * rounding-bias bug here — `+0x80` instead of `+0x8000` — fixed
          * at the same time as the u20 refactor.)
          *
-         * Bench reference: bench/fastLUT_real_world.js with GRACoL2006.
+         * Bench reference: harness/fastLUT_real_world.js with GRACoL2006.
          */
         tetrahedralInterp4DArray_3Ch_intLut_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){
             var X0 = 0|0, X1 = 0|0, Y0 = 0|0, Y1 = 0|0, Z0 = 0|0, Z1 = 0|0, K0 = 0|0;
@@ -1413,7 +1413,7 @@ module.exports = {
          *     float kernel's variable naming)
          *
          * Accuracy on GRACoL2006 → GRACoL2006 (65k random pixels,
-         * bench/fastLUT_real_world.js): 95.89 % bit-exact vs float, max
+         * harness/fastLUT_real_world.js): 95.89 % bit-exact vs float, max
          * 1 LSB drift on the remaining 4.11 %, zero channels off by ≥2.
          */
         tetrahedralInterp4DArray_4Ch_intLut_loop(input, inputPos, output, outputPos, length, intLut, inputHasAlpha, outputHasAlpha, preserveAlpha){

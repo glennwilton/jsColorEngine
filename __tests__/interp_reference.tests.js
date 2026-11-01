@@ -200,7 +200,7 @@ describe('optimised interpolators match the reference implementation', () => {
         // reference-grade; what it lacks is an outside opinion.
         //
         // The oracle is Little CMS, as it is for every other channel count in
-        // bench/lcms_compat/. The blocker is input: real n-colour profiles are
+        // harness/lcms_compat/. The blocker is input: real n-colour profiles are
         // licensed and cannot be committed. See the synthetic colour-wheel
         // profile plan in docs/NChannel.md.
         const lut = makeLut(3, 17, 6, 4321);

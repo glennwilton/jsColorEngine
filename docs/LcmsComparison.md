@@ -412,7 +412,7 @@ engines has plenty of opportunity to disturb what it is measuring, and on
 this page one already has.
 
 So the numbers are checked against a deliberately minimal control —
-[`bench/solo_photo/`](../bench/solo_photo/solo.js): **one photograph,
+[`harness/solo_photo/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/solo_photo/solo.js): **one photograph,
 one engine, one process, nothing else loaded.** No second engine is ever
 constructed, no second content type exists, and `lcms-wasm` is not
 imported at all, so no 300 KB WASM heap sits next to the thing being
@@ -806,14 +806,14 @@ standalone run; before, they were not.*
 **Every number on this page comes from one command:**
 
 ```bash
-cd bench/release_matrix && npm install && cd ../..
-node bench/reproduce.js
+cd harness/release_matrix && npm install && cd ../..
+node harness/reproduce.js
 ```
 
 That runs all seven phases — corpus, accuracy, native lcms at both
 builds, the JS content matrix, the size sweep, the per-image rows, the
 pixel cache and the control bench — and writes each phase's raw output
-to `bench/results/<timestamp>/`, alongside a `conditions.md` capturing
+to `harness/results/<timestamp>/`, alongside a `conditions.md` capturing
 the CPU, compiler, versions and corpus that produced them. Roughly an
 hour; `--quick` cuts it to about fifteen minutes at reduced coverage.
 
@@ -825,17 +825,17 @@ release run and it had to be re-measured.
 Useful subsets:
 
 ```bash
-node bench/reproduce.js --only accuracy      # the half that matters most, ~2 min
-node bench/reproduce.js --only js,solo       # no gcc/WSL needed
-node bench/reproduce.js --with-flags         # add the CFLAGS sweep (slow)
-node bench/reproduce.js --skip-native        # no Linux toolchain available
+node harness/reproduce.js --only accuracy      # the half that matters most, ~2 min
+node harness/reproduce.js --only js,solo       # no gcc/WSL needed
+node harness/reproduce.js --with-flags         # add the CFLAGS sweep (slow)
+node harness/reproduce.js --skip-native        # no Linux toolchain available
 ```
 
 The individual harnesses can still be driven directly when you are
 chasing one figure — see
-[`bench/release_matrix/`](../bench/release_matrix/README.md) for the six
-methodology rules it enforces, [`bench/solo_photo/`](../bench/solo_photo/README.md)
-for the control, and [`bench/lcms_c/`](../bench/lcms_c/README.md) for the
+[`harness/release_matrix/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/release_matrix/README.md) for the six
+methodology rules it enforces, [`harness/solo_photo/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/solo_photo/README.md)
+for the control, and [`harness/lcms_c/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c/README.md) for the
 native side.
 
 If your numbers disagree with ours, open an issue with the raw output.

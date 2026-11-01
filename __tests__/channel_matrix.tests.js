@@ -3,7 +3,7 @@
  *
  * 225 combinations, and the bar is deliberately low: does it produce a
  * plausible answer without throwing? Not "is it fast", not "does it match
- * another CMS" — those are bench/lcms-comparison/accuracy_*.js. This is the
+ * another CMS" — those are harness/lcms-comparison/accuracy_*.js. This is the
  * one that says the engine can do what it claims across its whole declared
  * range.
  *

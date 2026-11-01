@@ -1051,7 +1051,7 @@ describe('int16 wide output reaches float instead of throwing', () => {
     // simply did not build its table -- it should never have covered the case
     // where no u16 run exists at all.
     //
-    // Found by the first int16 run of bench/lcms-comparison/accuracy_b2a.js,
+    // Found by the first int16 run of harness/lcms-comparison/accuracy_b2a.js,
     // on a 6-channel profile. Nothing in this repo could reach it before,
     // because there were no profiles above 4 channels.
 

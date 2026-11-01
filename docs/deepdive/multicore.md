@@ -567,7 +567,7 @@ off the SIMD kernels even when they are running in workers.
 
 ## MEASURED (2026-08-19) — the experiment has been run
 
-`bench/multicore_poc/` — Model A, public API only, no engine changes.
+`harness/multicore_poc/` — Model A, public API only, no engine changes.
 Ryzen 7700X (8C/16T), Node 24, sRGB→GRACoL, `lutMode: 'int'`, 8 MP,
 output byte-identical to single-threaded in every row.
 
@@ -1062,7 +1062,7 @@ macOS place it wherever they like and may migrate it between cores
 mid-task. Neither `worker_threads` nor the Web Worker API exposes any
 way to pin one — that needs a native addon (`SetThreadAffinityMask`,
 `sched_setaffinity`), which is exactly why the native C benchmarks in
-`bench/lcms_c/` can use `taskset -c 0` and the JS ones cannot.
+`harness/lcms_c/` can use `taskset -c 0` and the JS ones cannot.
 
 Three consequences, and they all argue for the design already arrived
 at rather than against it:
@@ -1217,7 +1217,7 @@ a reason to prefer it over an ad-hoc pool-per-Transform shortcut.
 
 Worth reading the reference implementation before claiming a design is
 better. lcms's `threaded` plugin is vendored under
-`bench/lcms_c/lcms2-2.18/plugins/threaded/`, and it makes two choices
+`harness/lcms_c/lcms2-2.18/plugins/threaded/`, and it makes two choices
 that differ from everything measured here.
 
 **It splits evenly, one slice per thread** (`threaded_split.c`):
@@ -1274,7 +1274,7 @@ mistake in context. But both are avoidable when the API accepts a
 
 ### MEASURED — what the per-image barrier costs
 
-`bench/multicore_poc/batch_barrier.js`, identical work either way:
+`harness/multicore_poc/batch_barrier.js`, identical work either way:
 **BARRIER** plans, dispatches and joins each image in turn; **MERGED**
 puts every image's tasks in one queue with no image boundaries. 8
 workers, `lutMode:'int'`:
@@ -1636,7 +1636,7 @@ cost to accept without evidence. Screen-resolution sizing (1920×1080 ≈
 
 ### MEASURED — per-task overhead, and the planner is wrong
 
-`bench/multicore_poc/task_overhead.js`. 8 MP through 4 workers,
+`harness/multicore_poc/task_overhead.js`. 8 MP through 4 workers,
 sRGB→GRACoL, `lutMode:'int'`, best of 7. Total pixels and worker count
 held constant; only the number of tasks the work is cut into varies, so
 any rise is per-task cost and nothing else.
@@ -1971,9 +1971,9 @@ sits once worker spin-up is counted.
 > ~6.2x rather than 6.53x. **The absolute MPx/s barely moved** — which is the
 > lesson: quote the throughput, not the ratio.
 
-`bench/multicore_matrix/run.js`, 4 MPx sRGB→GRACoL2006, int8, median of 5,
+`harness/multicore_matrix/run.js`, 4 MPx sRGB→GRACoL2006, int8, median of 5,
 **one process per cell** (`--isolate`). Ryzen 7 7700X, 8 physical / 16 logical,
-Node 24. Raw rows in `bench/results/multicore_matrix.json`.
+Node 24. Raw rows in `harness/results/multicore_matrix.json`.
 
 Three axes, because each has been wrong before: content (a LUT transform is not
 fixed-cost per pixel), worker count including odd values (the pull queue is
@@ -2492,7 +2492,7 @@ already at the optimum, is in
 
 ### MEASURED, AND NOT BUILT: SharedArrayBuffer is worth ~5–13%, not ~30%
 
-`bench/sab_spike/` reimplements the pool's dispatch loop in the crudest way
+`harness/sab_spike/` reimplements the pool's dispatch loop in the crudest way
 that is still fair — a pull queue, real workers, the real matrix-shaper kernel,
 output checked byte-for-byte — so the delivery model could be measured before
 SAB was threaded through cancellation, eviction, scratch reuse and the worker

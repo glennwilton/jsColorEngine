@@ -2620,7 +2620,7 @@
          *      10     3   180ms  mean 1.130   1746ms mean 0.008
          *
          * (mean = LSB from Little CMS over a smooth table --
-         * bench/lcms-comparison/accuracy_nchannel.js)
+         * harness/lcms-comparison/accuracy_nchannel.js)
          *
          * The simplex is not better anywhere. At 5 and 6 channels -- the
          * counts anyone ships, Hexachrome being 6 -- this scheme is FASTER,
@@ -2815,7 +2815,7 @@
          *      10     3   180ms  mean 1.130   1746ms mean 0.008
          *
          * (mean = LSB from Little CMS over a smooth table --
-         * bench/lcms-comparison/accuracy_nchannel.js)
+         * harness/lcms-comparison/accuracy_nchannel.js)
          *
          * Not better anywhere. At 5 and 6 channels it is SLOWER and no more
          * accurate -- the sort costs more than four tetrahedral evaluations.
@@ -2991,7 +2991,7 @@
          *     NOT 32 — the Q0.8 version truncated (g1-1)/255 enough to
          *     introduce a second int>float bias on decreasing axes)
          *   - intLut.maxX/Y/Z[/maxK] hold (g1-1)*goN for the input===255
-         *     boundary patch (see bench/int_vs_float.js FINDING #2 —
+         *     boundary patch (see harness/int_vs_float.js FINDING #2 —
          *     non-optional, fixes a corner-rounding bug)
          *   - input is u8 (Uint8ClampedArray), values 0..255
          *   - output is u8 (Uint8ClampedArray); the array's natural clamp
@@ -3014,8 +3014,8 @@
          * RGB→RGB). The residual 1 LSB is Uint8ClampedArray banker's
          * rounding disagreeing with the kernel's round-half-up at exact
          * X.5 half-ties — not interpolation error. See
-         * bench/fastLUT_real_world.js (3D+4D real numbers) and
-         * bench/diag_cmyk_to_rgb.js (accuracy trail for the two fixes
+         * harness/fastLUT_real_world.js (3D+4D real numbers) and
+         * harness/diag_cmyk_to_rgb.js (accuracy trail for the two fixes
          * that eliminated the systematic +0.4 % bias and the Q0.8 gps
          * truncation bias).
          *
@@ -3040,7 +3040,7 @@
          * LSB (g1=17) of identity error and produced VISIBLE BANDING — a
          * smooth u16 gradient like 12340..12349 collapsed to a single
          * output value because the 8-bit weight quantized 16 input units to
-         * 1 weight step. See bench/int16_identity.js for the regression
+         * 1 weight step. See harness/int16_identity.js for the regression
          * demo.
          *
          * v1.3 fixes both losses with three changes (Q0.13 was reached
@@ -3070,12 +3070,12 @@
          *
          * Accuracy gates (run before shipping any change to these kernels):
          *
-         *   1. bench/int16_identity.js — synthetic identity round-trip.
+         *   1. harness/int16_identity.js — synthetic identity round-trip.
          *      g1 ∈ {17, 33, 65}: worst |in - out| ≤ 1 LSB on every axis,
          *      all grid-aligned inputs round-trip exactly. No banding.
          *      THIS IS THE GATE for kernel correctness.
          *
-         *   2. bench/int16_poc/accuracy_v1_7_self.js — float-LUT-vs-int16-LUT
+         *   2. harness/int16_poc/accuracy_v1_7_self.js — float-LUT-vs-int16-LUT
          *      self-delta on real ICC profiles (sRGB / GRACoL2006). Holds
          *      everything constant EXCEPT the kernel; the delta IS the
          *      Q0.13 quantization error.
@@ -3085,7 +3085,7 @@
          *      CMYK→RGB, CMYK→CMYK). The filename retains its
          *      development-artifact prefix (accuracy_v1_7_self.js).
          *
-         *   3. bench/int16_poc/accuracy_v1_6_vs_lcms.js — sanity check vs
+         *   3. harness/int16_poc/accuracy_v1_6_vs_lcms.js — sanity check vs
          *      lcms-wasm. NOT a precision reference (the source ICC builds
          *      to different float LUTs in jsCE vs lcms), but useful for
          *      "are we in the same league?" — yes, ≥ 98 % within 256 LSB
@@ -3111,7 +3111,7 @@
          *     machine running the same JS engine; the WASM scalar + SIMD
          *     u16 kernels produce identical bytes).
          *
-         * ⚠ DO NOT EDIT WITHOUT RUNNING bench/int16_identity.js — that
+         * ⚠ DO NOT EDIT WITHOUT RUNNING harness/int16_identity.js — that
          *   gate is the v1.3 (Q0.13) contract. Other tests
          *   (transform_lutMode_*) verify dispatcher integration and
          *   end-to-end ICC pipelines.

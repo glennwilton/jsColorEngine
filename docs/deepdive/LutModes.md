@@ -37,7 +37,7 @@ values ship, four kernels plus the dispatcher:
 All four runtime kernels produce bit-identical output for 8-bit input
 within their respective kernel families. The SIMD and scalar WASM kernels
 are verified bit-exact against the JS `'int'` reference across a 12-config
-matrix in [`bench/wasm_poc/`](../../bench/wasm_poc).
+matrix in [`harness/wasm_poc/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/wasm_poc).
 
 Which input × output × format actually has a custom kernel (and what
 ships) is the coverage matrix in

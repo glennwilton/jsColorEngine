@@ -1,4 +1,4 @@
-# `bench/lcms_compat/profiles/` — user-supplied ICC profiles
+# `harness/lcms_compat/profiles/` — user-supplied ICC profiles
 
 **This directory is gitignored** — ICC profiles are licensed
 artefacts and most of what ships in a real prepress workflow cannot

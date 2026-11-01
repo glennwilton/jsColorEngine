@@ -17,7 +17,7 @@ the same file. Do not gate on `jest --coverage`.
 fixtures cannot reach, written with `src/encodeICC.js`. Where it can, it
 checks against a formula rather than another engine.
 
-Accuracy against another CMS is `bench/lcms-comparison/`, not Jest.
+Accuracy against another CMS is `harness/lcms-comparison/`, not Jest.
 Throughput is `node bench/mpx_summary.js`. This page lists **what Jest
 asserts**, and **what it does not**.
 
@@ -31,11 +31,12 @@ npx jest channel_matrix          # 225 widths, does it run
 npx jest transform_guards        # array / ViaLUT / reformat / lastUsedKernel
 ```
 
-Oracles (not Jest):
+Oracles (not Jest), from the
+[harness repository](https://github.com/glennwilton/jsColorEngine-harness):
 
 ```bash
 node scripts/make_test_profiles.js --check
-cd bench/lcms-comparison
+cd harness/lcms-comparison
 node accuracy_gray.js            # 1 ch
 node accuracy_nchannel.js        # 2–10 ch, device → PCS
 node accuracy_b2a.js             # 2–15 ch, PCS → device, both depths

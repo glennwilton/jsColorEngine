@@ -621,6 +621,103 @@ describe('matrix black point', () => {
     });
 });
 
+describe('absolute intent on matrix profiles', () => {
+    const D65 = {X: 0.95045, Y: 1, Z: 1.08905};
+    const withWhite = (version) => {
+        const gamma = () => curvGamma(2.2);
+        const tags = [
+            ['bTRC', gamma()], ['bXYZ', enc.XYZType(SRGB_D50.b)],
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('d65')],
+            ['gTRC', gamma()], ['gXYZ', enc.XYZType(SRGB_D50.g)],
+            ['rTRC', gamma()], ['rXYZ', enc.XYZType(SRGB_D50.r)],
+            ['wtpt', enc.XYZType(D65)],
+        ];
+        const bytes = enc.assemble({colorSpace: 'RGB ', profileClass: 'mntr', pcs: 'XYZ ', intent: 0}, tags);
+        return fromBytes(version === 4 ? asV4(bytes) : bytes);
+    };
+    const toLab = (profile, intent) => {
+        const transform = new Transform({dataFormat: 'object', pixelCache: 0});
+        transform.create(profile, new Profile('*Lab'), intent);
+        return transform.transform(convert.RGB(255, 255, 255));
+    };
+
+    test('a v4 media white scales absolute', () => {
+        const absolute = toLab(withWhite(4), eIntent.absolute);
+        const relative = toLab(withWhite(4), eIntent.relative);
+        expect(Math.abs(absolute.b - relative.b)).toBeGreaterThan(10);
+    });
+
+    test('a v2 display white does not', () => {
+        const absolute = toLab(withWhite(2), eIntent.absolute);
+        const relative = toLab(withWhite(2), eIntent.relative);
+        expect(absolute.b).toBeCloseTo(relative.b, 6);
+    });
+
+    test('absolute into the profile is the inverse of absolute out of it', () => {
+        const profile = withWhite(4);
+        const out = new Transform({dataFormat: 'object', pixelCache: 0});
+        out.create(profile, new Profile('*Lab'), eIntent.absolute);
+        const back = new Transform({dataFormat: 'object', pixelCache: 0});
+        back.create(new Profile('*Lab'), profile, eIntent.absolute);
+        const colour = back.transform(out.transform(convert.RGB(120, 90, 200)));
+        expect(Math.abs(colour.R - 120)).toBeLessThan(1);
+        expect(Math.abs(colour.G - 90)).toBeLessThan(1);
+        expect(Math.abs(colour.B - 200)).toBeLessThan(1);
+    });
+
+    test('a D50 white keeps the matrix kernel', () => {
+        const curve = () => curvGamma(2.2);
+        const transform = new Transform({dataFormat: 'int8'});
+        transform.create(fromBytes(matrixProfile(curve(), curve(), curve())), new Profile('*AdobeRGB'), eIntent.absolute);
+        transform.array(new Uint8Array(30), false, false);
+        expect(transform.lastUsedKernel).toBe('matrix-shaper');
+    });
+});
+
+describe('black point detection', () => {
+    // An RGB LUT profile whose darkest colorant sits at a chosen L*.
+    const withDarkest = (lightness, tagNames) => {
+        const cells = [];
+        for(let r = 0; r < 2; r++){
+            for(let g = 0; g < 2; g++){
+                for(let b = 0; b < 2; b++){
+                    const L = lightness + (100 - lightness) * (r + g + b) / 3;
+                    cells.push(...enc.labToU16v2(L, 0, 0));
+                }
+            }
+        }
+        const a2b = enc.lut16Type({inputChannels: 3, outputChannels: 3, gridPoints: 2, CLUT: cells});
+        return fromBytes(enc.assemble({colorSpace: 'RGB ', profileClass: 'prtr', pcs: 'Lab ', intent: 0}, [
+            ...tagNames.map((name) => [name, a2b]),
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('dark')],
+            ['wtpt', enc.XYZType(enc.D50)],
+        ]));
+    };
+    const blackLightness = (profile, intent) => {
+        const transform = new Transform({});
+        const black = transform.detectBlackpoint(profile, intent);
+        return transform.XYZ2Lab(black).L;
+    };
+
+    test('a dark colorant is the black point', () => {
+        expect(blackLightness(withDarkest(20, ['A2B0', 'A2B1']), eIntent.relative)).toBeCloseTo(20, 1);
+    });
+
+    test('L* is limited to 50', () => {
+        expect(blackLightness(withDarkest(70, ['A2B0', 'A2B1']), eIntent.relative)).toBeCloseTo(50, 1);
+    });
+
+    test('a darkest colorant above L* 95 is a synthetic negative, not a black', () => {
+        expect(blackLightness(withDarkest(97, ['A2B0', 'A2B1']), eIntent.relative)).toBeCloseTo(0, 3);
+    });
+
+    test('no table for the intent means no black point', () => {
+        const profile = withDarkest(20, ['A2B0']);
+        expect(blackLightness(profile, eIntent.relative)).toBeCloseTo(0, 3);
+        expect(blackLightness(profile, eIntent.perceptual)).toBeCloseTo(20, 1);
+    });
+});
+
 describe('gray LUT density', () => {
     const gray = () => fromBytes(Profile.createGrayICC({gamma: 1.8}));
     const bake = (options) => {

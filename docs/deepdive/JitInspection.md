@@ -34,7 +34,7 @@ directly using V8's native APIs, not by inference. Run the bench yourself
 any time with:
 
 ```
-node --allow-natives-syntax bench/jit_inspection.js
+node --allow-natives-syntax harness/jit_inspection.js
 ```
 
 **Measured result (Node 20.13 / V8 11.3, Windows x64, 2026-04):**
@@ -107,7 +107,7 @@ for 5–10 cycles of branch penalty per pixel.
 
 ## Instruction-mix breakdown — what is V8 actually spending time on?
 
-From `bench/jit_asm_boundscheck.ps1` against the same dump, isolated per
+From `harness/jit_asm_boundscheck.ps1` against the same dump, isolated per
 optimised-code block:
 
 | Kernel | Total inst | Compute¹ | Data moves² | Safety³ | Tight bounds-check pairs⁴ |
@@ -182,7 +182,7 @@ optimised-code block:
 
 ## Move classification — spills vs real memory traffic
 
-From `bench/jit_asm_spillcheck.ps1`:
+From `harness/jit_asm_spillcheck.ps1`:
 
 | Kernel | Moves | Spill traffic⁵ | Real heap I/O⁶ | Reg-to-reg |
 |---|---|---|---|---|
@@ -327,7 +327,7 @@ The skeptical reading of every section above is *"op-counts and
 percentages are suggestive but you're trusting a regex to classify
 instructions."* Fair. So here is the actual emitted x64 for the single
 most load-bearing line in the whole engine, captured from a focused
-microbench (`bench/jit_asm_core_line.js`) that isolates just that
+microbench (`harness/jit_asm_core_line.js`) that isolates just that
 expression in a tight loop so V8 emits a ~1 KB function whose body maps
 1:1 back to the source — no kernel-dispatch noise, no tetrahedral branch
 selection, just the arithmetic.
@@ -348,7 +348,7 @@ output[outputPos++] = (o0 + ((( d0 + ((CLUT[base1++] - a) * rx)
 ```
 
 The pure-math hot body V8 emits inside the main loop (addresses from
-`bench/jit_asm_core_dump.txt`, `name = floatCoreLine`, TurboFan, loop
+`harness/jit_asm_core_dump.txt`, `name = floatCoreLine`, TurboFan, loop
 offsets `+0x502`..`+0x537`):
 
 ```
@@ -450,14 +450,14 @@ reproducible in under a second:
 
 ```
 node --allow-natives-syntax --print-opt-code --code-comments \
-     bench/jit_asm_core_line.js 2>&1 > bench/jit_asm_core_dump.txt
+     harness/jit_asm_core_line.js 2>&1 > harness/jit_asm_core_dump.txt
 ```
 
 Search the dump for `name = floatCoreLine` and `name = intCoreLine`.
 Each function emits ~1.9–2.0 KB of x64, of which the hot body shown here
 is ~50–60 bytes. The surrounding ~300 bytes of prolog / type-guards /
 iteration setup are identical to what the real 4D 3Ch kernel emits for
-the same line (verified against `bench/jit_asm_dump.txt` with the full
+the same line (verified against `harness/jit_asm_dump.txt` with the full
 `transformArrayViaLUT` path wired in), just without the 5 other
 tetrahedral cases and the 3-channel unroll that fattens the real kernel
 to 7.6 / 8.6 KB.
@@ -643,20 +643,20 @@ and the lesson survives another release cycle.
 ## If you want to verify yourself
 
 Every number in this page is reproducible with shipped tooling. The
-benches live in [`bench/`](../../bench/) and all of them run in seconds
+benches live in the [harness](https://github.com/glennwilton/jsColorEngine-harness) and all of them run in seconds
 from a stock Node 20 install:
 
 ```bash
 # Op-count and instruction-mix tables
-node --allow-natives-syntax bench/jit_inspection.js
+node --allow-natives-syntax harness/jit_inspection.js
 
 # Full asm dump (~660 KB text file)
 node --allow-natives-syntax --print-opt-code --code-comments \
-     bench/jit_asm_core_line.js 2>&1 > bench/jit_asm_core_dump.txt
+     harness/jit_asm_core_line.js 2>&1 > harness/jit_asm_core_dump.txt
 
 # Spill / bounds-check classifiers (PowerShell)
-pwsh bench/jit_asm_boundscheck.ps1 bench/jit_asm_core_dump.txt
-pwsh bench/jit_asm_spillcheck.ps1 bench/jit_asm_core_dump.txt
+pwsh harness/jit_asm_boundscheck.ps1 harness/jit_asm_core_dump.txt
+pwsh harness/jit_asm_spillcheck.ps1 harness/jit_asm_core_dump.txt
 
 # Throughput (MPx/s) across all four lutModes
 node bench/mpx_summary.js

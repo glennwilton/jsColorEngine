@@ -931,7 +931,7 @@ across 132 cells, `solo` worst **−0.61%**. Phase 2 gains held.
 ### How to gate the next kernel change
 
 ```bash
-node bench/reproduce.js
+node harness/reproduce.js
 node scripts/bench_compare.js          # newest run vs bench/baseline/<machine>/
 ```
 

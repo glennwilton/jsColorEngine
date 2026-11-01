@@ -55,7 +55,7 @@
 // The scalar and SIMD 3D states have identical interfaces. Both are valid
 // simultaneously — loading one does not prevent loading the other. The
 // two are functionally equivalent (bit-exact outputs across the 6-config
-// matrix in bench/wasm_poc/tetra3d_simd_run.js); SIMD is 2.0-2.5× faster
+// matrix in harness/wasm_poc/tetra3d_simd_run.js); SIMD is 2.0-2.5× faster
 // on cMax ∈ {3, 4}, which is what it supports. Other cMax (1, 2, 5+)
 // must route through the scalar state.
 //
@@ -64,7 +64,7 @@
 // carries a small scratch region (64 B) the kernel uses to pass u20
 // intermediates from the K0 plane pass to the K1 plane pass. Bit-exact
 // against the JS `_intLut_loop` 4D kernels; measured ~1.22× faster. See
-// bench/wasm_poc/tetra4d_nch_run.js and docs/deepdive/Performance.md §1b
+// harness/wasm_poc/tetra4d_nch_run.js and docs/deepdive/Performance.md §1b
 // "4D scalar — measured".
 //
 // The 4D SIMD state is the vectorized companion to 4D scalar. Same

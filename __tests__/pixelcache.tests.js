@@ -351,7 +351,7 @@ describe('pixelCache — safety', () => {
         // surface: evictions, hash collisions, and long hit/miss interleavings.
         // This runs a real photograph through and compares the whole buffer.
         // The exhaustive version (every content type, four transform shapes,
-        // 250k pixels) is bench/pixel_cache/verify_cache.js.
+        // 250k pixels) is harness/pixel_cache/verify_cache.js.
         const fs = require('fs');
         const imagePath = path.join(__dirname, '..', 'samples', 'images', 'skin.png');
         if (!fs.existsSync(imagePath)) return;

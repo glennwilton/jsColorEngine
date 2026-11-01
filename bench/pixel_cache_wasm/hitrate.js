@@ -49,7 +49,7 @@
 const path = require('path');
 const fs   = require('fs');
 
-const CORPUS = path.join(__dirname, '..', 'release_matrix', 'corpus');
+const CORPUS = path.join(__dirname, '..', '..', 'harness', 'release_matrix', 'corpus');
 
 const argv = process.argv.slice(2);
 const arg  = (n, d) => { const h = argv.find(a => a.startsWith('--' + n + '=')); return h ? h.slice(n.length + 3) : d; };

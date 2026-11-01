@@ -1683,7 +1683,7 @@ has a different encoding for each:
 
 A u8-scaled intLut cannot be used for u16 output — the 65280
 scale caps precision at u8-equivalent and produces visible banding
-(this was the v1.3 identity error, see `bench/int16_identity.js`).
+(this was the v1.3 identity error, see `harness/int16_identity.js`).
 A u16-scaled intLut cannot be used for u8 output — the `>> 8`
 rounding path expects the 65280 scale and would produce a +0.4%
 high bias (up to 75% of channels off-by-1 on CMYK→RGB profiles).
@@ -1735,7 +1735,7 @@ interpolation math itself. A ±1 LSB error in the CLUT (1 part in
 
 **In practical terms:** the u16 integer kernel matches the float
 kernel to within ~1–2 LSB across the full u16 range on real-world
-ICC profiles (measured in `bench/int16_identity.js` and
+ICC profiles (measured in `harness/int16_identity.js` and
 `diag_cmyk_to_rgb.js`). The Q0.13 design was chosen as the best
 i32-safe precision — Q0.14 overflows on adversarial CLUTs, Q0.12
 doubles the quantisation noise for no safety gain. At Q0.13 the

@@ -29,7 +29,7 @@
  */
 'use strict';
 const fs = require('fs'), path = require('path');
-const CORPUS = path.join(__dirname, '..', 'release_matrix', 'corpus');
+const CORPUS = path.join(__dirname, '..', '..', 'harness', 'release_matrix', 'corpus');
 
 /** Fraction of chunks byte-identical to the chunk before them. */
 function repeatRate(buf, chunkBytes){

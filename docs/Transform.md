@@ -891,7 +891,7 @@ For context, the sRGB perceptual gradient steps about 5–8 LSB per JND
 (just-noticeable difference) in the midtones, so a 1 LSB drift is
 invisible on screen.
 
-The benchmark `bench/fastLUT_real_world.js` reports an "off by ≥ 16"
+The benchmark `harness/fastLUT_real_world.js` reports an "off by ≥ 16"
 column — that's the regression indicator. It's `0` for all four
 directions across 65k pixels in the test suite. Any non-zero value
 there means a boundary patch (any of C/M/Y/K === 255) is broken.
@@ -901,10 +901,10 @@ there means a boundary patch (any of C/M/Y/K === 255) is broken.
 The two bench suites in this repo report different speedups for the
 same integer kernel:
 
-- **`bench/fastLUT_real_world.js`** — ~1.05–1.25× speedup. Class
+- **`harness/fastLUT_real_world.js`** — ~1.05–1.25× speedup. Class
   methods on a stable `Transform` instance; warmed up; same dispatch
   path users hit. **These are the numbers users will see.**
-- **`bench/int_vs_float*.js`** — ~1.5–1.6× speedup. Free-standing
+- **`harness/int_vs_float*.js`** — ~1.5–1.6× speedup. Free-standing
   functions comparing the raw kernel math. **Useful as "what's the
   kernel's intrinsic ceiling" but not a production prediction.**
 
@@ -972,7 +972,7 @@ both its rounding error AND its instruction count.
   Without them, pure-channel inputs land one grid below the top with
   weight ~0.875 instead of on the top with weight 0, producing a `max
   diff = 8` regression at corners. See FINDING #2 in
-  `bench/int_vs_float.js` for the deep dive. The 4D kernels apply this
+  `harness/int_vs_float.js` for the deep dive. The 4D kernels apply this
   to all four axes (C, M, Y, K).
 
 ---

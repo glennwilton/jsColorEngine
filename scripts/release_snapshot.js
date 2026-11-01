@@ -4,7 +4,7 @@
  *
  * WHY. docs/BenchResults.md always describes the newest run, so it tells you
  * what the engine does *now* and nothing about what 1.4 did. The raw JSON that
- * backs it lives in bench/results/, which is gitignored and machine-local: lose
+ * backs it lives in harness/results/, which is gitignored and machine-local: lose
  * the folder and a published figure can never be reproduced or audited again.
  *
  * A snapshot fixes both. Per version, committed:
@@ -42,7 +42,7 @@ const { spawnSync } = require('child_process');
 const { machineId, machineDetail } = require('./lib/machine.js');
 
 const ROOT    = path.join(__dirname, '..');
-const RESULTS = path.join(ROOT, 'bench', 'results');
+const RESULTS = path.join(ROOT, 'harness', 'results');
 const HISTORY = path.join(ROOT, 'bench', 'history');
 const DOCS    = path.join(ROOT, 'docs');
 
@@ -102,7 +102,7 @@ if(runDir){
     runDir = path.resolve(runDir);
     console.log('\n  reusing run: ' + path.relative(ROOT, runDir));
 } else {
-    run('node', ['bench/reproduce.js'], 'full bench (all phases — this takes ~30 min)');
+    run('node', ['harness/reproduce.js'], 'full bench (all phases — this takes ~30 min)');
     runDir = newestRun();
 }
 

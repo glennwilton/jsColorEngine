@@ -29,49 +29,9 @@ speed_tests/
 # Per-project agent instructions — local working notes, not project source.
 CLAUDE.md
 
-
 # Large ephemeral outputs from bench/jit_inspection.js
-/bench/jit_asm_dump.txt
-/bench/jit_asm_core_dump.txt
-/bench/turbo-*.json
 /jit_trace.txt
 /jit_asm.txt
-
-# Vendored lcms2 C source (downloaded by bench/lcms_c/fetch-lcms2.sh).
-# We commit the bench glue (bench_lcms.c / Makefile / README / fetch
-# scripts) but NOT the third-party lcms2 source tree — too big, has
-# its own upstream.
-/bench/lcms_c/lcms2-2.18/
-/bench/lcms_c/lcms2-2.19/
-/bench/lcms_c/lcms2-*/
-/bench/lcms_c/*.o
-/bench/lcms_c/bench_lcms
-/bench/lcms_c/bench_lcms.exe
-/bench/lcms_c/bench_content_matrix
-/bench/lcms_c/bench_content_matrix.exe
-
-# lcms_compat/ harness — profiles are licensed artefacts (Adobe,
-# IDEAlliance, ECI, RISO, etc.) so user-supplied copies stay local.
-# See bench/lcms_compat/profiles/README.md for the licensing split.
-/bench/lcms_compat/profiles/*
-!/bench/lcms_compat/profiles/README.md
-
-# The reference .it8 set was committed until 1.5.5 — 150 files, 63 MB of
-# measurements derived from those profiles. Untracked now mainly because
-# nobody needs OUR copy: derived measurement data is what anyone with the same
-# profiles and the same lcms version computes for themselves. Derived data is
-# a grey area rather than a real concern, so this is caution plus 63 MB, not a
-# licensing retreat. Same treatment as testbed/testData/ below.
-#
-# PROFILES are the actual line. Nothing that a vendor licenses gets committed.
-/bench/lcms_compat/reference/*
-!/bench/lcms_compat/reference/README.md
-
-# Scratch / work-in-progress instrumented lcms2 tree — will be
-# distilled down to a patch file under bench/lcms_compat/lcms_patch/
-# in v1.5 (deferred from v1.3 to keep the release scoped), at which
-# point this whole folder goes away.
-/bench/lcms_exposed/
 
 # Private work-in-progress — not ready for public repo
 /_wip/
@@ -79,20 +39,6 @@ CLAUDE.md
 .cursor/
 
 # Old browser bundles, pulled by `npm run archive` — build artefacts, not source.
-bench/archive/
-
-# Superseded one-off benches and the large ephemeral asm dumps. Kept locally
-# because they are occasionally worth re-reading, out of the repo because
-# nothing references them and two of them are 16 MB of generated text.
-bench/_archive/
-
-# Decoded photo corpus — ~27 MB of derived .rgb.bin/.cmyk.bin planes.
-# The SOURCE images in bench/release_matrix/images/ ARE committed (Unsplash
-# licence, see their CREDITS.md) so the published comparison is reproducible;
-# only the generated planes are ignored. Rebuild them with:
-#   node bench/release_matrix/make_corpus.cjs
-bench/release_matrix/corpus/
-bench/release_matrix/node_modules/
 
 # Reproduction runs from bench/reproduce.js — raw timing output, machine-specific,
 # superseded by the next run. Curated summaries (bench/results/v1.5.0-dev.md)
@@ -110,7 +56,6 @@ bench/release_matrix/node_modules/
 #                                        re-derived in 1.9.
 #
 # ~120 KB each. See bench/baseline/README.md.
-bench/results/[0-9]*/
 
 # Licensed ICC profiles — same rule as bench/lcms_compat/profiles/ above.
 # testbed/profiles/README.md says so of itself: ICC profiles are licensed
@@ -139,6 +84,7 @@ bench/results/[0-9]*/
 #                            lcms's own testbed, no third-party IP at all
 
 # Loose reproduce/pool logs and one-off dumps beside the timestamped runs.
-/bench/results/*.log
-/bench/results/multicore_matrix*.json
-/bench/results/multicore_scaling*.json
+
+# The test harness is its own repository, cloned here.
+# https://github.com/glennwilton/jsColorEngine-harness
+/harness/

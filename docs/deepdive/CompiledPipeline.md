@@ -23,7 +23,7 @@
 
 > **Status: proof of concept — paused after v1.3 framing review
 > (Apr 2026), no harm in current shape.** The code lives at
-> `src/Transform.js` (`Transform.compile()`) and `bench/compile_poc/`.
+> `src/Transform.js` (`Transform.compile()`) and `harness/compile_poc/`.
 > It currently handles the sRGB → CMYK chain end-to-end (6 of the 6
 > stages have JS emitters, including the two diagnostic markers) and
 > is the measurement vehicle for the larger v1.5 effort planned in
@@ -178,10 +178,10 @@ Important points about the code shape:
 
 ## Performance: sRGB → GRACoL CMYK
 
-Bench scripts: `bench/compile_poc/bench_compiled.js` (the headline
-number), `bench/compile_poc/bench_body_variants.js` (NOP-differential
-analysis of the compiled body), `bench/compile_poc/bench_profilable.js`
-+ `bench/compile_poc/profile_run.js` (V8 profiler attribution).
+Bench scripts: `harness/compile_poc/bench_compiled.js` (the headline
+number), `harness/compile_poc/bench_body_variants.js` (NOP-differential
+analysis of the compiled body), `harness/compile_poc/bench_profilable.js`
++ `harness/compile_poc/profile_run.js` (V8 profiler attribution).
 
 ```
 ====== bench (sRGB → GRACoL CMYK, 500 000 px, no-LUT path) ======
@@ -242,7 +242,7 @@ Cost of named-function mode: ~45 % throughput hit (4.04 → 2.85 MPx/s)
 from per-stage call overhead. Acceptable for a profiler-only mode;
 **bit-exact to the monolithic version** (Δmax over 200 pixels = 0).
 
-Run `node bench/compile_poc/profile_run.js --pixels 5000000`. It
+Run `node harness/compile_poc/profile_run.js --pixels 5000000`. It
 spawns the inner bench under `node --prof`, processes the resulting
 tick log, and prints a clean per-stage table:
 
@@ -311,7 +311,7 @@ classification, as the default fast path.** We didn't invent this;
 we independently rediscovered the standard CMS curve-optimization.
 
 The receipts (lcms2-2.18, included for offline reference at
-`bench/lcms_c/lcms2-2.18/`):
+`harness/lcms_c/lcms2-2.18/`):
 
 **`src/cmsopt.c` line 418** — the canonical magic number:
 
@@ -401,7 +401,7 @@ just amortises the call/alloc overhead across all pixels in one outer
 loop.
 
 Measured on the same sRGB → GRACoL chain
-(`bench/compile_poc/bench_gammalut_hotloop.js`,
+(`harness/compile_poc/bench_gammalut_hotloop.js`,
 500 000 random pixels, best of 5):
 
 | Mode                                |    ms |   MPx/s | vs runtime | vs bit-exact compile |
@@ -451,7 +451,7 @@ chains you've audited yourself.
 
 CMYK → CMYK is the natural "is the speedup gamma-specific?" test —
 no sRGB inverse-gamma at the front, just curves and CLUTs. We
-tried it (`bench/compile_poc/bench_compiled_cmyk2cmyk.js`,
+tried it (`harness/compile_poc/bench_compiled_cmyk2cmyk.js`,
 GRACoL → SWOP) and **the bench refuses to run**. Two known gaps
 in the POC surface immediately:
 
@@ -906,16 +906,16 @@ v1.3-pivot checkpoint so the measurement record stands.
 
 ```sh
 # Headline: monolithic compiled vs runtime walker
-node bench/compile_poc/bench_compiled.js --pixels 500000
+node harness/compile_poc/bench_compiled.js --pixels 500000
 
 # Differential analysis: which stage dominates the body?
-node bench/compile_poc/bench_body_variants.js --pixels 500000
+node harness/compile_poc/bench_body_variants.js --pixels 500000
 
 # V8 CPU profiler: per-stage attribution from real samples
-node bench/compile_poc/profile_run.js --pixels 5000000
+node harness/compile_poc/profile_run.js --pixels 5000000
 
 # (planned) CMYK→CMYK LUT-only chain — currently aborts on missing emitters
-node bench/compile_poc/bench_compiled_cmyk2cmyk.js
+node harness/compile_poc/bench_compiled_cmyk2cmyk.js
 ```
 
 All four run from a fresh checkout in a few seconds each. `profile_run.js`

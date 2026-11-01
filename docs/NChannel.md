@@ -88,7 +88,7 @@ Full in × out × format matrix:
 - **5CLR / 6CLR INPUT (device→PCS) with `buildLut: true` — baked at the
   profile A2B density** (typically 9^5 / 7^6). `Kernel5D` / `Kernel6D`
   run int8 WASM scalar, JS int8 fallback. Do not up-res. Throughput
-  probe: `bench/nch_56/run.js`.
+  probe: `harness/nch_56/run.js`.
 - **7–15 INPUT (e.g. 7CLR→Lab) with `buildLut: true` — declined.**
   `KernelND.provideLut()` returns `false`; the per-pixel pipeline walks
   the profile's own A2B. Real 7CLR A2B is ~5 pts/axis, not a 17^7
@@ -132,8 +132,8 @@ profile, so no second CMS — is **closed**. Journey and numbers:
 |---|---|---|
 | Writer + 15 dual-table files (`1CLR`–`FCLR`) | `encodeICC.js`, `Profile.createNChannelICC()`, `__tests__/profiles/synthetic_NNch.icc` | shipped |
 | Every width into every width | `__tests__/channel_matrix.tests.js` — 225 pairs, both depths | shipped (does it run, not ΔE) |
-| lcms, device → PCS | `bench/lcms-comparison/accuracy_nchannel.js` — 2–10 ch | shipped; residual tracks grid coarseness |
-| lcms, PCS → device | `bench/lcms-comparison/accuracy_b2a.js` — 2–15 ch, int8 + int16 | shipped |
+| lcms, device → PCS | `harness/lcms-comparison/accuracy_nchannel.js` — 2–10 ch | shipped; residual tracks grid coarseness |
+| lcms, PCS → device | `harness/lcms-comparison/accuracy_b2a.js` — 2–15 ch, int8 + int16 | shipped |
 | Gray | `accuracy_gray.js` | shipped |
 | 5/6 int8 WASM ≡ JS | `__tests__/transform_lutMode_wasm_5d_6d.tests.js` | shipped |
 | Real 7CLR press file | `__tests__/transform_nchannel.tests.js` | physical sanity only (licensed; cannot commit) |
@@ -164,8 +164,8 @@ both CMMs already consume and because `toICC()` is a product feature.
 ### Still open
 
 1. **Promote the accuracy benches to a gate.** They are hand-run
-   (`cd bench/lcms-comparison && node accuracy_nchannel.js`). Same
-   shape as `bench/reproduce.js` — see Roadmap “Automated profile
+   (`cd harness/lcms-comparison && node accuracy_nchannel.js`). Same
+   shape as `harness/reproduce.js` — see Roadmap “Automated profile
    oracle”.
 2. **Appearance-level synthetics.** `createNChannelICC()` uses a
    simple coverage → Lab ink model, good enough to walk. A colour-wheel

@@ -41,7 +41,7 @@ if(!machines.length){
     console.error('  Produce one (full bench + full test suite, ~35 min):\n');
     console.error('      npm run release-snapshot\n');
     console.error('  Or, if you already have a full run:\n');
-    console.error('      node scripts/release_snapshot.js --from bench/results/<run>\n');
+    console.error('      node scripts/release_snapshot.js --from harness/results/<run>\n');
     console.error('  To publish without one anyway:\n');
     console.error('      node scripts/check_release_snapshot.js --allow-missing && npm run build\n');
     process.exit(1);

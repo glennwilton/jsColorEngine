@@ -14,7 +14,7 @@
  * which is the same trap the interpolator suite fell into when it tested every
  * variant at the one input scale where the bug was invisible.
  *
- * The thing that closes that gap is bench/lcms-comparison/accuracy_gray.js,
+ * The thing that closes that gap is harness/lcms-comparison/accuracy_gray.js,
  * which hands the written profile to Little CMS and compares outputs. It is a
  * bench rather than a test because it needs the lcms-wasm dependency, and it
  * is the reason this writer exists at all.

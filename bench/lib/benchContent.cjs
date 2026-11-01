@@ -8,7 +8,7 @@ var fs   = require('fs');
 var path = require('path');
 
 var DEFAULT_KIND = 'photo-5';
-var PHOTO_FILE = path.join(__dirname, '..', 'release_matrix', 'images',
+var PHOTO_FILE = path.join(__dirname, '..', 'images',
     'jacek-dylag-559115_STRAWBERRIES-unsplash.jpg');
 
 function lcgStep(seed) {

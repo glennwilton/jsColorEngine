@@ -35,7 +35,7 @@
  * accuracy story for no speed, since f32 arithmetic is native on every target
  * that runs WASM at all.
  *
- * Structure is the POC's V4/V5 SIMD kernel (bench/matrix_shaper_poc/), with two
+ * Structure is the POC's V4/V5 SIMD kernel (harness/matrix_shaper_poc/), with two
  * deliberate changes:
  *
  * 1. THE OUTPUT GAMMA TABLE IS 16-BIT, not 4096-entry. Measured against the

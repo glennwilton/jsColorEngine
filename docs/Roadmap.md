@@ -60,7 +60,7 @@ future-facing only.
 - [v1.6 — QC infrastructure + automated bench history](#v16--qc-infrastructure--automated-bench-history)
     - [Automated bench recording — `npm run benchRecord`](#automated-bench-recording--npm-run-benchrecord)
     - [One home for the numbers — `docs/BenchResults.md`, generated](#one-home-for-the-numbers--docsbenchresultsmd-generated)
-    - [Browser bundle archive — `bench/results/bundles/`](#browser-bundle-archive--benchresultsbundles)
+    - [Browser bundle archive — `harness/results/bundles/`](#browser-bundle-archive--benchresultsbundles)
     - [`lcms_patch/` extraction (v1.3 follow-up)](#lcms_patch-extraction-v13-follow-up)
     - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
     - [Accuracy-path `pixelCache: 'auto'` — shipped](#accuracy-path-pixelcache-auto--shipped)
@@ -115,7 +115,7 @@ Release notes: [CHANGELOG.md](../CHANGELOG.md).
 
 **v1.2 is feature-complete.** The last open item — a measured
 head-to-head against native (non-wasm) lcms2 — landed via
-[`bench/lcms_c/`](../bench/lcms_c) and is documented in
+[`harness/lcms_c/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_c) and is documented in
 [Performance.md § Measured — vs native LittleCMS](./deepdive/Performance.md#measured--vs-native-littlecms-same-hardware-same-run).
 The headline at the time (pure JS beating vanilla native lcms2 on
 most measured workflows) has since been revised: the native
@@ -190,12 +190,12 @@ and will land iteratively.
   demotion chain as the v1.2 u8 path:
   `int16-wasm-simd` → `int16-wasm-scalar` → `int16`.
 - **Three accuracy gates** ship alongside the kernels:
-  [`bench/int16_identity.js`](../bench/int16_identity.js) (synthetic
+  [`harness/int16_identity.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_identity.js) (synthetic
   identity-CLUT round-trip — kernels MUST round at the u16 LSB),
-  [`bench/int16_poc/accuracy_v1_7_self.js`](../bench/int16_poc/accuracy_v1_7_self.js)
+  [`harness/int16_poc/accuracy_v1_7_self.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_poc/accuracy_v1_7_self.js)
   (jsCE float-LUT vs jsCE int16-LUT — pure kernel quantisation
   noise, max **4 LSB u16** on every workflow, mean ≤ 0.48 LSB),
-  and [`bench/lcms_compat/run.js`](../bench/lcms_compat/run.js)
+  and [`harness/lcms_compat/run.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/run.js)
   (jsCE float pipeline vs lcms2 2.16 float pipeline — confirms
   the math underneath is correct, see Accuracy doc).
 - **Browser benchmark updated** — 8 jsColorEngine modes vs
@@ -1384,7 +1384,7 @@ and 7-ink profiles now produce oracle rows for the ΔE-vs-lcms pipeline).
 > **Measured and dropped: `SharedArrayBuffer` delivery.** Projected
 > +30%, spiked at +5–13% at int8 and nil at int16, with the plain-array
 > caller case measuring *slower* than today. Not worth two delivery
-> paths and a COOP/COEP blocker. `bench/sab_spike/` is kept so the
+> paths and a COOP/COEP blocker. `harness/sab_spike/` is kept so the
 > question can be re-asked on higher core counts rather than re-argued.
 
 ### 2. ~~Pixel cache in the image kernels~~ — MOVED TO v1.6
@@ -1468,7 +1468,7 @@ because the LCG is L1-resident. Guide: [Bench.md](./Bench.md).
 **Still open (does not block quoting photo with 5 % noise added):**
 
 - Adjacency / CLUT coverage next to browser rows (Node
-  `bench/release_matrix/` already reports this).
+  `harness/release_matrix/` already reports this).
 - A stacked multi-photo composite — three separate frames + tiling is
   enough for the headline; a single tall asset would only help the
   corpus-range question.
@@ -1595,11 +1595,11 @@ Combined with the identity check:
   selected by curve type and microbench)
 
 **Micro-bench needed first.** Before integrating into the main
-dispatch, add a micro-bench in `bench/` measuring:
+dispatch, add a micro-bench in the harness measuring:
 - jsCE fused-matrix emitted JS (`new Function`, existing compile path)
 - jsCE fused-matrix WASM kernel (new, see below)
-- lcms2 vanilla C (~157 MPx/s, `bench/lcms_c/`)
-- lcms2 + fast_float (~455 MPx/s, `bench/lcms_c/ make fastfloat`)
+- lcms2 vanilla C (~157 MPx/s, `harness/lcms_c/`)
+- lcms2 + fast_float (~455 MPx/s, `harness/lcms_c/ make fastfloat`)
 
 If the emitted JS gets within striking distance of fast_float (or
 beats it), the WASM kernel is still worth building; if pure JS
@@ -1669,7 +1669,7 @@ architecture.
 ✅ **SHIPPED IN v1.5.0 (beta), not v1.5.5** — `src/cache.js`,
 opt-in via `pixelCache: 0|1|16|32`, `getPixelCacheStats()` for hit
 counting, tests in `__tests__/pixelcache.tests.js`, bench and
-output-verification in `bench/pixel_cache/`.
+output-verification in `harness/pixel_cache/`.
 
 **Measured, and the original hypothesis held.** On whole
 full-resolution photographs the cache hits 3–41 % and runs between
@@ -1745,7 +1745,7 @@ page ends up carrying two vintages of the same number at once.
 The shape to build, alongside the bench-recording work above:
 
 1. **The benches emit data, not prose.** Each writes JSON to
-   `bench/results/`, which several already do (`multicore_matrix.json`).
+   `harness/results/`, which several already do (`multicore_matrix.json`).
 2. **One generated page** — `docs/BenchResults.md` — renders those into tables,
    each with a stable id, the machine, the date and the harness that produced
    it. Generated, never hand-edited, regenerated by one command.
@@ -1763,7 +1763,7 @@ number out of a picture, and a diff cannot show what moved.
 **Built on 2026-08-20**, ahead of the rebuild for exactly that reason: the
 rebuild is the event that invalidates every quoted figure at once. `emit.cjs`
 is wired into the release matrix, the pixel cache, the matrix-shaper benches,
-the pool matrix and the solo control; `bench/reproduce.js` runs all of them and
+the pool matrix and the solo control; `harness/reproduce.js` runs all of them and
 each writes its own JSON. Still to wire: the native C harness (its numbers are
 parsed from text) and the one-off POC benches, which are history rather than
 published figures.
@@ -1896,11 +1896,13 @@ came apart:
 
 ### Automated profile oracle — build on synthetics
 
-**Next:** the review pass ran every testbed profile, in all intents, BPC on and
-off, both directions, against live `lcms-wasm`. It found more than the Jest suite
-did, but it lived in a throwaway script. Bring it into `bench/lcms-comparison/`.
-Treat lcms as evidence and the ICC spec as the authority: a disagreement means
-checking the spec, not copying lcms.
+**Shipped in 1.7.1, in the
+[harness repository](https://github.com/glennwilton/jsColorEngine-harness).**
+Scan a folder of profiles, generate CGATS references from the Little CMS C build,
+and compare jsColorEngine and `lcms-wasm` against them. lcms is evidence and the ICC
+spec is the authority: a disagreement means checking the spec, not copying lcms.
+Still to do: synthetic fixtures with committed references, so the harness has a
+baseline that needs no profiles, and 5+ channel stimuli.
 
 The TOC item was written when the gap was "no second CMS for 1 / 2 /
 5–15 channels." That hole is closed.
@@ -1913,7 +1915,7 @@ corpus or a regenerated `lcms_patch`:
 
 1. Promote `accuracy_nchannel.js` (and the gray / nCLR writer) from
    a bench you run by hand into a gate — same shape as
-   `bench/reproduce.js` phases.
+   `harness/reproduce.js` phases.
 2. Keep the RGB/CMYK LittleCMS comparison as the *real-profile*
    oracle it already is ([LcmsComparison.md](./LcmsComparison.md)).
 3. A bulk `.it8` dump of every file in a private corpus is a later
@@ -1979,7 +1981,7 @@ Same fused 3×3 and the same curves off `stage_matrix_rgb.stageData`, in plain
 JS — and unlike the WASM kernel it can carry three curves without thinking
 about it, because JS has no table-size pressure.
 
-`bench/js_matrix_shaper/run.js`, 1 MPx noise, `*prophoto → *sRGB`:
+`harness/js_matrix_shaper/run.js`, 1 MPx noise, `*prophoto → *sRGB`:
 
 | variant | int8 | int16 | max LSB (8 / 16) |
 |---|---:|---:|---:|
@@ -2540,7 +2542,7 @@ reasons:
 unrolls the same simplex walk over an N-D index. Plumbed through
 the existing `lutKernelTable.js` dispatcher as a new
 `(lutMode='float', inCh=N)` row. Existing N-channel test profiles
-in [`bench/lcms_compat/profiles/`](../bench/lcms_compat/profiles/)
+in [`harness/lcms_compat/profiles/`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/lcms_compat/profiles/)
 become the regression surface.
 
 **The observation.** The WASM kernel we just shipped knows nothing
@@ -2748,7 +2750,7 @@ but four of its findings still shape decisions here:
 
 The full analysis, with the POC table and the instruction-mix breakdown, is in
 [Performance § 5](./deepdive/Performance.md#historical-record-original-v13--v15-analysis-1d-wasm-poc);
-raw results in `bench/wasm_poc/README.md`. It is not repeated here.
+raw results in `harness/wasm_poc/README.md`. It is not repeated here.
 
 ---
 
@@ -2774,7 +2776,7 @@ hot-gamut regions at predictable memory cost:
 
 **Bench work needed before shipping as a feature:**
 
-1. Add a `bench/lutGridSweep.js` that builds the same profile at
+1. Add a `harness/lutGridSweep.js` that builds the same profile at
    grid sizes {17, 25, 33, 49, 65, 97, 129} for 3D, {17, 21, 25,
    33} for 4D, and measures:
    - ΔE₀₀ RMS and max against the f64 non-LUT pipeline as ground

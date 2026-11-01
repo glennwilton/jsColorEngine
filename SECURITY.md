@@ -6,7 +6,7 @@ jsColorEngine is a colour management library: it parses ICC profiles and
 transforms pixel data. It runs in Node and in the browser, in-process, on data
 the host application hands it.
 
-The repository also contains benchmark harnesses (`bench/`), a comparison
+The repository also contains a throughput gate (`bench/`), a comparison
 testbed (`testbed/`), and samples (`samples/`). None of these are published to
 npm — the package is `src/` only, 64 files — but they are not all the same
 kind of thing, and reports are treated differently for each. See below.
@@ -48,7 +48,8 @@ sits. That is the case where a sample bug can become somebody else's real bug.
 
 ## What is out of scope
 
-**`bench/` and `testbed/` are not a security boundary.** They are programs a
+**`bench/`, `testbed/` and the separate harness repository are not a security
+boundary.** They are programs a
 developer compiles and invokes with arguments they type, against corpora they
 generate on their own machine. Reports that assume an attacker controls a
 benchmark's command line, its pixel counts, or its input files describe a
@@ -57,11 +58,11 @@ be closed.
 
 Concretely, and to save anyone the trouble of re-reporting:
 
-- unchecked arithmetic before allocation in `bench/lcms_c/*.c`, where the
+- unchecked arithmetic before allocation in `harness/lcms_c/*.c`, where the
   sizes come from a `--sizes` flag the developer types
 - `strtok` rather than `strtok_r` in single-threaded argument parsing
 - CVEs in transitive devDependencies or in the private, unpublished
-  proof-of-concept packages under `bench/`
+  proof-of-concept packages in the harness repository
 
 **Dependency advisories against build and benchmark tooling are not a
 priority and will not be treated as urgent.** The published package is `src/`
@@ -88,7 +89,7 @@ please:
 - state the threat model in your own words, not just a CWE number and a
   severity label — "an attacker who can supply an ICC profile can …" is a
   report we can act on; "likely exploitable" against a local benchmark is not
-- open an issue before a pull request for anything touching `bench/`
+- open an issue before a pull request for anything touching `bench/` or the harness or the harness
 - do not bundle unrelated refactors with a fix
 
 Severity assigned by a scanner is treated as a starting point, not a

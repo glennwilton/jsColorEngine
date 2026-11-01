@@ -14,7 +14,7 @@
  */
 'use strict';
 const fs = require('fs'), path = require('path');
-const CORPUS = path.join(__dirname, '..', 'release_matrix', 'corpus');
+const CORPUS = path.join(__dirname, '..', '..', 'harness', 'release_matrix', 'corpus');
 
 function stats(px, npx){
     let uni4 = 0, uni2 = 0, runTotal = 0, runs = 0, cur = 1;

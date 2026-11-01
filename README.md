@@ -23,6 +23,10 @@ Live benchmark and demo of samples here **<https://www.o2creative.co.nz/jscolore
   stages; ΔE76 / ΔE2000; spectral and illuminant maths. See
   [Features at a glance](#features-at-a-glance).
 
+- **Checked against LittleCMS 2.20.** 330 profile pairs and 1,650 conversions
+  across 83 profiles, on 9.6 million in-gamut colours: **1,635 conversions are
+  within 1 LSB at 8 bits**, and the worst is 2.1 LSB near black. Run it on your own
+  profiles with the [harness](https://github.com/glennwilton/jsColorEngine-harness).
 - **Accurate.** Image-path LUT within **1 LSB of LittleCMS** on 100 %
   of samples. **LUT-free** (`buildLut: false`) walks the full f64
   pipeline — no LUT quantisation — for prepress and measurement.
@@ -152,8 +156,8 @@ same hardware, same profiles, same input bytes:
   photographic content, one core. Don't assume "WASM = faster": the
   pure-JS kernels already beat it before any WASM is involved.
 - **Accurate against the same reference** — image-path LUT within
-  **1 LSB on 100 % of samples**; LUT-free f64 pipeline ≤ 0.06 ΔE76
-  across 130 reference files. See [Accuracy](#accuracy).
+  **1 LSB on 100 % of samples**; LUT-free f64 pipeline ≤ 0.31 ΔE76
+  across 1,650 reference files. See [Accuracy](#accuracy).
 
 Native C, flats vs photographs, and where LittleCMS still wins
 (one-pixel memo, fused matrix-shaper RGB→RGB) live on the
@@ -162,7 +166,7 @@ comparison page — not here.
 The full comparison — methodology, tables, caveats, and the upstream
 discussion with LittleCMS's author — lives on the
 **[LittleCMS comparison page](./docs/LcmsComparison.md)**.
-Reproduce all of it with `node bench/reproduce.js`.
+Reproduce all of it with `node harness/reproduce.js`.
 
 ---
 
@@ -730,7 +734,7 @@ only pays decode cost — runtime is identical.
 jsColorEngine has **two accuracy paths** and a separate validation
 harness for each:
 
-### 1. Float pipeline vs lcms native f64 (`bench/lcms_compat/`)
+### 1. Float pipeline vs lcms native f64 (`harness/lcms_compat/`)
 
 The "is the underlying math right?" question. Measured against a
 committed reference oracle of 150 CGATS `.it8` files generated from
@@ -746,14 +750,14 @@ error per output type:
 | CMYK ink      | **0.04 %** | ink        | well below dot-gain measurement noise |
 | 2C spot       | **2.88e-4**| fraction   | noise floor — basically zero |
 
-`node bench/lcms_compat/run.js` reproduces this in ~1.3 s on a
+`node harness/lcms_compat/run.js` reproduces this in ~1.3 s on a
 current laptop. Per-pixel triage for any divergence is in
-`bench/lcms_compat/probe-pixel.js`. Full writeup, including the
+`harness/lcms_compat/probe-pixel.js`. Full writeup, including the
 `* → ISOcoated_v2_grey1c_bas.ICC` Perceptual outlier that turned out
 to be jsColorEngine forcing BPC and is now fixed, is in
 [`docs/deepdive/Accuracy.md`](./docs/deepdive/Accuracy.md).
 
-### 2. Image-path LUT vs lcms-wasm (`bench/lcms-comparison/`)
+### 2. Image-path LUT vs lcms-wasm (`harness/lcms-comparison/`)
 
 The "after the LUT quantises everything, do we still agree?"
 question. Measured against `lcms-wasm` (LittleCMS 2.16 compiled to
@@ -767,7 +771,7 @@ with lcms's **default optimisation** (`flags = 0`) as the oracle.
 | CMYK → RGB  | **100.00 %** | 1 LSB | 0.002 LSB |
 | CMYK → CMYK | **100.00 %** | 1 LSB | 0.008 LSB |
 
-`node bench/lcms-comparison/accuracy.js` reproduces this on your
+`node harness/lcms-comparison/accuracy.js` reproduces this on your
 hardware.
 
 <small>Earlier published runs of this harness used
@@ -796,7 +800,7 @@ roughly 65× tighter than the u8 path because Q0.13 weights and the
 65535-scaled CLUT keep the rounding budget below the u16 LSB.
 The JS / WASM scalar / WASM SIMD u16 kernels are **bit-exact
 against each other** across the full coverage matrix; the identity
-gate at [`bench/int16_identity.js`](./bench/int16_identity.js)
+gate at [`harness/int16_identity.js`](https://github.com/glennwilton/jsColorEngine-harness/tree/main/int16_identity.js)
 asserts kernels round at the u16 LSB on every release.
 
 ---
@@ -1076,7 +1080,7 @@ After `npm run browser && npm run serve`, open
 [Benchmark results — generated](./docs/BenchResults.md):
 
 ```bash
-node bench/reproduce.js
+node harness/reproduce.js
 node scripts/build_bench_results.js "bobs pc"   # → docs/BenchResults-bobs-pc.md
 ```
 
