@@ -27,7 +27,7 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-11-01):** **1.6.3** plus an unreleased review
+**Current state (2026-11-01):** **1.7.0**, the review
 pass: profile-handling fixes from a sweep against LittleCMS, X×Y×Z
 CLUT grids, stricter loading, and sampled and parametric TRCs on the
 matrix kernel (`CHANGELOG.md`). v1.5.5 shipped the
@@ -108,7 +108,7 @@ Single source of truth for future work, ordered by leverage: v1.5.5
 (shipped — matrix-shaper kernel, multicore, photo with 5 % noise added
 browser bench),
 v1.6 (accuracy-path `pixelCache` auto already shipped; in-kernel cache
-in `create()`; C IT8 oracle next, not a 1.6 gate), v1.7
+in `create()`; C IT8 oracle next, not a 1.6 gate), v1.8
 (compiled pipeline / `toModule()`), v2 (package split);
 plus shipped-so-far summaries and explicitly-dropped ideas with
 reasons.
@@ -191,7 +191,7 @@ session.
 ### deepdive/CompiledPipeline.md
 The `compile()` POC: emitting the no-LUT pipeline as straight-line JS
 (~5× over the runtime stage walker), measurement methods, and the
-`getSource()` / `toModule()` distribution story targeted at v1.7.
+`getSource()` / `toModule()` distribution story targeted at v1.8.
 
 ### deepdive/Identity.md
 Identity / NOP detection: profile-equality strategies (binary hash,
@@ -305,7 +305,7 @@ management, and reproduction recipes.
 
 [`../README.md`](../README.md) — positioning, features, headline
 numbers · [`../CHANGELOG.md`](../CHANGELOG.md) — release notes
-(`[Unreleased]` current; `[1.6.3]` latest tagged) · [`../CLAUDE.md`](../CLAUDE.md) — AI session entry
+(`[1.7.0]` latest tagged) · [`../CLAUDE.md`](../CLAUDE.md) — AI session entry
 rules · [`../samples/README.md`](../samples/README.md) — samples index
 (per-tool folders) · `samples/LutBuilder/lutbuilder.md` — LutBuilder
 user guide · `samples/ICCImage/ICCImage.md` — ICCImage API ·

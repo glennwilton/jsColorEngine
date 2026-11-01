@@ -315,7 +315,7 @@ and [`docs/NChannel.md`](../docs/NChannel.md).
 ## Compile POC
 
 [`compile_poc/`](./compile_poc/) — **History / manual probe** for
-`Transform.compile()` (v1.7 story). Write-up:
+`Transform.compile()` (v1.8 story). Write-up:
 [`docs/deepdive/CompiledPipeline.md`](../docs/deepdive/CompiledPipeline.md).
 
 - `probe_rgb_to_cmyk.js` — dump stages for one RGB→CMYK pixel

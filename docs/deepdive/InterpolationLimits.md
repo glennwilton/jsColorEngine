@@ -106,7 +106,7 @@ performance arc. The remaining kernel ideas on this page do not
 add another step like that.
 
 **Where we could go** is not another interpolator. Pool copies and
-v1.7 `toModule()` still help delivery.
+v1.8 `toModule()` still help delivery.
 Quality stays at 33³ (3D) / 17⁴ (4D) and u16 nodes. If a future
 trick needs 9³ to look fast, it is not a trick we want.
 

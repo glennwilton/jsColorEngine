@@ -7,10 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [1.7.0] — 2026-11-01
 
-Profile-handling fixes found by sweeping the testbed against Little CMS. The
-kernels were not touched. Two of these change default output; see Changed.
+A review pass: profile-handling fixes found by sweeping the testbed against
+Little CMS, every profile in all four intents with BPC on and off. The image
+kernels were not touched and throughput is unchanged from 1.6.0
+(`bench/history/1.6.0/`), so there is no new bench snapshot for this release.
+
+Two changes alter default output; see Changed. npm stopped at 1.6.2, so this is
+also the first npm release to carry the 1.6.3 fixes.
 
 ### Changed
 

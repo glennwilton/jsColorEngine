@@ -65,11 +65,11 @@ future-facing only.
     - [Automated profile oracle — bulk ICC compatibility testing](#automated-profile-oracle--bulk-icc-compatibility-testing)
     - [Accuracy-path `pixelCache: 'auto'` — shipped](#accuracy-path-pixelcache-auto--shipped)
     - [In-kernel pixel cache — shipped in 1.6](#in-kernel-pixel-cache--beta-off-by-default)
-- [v1.7 — Compiled non-LUT pipeline + `toModule()`](#v17--compiled-non-lut-pipeline--tomodule)
+- [v1.8 — Compiled non-LUT pipeline + `toModule()`](#v18--compiled-non-lut-pipeline--tomodule)
     - [Per-Transform microbench for `'auto'`](#per-transform-microbench-for-auto)
     - [Non-LUT pipeline code generation (`new Function` + emitted WASM)](#non-lut-pipeline-code-generation-new-function--emitted-wasm)
     - [POC `compile()` options](#poc-compile-options)
-- [v1.8 (optional) — Hardened profile decode](#v18-optional--hardened-profile-decode)
+- [v1.9 (optional) — Hardened profile decode](#v19-optional--hardened-profile-decode)
 - [v2 — Separation of concerns: split Transform + Pipeline + Interpolator](#v2--separation-of-concerns-split-transform--pipeline--interpolator)
 - [What we are explicitly NOT doing](#what-we-are-explicitly-not-doing)
 - [Research and analysis](#research-and-analysis)
@@ -251,7 +251,7 @@ lcms comparison corrections after upstream review
 lcms default flags, 100 % within 1 LSB on all four image workflows).
 488 tests. Full notes: [CHANGELOG.md](../CHANGELOG.md).
 
-**Review pass (unreleased)** — profile-handling fixes found by sweeping
+**v1.7.0 (2026-11-01)** — the review pass: profile-handling fixes found by sweeping
 the testbed against LittleCMS, X×Y×Z CLUT grids, stricter loading, sampled
 and parametric TRCs on the matrix kernel, denser gray LUTs. See
 [CHANGELOG.md](../CHANGELOG.md).
@@ -271,7 +271,7 @@ prose that lived here has been folded into the shipped retrospective
 and into [Accuracy.md](./deepdive/Accuracy.md). The `lcms_patch/`
 extraction follow-up is now tracked in v1.4.2 as a polish-pass item,
 `lutGridSize` moved to [Research and analysis](#research-and-analysis),
-and the larger compiled-pipeline work remains in v1.7.
+and the larger compiled-pipeline work remains in v1.8.
 
 ---
 
@@ -1146,7 +1146,7 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 > **Theme.** Quick wins that improve developer experience, close
 > security alerts, harden the pipeline, and add targeted fast paths
 > — all shippable independently, no big architectural changes. The
-> larger compiled-pipeline + `toModule()` work moves to v1.7; QC
+> larger compiled-pipeline + `toModule()` work moves to v1.8; QC
 > infrastructure moves to v1.6; N-channel float inputs move to v2.
 
 ### Dependency hygiene — Dependabot triage + devDependency bumps (shipped)
@@ -1201,7 +1201,7 @@ Build a colour transform once; ship a JSON file; reconstruct at runtime with no 
 **What `validatePipeline` catches vs. misses.** It tests one mid-grey
 pixel — enough to catch matrix NaN, gamma NaN, and throwing stages.
 It does not catch corruption that only affects extreme values (e.g.
-top few entries of a 1D gamma LUT). The v1.8 full Profile deep scan
+top few entries of a 1D gamma LUT). The v1.9 full Profile deep scan
 (NaN/undefined walk of every numeric field) would close that gap.
 
 ### Transform identity / NOP detection (shipped)
@@ -2036,7 +2036,7 @@ not the code shape around them.
 `build()` whenever there is no WASM variant to use — which is exactly the two
 cases above. `useVariant('js')` pins it for tests and benchmarks.
 
-## v1.7 — Compiled non-LUT pipeline + `toModule()`
+## v1.8 — Compiled non-LUT pipeline + `toModule()`
 
 > **Scope.** This is **the largest single piece of post-v1.4 work**.
 > Code-generation for non-LUT transforms, the `getSource()` /
@@ -2059,7 +2059,7 @@ cases above. `useVariant('js')` pins it for tests and benchmarks.
 >   marquee feature — a unique capability nothing else in the JS
 >   colour-management space offers. ~50–80 KB standalone, dep-free,
 >   bit-exact transform modules from any source/dest profile pair.
-> - The **WASM emit target is deferred to v1.7+**. Worth keeping on
+> - The **WASM emit target is deferred to v1.8+**. Worth keeping on
 >   the radar (the 1D POC ceiling stands), but the dev complexity
 >   no longer pays back for the workload that actually benefits.
 >
@@ -2080,7 +2080,7 @@ in each kernel module resolves SIMD → scalar → JS based on capability flags.
 In practice on weaker CPUs the JS `'int'` kernel can edge out `'int-wasm-scalar'`
 for small (17³) LUTs — WASM JIT warm-up and call overhead eat the scalar win.
 
-**Why defer to v1.7.** With kernel modules, `'auto'` selection moves into
+**Why defer to v1.8.** With kernel modules, `'auto'` selection moves into
 `kernel3D_create(lutMode)` — the kernel module owns capability detection.
 A microbench written for the v1.5 static demotion chain would be discarded
 entirely when the kernel module architecture lands.  The right place for
@@ -2313,11 +2313,11 @@ The proof-of-concept `Transform.compile()` (sRGB → CMYK chain,
 covered in detail in
 [deepdive/CompiledPipeline.md](./deepdive/CompiledPipeline.md))
 ships with four opt-in flags that make the emitter a useful
-measurement vehicle for the larger v1.7 effort:
+measurement vehicle for the larger v1.8 effort:
 
 ```js
 t.compile({
-    target:      'js',     // emit target — only 'js' for now (WASM is the v1.7 backend)
+    target:      'js',     // emit target — only 'js' for now (WASM is the v1.8 backend)
     instrument:  false,    // wrap each stage in hrtime() for relative timing
     profilable:  false,    // lift each stage into its own NAMED fn for V8 --prof attribution
     useGammaLUT: false,    // 4096-entry LUT replaces Math.pow(x, 2.4) — LOSSY, ~3× speedup
@@ -2332,7 +2332,7 @@ over `t.forward()`** on sRGB→CMYK, both stacked reach **3.01× /
 5.36×**. `instrument` and `profilable` are diagnostic — they
 exist so we can keep measuring as new emitters land.
 
-These are POC-shipped, not the final v1.7 contract. The v1.7 work
+These are POC-shipped, not the final v1.8 contract. The v1.8 work
 generalises this to:
 - multi-channel input preambles (CMYK input, not just RGB),
 - emitters for the remaining stages (`tetrahedralInterp4D`,
@@ -2342,7 +2342,7 @@ generalises this to:
 
 ---
 
-## v1.8 (optional) — Hardened profile decode
+## v1.9 (optional) — Hardened profile decode
 
 Status: **acknowledged Achilles' heel, parked until a production
 incident or external audit forces the issue.** Boring but important;
@@ -2440,7 +2440,7 @@ exercise every guard.
 1. **No production incident yet.** The decoder has handled thousands
    of real-world profiles without issue; the failure modes above are
    theoretical until someone hits them.
-2. **New features are more visible.** v1.7's `toModule()`, v2's
+2. **New features are more visible.** v1.8's `toModule()`, v2's
    N-channel inputs, and LUT hooks all have immediate user value; hardening
    the decoder doesn't add features, it just prevents rare failures.
 3. **It's boring.** Tag-by-tag validation is grunt work — important,
@@ -2464,7 +2464,7 @@ exercise every guard.
 - We decide to pursue "production-grade" branding and want to back
   it up with a hardening pass.
 
-Until then, v1.8 is a skippable release slot — documented here so
+Until then, v1.9 is a skippable release slot — documented here so
 the scope is clear when the time comes.
 
 ---
@@ -2472,7 +2472,7 @@ the scope is clear when the time comes.
 ## v2 — Separation of concerns: split Transform + Pipeline + Interpolator
 
 Deferred; direction is worth capturing because the v1.2 architecture
-already sets it up cleanly and the v1.7 code-generation work
+already sets it up cleanly and the v1.8 code-generation work
 sharpens the split further (by turning "pipeline" from a Transform
 method into a family of emitted functions).
 
@@ -2565,8 +2565,8 @@ the product is what wraps it.
   profile class. No color math.** Ingests a descriptor, outputs pixel
   bytes. Testable in isolation against synthetic identity LUTs — no
   ICC profile fixture required.
-- **`@jscolorengine/pipeline-emitter`** *(new, if v1.7 ends up big
-  enough)* — the code-generator from v1.7. Takes a pipeline spec,
+- **`@jscolorengine/pipeline-emitter`** *(new, if v1.8 ends up big
+  enough)* — the code-generator from v1.8. Takes a pipeline spec,
   emits JS source or `.wat`. Depends on `interpolator` for the LUT
   stages.
 
@@ -2653,12 +2653,12 @@ descriptors from scratch without touching `Profile`).
    of new test code; the underlying shape is unchanged.
 3. **v1.3 complete:** 16-bit kernels land. The descriptor
    `outputPrecision: 'u8' | 'u16'` field gets a second legal value.
-4. **v1.7 complete:** non-LUT pipeline code generation lands. The
+4. **v1.8 complete:** non-LUT pipeline code generation lands. The
    split isn't just "LUT interpolator vs the rest" anymore — it's
    "LUT interpolator vs emitted pipelines vs color-science front-
    end". That three-way split is the target package shape.
 5. **v2 split:** extract `@jscolorengine/interpolator` (and maybe
-   `@jscolorengine/pipeline-emitter` if v1.7 ends up big enough) to
+   `@jscolorengine/pipeline-emitter` if v1.8 ends up big enough) to
    its own package directory with its own `package.json`. Wire
    `core` to depend on them. Ship from a monorepo for at least one
    release before encouraging external adoption.
@@ -2715,7 +2715,7 @@ we're on.
 - **Web Workers / parallel transformArray.** Was on the v1.3 roadmap
   but bumped — the WASM POC numbers (1.84× scalar, 3.25× SIMD in the
   event) made WASM the far better next step, and Web Workers can be
-  added on top of any kernel later. Will revisit post-v1.7 once
+  added on top of any kernel later. Will revisit post-v1.8 once
   `'auto'` and the emitted-pipeline path both exist; by then the
   per-worker compile cost is amortised across multiple Transforms
   via `wasmCache`, which is the shape that makes workers cheap.

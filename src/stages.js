@@ -36,7 +36,7 @@
      * Contents: the ~100 stage_* pipeline functions, their compile()-time
      * emit_js_* / attachStore_js_* emitters (kept co-located so a stage and
      * its emitter drift together — they split out to a stage2code module only
-     * when the v1.7 compiled-pipeline work needs it), and the colour/matrix
+     * when the v1.8 compiled-pipeline work needs it), and the colour/matrix
      * helpers the stages call (XYZ/Lab constructors, evalMatrix,
      * invertMatrix, gamma table builders).
      *

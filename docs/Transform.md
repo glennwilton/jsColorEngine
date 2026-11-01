@@ -365,7 +365,7 @@ input pixel (50 % on every channel). It catches:
 It **does not** catch corruption that only affects extreme values —
 for example, a corrupt entry at the very top of a 1D gamma LUT would
 not be caught because the mid-grey test value never reaches it. A full
-NaN/undefined deep scan of the `Profile` object (planned for v1.8)
+NaN/undefined deep scan of the `Profile` object (planned for v1.9)
 would close that gap.
 
 **Error handling — why you `try/catch` `create()` but not `transform()`.**
