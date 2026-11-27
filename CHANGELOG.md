@@ -9,6 +9,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **TypeScript type definitions**, in `src/main.d.ts` and named by the `types` field
+  in `package.json`. They cover the documented API: `Profile`, `Transform` and its
+  options, `Loader`, the `color` helpers, `alpha` and the enums. Hand-written; the
+  engine is still plain JavaScript and nothing about how it runs has changed. A Jest
+  test checks that every method the file declares exists on the running engine.
+
 ## [1.7.2] — 2026-11-27
 
 An audit pass for crashes and silent wrong answers, and embedded profiles from

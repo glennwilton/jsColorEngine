@@ -308,6 +308,27 @@ The `browser` field stubs out the Node-only modules (`fs`, `path`,
 `util`, `child_process`) for browser builds. No extra bundler config
 should be needed.
 
+### TypeScript
+
+Type definitions ship with the package (`src/main.d.ts`), so there is nothing
+extra to install:
+
+```ts
+import { Profile, Transform, eIntent, color } from 'jscolorengine';
+import type { CMYKColor } from 'jscolorengine';
+
+const lab2cmyk = new Transform();
+lab2cmyk.create('*lab', cmykProfile, eIntent.perceptual);
+const out = lab2cmyk.transform<CMYKColor>(color.Lab(80.1, -22.3, 35.1));
+```
+
+They cover the documented API: `Profile`, `Transform` and its options,
+`Loader`, the `color` helpers, `alpha` and the enums. Option values such as
+`dataFormat` and `lutMode` are checked, so a misspelt one is a compile error.
+`transform()` and `array()` take the result type as a type argument, because
+the shape they return depends on `dataFormat`. The engine itself is still
+plain JavaScript.
+
 ### Environments
 
 The engine ships with backends for three environments and picks the
