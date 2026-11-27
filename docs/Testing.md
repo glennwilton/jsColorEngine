@@ -46,6 +46,19 @@ node accuracy_nchannel.js        # 2–10 ch, device → PCS
 node accuracy_b2a.js             # 2–15 ch, PCS → device, both depths
 ```
 
+Damaged files, also from the harness:
+
+```bash
+node harness/fuzz/run.js         # ~10 min; a failure is replayed with --case "<name>"
+```
+
+It damages the profiles and image files in `__tests__` (one byte at a time,
+several random bytes, zeroed runs, truncation) and fails on a hang, a crash,
+an out-of-memory exit or a NaN result. It is seeded, so the cases are the
+same on every run. Run it after any change to `decodeICC.js`, `Profile.js`
+or `embeddedProfile.js`. A case it finds goes into
+`profile_decode_regressions.tests.js` as a fixed test once it is fixed.
+
 ### The order to run things in
 
 Every engine change:

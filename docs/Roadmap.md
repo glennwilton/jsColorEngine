@@ -2374,10 +2374,14 @@ new features are cooler, but this is worth doing eventually.
 > with no hang, no crash and no NaN output, where it had 50 hangs and 107
 > crashes.
 >
+> The fuzz is now a kept tool, `harness/fuzz/run.js`: the single-byte sweep,
+> seeded multi-byte damage, zeroed and randomised runs, truncation, and the
+> same over JPEG, TIFF and PNG files. 59,567 cases over 22 files end with no
+> failure. Run against the engine as it was before the audit pass, the byte
+> sweep alone reports 47 hangs, 51 crashes and 3 NaN results.
+>
 > **Still open:**
 >
-> - The fuzz as a kept tool in the harness, extended to multi-byte changes and
->   truncation. Single-byte is all that has been run.
 > - Item 8 below, the NaN and undefined scan of the decoded profile.
 >   `validateOnCreate` catches these at `create()` today, which is later than
 >   it could be.
