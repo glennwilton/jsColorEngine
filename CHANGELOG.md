@@ -14,6 +14,41 @@ The npm package does not change. The demos and LutBuilder moved to
 `ICCImage` became [jsICCImage](https://github.com/glennwilton/jsICCImage), its own MIT
 project built on the engine. The plugin example is now in `docs/Plugin.md`.
 
+### Fixed
+
+- **lut8 and lut16 tables inside a v4 profile.** The pipeline chose its route from the
+  profile version, so a v4 profile carrying `mft1`/`mft2` tables lost their input and
+  output curves and had its Lab values read in the wrong encoding. It now follows the
+  table type. The 3x3 matrix of a lut8/lut16 B2A table with an XYZ PCS is applied too.
+- **A profile's name no longer changes its maths.** A decoded matrix profile whose
+  description began "sRGB" was given the sRGB curve in place of its own gamma value.
+- **Identity detection compares tone curves.** Two matrix profiles with the same
+  primaries and different curves could be treated as one profile, turning the
+  conversion into a copy.
+- **`toICC()`** wrote a parametric gray curve as zeros, and now refuses a Lab-PCS gray
+  profile instead of writing it with the wrong meaning. It also says, once, that it is
+  test tooling and not supported for building production profiles.
+- The `tech` tag decoded as unknown for every profile.
+- The multiProcessElement stub read its position table at half the entry size.
+- `create()` no longer edits the chain and `BPC` arrays it is given.
+- `Profile.load()` accepts an `ArrayBuffer`, fails cleanly on a non-source argument,
+  and loads `https:` URLs in Node.
+
+### Added
+
+- **Profiles embedded in a JPEG.** `loadBinary(bytes, callback, true)` puts a profile
+  split across APP2 segments back together, which is every profile over 64 KB.
+
+### Changed
+
+- **Damaged profiles are refused at load.** Curve, text and element counts are checked
+  against the file, and LUT tables against their own headers and the profile's colour
+  space. Several of these used to hang the load or run the process out of memory.
+- A profile with nothing usable, such as an RGB profile missing a matrix tag, no longer
+  loads. A profile with no table for the direction asked gives a clear error from
+  `create()`.
+- Loading a matrix profile decodes a tone curve shared by all three channels once.
+
 ---
 
 ## [1.7.1] — 2026-11-01

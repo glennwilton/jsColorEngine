@@ -141,7 +141,7 @@ function curveType(curve){
         var N = 1024;
         u32(out, N);
         for(var s = 0; s < N; s++){
-            var v = curve.curveFn(s / (N - 1));
+            var v = curve.curveFn(curve.params, s / (N - 1));
             u16(out, Math.max(0, Math.min(65535, Math.round(v * 65535))));
         }
         return out;

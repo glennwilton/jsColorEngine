@@ -215,6 +215,14 @@ module.exports = {
 
         var u8TempArray = new Uint8Array(binary.buffer.slice(start, start + bytes));
 
+        // slice() stops at the end of the buffer. A count read from a damaged
+        // tag can be far larger than the file, even Infinity, and the swap
+        // below would then never finish.
+        bytes = u8TempArray.length - (u8TempArray.length % 2);
+        if (bytes !== u8TempArray.length) {
+            u8TempArray = u8TempArray.subarray(0, bytes).slice();
+        }
+
         // the data is in littleEndian format so we need to invert the data - Quick and easier than using DataView???
         for (var i = 0; i < bytes; i += 2) {
             var v = u8TempArray[i];
@@ -352,15 +360,27 @@ module.exports = {
      * @returns {{sig:string, text:string, languages:Array<{languageCode:string, countryCode:string, text:string}>}}
      */
     _multiLocalizedUnicodeText: function (binary, offset) {
-        var recordCount = this.uint32(binary, offset + 8);
-        var recordSize = this.uint32(binary, offset + 12);
+        var recordCount = this.uint32(binary, offset + 8) >>> 0;
+        var recordSize = this.uint32(binary, offset + 12) >>> 0;
         var languages = [];
         var ptr = offset + 16;
         var textEn = '';
+
+        // Every record is 12 bytes of the file. A count that cannot fit is a
+        // damaged tag, and looping over it runs the process out of memory.
+        // Text is not worth failing a profile over, so it reads as empty.
+        var unreadable = {sig: this.chars(binary, offset, 4), text: '', languages: []};
+        if (recordCount === 0 || offset + 16 + recordCount * 12 > binary.length) {
+            return unreadable;
+        }
+
         for (var i = 0; i < recordCount; i++) {
             var languageCode = this.chars(binary, ptr, 2);
-            var strLength = this.uint32(binary, ptr + 4) / 2;
-            var strOffset = this.uint32(binary, ptr + 8);
+            var strLength = (this.uint32(binary, ptr + 4) >>> 0) / 2;
+            var strOffset = this.uint32(binary, ptr + 8) >>> 0;
+            if (offset + strOffset + strLength * 2 > binary.length) {
+                return unreadable;
+            }
             var text = this.unicodeChars(binary, offset + strOffset, strLength);
 
             // choose the first english text
@@ -719,10 +739,17 @@ module.exports = {
 
         switch (type) {
             case 'curv':
-                curve.count = this.uint32(binary, offset + 8);
+                curve.count = this.uint32(binary, offset + 8) >>> 0;
 
                 // calculate the length of the curve, adding 20 bytes for the curve header
                 curve.byteLength = curveHeaderBytes + (curve.count * 2);
+
+                // The samples are in the file or the count is wrong. Without
+                // this a damaged count loads as a curve of zeros, after
+                // inverting millions of entries that were never there.
+                if (offset + curve.byteLength > binary.length) {
+                    throw new Error('curv tag declares ' + curve.count + ' entries, which do not fit in the profile');
+                }
 
                 /*The count value specifies the number of entries in the curve table except as follows:
                  when count is 0, then a linear response (slope equal to 1.0) is assumed,
@@ -1025,6 +1052,7 @@ module.exports = {
 
                 lut.inputChannels = binary[offset + 8];
                 lut.outputChannels = binary[offset + 9]
+                if (!this.lutChannelsUsable(lut)) { break; }
 
                 nGridPoints = binary[offset + 10];
                 for (i = 0; i < lut.inputChannels; i++) {
@@ -1086,6 +1114,7 @@ module.exports = {
                 lut.outputScale = 1 / 255;
                 lut.inputChannels = binary[offset + 8];
                 lut.outputChannels = binary[offset + 9];
+                if (!this.lutChannelsUsable(lut)) { break; }
 
                 nGridPoints = binary[offset + 10];
                 for (i = 0; i < lut.inputChannels; i++) {
@@ -1136,6 +1165,7 @@ module.exports = {
             case 'mAB ': //lutAToBType V4
                 lut.inputChannels = binary[offset + 8];
                 lut.outputChannels = binary[offset + 9];
+                if (!this.lutChannelsUsable(lut)) { break; }
                 bCurveOffset = this.uint32(binary, offset + 12);
                 matrixOffset = this.uint32(binary, offset + 16);
                 mCurveOffset = this.uint32(binary, offset + 20);
@@ -1157,6 +1187,7 @@ module.exports = {
             case 'mBA ': //lutBToAType V4
                 lut.inputChannels = binary[offset + 8];
                 lut.outputChannels = binary[offset + 9];
+                if (!this.lutChannelsUsable(lut)) { break; }
                 bCurveOffset = this.uint32(binary, offset + 12);
                 matrixOffset = this.uint32(binary, offset + 16);
                 mCurveOffset = this.uint32(binary, offset + 20);
@@ -1209,6 +1240,12 @@ module.exports = {
                 break;
         }
 
+        var structureError = this.lutStructureError(lut);
+        if (structureError) {
+            lut.invalid = true;
+            lut.errorReason = structureError;
+        }
+
         // Stride pre-compute for the interpolation hot path.
         // For 3D LUTs `gridPoints[3]` is undefined → g4 is NaN; that's
         // intentional (consumers only read up to g_inputChannels).
@@ -1238,6 +1275,91 @@ module.exports = {
         return lut;
 
     },
+    /**
+     * Channel counts a LUT reader can act on. Checked before any table is
+     * sized from them: 255 channels of 65535 entries is a lot of memory to
+     * allocate for a tag that is about to be refused.
+     *
+     * @param {object} lut
+     * @returns {boolean}
+     */
+    lutChannelsUsable: function (lut) {
+        return lut.inputChannels >= 1 && lut.inputChannels <= 15
+            && lut.outputChannels >= 1 && lut.outputChannels <= 15;
+    },
+
+    /**
+     * Check a decoded LUT against what its own header promised. The readers
+     * slice whatever the file holds, so a damaged channel count, grid size or
+     * table length otherwise decodes into a short table that interpolates to
+     * NaN, or into a loop over a count the file never contained.
+     *
+     * @param {object} lut  as built by `lut()`
+     * @returns {string|false}  the reason it is unusable, or false
+     */
+    lutStructureError: function (lut) {
+        if (lut.invalid) {
+            return false;
+        }
+        var inputChannels = lut.inputChannels;
+        var outputChannels = lut.outputChannels;
+        if (!(inputChannels >= 1 && inputChannels <= 15) || !(outputChannels >= 1 && outputChannels <= 15)) {
+            return 'LUT declares ' + inputChannels + ' input and ' + outputChannels + ' output channels';
+        }
+
+        if (lut.CLUT) {
+            var expectedLength = outputChannels;
+            for (var axis = 0; axis < inputChannels; axis++) {
+                var points = lut.gridPoints[axis];
+                if (!(points >= 2)) {
+                    return 'LUT grid has ' + points + ' points on axis ' + axis;
+                }
+                expectedLength *= points;
+            }
+            if (lut.CLUT.length !== expectedLength) {
+                return 'LUT table holds ' + lut.CLUT.length + ' values, its header needs ' + expectedLength;
+            }
+            if (!(lut.precision === 8 || lut.precision === 16)) {
+                return 'LUT precision is ' + lut.precision + ' bits';
+            }
+        }
+
+        var tables = [[lut.inputCurve, inputChannels, 'input'], [lut.outputCurve, outputChannels, 'output']];
+        for (var t = 0; t < tables.length; t++) {
+            var curve = tables[t][0];
+            if (!curve) {
+                continue;
+            }
+            if (!(curve.entries >= 2)) {
+                return 'LUT ' + tables[t][2] + ' table has ' + curve.entries + ' entries';
+            }
+            if (curve.table.length !== curve.entries * tables[t][1]) {
+                return 'LUT ' + tables[t][2] + ' table holds ' + curve.table.length + ' values, its header needs '
+                    + (curve.entries * tables[t][1]);
+            }
+        }
+
+        // A curves sit on the device side, M and B curves on the PCS side.
+        var deviceChannels = (lut.type === 'mBA ') ? outputChannels : inputChannels;
+        var pcsChannels = (lut.type === 'mBA ') ? inputChannels : outputChannels;
+        var curveSets = [[lut.aCurves, 'A', deviceChannels], [lut.mCurves, 'M', pcsChannels], [lut.bCurves, 'B', pcsChannels]];
+        for (var s = 0; s < curveSets.length; s++) {
+            var set = curveSets[s][0];
+            if (!set) {
+                continue;
+            }
+            if (set.length !== curveSets[s][2]) {
+                return 'LUT has ' + set.length + ' ' + curveSets[s][1] + ' curves, it needs ' + curveSets[s][2];
+            }
+            for (var c = 0; c < set.length; c++) {
+                if (set[c].byteLength === false) {
+                    return 'LUT ' + curveSets[s][1] + ' curve ' + c + ' is not a readable curve';
+                }
+            }
+        }
+        return false;
+    },
+
     /**
      * Decode the multi-dimensional CLUT block of a V4 `mAB`/`mBA` tag and
      * attach `CLUT`, `gridPoints`, `precision`, `inputScale`,
@@ -1309,13 +1431,20 @@ module.exports = {
         var elements = [];
         var inputChannels = this.uint16(binary, offset + 8);
         var outputChannels = this.uint16(binary, offset + 10);
-        var elementCount = this.uint32(binary, offset + 12);
+        var elementCount = this.uint32(binary, offset + 12) >>> 0;
+
+        // The position table is 8 bytes an element, offset then size. A count
+        // that cannot fit is a damaged tag, and nothing here is used for
+        // colour, so it is not worth failing the profile over.
+        if (offset + 16 + elementCount * 8 > binary.length) {
+            return {inputChannels: inputChannels, outputChannels: outputChannels, elements: []};
+        }
 
         var elementOffsets = [];
         for (var i = 0; i < elementCount; i++) {
             elementOffsets.push({
-                offset: this.uint32(binary, offset + 16 + (i * 4)),
-                size: this.uint32(binary, offset + 16 + (i * 4) + 4)
+                offset: this.uint32(binary, offset + 16 + (i * 8)) >>> 0,
+                size: this.uint32(binary, offset + 16 + (i * 8) + 4) >>> 0
             });
         }
 

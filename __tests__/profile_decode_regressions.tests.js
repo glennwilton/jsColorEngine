@@ -979,3 +979,237 @@ describe('X*Y*Z CLUT grids', () => {
         expect(baked.lut.gridPoints).toEqual([5, 5, 5, 5, 5]);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Audit pass: wrong colour with no error, and damaged profiles.
+// ---------------------------------------------------------------------------
+
+const readFixture = (name) => new Uint8Array(fs.readFileSync(path.join(__dirname, name)));
+const uint32At = (bytes, offset) => ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+const tagOffset = (bytes, signature) => {
+    for (let index = 0; index < uint32At(bytes, 128); index++) {
+        const entry = 132 + index * 12;
+        if (String.fromCharCode(bytes[entry], bytes[entry + 1], bytes[entry + 2], bytes[entry + 3]) === signature) {
+            return uint32At(bytes, entry + 4);
+        }
+    }
+    throw new Error('no ' + signature + ' tag');
+};
+const renameTag = (bytes, signature) => {
+    const copy = bytes.slice();
+    for (let index = 0; index < uint32At(copy, 128); index++) {
+        const entry = 132 + index * 12;
+        if (String.fromCharCode(copy[entry], copy[entry + 1], copy[entry + 2], copy[entry + 3]) === signature) {
+            copy.set([122, 122, 122, 122], entry);
+        }
+    }
+    return copy;
+};
+const deviceTransform = (source, destination) => {
+    const transform = new Transform({dataFormat: 'device', BPC: false});
+    transform.create(source, destination, eIntent.relative);
+    return transform;
+};
+const jpegWith = (profileBytes) => {
+    const segmentSize = 65519;
+    const total = Math.ceil(profileBytes.length / segmentSize);
+    const parts = [[0xFF, 0xD8]];
+    for (let sequence = 1; sequence <= total; sequence++) {
+        const chunk = profileBytes.subarray((sequence - 1) * segmentSize, Math.min(profileBytes.length, sequence * segmentSize));
+        const length = 2 + 12 + 2 + chunk.length;
+        parts.push([0xFF, 0xE2, length >> 8, length & 255, 73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0, sequence, total]);
+        parts.push(chunk);
+    }
+    parts.push([0xFF, 0xDA, 0, 2, 0xFF, 0xD9]);
+    const jpeg = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+    let written = 0;
+    for (const part of parts) { jpeg.set(part, written); written += part.length; }
+    return jpeg;
+};
+
+describe('lut16 tables follow the table type, not the profile version', () => {
+    // ICC.1:2010 10.8 and 10.9: a lut8/lut16 keeps its curves, its matrix and
+    // the legacy Lab encoding in a v4 profile exactly as in a v2 one, so the
+    // same tables must convert the same under either header.
+    const shipped = readFixture('GRACoL2006_Coated1v2.icc');
+    const flagged = shipped.slice();
+    flagged[8] = 4;
+    flagged[9] = 0x20;
+    const versionTwo = fromBytes(shipped);
+    const versionFour = fromBytes(flagged);
+    const lab = new Profile('*Lab');
+
+    test('the header version alone does not change Lab to CMYK', () => {
+        expect(versionFour.version).toBe(4);
+        const expected = deviceTransform(lab, versionTwo);
+        const actual = deviceTransform(lab, versionFour);
+        for (const colour of [[0.5, 0.5, 0.5], [0.7, 0.6, 0.4], [0.2, 0.5, 0.5], [0.95, 0.5, 0.5]]) {
+            const want = expected.transform(colour);
+            const got = actual.transform(colour);
+            for (let channel = 0; channel < 4; channel++) {
+                expect(got[channel]).toBeCloseTo(want[channel], 6);
+            }
+        }
+    });
+
+    test('nor CMYK to Lab', () => {
+        const expected = deviceTransform(versionTwo, lab);
+        const actual = deviceTransform(versionFour, lab);
+        for (const colour of [[0, 0, 0, 0], [0.2, 0.1, 0.1, 0], [0.5, 0.4, 0.4, 0.1], [1, 1, 1, 1]]) {
+            const want = expected.transform(colour);
+            const got = actual.transform(colour);
+            for (let channel = 0; channel < 3; channel++) {
+                expect(got[channel]).toBeCloseTo(want[channel], 6);
+            }
+        }
+    });
+});
+
+describe('a matrix profile is described by its curves', () => {
+    const adobeBytes = readFixture('AdobeRGB1998.icc');
+
+    test('a description starting "sRGB" does not swap in the sRGB curve', () => {
+        const renamed = adobeBytes.slice();
+        renamed.set([0x73, 0x52, 0x47, 0x42], tagOffset(adobeBytes, 'desc') + 12);
+        const original = fromBytes(adobeBytes);
+        const impostor = fromBytes(renamed);
+        expect(impostor.name.substring(0, 4)).toBe('sRGB');
+
+        const lab = new Profile('*Lab');
+        const want = deviceTransform(original, lab).transform([0.1, 0.1, 0.1]);
+        const got = deviceTransform(impostor, lab).transform([0.1, 0.1, 0.1]);
+        expect(got[0]).toBeCloseTo(want[0], 9);
+    });
+
+    test('same primaries with a different gamma is not an identity conversion', () => {
+        const linear = adobeBytes.slice();
+        const seen = new Set();
+        for (const signature of ['rTRC', 'gTRC', 'bTRC']) {
+            const offset = tagOffset(adobeBytes, signature);
+            if (!seen.has(offset)) { linear.set([1, 0], offset + 12); seen.add(offset); }
+        }
+        const transform = deviceTransform(fromBytes(adobeBytes), fromBytes(linear));
+        expect(transform.isIdentity).toBe(false);
+        expect(transform.transform([0.25, 0.25, 0.25])[0]).toBeCloseTo(Math.pow(0.25, 563 / 256), 4);
+    });
+
+    test('the same file loaded twice still collapses to identity', () => {
+        const transform = deviceTransform(fromBytes(adobeBytes), fromBytes(adobeBytes));
+        expect(transform.isIdentity).toBe(true);
+    });
+
+    test('create() leaves the chain and BPC arrays it was given alone', () => {
+        const chain = ['*sRGB', eIntent.relative, '*sRGB', eIntent.relative, '*AdobeRGB'];
+        const blackPoint = [true, false];
+        const transform = new Transform({BPC: blackPoint});
+        transform.createMultiStage(chain);
+        expect(chain).toEqual(['*sRGB', eIntent.relative, '*sRGB', eIntent.relative, '*AdobeRGB']);
+        expect(blackPoint).toEqual([true, false]);
+    });
+});
+
+describe('profiles embedded in a JPEG', () => {
+    test('a profile split across APP2 segments is put back together', () => {
+        const profileBytes = readFixture('GRACoL2006_Coated1v2.icc');
+        expect(profileBytes.length).toBeGreaterThan(65519 * 2);
+        const reference = fromBytes(profileBytes);
+        const embedded = new Profile();
+        embedded.loadBinary(jpegWith(profileBytes), null, true);
+
+        expect(embedded.loaded).toBe(true);
+        expect(embedded.binaryHash).toBe(reference.binaryHash);
+        const lab = new Profile('*Lab');
+        expect(Array.from(deviceTransform(lab, embedded).transform([0.6, 0.55, 0.45])))
+            .toEqual(Array.from(deviceTransform(lab, reference).transform([0.6, 0.55, 0.45])));
+    });
+
+    test('a JPEG missing one of the segments is refused', () => {
+        const profileBytes = readFixture('GRACoL2006_Coated1v2.icc');
+        const jpeg = jpegWith(profileBytes);
+        // Rename the second APP2 segment so its part of the profile is absent.
+        jpeg[2 + 2 + (2 + 12 + 2 + 65519) + 1] = 0xE3;
+        const embedded = new Profile();
+        embedded.loadBinary(jpeg, null, true);
+        expect(embedded.loaded).toBe(false);
+    });
+});
+
+describe('damaged profiles are refused quickly', () => {
+    const adobeBytes = readFixture('AdobeRGB1998.icc');
+    const cmykBytes = readFixture('GRACoL2006_Coated1v2.icc');
+    const refusedWithin = (bytes, milliseconds) => {
+        const started = Date.now();
+        const profile = new Profile();
+        profile.loadBinary(bytes);
+        expect(Date.now() - started).toBeLessThan(milliseconds);
+        expect(profile.loaded).toBe(false);
+        return profile.lastError.text;
+    };
+
+    test('a curve entry count far larger than the file', () => {
+        const damaged = adobeBytes.slice();
+        damaged[tagOffset(adobeBytes, 'rTRC') + 8] = 0x01;      // 1 entry becomes 16,777,217
+        expect(refusedWithin(damaged, 500)).toMatch(/curv tag declares/);
+    });
+
+    test.each([
+        ['255 input channels', 8, 255, /input and/],
+        ['255 grid points', 10, 255, /LUT table holds/],
+        ['1 grid point', 10, 1, /grid has 1 points/],
+        ['1 input channel in a CMYK profile', 8, 1, /header needs 4 to 3/],
+    ])('a lut16 header declaring %s', (label, byte, value, message) => {
+        const damaged = cmykBytes.slice();
+        damaged[tagOffset(cmykBytes, 'A2B0') + byte] = value;
+        expect(refusedWithin(damaged, 500)).toMatch(message);
+    });
+
+    test('an RGB profile with one matrix tag missing does not load', () => {
+        const profile = new Profile();
+        profile.loadBinary(renameTag(adobeBytes, 'gTRC'));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/incomplete set of matrix and curve tags/);
+    });
+
+    test('a gray profile with no kTRC does not load', () => {
+        const profile = new Profile();
+        profile.loadBinary(renameTag(readFixture('profiles/synthetic_gray_g22.icc'), 'kTRC'));
+        expect(profile.loaded).toBe(false);
+    });
+
+    test('a profile with no B2A table says so when used as a destination', () => {
+        let inputOnly = cmykBytes;
+        for (const signature of ['B2A0', 'B2A1', 'B2A2']) { inputOnly = renameTag(inputOnly, signature); }
+        const profile = fromBytes(inputOnly);
+        expect(profile.loaded).toBe(true);
+        const transform = new Transform({dataFormat: 'device'});
+        expect(() => transform.create('*Lab', profile, eIntent.relative)).toThrow(/has no B2A table/);
+    });
+});
+
+describe('loader odds and ends', () => {
+    test('load() takes an ArrayBuffer', () => {
+        const bytes = readFixture('AdobeRGB1998.icc');
+        const profile = new Profile();
+        profile.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+        expect(profile.loaded).toBe(true);
+    });
+
+    test('load() fails cleanly on something that is not a profile source', () => {
+        const profile = new Profile();
+        let calledBack = false;
+        profile.load(null, () => { calledBack = true; });
+        expect(profile.loaded).toBe(false);
+        expect(profile.loadError).toBe(true);
+        expect(calledBack).toBe(true);
+    });
+
+    test('toICC keeps a parametric gray curve', () => {
+        // A gray profile whose kTRC is a parametric gamma 2.4 (function type 1).
+        const source = fromBytes(Profile.createGrayICC({gamma: 2.2}));
+        const parametric = decode.curve(new Uint8Array(paraTag(1, [2.4, 1, 0])), 0);
+        source.Gray.kTRC = parametric;
+        const written = fromBytes(source.toICC());
+        const middle = written.Gray.kTRC.dataf[Math.round(0.5 * (written.Gray.kTRC.count - 1))];
+        expect(middle).toBeCloseTo(Math.pow(0.5, 2.4), 2);
+    });
+});

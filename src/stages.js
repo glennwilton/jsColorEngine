@@ -1476,30 +1476,6 @@
 
         };
 
-        invertMatrix3(m){
-
-            var determinant =
-                m[0] * (m[9] * m[4] - m[7] * m[4]) -
-                m[3] * (m[9] * m[1] - m[7] * m[2]) +
-                m[6] * (m[4] * m[1] - m[4] * m[2]);
-
-            var scale = 1.0 / determinant;
-
-            return [
-                scale * (m[9] * m[4] - m[7] * m[4]),
-                -scale * (m[9] * m[1] - m[7] * m[2]),
-                scale * (m[4] * m[1] - m[4] * m[2]),
-
-                -scale * (m[9] * m[3] - m[6] * m[4]),
-                scale * (m[9] * m[0] - m[6] * m[2]),
-                -scale * (m[4] * m[0] - m[3] * m[2]),
-
-                scale * (m[7] * m[3] - m[6] * m[4]),
-                -scale * (m[7] * m[0] - m[6] * m[1]),
-                scale * (m[4] * m[0] - m[3] * m[1])
-            ]
-        };
-
         ////////////////////////////////////////////////////////////////////////////////
         //
         //  Stage for applying Curves

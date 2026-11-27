@@ -1063,7 +1063,9 @@
             this.precession = this.precision; // @deprecated alias
 
             if(Array.isArray(options.BPC)){
-                this.useBPC = options.BPC; // can use an array to specify which channels to which stage
+                // Copied: collapsing an identity pair removes its slot, and
+                // that must not reach into the caller's own array.
+                this.useBPC = options.BPC.slice(); // can use an array to specify which channels to which stage
             } else {
                 this.useBPC = options.BPC === true; // defaults to off
             }
@@ -1981,6 +1983,10 @@
                 throw 'Invalid profileChain, must be an array';
             }
 
+            // Copied: the chain is rewritten below, virtual names into
+            // Profiles and identity pairs spliced out, and a caller may be
+            // about to build a second Transform from the same array.
+            profileChain = profileChain.slice();
 
             var step, i;
             var chainEnd = profileChain.length - 1;
@@ -5881,9 +5887,50 @@
                 var matrixKey = matrixKeys[keyIndex];
                 if(Math.abs(matrixA[matrixKey] - matrixB[matrixKey]) > epsilon) return false;
             }
+            // A decoded profile carries real curves, and those are what has
+            // to match. RGBMatrix.gamma cannot stand in for them: it is 0 for
+            // most parametric curves and a midpoint estimate for sampled ones,
+            // so two different curves routinely share it.
+            var decodedA = !!(profileA.rgb && profileA.rgb.rTRC);
+            var decodedB = !!(profileB.rgb && profileB.rgb.rTRC);
+            if(decodedA !== decodedB) return false;
+            if(decodedA){
+                return this._areSameCurve(profileA.rgb.rTRC, profileB.rgb.rTRC)
+                    && this._areSameCurve(profileA.rgb.gTRC, profileB.rgb.gTRC)
+                    && this._areSameCurve(profileA.rgb.bTRC, profileB.rgb.bTRC);
+            }
+
             if(profileA.RGBMatrix.issRGB !== profileB.RGBMatrix.issRGB) return false;
             if(!profileA.RGBMatrix.issRGB){
                 if(Math.abs((profileA.RGBMatrix.gamma || 0) - (profileB.RGBMatrix.gamma || 0)) > epsilon) return false;
+            }
+            return true;
+        }
+
+        /**
+         * @param {object} curveA  as decoded by decodeICC.curve()
+         * @param {object} curveB
+         * @returns {boolean} true if both describe the same tone curve
+         */
+        _areSameCurve(curveA, curveB) {
+            if(curveA === curveB) return true;
+            if(!curveA || !curveB) return false;
+            if(curveA.count !== curveB.count || curveA.gamma !== curveB.gamma) return false;
+            if(!!curveA.curveFn !== !!curveB.curveFn) return false;
+
+            // The parameter count identifies the parametric function type.
+            var paramsA = curveA.params || [];
+            var paramsB = curveB.params || [];
+            if(paramsA.length !== paramsB.length) return false;
+            for(var paramIndex = 0; paramIndex < paramsA.length; paramIndex++){
+                if(paramsA[paramIndex] !== paramsB[paramIndex]) return false;
+            }
+
+            var samplesA = curveA.data || [];
+            var samplesB = curveB.data || [];
+            if(samplesA.length !== samplesB.length) return false;
+            for(var sampleIndex = 0; sampleIndex < samplesA.length; sampleIndex++){
+                if(samplesA[sampleIndex] !== samplesB[sampleIndex]) return false;
             }
             return true;
         }
@@ -6096,6 +6143,42 @@
             }
             throw 'Unknown profile type ' + outputProfile.type + 'in getDevice2OutputPCSInfo';
         };
+
+        /**
+         * lut8 and lut16 tables (mft1, mft2) are legal in a v4 profile as well
+         * as a v2 one, and they keep their own layout wherever they appear:
+         * input tables, CLUT, output tables, the legacy 16-bit Lab encoding,
+         * and a matrix applied when the input side is XYZ (ICC.1:2010 10.8,
+         * 10.9). So the pipeline follows the table type. Following
+         * profile.version dropped the curves of a lut16 in a v4 profile.
+         *
+         * @param {object} lut
+         * @returns {boolean} true for lut8/lut16, false for lutAToB/lutBToA
+         */
+        usesLegacyLutLayout(lut){
+            return !!(lut && (lut.inputCurve || lut.outputCurve));
+        }
+
+        /**
+         * The table a profile offers for one direction and intent, or a clear
+         * error. An input-only profile (a scanner or camera profile) has no
+         * B2A table at all, and this used to surface as "Cannot read
+         * properties of null" from inside the pipeline builder.
+         *
+         * @param {Profile} profile
+         * @param {string} direction  'A2B' (device to PCS) or 'B2A' (PCS to device)
+         * @param {number} intent
+         * @returns {object} the lut
+         */
+        requireLut(profile, direction, intent){
+            var lut = profile[direction][this.intent2LUTIndex(intent)];
+            if(!lut){
+                throw new Error('Profile "' + profile.name + '" has no ' + direction + ' table, so it cannot be used as a '
+                    + (direction === 'A2B' ? 'source' : 'destination')
+                    + (direction === 'B2A' ? '. Input-only profiles, such as scanner profiles, are like this.' : '.'));
+            }
+            return lut;
+        }
 
         isGreyTRCwithNOLUT(profile, intent){
             return (profile.Gray.kTRC && !profile.A2B[this.intent2LUTIndex(intent)])
@@ -6395,7 +6478,7 @@
                 case eProfileType.RGBLut:
                 case eProfileType.CMYK:
                 case eProfileType.NChannel:
-                    if(inputProfile.version === 2){
+                    if(this.usesLegacyLutLayout(this.requireLut(inputProfile, 'A2B', intent))){
                         this.createPipeline_Device_to_PCS_via_V2Lut(pcsInfo, inputProfile, outputProfile, intent);
                     } else {
                         this.createPipeline_Device_to_PCS_via_V4Lut(pcsInfo, inputProfile, outputProfile, intent);
@@ -6806,7 +6889,7 @@
                 case eProfileType.RGBLut:
                 case eProfileType.CMYK:
                 case eProfileType.NChannel:
-                    if(outputProfile.version === 2){
+                    if(this.usesLegacyLutLayout(this.requireLut(outputProfile, 'B2A', intent))){
                         this.createPipeline_PCS_to_Device_via_V2LUT(pcsInfo, inputProfile, outputProfile, intent);
                         return
                     }
@@ -6976,12 +7059,12 @@
 
         isIdentityMatrix(matrix){
             if(!matrix || matrix.length < 9) return true;
+            // A lut8/lut16 matrix is 3x3 with no offsets; lutAToB/lutBToA add three.
+            var noOffsets = matrix.length < 12 || (matrix[9] === 0 && matrix[10] === 0 && matrix[11] === 0);
             return (matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 &&
                     matrix[3] === 0 && matrix[4] === 1 && matrix[5] === 0 &&
                     matrix[6] === 0 && matrix[7] === 0 && matrix[8] === 1 &&
-
-                    // Offsets
-                    matrix[9] === 0 && matrix[10] === 0 && matrix[11] === 0
+                    noOffsets
             );
         }
 
@@ -7004,6 +7087,20 @@
             if(!(pcsInfo.pcsEncoding === encoding.PCSv2 || pcsInfo.pcsEncoding === encoding.PCSXYZ)){
                 console.log(this.getStageNames(true));
                 throw 'createPipeline_PCS_to_Device_via_V2LUT: expects PCSv2 or PCSXYZ not ' + encodingStr[pcsInfo.pcsEncoding];
+            }
+
+            // lut8 and lut16 carry a 3x3 matrix that is used only when the
+            // input side is XYZ, which for a B2A table means an XYZ PCS. It
+            // comes first: matrix, input tables, CLUT, output tables.
+            if(pcsInfo.pcsEncoding === encoding.PCSXYZ && lut.matrix && !this.isIdentityMatrix(lut.matrix)){
+                this.addStage(
+                    encoding.PCSXYZ,
+                    'stage_Matrix',
+                    this.stage_matrix_v4_noOffsets,
+                    lut.matrix,
+                    encoding.PCSXYZ,
+                    '  [PCSv4_to_Device_via_V2LUT : Matrix : {name}]|({last}) > ({data})'
+                );
             }
 
             // V2 Profile pipeline
@@ -7332,8 +7429,10 @@
                     this.pipeline_Convert_PCS_to(pcsInfo, encoding.PCSXYZ);
                     break;
                 case 'LAB':
-                    switch(profile.version){
-                        case 2: // V2 PROFILE
+                    // By table type, not profile.version: a lut16 keeps the
+                    // legacy Lab encoding inside a v4 profile too.
+                    switch(this.usesLegacyLutLayout(lut) ? 2 : 4){
+                        case 2: // lut8 / lut16
                             if(lut.precision === 8) {
                                 // 8Bit LUT with v2 encoding is the same as PCSv4 encoding,
                                 // so this is a special case where ...
@@ -7378,7 +7477,7 @@
                                 this.pushStage(stage);
                             }
                             break;
-                        case 4: // v4 PROFILE
+                        case 4: // lutAToB / lutBToA
                             this.pipeline_Convert_PCS_to(pcsInfo, encoding.PCSv4);
                             break;
                         default:

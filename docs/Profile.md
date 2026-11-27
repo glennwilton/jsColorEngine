@@ -155,6 +155,8 @@ before decode — pass the TIFF/JPEG slice as-is.
 * `searchForProfile = true` — scan the buffer for an embedded profile
   signature (`acsp`) instead of treating offset 0 as the profile start.
   Useful for extracting the embedded profile out of a JPEG / TIFF.
+  A JPEG is read segment by segment, so a profile split across several APP2
+  segments (any profile over 64 KB) is reassembled.
 
 ### `profile.loadFile(filename, afterLoad?)`
 

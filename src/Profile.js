@@ -321,8 +321,17 @@ class Profile {
     load(dataOrUrl, afterLoad) {
         this.loaded = false;
         this.loadError = false;
+        if (dataOrUrl instanceof ArrayBuffer) {
+            dataOrUrl = new Uint8Array(dataOrUrl);
+        }
         if (Object.prototype.toString.call(dataOrUrl) === '[object Uint8Array]') {
             this.loadBinary(dataOrUrl, afterLoad);
+        } else if (typeof dataOrUrl !== 'string') {
+            this.loadError = true;
+            this.lastError = {err: 122, text: 'Profile.load expects a Uint8Array, an ArrayBuffer or a string'};
+            if(typeof afterLoad === 'function'){
+                afterLoad(this);
+            }
         } else if (dataOrUrl.substring(0, 1) === '*') {
             this.loadVirtualProfile(dataOrUrl, afterLoad);
         } else if (dataOrUrl.substring(0, 5).toLowerCase() === 'file:') {
@@ -350,8 +359,8 @@ class Profile {
     loadBinary(binary, afterLoad, searchForProfile) {
         this.loaded = this.readICCProfile(binary, searchForProfile);
         this.loadError = !this.loaded;
-        if(this.loaded && binary && binary.length){
-            this.binaryHash = _profileFnv1a32(binary, this.sizeBytes);
+        if(this.loaded){
+            this.binaryHash = this._decodedHash;
         }
         if(typeof afterLoad === 'function'){
             afterLoad(this);
@@ -903,6 +912,15 @@ class Profile {
         var _this = this;
         var start = 0;
         if (searchForProfile){
+            // A JPEG splits any profile over 64 KB across APP2 segments, each
+            // with its own header, so the bytes are not contiguous in the file.
+            var fromJpeg = _iccFromJpegSegments(data);
+            if (fromJpeg) {
+                data = fromJpeg;
+                searchForProfile = false;
+            }
+        }
+        if (searchForProfile){
             //Search for text "ICC_PROFILE" in an Image
             var ICC_PROFILE = [73 ,67 ,67 ,95 ,80 ,82 ,79 ,70 ,73 ,76 ,69 ];
             start = scan(data,0, ICC_PROFILE);
@@ -982,6 +1000,10 @@ class Profile {
                 this.createRGBMatrix();
             }
 
+            // Kept for loadBinary(), so that a profile found inside an image
+            // is fingerprinted by its own bytes and not by the host file.
+            this._decodedHash = _profileFnv1a32(data, this.sizeBytes);
+
             this.loaded = true;
             return true;
         }
@@ -1037,7 +1059,10 @@ class Profile {
         this.type = eProfileType.RGBMatrix;
         this.RGBMatrix = {
             gamma: this.rgb.rTRC.gamma,
-            issRGB: (this.name.substr(0, 4) === 'sRGB'),
+            // Never inferred for a decoded profile. This used to be true for
+            // any description starting "sRGB", which swapped a plain gamma
+            // curve for the sRGB one on the strength of the name.
+            issRGB: false,
 
             cRx: rxy.x,
             cRy: rxy.y,
@@ -1295,6 +1320,17 @@ class Profile {
 
         this.tags = this.decodeTags(binary);
 
+        // rTRC, gTRC and bTRC very often point at one curve. Decoding it once
+        // matters because inverting a sampled curve is the slow part of a load.
+        var decodedCurves = {};
+        var curveAt = function(offset, inverse) {
+            var key = offset + (inverse ? 'i' : 'f');
+            if (!decodedCurves[key]) {
+                decodedCurves[key] = decode.curve(binary, offset, inverse);
+            }
+            return decodedCurves[key];
+        };
+
         // process common tags
         for (var i = 0; i < this.tags.length; i++) {
             var tag = this.tags[i];
@@ -1310,16 +1346,16 @@ class Profile {
                     break;
 
                 case 'rTRC':
-                    this.rgb.rTRC = decode.curve(binary, tag.offset);
-                    this.rgb.rTRCInv = decode.curve(binary, tag.offset, true);
+                    this.rgb.rTRC = curveAt(tag.offset, false);
+                    this.rgb.rTRCInv = curveAt(tag.offset, true);
                     break;
                 case 'gTRC':
-                    this.rgb.gTRC = decode.curve(binary, tag.offset);
-                    this.rgb.gTRCInv = decode.curve(binary, tag.offset, true);
+                    this.rgb.gTRC = curveAt(tag.offset, false);
+                    this.rgb.gTRCInv = curveAt(tag.offset, true);
                     break;
                 case 'bTRC':
-                    this.rgb.bTRC = decode.curve(binary, tag.offset);
-                    this.rgb.bTRCInv = decode.curve(binary, tag.offset, true);
+                    this.rgb.bTRC = curveAt(tag.offset, false);
+                    this.rgb.bTRCInv = curveAt(tag.offset, true);
                     break;
 
                 case 'kTRC':
@@ -1361,7 +1397,7 @@ class Profile {
                     this.copyright = decode.text(binary, tag.offset).text;
                     break;
                 case 'tech':
-                    this.technology = this.techSignatureString(decode.chars(binary, tag.offset, 4));
+                    this.technology = this.techSignatureString(decode.chars(binary, tag.offset + 8, 4));
                     break;
                 case 'vued':
                     this.viewingConditions = decode.text(binary, tag.offset);
@@ -1511,6 +1547,12 @@ class Profile {
             }
         }
 
+        var structureError = this.profileStructureError();
+        if (structureError) {
+            this.lastError = {err: 133, text: structureError};
+            return false;
+        }
+
         if (!(this.header.pClass === 'prtr' ||
             this.header.pClass === 'mntr' ||
             this.header.pClass === 'scnr' ||
@@ -1524,6 +1566,51 @@ class Profile {
 
         return true;
 
+    };
+
+    /**
+     * Does the decoded profile hold something a Transform can use, and do its
+     * tables agree with its header? A profile that fails here used to load and
+     * then throw "Cannot read properties of null" inside create().
+     *
+     * @returns {string|false}  the reason it is unusable, or false
+     */
+    profileStructureError() {
+        var isDeviceLink = this.header.pClass === 'link';
+        var deviceChannels = isDeviceLink ? this.deviceLinkInputChannels : this.outputChannels;
+        var connectionChannels = isDeviceLink ? this.outputChannels : 3;
+
+        for (var intent = 0; intent < 3; intent++) {
+            var toConnection = this.A2B[intent];
+            if (toConnection && (toConnection.inputChannels !== deviceChannels || toConnection.outputChannels !== connectionChannels)) {
+                return 'A2B' + intent + ' is ' + toConnection.inputChannels + ' to ' + toConnection.outputChannels
+                    + ' channels, the profile header needs ' + deviceChannels + ' to ' + connectionChannels;
+            }
+            var toDevice = this.B2A[intent];
+            if (toDevice && !isDeviceLink && (toDevice.inputChannels !== 3 || toDevice.outputChannels !== deviceChannels)) {
+                return 'B2A' + intent + ' is ' + toDevice.inputChannels + ' to ' + toDevice.outputChannels
+                    + ' channels, the profile header needs 3 to ' + deviceChannels;
+            }
+        }
+
+        var hasTable = this.A2B.some(Boolean) || this.B2A.some(Boolean);
+        if (hasTable) {
+            return false;
+        }
+        var rgb = this.rgb;
+        var hasMatrix = this.header.space === 'RGB '
+            && rgb.rXYZ && rgb.gXYZ && rgb.bXYZ && rgb.rTRC && rgb.gTRC && rgb.bTRC;
+        var hasGrayCurve = this.header.space === 'GRAY' && this.Gray.kTRC;
+        if (hasMatrix || hasGrayCurve) {
+            return false;
+        }
+        if (this.header.space === 'RGB ') {
+            return 'RGB profile has no LUT and an incomplete set of matrix and curve tags';
+        }
+        if (this.header.space === 'GRAY') {
+            return 'Gray profile has neither a LUT nor a kTRC curve';
+        }
+        return 'Profile has no A2B or B2A table';
     };
 
     // ========================================================================
@@ -1611,6 +1698,14 @@ class Profile {
         opts = opts || {};
         const space = (this.header && this.header.space || '').trim();
 
+        // TEST TOOLING, NOT A PROFILE BUILDER. It exists so the engine can be
+        // compared with other CMMs on profiles nobody ships. It is not
+        // supported for making profiles to use on real work. Said once.
+        if (!Profile._toICCWarned) {
+            Profile._toICCWarned = true;
+            console.warn('jsColorEngine: Profile.toICC() is for testing only and is not supported for building production profiles.');
+        }
+
         if (space !== 'GRAY') {
             throw new Error('Profile.toICC: only GRAY profiles can be written so far'
                 + (space ? ' (this one is "' + space + '")' : '')
@@ -1628,6 +1723,11 @@ class Profile {
         }
         if (!this.Gray || !this.Gray.kTRC) {
             throw new Error('Profile.toICC: a GRAY profile needs a kTRC tone curve.');
+        }
+        // The file is written with an XYZ PCS, where kTRC yields Y. Under a
+        // Lab PCS the same curve yields L*, so copying it across is wrong.
+        if (this.pcs === 'LAB') {
+            throw new Error('Profile.toICC: this GRAY profile has a Lab PCS, and only an XYZ PCS can be written.');
         }
 
         const wtpt = this.mediaWhitePoint || encode.D50;
@@ -2007,8 +2107,19 @@ class Profile {
  * failure.
  */
 function nodeLoadFileFromURL(url, callback) {
-    const http = require('http');
-    http.get(url, (response) => {
+    // The two modules share an interface but each refuses the protocol of the other.
+    const http = /^https:/i.test(url) ? require('https') : require('http');
+    let request;
+    try {
+        request = http.get(url, onResponse);
+    } catch (error) {
+        return callback(false, error.message);
+    }
+    request.on('error', (err) => {
+        callback(false, err.message);
+    });
+
+    function onResponse(response) {
         // Check if the request was successful
         if (response.statusCode < 200 || response.statusCode >= 300) {
             return callback(false, 'Response status was ' + response.statusCode);
@@ -2026,9 +2137,7 @@ function nodeLoadFileFromURL(url, callback) {
             const buffer = Buffer.concat(chunks);
             callback(new Uint8Array(buffer), '');
         });
-    }).on('error', (err) => {
-        callback(false, err.message);
-    });
+    }
 }
 
 
@@ -2144,6 +2253,70 @@ function base64ToUint8Array(base64) {
 // embedded in a JPEG APP2 or TIFF tag may be padded to a block boundary
 // by the host application, so naively hashing the whole buffer would
 // produce a different fingerprint for the same logical profile.
+/**
+ * Pull an ICC profile out of a JPEG. The profile lives in APP2 segments marked
+ * "ICC_PROFILE" plus a zero byte, each holding at most 65519 bytes of it and
+ * each numbered, so a profile over 64 KB has to be put back together in order.
+ *
+ * @param {Uint8Array} bytes  a JPEG file, or at least its header segments
+ * @returns {Uint8Array|null} the profile, or null if this is not a JPEG or it
+ *                            carries no complete profile
+ */
+function _iccFromJpegSegments(bytes) {
+    if (!bytes || bytes.length < 4 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) {
+        return null;
+    }
+    var marker = [73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0]; // ICC_PROFILE, then 0
+    var chunks = [];
+    var chunkTotal = 0;
+    var position = 2;
+
+    while (position + 4 <= bytes.length && bytes[position] === 0xFF) {
+        var segmentType = bytes[position + 1];
+        // Start of scan or end of image: the header segments are over.
+        if (segmentType === 0xDA || segmentType === 0xD9) {
+            break;
+        }
+        var segmentLength = (bytes[position + 2] << 8) | bytes[position + 3];
+        if (segmentLength < 2) {
+            break;
+        }
+        var payload = position + 4;
+        var payloadEnd = Math.min(position + 2 + segmentLength, bytes.length);
+
+        if (segmentType === 0xE2 && payloadEnd - payload > 14) {
+            var isProfile = true;
+            for (var m = 0; m < marker.length; m++) {
+                if (bytes[payload + m] !== marker[m]) { isProfile = false; break; }
+            }
+            if (isProfile) {
+                var sequence = bytes[payload + 12];
+                chunkTotal = bytes[payload + 13];
+                chunks[sequence] = bytes.subarray(payload + 14, payloadEnd);
+            }
+        }
+        position += 2 + segmentLength;
+    }
+
+    if (chunkTotal === 0) {
+        return null;
+    }
+    var size = 0;
+    for (var c = 1; c <= chunkTotal; c++) {
+        if (!chunks[c]) {
+            return null; // a segment is missing, so there is no whole profile
+        }
+        size += chunks[c].length;
+    }
+    var profile = new Uint8Array(size);
+    var written = 0;
+    for (c = 1; c <= chunkTotal; c++) {
+        profile.set(chunks[c], written);
+        written += chunks[c].length;
+    }
+    return profile;
+}
+
 function _compactIccBytes(bytes) {
     if (!bytes || typeof bytes.byteOffset !== 'number' || !bytes.buffer) {
         return bytes;
