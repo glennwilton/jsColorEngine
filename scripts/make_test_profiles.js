@@ -119,7 +119,18 @@ for(const spec of PROFILES){
     const bytes  = Buffer.from(spec.make());
 
     const exists = fs.existsSync(target);
-    const identical = exists && Buffer.compare(fs.readFileSync(target), bytes) === 0;
+    // The writer stamps the header with the time it ran (bytes 24 to 35), so
+    // a fresh profile never matched the one on disk and --check reported
+    // every file as changed, every time. Compare with the stamp on disk
+    // carried over: what is left is a difference in what the writer wrote.
+    let identical = false;
+    if(exists){
+        const onDisk = fs.readFileSync(target);
+        if(onDisk.length === bytes.length){
+            onDisk.copy(bytes, 24, 24, 36);
+            identical = Buffer.compare(onDisk, bytes) === 0;
+        }
+    }
 
     let status;
     if(identical){ status = 'unchanged'; same++; }

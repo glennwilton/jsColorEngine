@@ -152,11 +152,37 @@ Decode an already-in-memory `Uint8Array` containing ICC binary.
 A view into a larger `ArrayBuffer` (`byteOffset !== 0`) is copied
 before decode — pass the TIFF/JPEG slice as-is.
 
-* `searchForProfile = true` — scan the buffer for an embedded profile
-  signature (`acsp`) instead of treating offset 0 as the profile start.
-  Useful for extracting the embedded profile out of a JPEG / TIFF.
-  A JPEG is read segment by segment, so a profile split across several APP2
-  segments (any profile over 64 KB) is reassembled.
+* `searchForProfile = true` — the bytes are an image file, and the profile
+  is read out of it. Pass the whole file, or at least the part that holds
+  the profile.
+  * **JPEG**: the APP2 `ICC_PROFILE` segments are put back together in
+    order, so a profile over 64 KB, which is always split, loads correctly.
+  * **TIFF**: tag 34675 is followed from the image file directory. Little-
+    and big-endian files are read; BigTIFF is not. Image compression (LZW,
+    ZIP, JPEG) does not touch the profile.
+  * **PNG**: the `iCCP` chunk is decompressed. The profile in a PNG is always
+    zlib-compressed, and the engine carries its own small inflate for it, so
+    this works the same in Node and in a browser with no dependency.
+  * **Any other bytes**: the profile itself is accepted as it is, and a
+    profile held whole and uncompressed inside other data is found by its
+    header. A candidate counts only if the length it declares fits in the
+    bytes that follow, so a stray `acsp` in pixel data is not mistaken for
+    one. This is what covers a profile cut out of a file by other code.
+
+  ```js
+  const bytes = new Uint8Array(fs.readFileSync('photo.tif'));
+  const profile = new Profile();
+  profile.loadBinary(bytes, null, true);
+  if (!profile.loaded) throw new Error(profile.lastError.text);
+  ```
+
+  These three containers are the supported set. BigTIFF, HEIC/AVIF and
+  camera raw are not read. A JPEG, TIFF or PNG with no profile is refused
+  rather than scanned, because anything found in its pixel data would be an
+  accident.
+
+  A file with no profile, or with one that is damaged or cut short, leaves
+  `profile.loaded` false and says why in `profile.lastError`.
 
 ### `profile.loadFile(filename, afterLoad?)`
 

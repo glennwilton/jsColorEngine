@@ -543,6 +543,19 @@ as the wins.
   `t.create(deviceLink)`, including curves-only linearization links,
   ink-limit links, and asymmetric conversions (CMYK→RGB, RGB→CMYK)
   ([implementation notes](./docs/DeviceLink.md))
+- **Embedded profiles straight from image bytes** — hand
+  `loadBinary(bytes, callback, true)` a JPEG, TIFF or PNG and it returns the
+  profile inside. JPEG profiles split across segments (anything over 64 KB)
+  are put back together, TIFF is read in both byte orders whatever the image
+  compression, and PNG's always-compressed profile is inflated by a small
+  built-in decoder, so it works the same in Node and the browser with no
+  dependency. Raw bytes work too: the profile itself, or one held whole
+  inside other data. ([Profile docs](./docs/Profile.md))
+- **Matrix fallback** — an RGB profile with a table in one direction and
+  matrix tags uses the matrix for the other, as LittleCMS does
+- **Untrusted profiles are refused, not trusted** — counts, offsets and table
+  sizes are checked against the file at load, so a damaged or hostile profile
+  is a failed load with a reason rather than a hang or a crash later
 
 ### Transforms
 
@@ -989,9 +1002,11 @@ npm test
 
 Runs the Jest suite: transform pipeline (object IO, device IO, LUT
 IO, multi-stage), the lower-level `decodeICC` (parametric curves,
-sampled `curv` curves, unsupported LUT sentinels), and the WASM
+sampled `curv` curves, unsupported LUT sentinels), the WASM
 kernel dispatch-counter tests that guard against silent demotion
-regressions.
+regressions, damaged-profile refusal, and embedded-profile reading
+against real JPEG, TIFF and PNG files saved from Photoshop.
+What it covers and what it leaves out: [Testing.md](./docs/Testing.md).
 
 ---
 
@@ -1011,6 +1026,9 @@ everyday colour management. Things outside that scope:
   Without that URL, `transformImages()` converts **sequentially** — same
   bytes, same callbacks, one thread. Try it on the bench **Pool demo** tab.
   → [pool.md](./docs/pool.md)
+- **Embedded profiles are read from JPEG, TIFF and PNG only.** BigTIFF,
+  HEIC/AVIF and camera raw are not read. For anything else, cut the profile
+  out yourself and pass the bytes.
 - **Named Color profiles** (`ncl2`) are not supported.
   → [Why named colour profiles are not supported](./docs/deepdive/namedColorProfiles.md)
 - **N-channel (5CLR–15CLR) input runs on the accuracy pipeline only** —
@@ -1070,6 +1088,7 @@ authoritative reference for method signatures and parameter types:
 - [`src/Loader.js`](./src/Loader.js) — optional batch profile loader
 - [`src/convert.js`](./src/convert.js) — colour-space helper maths
 - [`src/decodeICC.js`](./src/decodeICC.js) — low-level ICC binary decoders
+- [`src/embeddedProfile.js`](./src/embeddedProfile.js) — profile extraction from JPEG, TIFF and PNG bytes, with its own inflate
 - [`src/Spectral.js`](./src/Spectral.js) — spectral / illuminant maths
 
 ### Benchmark your own machine

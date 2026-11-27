@@ -257,6 +257,15 @@ each moved to their own repository:
 [jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples) and
 [jsICCImage](https://github.com/glennwilton/jsICCImage).
 
+**v1.7.2 (2026-11-27)** — a second audit pass, this one for
+crashes and silent wrong answers rather than accuracy. `lut16` tables are routed
+by table type, so one inside a v4 profile keeps its curves. A profile's name no
+longer decides its tone curve. Counts and sizes read from a profile are checked
+against the file, which ended every hang and crash a single-byte fuzz could
+find. Embedded profiles are read from JPEG, TIFF and PNG. RGB profiles with a
+table in one direction fall back to their matrix for the other. See
+[CHANGELOG.md](../CHANGELOG.md).
+
 **v1.7.0 (2026-11-01)** — the review pass: profile-handling fixes found by sweeping
 the testbed against LittleCMS, X×Y×Z CLUT grids, stricter loading, sampled
 and parametric TRCs on the matrix kernel, denser gray LUTs. See
@@ -2356,10 +2365,29 @@ Status: **acknowledged Achilles' heel, parked until a production
 incident or external audit forces the issue.** Boring but important;
 new features are cooler, but this is worth doing eventually.
 
-> **Partly done in the review pass.** The minimum bar below has landed: decode
-> errors are a failed load with `lastError` set. So have the file size and tag
-> bounds checks from the better tier, and unreadable LUT tags are refused. Still
-> open: absurd element counts inside a tag, and the rest of the tag-level checks.
+> **Mostly done.** The review pass landed the minimum bar: decode errors are a
+> failed load with `lastError` set, with file size and tag bounds checks. The
+> audit pass in 1.7.2 did the element counts: curve, text, MPE and LUT
+> channel and grid counts are checked against the file, LUT tables against their
+> own header and the profile's colour space, and a profile with nothing usable
+> does not load. A fuzz of 6,026 single-byte changes to eight profiles now ends
+> with no hang, no crash and no NaN output, where it had 50 hangs and 107
+> crashes.
+>
+> **Still open:**
+>
+> - The fuzz as a kept tool in the harness, extended to multi-byte changes and
+>   truncation. Single-byte is all that has been run.
+> - Item 8 below, the NaN and undefined scan of the decoded profile.
+>   `validateOnCreate` catches these at `create()` today, which is later than
+>   it could be.
+> - Item 6, matrix sanity: a singular or absurd matrix still loads.
+> - About 97 `throw 'string'` sites against 71 `throw new Error`. A string has
+>   no stack and no `.message`. Changing them breaks anyone matching on the
+>   text, so it belongs in a minor release with a changelog note.
+> - `transform()` does not refuse a NaN channel. A per-channel test was
+>   written and removed: it took the no-LUT row of `bench/mpx_summary.js` from
+>   4.6 to 3.9 MPx/s.
 
 ### The problem
 
@@ -2474,6 +2502,30 @@ exercise every guard.
 
 Until then, v1.9 is a skippable release slot — documented here so
 the scope is clear when the time comes.
+
+### Smaller items left by the audit pass
+
+None of these blocks a release. Each is small on its own.
+
+- **Real profiles for the new routes.** The `lut16`-in-v4 routing and the
+  matrix fallback are proven on synthetic profiles and on real profiles with
+  a flipped header version. A genuine v4 profile carrying `lut16` tables, a
+  DisplayCAL XYZ LUT profile, and an RGB profile with tables in one direction
+  only should go into the harness when one turns up.
+- **Fast path for a true sRGB curve.** A decoded profile is no longer assumed
+  to be sRGB from its name. Recognising the sRGB parametric curve by its
+  parameters would give real sRGB files the built-in curve again.
+- **Alpha fill under `dataFormat: 'device'`** is 255. For 0 to 1 data, 1.0 is
+  what a caller would expect. Changing it could break callers, so it wants a
+  decision rather than a patch.
+- **Same-profile CMYK to CMYK.** Loaded with `loadBinary`, the same CMYK
+  profile on both sides is an identity. Loaded from a file or URL it is a real
+  conversion. RGB is consistent on every route; CMYK is left as it is because
+  callers rely on the re-separation.
+- **More containers for embedded profiles.** JPEG, TIFF and PNG are read.
+  BigTIFF is the natural next one. PSD and WebP hold the profile whole and
+  uncompressed, so the generic scan should already find it there, but neither
+  has been tried on a real file.
 
 ---
 

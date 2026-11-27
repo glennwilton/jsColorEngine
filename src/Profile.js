@@ -21,6 +21,7 @@ const eIntent = colorEngineDef.eIntent;
 const eProfileType = colorEngineDef.eProfileType;
 const decode = require('./decodeICC');
 const encode = require('./encodeICC');
+const embeddedProfile = require('./embeddedProfile');
 
 // Stamped into every profile this engine generates rather than decodes. These
 // files are committed and opened in inspectors, and nothing about ICC bytes
@@ -914,20 +915,31 @@ class Profile {
         var _this = this;
         var start = 0;
         if (searchForProfile){
-            // A JPEG splits any profile over 64 KB across APP2 segments, each
-            // with its own header, so the bytes are not contiguous in the file.
-            var fromJpeg = _iccFromJpegSegments(data);
-            if (fromJpeg) {
-                data = fromJpeg;
+            // JPEG, TIFF and PNG each keep the profile their own way: split
+            // across segments, behind a directory entry, or compressed. None
+            // of them can be found by scanning for a marker.
+            var fromContainer = embeddedProfile.extractEmbeddedProfile(data);
+            if (fromContainer) {
+                data = _compactIccBytes(fromContainer);
                 searchForProfile = false;
-            }
-        }
-        if (searchForProfile){
-            //Search for text "ICC_PROFILE" in an Image
-            var ICC_PROFILE = [73 ,67 ,67 ,95 ,80 ,82 ,79 ,70 ,73 ,76 ,69 ];
-            start = scan(data,0, ICC_PROFILE);
-            if(start === -1){
-                return false;
+            } else {
+                var containerType = embeddedProfile.embeddedContainerType(data);
+                if (containerType) {
+                    // The container was read properly and has no usable
+                    // profile. Scanning the pixel data would only find one
+                    // by accident, or half of one.
+                    this.lastError = {err: 121, text: 'No complete ICC profile found in the ' + containerType + ' data'};
+                    return false;
+                }
+                // Not a container read here: the bytes may be the profile
+                // itself, or hold one whole somewhere inside.
+                var fromScan = embeddedProfile.findProfileInBytes(data);
+                if (!fromScan) {
+                    this.lastError = {err: 121, text: 'No embedded ICC profile found'};
+                    return false;
+                }
+                data = _compactIccBytes(fromScan);
+                searchForProfile = false;
             }
         }
 
@@ -939,7 +951,6 @@ class Profile {
             return false;
         }
 
-        if (searchForProfile) { data = _compactIccBytes(data.subarray(ascpPos - 36)); }
         // extract the core profile data
         var result;
         try {
@@ -2283,70 +2294,6 @@ function base64ToUint8Array(base64) {
 // embedded in a JPEG APP2 or TIFF tag may be padded to a block boundary
 // by the host application, so naively hashing the whole buffer would
 // produce a different fingerprint for the same logical profile.
-/**
- * Pull an ICC profile out of a JPEG. The profile lives in APP2 segments marked
- * "ICC_PROFILE" plus a zero byte, each holding at most 65519 bytes of it and
- * each numbered, so a profile over 64 KB has to be put back together in order.
- *
- * @param {Uint8Array} bytes  a JPEG file, or at least its header segments
- * @returns {Uint8Array|null} the profile, or null if this is not a JPEG or it
- *                            carries no complete profile
- */
-function _iccFromJpegSegments(bytes) {
-    if (!bytes || bytes.length < 4 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) {
-        return null;
-    }
-    var marker = [73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0]; // ICC_PROFILE, then 0
-    var chunks = [];
-    var chunkTotal = 0;
-    var position = 2;
-
-    while (position + 4 <= bytes.length && bytes[position] === 0xFF) {
-        var segmentType = bytes[position + 1];
-        // Start of scan or end of image: the header segments are over.
-        if (segmentType === 0xDA || segmentType === 0xD9) {
-            break;
-        }
-        var segmentLength = (bytes[position + 2] << 8) | bytes[position + 3];
-        if (segmentLength < 2) {
-            break;
-        }
-        var payload = position + 4;
-        var payloadEnd = Math.min(position + 2 + segmentLength, bytes.length);
-
-        if (segmentType === 0xE2 && payloadEnd - payload > 14) {
-            var isProfile = true;
-            for (var m = 0; m < marker.length; m++) {
-                if (bytes[payload + m] !== marker[m]) { isProfile = false; break; }
-            }
-            if (isProfile) {
-                var sequence = bytes[payload + 12];
-                chunkTotal = bytes[payload + 13];
-                chunks[sequence] = bytes.subarray(payload + 14, payloadEnd);
-            }
-        }
-        position += 2 + segmentLength;
-    }
-
-    if (chunkTotal === 0) {
-        return null;
-    }
-    var size = 0;
-    for (var c = 1; c <= chunkTotal; c++) {
-        if (!chunks[c]) {
-            return null; // a segment is missing, so there is no whole profile
-        }
-        size += chunks[c].length;
-    }
-    var profile = new Uint8Array(size);
-    var written = 0;
-    for (c = 1; c <= chunkTotal; c++) {
-        profile.set(chunks[c], written);
-        written += chunks[c].length;
-    }
-    return profile;
-}
-
 function _compactIccBytes(bytes) {
     if (!bytes || typeof bytes.byteOffset !== 'number' || !bytes.buffer) {
         return bytes;

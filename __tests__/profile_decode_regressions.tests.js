@@ -1349,3 +1349,335 @@ describe('RGB profile with a table in one direction and matrix tags', () => {
         expect(() => convertAll('*Lab', profile, labSamples, eIntent.relative)).toThrow(/has no B2A table/);
     });
 });
+
+describe('profiles embedded in TIFF and PNG', () => {
+    const zlib = require('zlib');
+    const profileBytes = readFixture('AdobeRGB1998.icc');
+    const largeProfileBytes = readFixture('GRACoL2006_Coated1v2.icc');
+    const embeddedProfile = require('../src/embeddedProfile');
+
+    const crcTable = new Int32Array(256).map((_, value) => {
+        let crc = value;
+        for (let bit = 0; bit < 8; bit++) { crc = crc & 1 ? 0xEDB88320 ^ (crc >>> 1) : crc >>> 1; }
+        return crc;
+    });
+    const crc32 = (buffer) => {
+        let crc = -1;
+        for (const byte of buffer) { crc = crcTable[(crc ^ byte) & 255] ^ (crc >>> 8); }
+        return (crc ^ -1) >>> 0;
+    };
+    const pngChunk = (type, data) => {
+        const chunk = Buffer.alloc(12 + data.length);
+        chunk.writeUInt32BE(data.length, 0);
+        chunk.write(type, 4, 'latin1');
+        Buffer.from(data).copy(chunk, 8);
+        chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + data.length)), 8 + data.length);
+        return chunk;
+    };
+    const pngWith = (profile, deflateOptions) => {
+        const header = Buffer.alloc(13);
+        header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 2;
+        const chunks = [Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), pngChunk('IHDR', header)];
+        if (profile) {
+            chunks.push(pngChunk('iCCP', Buffer.concat([
+                Buffer.from('ICC Profile\0\0', 'latin1'), zlib.deflateSync(Buffer.from(profile), deflateOptions)])));
+        }
+        chunks.push(pngChunk('IDAT', zlib.deflateSync(Buffer.from([0, 255, 0, 0]))), pngChunk('IEND', Buffer.alloc(0)));
+        return new Uint8Array(Buffer.concat(chunks));
+    };
+    /** One directory, LZW flagged as the image compression, profile after the directory. */
+    const tiffWith = (profile, littleEndian) => {
+        const write16 = (buffer, value, offset) => littleEndian ? buffer.writeUInt16LE(value, offset) : buffer.writeUInt16BE(value, offset);
+        const write32 = (buffer, value, offset) => littleEndian ? buffer.writeUInt32LE(value, offset) : buffer.writeUInt32BE(value, offset);
+        const entries = [[256, 3, 1, 1], [257, 3, 1, 1], [258, 3, 1, 8], [259, 3, 1, 5], [262, 3, 1, 1]];
+        const directorySize = 2 + (entries.length + 1) * 12 + 4;
+        entries.push([34675, 7, profile.length, 8 + directorySize]);
+        const header = Buffer.alloc(8);
+        header.write(littleEndian ? 'II' : 'MM', 0, 'latin1');
+        write16(header, 42, 2);
+        write32(header, 8, 4);
+        const directory = Buffer.alloc(directorySize);
+        write16(directory, entries.length, 0);
+        entries.forEach(([tag, type, count, value], index) => {
+            const offset = 2 + index * 12;
+            write16(directory, tag, offset);
+            write16(directory, type, offset + 2);
+            write32(directory, count, offset + 4);
+            if (type === 3) { write16(directory, value, offset + 8); } else { write32(directory, value, offset + 8); }
+        });
+        return new Uint8Array(Buffer.concat([header, directory, Buffer.from(profile)]));
+    };
+    const embeddedIn = (bytes) => {
+        const profile = new Profile();
+        profile.loadBinary(bytes, () => {}, true);
+        return profile;
+    };
+    const reference = fromBytes(profileBytes);
+    const largeReference = fromBytes(largeProfileBytes);
+
+    test.each([
+        ['default compression', undefined],
+        ['stored blocks', {level: 0}],
+        ['fixed Huffman codes', {strategy: zlib.constants.Z_FIXED}],
+        ['best compression', {level: 9}],
+    ])('PNG iCCP chunk, %s', (label, deflateOptions) => {
+        const small = embeddedIn(pngWith(profileBytes, deflateOptions));
+        expect(small.loaded).toBe(true);
+        expect(small.profileFingerprint).toBe(reference.profileFingerprint);
+        const large = embeddedIn(pngWith(largeProfileBytes, deflateOptions));
+        expect(large.loaded).toBe(true);
+        expect(large.profileFingerprint).toBe(largeReference.profileFingerprint);
+    });
+
+    test.each([['little-endian', true], ['big-endian', false]])('TIFF tag 34675, %s', (label, littleEndian) => {
+        const small = embeddedIn(tiffWith(profileBytes, littleEndian));
+        expect(small.loaded).toBe(true);
+        expect(small.profileFingerprint).toBe(reference.profileFingerprint);
+        const large = embeddedIn(tiffWith(largeProfileBytes, littleEndian));
+        expect(large.profileFingerprint).toBe(largeReference.profileFingerprint);
+    });
+
+    test('an embedded profile converts as the bare profile does', () => {
+        const fromTiff = deviceTransform(embeddedIn(tiffWith(largeProfileBytes, true)), '*Lab');
+        const bare = deviceTransform(largeReference, '*Lab');
+        expect(Array.from(fromTiff.transform([0.2, 0.4, 0.6, 0.1]))).toEqual(Array.from(bare.transform([0.2, 0.4, 0.6, 0.1])));
+    });
+
+    test('a PNG with no iCCP chunk says so', () => {
+        const profile = embeddedIn(pngWith(null));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/PNG/);
+    });
+
+    test('a damaged PNG profile stream is refused, not half read', () => {
+        const damaged = pngWith(largeProfileBytes);
+        damaged[damaged.length - 200] ^= 0x10;
+        expect(embeddedIn(damaged).loaded).toBe(false);
+        expect(embeddedIn(pngWith(largeProfileBytes).slice(0, 5000)).loaded).toBe(false);
+    });
+
+    test('a TIFF whose profile tag runs past the end of the data is refused', () => {
+        const whole = tiffWith(profileBytes, true);
+        const profile = embeddedIn(whole.slice(0, whole.length - 10));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/TIFF/);
+    });
+
+    test('a TIFF directory chain that loops back ends the search', () => {
+        const looping = tiffWith(profileBytes, true);
+        // Hide the profile tag, then point "next directory" at this directory.
+        const profileEntryOffset = 8 + 2 + 5 * 12;
+        looping[profileEntryOffset] = 0; looping[profileEntryOffset + 1] = 0;
+        const nextDirectoryOffset = 8 + 2 + 6 * 12;
+        looping[nextDirectoryOffset] = 8;
+        const started = Date.now();
+        expect(embeddedIn(looping).loaded).toBe(false);
+        expect(Date.now() - started).toBeLessThan(500);
+    });
+
+    test('inflate refuses a stream that would exceed the size limit', () => {
+        const packed = new Uint8Array(zlib.deflateSync(Buffer.alloc(100000)));
+        expect(embeddedProfile.inflateZlib(packed, 0, packed.length, 1000)).toBe(null);
+        expect(embeddedProfile.inflateZlib(packed, 0, packed.length, 200000).length).toBe(100000);
+    });
+
+    test('"acsp" too near the start of the data is not treated as a profile', () => {
+        const junk = new Uint8Array(400);
+        junk.set([73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0, 97, 99, 115, 112], 0); // ICC_PROFILE, 0, acsp
+        expect(embeddedIn(junk).loaded).toBe(false);
+    });
+});
+
+describe('input guards', () => {
+    const rgbToLab = () => {
+        const transform = new Transform({dataFormat: 'device', BPC: false});
+        transform.create('*sRGB', '*Lab', eIntent.relative);
+        return transform;
+    };
+    const imageTransform = (options) => {
+        const transform = new Transform(Object.assign({dataFormat: 'int8', buildLut: true}, options));
+        transform.create('*sRGB', '*adobeRGB', eIntent.relative);
+        return transform;
+    };
+
+    test('transform() refuses null and undefined with an Error', () => {
+        expect(() => rgbToLab().transform(null)).toThrow(/expects a colour, got null/);
+        expect(() => rgbToLab().transform(undefined)).toThrow(Error);
+    });
+
+    test('array() refuses a missing buffer', () => {
+        expect(() => imageTransform().array(null, false, false)).toThrow(/expects an array or typed array/);
+        expect(() => imageTransform().transformArray(undefined, false, false)).toThrow(Error);
+    });
+
+    test.each([
+        ['with a LUT', {}],
+        ['on the per-pixel pipeline', {buildLut: false}],
+    ])('array() refuses a pixelCount larger than the data, %s', (label, options) => {
+        const pixels = new Uint8ClampedArray(4 * 3);
+        expect(() => imageTransform(options).array(pixels, false, false, false, 5)).toThrow(/pixelCount 5 needs 15 values/);
+        expect(() => imageTransform(options).array(pixels, true, true, true, 4)).toThrow(/needs 16 values at 4 per pixel/);
+        expect(imageTransform(options).array(pixels, false, false, false, 4).length).toBe(12);
+        expect(imageTransform(options).array(pixels, false, false, false, 2).length).toBe(6);
+        expect(imageTransform(options).array(pixels, true, true, true, 3).length).toBe(12);
+    });
+
+    test('array() refuses a pixelCount that is not a count', () => {
+        const pixels = new Uint8ClampedArray(12);
+        expect(() => imageTransform().array(pixels, false, false, false, -1)).toThrow(/pixelCount must be a number/);
+        expect(() => imageTransform().array(pixels, false, false, false, NaN)).toThrow(/pixelCount must be a number/);
+    });
+});
+
+describe('inverseCurve', () => {
+    /** The search this replaced: for each output point, the first interval that holds it. */
+    const referenceInverse = (curve, points) => {
+        const last = curve.length - 1;
+        const rising = curve[0] < curve[last];
+        const step = 1 / (points - 1);
+        const output = [];
+        let slope = 0;
+        let offset = 0;
+        for (let point = 0; point < points; point++) {
+            const target = point * step;
+            let found = -1;
+            for (let index = 0; index < last && found < 0; index++) {
+                const low = Math.min(curve[index], curve[index + 1]);
+                const high = Math.max(curve[index], curve[index + 1]);
+                if (target >= low && target <= high) { found = index; }
+            }
+            if (found >= 0) {
+                const x1 = curve[found];
+                const x2 = curve[found + 1];
+                const y1 = found / last;
+                const y2 = (found + 1) / last;
+                if (x1 === x2) { output.push(rising ? y2 : y1); continue; }
+                slope = (y2 - y1) / (x2 - x1);
+                offset = y2 - slope * x2;
+            }
+            output.push(Math.min(1, Math.max(0, slope * target + offset)));
+        }
+        return output;
+    };
+    const gammaCurve = (gamma, count) => Array.from({length: count}, (_, index) => Math.pow(index / (count - 1), gamma));
+
+    test.each([
+        ['a gamma curve', gammaCurve(2.2, 1024)],
+        ['an 8-bit quantised curve, full of flat steps', gammaCurve(2.2, 1024).map((value) => Math.round(value * 255) / 255)],
+        ['a curve with a raised black and a lowered white', gammaCurve(1.8, 256).map((value) => 0.1 + value * 0.8)],
+        ['a falling curve', gammaCurve(1.8, 512).map((value) => 1 - value)],
+        ['a two-point curve', [0, 1]],
+    ])('one-pass inversion matches the full search: %s', (label, curve) => {
+        for (const points of [2, 256, 4096]) {
+            expect(decode.inverseCurve(curve, points)).toEqual(referenceInverse(curve, points));
+        }
+    });
+
+    test('a curve that wobbles still takes the full search', () => {
+        const wobbly = gammaCurve(1.0, 64).map((value, index) => value + (index % 2 ? 0.02 : -0.02));
+        expect(decode.inverseCurve(wobbly, 256)).toEqual(referenceInverse(wobbly, 256));
+    });
+
+    test('inverting a 4096-point curve is quick', () => {
+        const curve = gammaCurve(2.4, 4096);
+        decode.inverseCurve(curve, 4096);
+        const started = process.hrtime.bigint();
+        for (let run = 0; run < 20; run++) { decode.inverseCurve(curve, 4096); }
+        const milliseconds = Number(process.hrtime.bigint() - started) / 20e6;
+        // The full search took about 8 ms here; one pass takes well under 1.
+        expect(milliseconds).toBeLessThan(3);
+    });
+});
+
+describe('profiles embedded in real image files', () => {
+    // Saved from Photoshop, one 200 x 200 image in each form. They are in
+    // __tests__/embedded. What each file is was read back from the file
+    // itself (byte order, compression, layers, colour mode), not taken from
+    // its name.
+    const embeddedProfile = require('../src/embeddedProfile');
+    const sample = (name) => new Uint8Array(fs.readFileSync(path.join(__dirname, 'embedded', name)));
+    const embeddedIn = (bytes) => {
+        const profile = new Profile();
+        profile.loadBinary(bytes, () => {}, true);
+        return profile;
+    };
+    const ADOBE_RGB = {name: 'Adobe RGB (1998)', size: 560, fingerprint: '230-ec502c5eafddcf03'};
+    const FOGRA39 = {name: 'Coated FOGRA39 (ISO 12647-2:2004)', size: 654352, fingerprint: '9fc10-13f5133e430d0fc7'};
+    const SRGB = {name: 'sRGB IEC61966-2.1', size: 3144, fingerprint: 'c48-6698190f158ab1e1'};
+
+    test.each([
+        ['rgb_adobe.jpg', 'JPEG, one segment', ADOBE_RGB],
+        ['cmyk_fogra39.jpg', 'JPEG, profile split across 10 segments', FOGRA39],
+        ['rgb_adobe.png', 'PNG', ADOBE_RGB],
+        ['rgb_srgb.png', 'PNG', SRGB],
+        ['rgb_adobe_ibm_uncompressed.tif', 'TIFF, little-endian, no compression', ADOBE_RGB],
+        ['rgb_adobe_ibm_lzw.tif', 'TIFF, little-endian, LZW', ADOBE_RGB],
+        ['rgb_adobe_ibm_zip.tif', 'TIFF, little-endian, ZIP', ADOBE_RGB],
+        ['rgb_adobe_ibm_none_layers.tif', 'TIFF, little-endian, with layers', ADOBE_RGB],
+        ['rgb_adobe_mac_uncompressed.tif', 'TIFF, big-endian, no compression', ADOBE_RGB],
+        ['rgb_adobe_mac_lzw.tif', 'TIFF, big-endian, LZW', ADOBE_RGB],
+        ['cmyk_fogra39_none.tif', 'CMYK TIFF, no compression', FOGRA39],
+        ['cmyk_fogra39_lzw.tif', 'CMYK TIFF, LZW', FOGRA39],
+    ])('%s (%s)', (file, description, expected) => {
+        const profile = embeddedIn(sample(file));
+        expect(profile.loaded).toBe(true);
+        expect(profile.name).toBe(expected.name);
+        expect(profile.sizeBytes).toBe(expected.size);
+        expect(profile.profileFingerprint).toBe(expected.fingerprint);
+    });
+
+    test('a PNG saved without a profile is refused, and says it is a PNG', () => {
+        const profile = embeddedIn(sample('rgb_none.png'));
+        expect(profile.loaded).toBe(false);
+        expect(profile.lastError.text).toMatch(/PNG/);
+    });
+
+    test('the same profile from JPEG and from TIFF is an identity pair', () => {
+        const fromJpeg = embeddedIn(sample('rgb_adobe.jpg'));
+        const fromTiff = embeddedIn(sample('rgb_adobe_mac_lzw.tif'));
+        expect(deviceTransform(fromJpeg, fromTiff).isIdentity).toBe(true);
+    });
+
+    test('the split CMYK profile converts as the whole one from the TIFF does', () => {
+        const fromJpeg = deviceTransform(embeddedIn(sample('cmyk_fogra39.jpg')), '*Lab');
+        const fromTiff = deviceTransform(embeddedIn(sample('cmyk_fogra39_none.tif')), '*Lab');
+        const ink = [0.2, 0.4, 0.6, 0.1];
+        expect(Array.from(fromJpeg.transform(ink))).toEqual(Array.from(fromTiff.transform(ink)));
+    });
+
+    describe('bytes that are not an image', () => {
+        const bare = embeddedProfile.extractEmbeddedProfile(sample('rgb_adobe.png'));
+
+        test('the profile itself loads with or without the search', () => {
+            expect(embeddedIn(bare).profileFingerprint).toBe(ADOBE_RGB.fingerprint);
+            expect(fromBytes(bare).profileFingerprint).toBe(ADOBE_RGB.fingerprint);
+        });
+
+        test('a profile held whole inside other bytes is found', () => {
+            const host = new Uint8Array(5000 + bare.length + 3000).fill(0x55);
+            host.set(bare, 5000);
+            const profile = embeddedIn(host);
+            expect(profile.loaded).toBe(true);
+            expect(profile.profileFingerprint).toBe(ADOBE_RGB.fingerprint);
+        });
+
+        test('a stray "acsp" before the real profile is passed over', () => {
+            const host = new Uint8Array(2000 + bare.length).fill(0xFF);
+            host.set([97, 99, 115, 112], 500);
+            host.set(bare, 2000);
+            expect(embeddedIn(host).profileFingerprint).toBe(ADOBE_RGB.fingerprint);
+        });
+
+        test('a profile cut short is not found', () => {
+            const host = new Uint8Array(1000 + bare.length - 50).fill(0);
+            host.set(bare.subarray(0, bare.length - 50), 1000);
+            const profile = embeddedIn(host);
+            expect(profile.loaded).toBe(false);
+            expect(profile.lastError.text).toMatch(/No embedded ICC profile/);
+        });
+
+        test('bytes with no profile in them are refused', () => {
+            expect(embeddedIn(new Uint8Array(4096).fill(0x20)).loaded).toBe(false);
+        });
+    });
+});

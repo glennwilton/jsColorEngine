@@ -4156,6 +4156,13 @@
                 throw 'No Pipeline';
             }
 
+            // Nothing at all used to surface as "Cannot read properties of
+            // null" from inside a stage. This one test is all that is checked
+            // here, on purpose: see _refuseMissingColour.
+            if(cmsColor === null || cmsColor === undefined){
+                this._refuseMissingColour(cmsColor);
+            }
+
             // THE ONE SILENT HOLE. transform() is polymorphic by contract —
             // {object|number[]} — and arrays work in every format that accepts
             // them. A colour OBJECT into a DEVICE-source Transform in an
@@ -4289,6 +4296,12 @@
             if(!this.pipelineCreated && !this.lut){
                 throw 'No Pipeline';
             }
+
+            // In its own method on purpose. Written inline here, the same
+            // checks cost the per-pixel loops below 15% (4.7 to 4.0 MPx/s,
+            // sRGB to GRACoL, no LUT): this function is at the size where two
+            // more locals change how it is compiled.
+            this._checkArrayInput(inputArray, inputHasAlpha, pixelCount);
 
             // PRESERVE ALPHA IS A PREFERENCE, NOT A RULE. This used to throw
             // when asked to preserve alpha from an input that has none -- and
@@ -4652,6 +4665,57 @@
                 out[i] = rounding ? Math.min(maximum, Math.max(0, Math.round(v))) : v;
             }
             return out;
+        }
+
+        /**
+         * The error for transform(null) and transform(undefined).
+         *
+         * NaN CHANNELS ARE NOT CHECKED, and that is measured, not skipped. A
+         * loop over the input channels in transform(), inline or in a method
+         * of its own, took the no-LUT row of bench/mpx_summary.js from 4.6 to
+         * 3.9 MPx/s (sRGB to GRACoL), a row that never calls transform(). A
+         * NaN channel therefore still passes through: it comes back as NaN,
+         * or as 0 in an integer format.
+         *
+         * @param {null|undefined} cmsColor
+         * @throws {Error}
+         */
+        _refuseMissingColour(cmsColor){
+            throw new Error('transform: expects a colour, got ' + cmsColor);
+        }
+
+        /**
+         * Entry check for array(): once per call, never per pixel. A missing
+         * buffer was a TypeError from inside a kernel. A pixelCount larger
+         * than the data was worse: the loops read past the end, typed arrays
+         * hand back undefined there, and the tail of the output was garbage
+         * with no error. Values are not checked: a NaN inside a float buffer
+         * still comes out as NaN for that pixel.
+         *
+         * @param {TypedArray|Array} inputArray
+         * @param {boolean} inputHasAlpha
+         * @param {number}  [pixelCount]
+         * @throws {Error}
+         */
+        _checkArrayInput(inputArray, inputHasAlpha, pixelCount){
+            if(inputArray === null || inputArray === undefined || typeof inputArray.length !== 'number'){
+                throw new Error('array: expects an array or typed array of pixel data, got '
+                    + (inputArray === null ? 'null' : typeof inputArray));
+            }
+            if(pixelCount === undefined){
+                return;
+            }
+            if(typeof pixelCount !== 'number' || !(pixelCount >= 0)){
+                throw new Error('array: pixelCount must be a number, 0 or more, got ' + pixelCount);
+            }
+            var colourChannels = this.lut ? this.lut.inputChannels : this.inputChannels;
+            var itemsPerPixel = (this.dataFormat === 'object' || this.dataFormat === 'objectFloat')
+                ? 1
+                : colourChannels + (inputHasAlpha ? 1 : 0);
+            if(itemsPerPixel > 0 && pixelCount * itemsPerPixel > inputArray.length){
+                throw new Error('array: pixelCount ' + pixelCount + ' needs ' + (pixelCount * itemsPerPixel)
+                    + ' values at ' + itemsPerPixel + ' per pixel, the input has ' + inputArray.length);
+            }
         }
 
         /**

@@ -6,7 +6,8 @@
 [Synthetic profiles](./deepdive/SyntheticProfiles.md) ·
 [LittleCMS comparison](./LcmsComparison.md)
 
-Jest is the engine gate: `npx jest` (currently ~1170 tests, 50 files).
+Jest is the engine gate: `npx jest` (currently 1,123 tests in 48 files;
+the LutBuilder tests moved out with LutBuilder).
 It is **not** a line-coverage map. The holes that have actually bitten
 this engine were combinatorial — a missing `default` above 4 channels,
 int16 wide output, an optimiser that concatenated `'stage_device' + N`
@@ -44,6 +45,36 @@ node accuracy_gray.js            # 1 ch
 node accuracy_nchannel.js        # 2–10 ch, device → PCS
 node accuracy_b2a.js             # 2–15 ch, PCS → device, both depths
 ```
+
+### The order to run things in
+
+Every engine change:
+
+```bash
+npx jest                         # fully green
+node bench/mpx_summary.js        # throughput parity with the run before the change
+```
+
+`mpx_summary` is the one that catches a slow-down that no test can see. A
+change to `Transform.js` that touches none of the kernels can still move a
+row by 15%, because the large functions there sit at a size where a few more
+locals change how they are compiled. Compare against a run of the same
+command from before the change, on the same machine, with nothing else
+running.
+
+Before a release, in one quiet session:
+
+```bash
+node harness/reproduce.js                 # every published number, ~30 min
+node scripts/build_bench_results.js       # renders docs/BenchResults.md from that run
+npm run release-snapshot                  # freezes it under bench/history/<version>/<machine>/
+```
+
+`reproduce.js` writes its raw output to `harness/results/<timestamp>/`.
+[BenchResults.md](./BenchResults.md) is generated from it and is never edited
+by hand. The snapshot is per version and per machine, and `npm run publish`
+refuses to build without one. Why it is kept:
+[bench/history/README.md](../bench/history/README.md).
 
 ---
 
@@ -86,6 +117,12 @@ inventory of every `test()`.
 | Invalid create | `invalid_transforms` | Unloaded profiles, bad intent, broken chains |
 | Profile load | `profile_load_file`, `loader` | File / buffer / URL / registry |
 | ICC decode / write | `decodeICC.smoke`, `encodeICC` | Parametric curves; gray + N-ch writers |
+| Embedded profiles | `profile_decode_regressions` | 13 real files in `__tests__/embedded` (JPEG incl. a 10-segment CMYK profile, PNG, TIFF both byte orders, none/LZW/ZIP/layers), synthetic wrappers for every deflate block type, raw bytes, and damaged or truncated containers |
+| Damaged profiles | `profile_decode_regressions` | Hostile counts, channel and grid sizes refused within 500 ms; profiles with nothing usable do not load |
+| Matrix fallback | `profile_decode_regressions` | Table in one direction plus matrix tags; equals the plain matrix profile in the other |
+| Identity by fingerprint | `profile_decode_regressions`, `transform_identity` | Same RGB profile on both sides is a no-op on every load route; CMYK from a file stays a real conversion |
+| Input guards | `profile_decode_regressions`, `transform_guards` | `transform(null)`, missing buffer, `pixelCount` larger than the data. NaN values are not checked (measured cost, see `_refuseMissingColour`) |
+| `inverseCurve` | `profile_decode_regressions` | One-pass result equals the full search, bit for bit |
 | Lab ↔ int16 | `convert_lab_int16` | v2/v4 encodings |
 | Interpolators | `interp_reference` | Optimised vs reference; N-ch surfaces agree |
 | LutBuilder + TIFF | `lutbuilder`, `lutbuilder_tiff` | JSON, `setLut`, signatures, CLI samples |
@@ -134,7 +171,10 @@ When you add a combo axis, add it to the second table or to
 
 ## File list
 
-`__tests__/*.js` — 42 files. Names match the feature they own.
+`__tests__/*.js` — 48 files. Names match the feature they own.
+`__tests__/embedded/` holds 13 small images saved from Photoshop, one
+200 × 200 picture in each container and compression, for the
+embedded-profile tests.
 `transform_features.tests.js` is the option/gap file (`useCurveLut`, custom
 stages, BPC, object `array()`, 2D duotone).
 `__tests__/profiles/synthetic_01ch.icc` … `synthetic_15ch.icc` are the

@@ -4,7 +4,7 @@
 > in this repo cold: what the project is, and a per-document summary of
 > where every piece of context and reasoning lives. Regenerate per
 > [`summary-generator.md`](./summary-generator.md).
-> Last regenerated: **2026-08-25** (added `deepdive/InterpolationLimits.md`).
+> Last regenerated: **2026-11-27** (audit pass: embedded profiles, loader hardening, release procedure in `Testing.md`).
 
 > Headline MPx/s below are from the date in **Current state**. Re-run: [`samples/bench/`](https://www.o2creative.co.nz/jscolorengine/samples/bench/) or `node bench/mpx_summary.js`. Tables: [BenchResults.md](./BenchResults.md).
 
@@ -27,10 +27,15 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-11-01):** **1.7.0**, the review
+**Current state (2026-11-27):** **1.7.2**, an audit pass aimed at crashes and
+silent wrong answers: `lut16` tables routed by table type, damaged
+profiles refused at load, embedded profiles read from JPEG, TIFF and
+PNG (`src/embeddedProfile.js`), a matrix fallback for RGB profiles with
+a table in one direction, and a profile fingerprint on every load route
+(`CHANGELOG.md`). **1.7.0** was the review
 pass: profile-handling fixes from a sweep against LittleCMS, X×Y×Z
 CLUT grids, stricter loading, and sampled and parametric TRCs on the
-matrix kernel (`CHANGELOG.md`). v1.5.5 shipped the
+matrix kernel. v1.5.5 shipped the
 **matrix-shaper WASM kernel** and **multicore** (`transformImages()`).
 1.6 adds **Kernel5D / Kernel6D** (int8 WASM scalar), the **in-kernel
 WASM pixel cache** (`interp_*_cached`, bound when `pixelCache !== 0`),
@@ -99,9 +104,10 @@ Still valid: tests in `plugin_identity` / `plugin_isolation`, demo in
 `arrayFnBig`; 1D/2D/N-D and `detectIdentity` skip them.
 
 ### Profile.md
-`Profile` class API: loading from file/URL/base64/binary, virtual
-profiles vs real ICC (and when each is right), properties, deprecated
-names, environment backends.
+`Profile` class API: loading from file/URL/base64/binary, reading the
+profile embedded in a JPEG, TIFF or PNG, virtual profiles vs real ICC
+(and when each is right), properties, deprecated names, environment
+backends.
 
 ### Roadmap.md
 Single source of truth for future work, ordered by leverage: v1.5.5
@@ -125,7 +131,9 @@ and the per-repo adaptations.
 ### Testing.md
 What Jest covers and what it does not: a feature → file map, the
 combo axes (`channel_matrix`, oracles, `lastUsedKernel`), and the
-known gaps left on purpose (`compile()`, `Spectral.js`, samples).
+known gaps left on purpose (`compile()`, `Spectral.js`, samples). Also
+the order to run things in: the two gates for every change, and the
+bench, results page and snapshot for a release.
 Not a line-coverage report.
 
 ### Transform.md

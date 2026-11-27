@@ -1,0 +1,485 @@
+{
+  "tool": "run.js",
+  "generated": "2026-11-27T05:48:22.284Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.7.2"
+  },
+  "tables": [
+    {
+      "id": "js.perimage.rgb-rgb-matrix.1024k",
+      "title": "RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6429,
+          "coverX": 0.18,
+          "jsceInt": 53.3,
+          "jsceSimd": 116.5,
+          "lcmsWasm": 67,
+          "lcmsWasmNoCache": 67.5,
+          "ratioVsLcms": 1.74
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 16.1,
+          "distinct": 152752,
+          "coverX": 4.25,
+          "jsceInt": 52.9,
+          "jsceSimd": 107.6,
+          "lcmsWasm": 67.5,
+          "lcmsWasmNoCache": 67,
+          "ratioVsLcms": 1.59
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42,
+          "distinct": 71661,
+          "coverX": 1.99,
+          "jsceInt": 55.7,
+          "jsceSimd": 140,
+          "lcmsWasm": 67.3,
+          "lcmsWasmNoCache": 67.7,
+          "ratioVsLcms": 2.08
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 14.6,
+          "distinct": 116552,
+          "coverX": 3.24,
+          "jsceInt": 52.3,
+          "jsceSimd": 97.3,
+          "lcmsWasm": 67.4,
+          "lcmsWasmNoCache": 67.5,
+          "ratioVsLcms": 1.44
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 6.9,
+          "distinct": 229716,
+          "coverX": 6.39,
+          "jsceInt": 51.8,
+          "jsceSimd": 106.4,
+          "lcmsWasm": 67.5,
+          "lcmsWasmNoCache": 67,
+          "ratioVsLcms": 1.58
+        }
+      ]
+    },
+    {
+      "id": "js.perimage.rgb-lab.1024k",
+      "title": "RGB -> Lab — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6429,
+          "coverX": 0.18,
+          "jsceInt": 54.5,
+          "jsceSimd": 117.6,
+          "lcmsWasm": 36.8,
+          "lcmsWasmNoCache": 42.2,
+          "ratioVsLcms": 3.2
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 16.1,
+          "distinct": 152752,
+          "coverX": 4.25,
+          "jsceInt": 52.8,
+          "jsceSimd": 108.9,
+          "lcmsWasm": 35.7,
+          "lcmsWasmNoCache": 41.1,
+          "ratioVsLcms": 3.05
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42,
+          "distinct": 71661,
+          "coverX": 1.99,
+          "jsceInt": 55.6,
+          "jsceSimd": 140.2,
+          "lcmsWasm": 41.4,
+          "lcmsWasmNoCache": 43.5,
+          "ratioVsLcms": 3.38
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 14.6,
+          "distinct": 116552,
+          "coverX": 3.24,
+          "jsceInt": 52.7,
+          "jsceSimd": 110,
+          "lcmsWasm": 35.7,
+          "lcmsWasmNoCache": 41,
+          "ratioVsLcms": 3.08
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 6.9,
+          "distinct": 229716,
+          "coverX": 6.39,
+          "jsceInt": 51.5,
+          "jsceSimd": 106.5,
+          "lcmsWasm": 32.9,
+          "lcmsWasmNoCache": 40.5,
+          "ratioVsLcms": 3.24
+        }
+      ]
+    },
+    {
+      "id": "js.perimage.rgb-cmyk.1024k",
+      "title": "RGB -> CMYK — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6429,
+          "coverX": 0.18,
+          "jsceInt": 48.7,
+          "jsceSimd": 118.1,
+          "lcmsWasm": 35.2,
+          "lcmsWasmNoCache": 39.7,
+          "ratioVsLcms": 3.36
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 16.1,
+          "distinct": 152752,
+          "coverX": 4.25,
+          "jsceInt": 47.3,
+          "jsceSimd": 110.6,
+          "lcmsWasm": 32.9,
+          "lcmsWasmNoCache": 37.2,
+          "ratioVsLcms": 3.36
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42,
+          "distinct": 71661,
+          "coverX": 1.99,
+          "jsceInt": 49.6,
+          "jsceSimd": 141.2,
+          "lcmsWasm": 41.4,
+          "lcmsWasmNoCache": 41.3,
+          "ratioVsLcms": 3.41
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 14.6,
+          "distinct": 116552,
+          "coverX": 3.24,
+          "jsceInt": 47.3,
+          "jsceSimd": 111.5,
+          "lcmsWasm": 33.8,
+          "lcmsWasmNoCache": 39,
+          "ratioVsLcms": 3.3
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 6.9,
+          "distinct": 229716,
+          "coverX": 6.39,
+          "jsceInt": 46.8,
+          "jsceSimd": 108.3,
+          "lcmsWasm": 32.5,
+          "lcmsWasmNoCache": 37.7,
+          "ratioVsLcms": 3.33
+        }
+      ]
+    },
+    {
+      "id": "js.perimage.cmyk-rgb.1024k",
+      "title": "CMYK -> RGB — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "17x17x17x17",
+        "clutCells": 83521
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6332,
+          "coverX": 0.08,
+          "jsceInt": 36.3,
+          "jsceSimd": 83.6,
+          "lcmsWasm": 25.4,
+          "lcmsWasmNoCache": 24.5,
+          "ratioVsLcms": 3.29
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 17.6,
+          "distinct": 103888,
+          "coverX": 1.24,
+          "jsceInt": 37.3,
+          "jsceSimd": 83.6,
+          "lcmsWasm": 25.6,
+          "lcmsWasmNoCache": 24.9,
+          "ratioVsLcms": 3.26
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42.2,
+          "distinct": 67211,
+          "coverX": 0.8,
+          "jsceInt": 37.5,
+          "jsceSimd": 108.7,
+          "lcmsWasm": 32,
+          "lcmsWasmNoCache": 26.2,
+          "ratioVsLcms": 3.39
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 15.6,
+          "distinct": 86185,
+          "coverX": 1.03,
+          "jsceInt": 36.3,
+          "jsceSimd": 85.6,
+          "lcmsWasm": 25.9,
+          "lcmsWasmNoCache": 24.6,
+          "ratioVsLcms": 3.3
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 7.1,
+          "distinct": 201835,
+          "coverX": 2.42,
+          "jsceInt": 34.5,
+          "jsceSimd": 80.5,
+          "lcmsWasm": 24.5,
+          "lcmsWasmNoCache": 24.4,
+          "ratioVsLcms": 3.28
+        }
+      ]
+    },
+    {
+      "id": "js.perimage.cmyk-cmyk.1024k",
+      "title": "CMYK -> CMYK — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "17x17x17x17",
+        "clutCells": 83521
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6332,
+          "coverX": 0.08,
+          "jsceInt": 31.4,
+          "jsceSimd": 83,
+          "lcmsWasm": 23.5,
+          "lcmsWasmNoCache": 24.1,
+          "ratioVsLcms": 3.54
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 17.6,
+          "distinct": 103888,
+          "coverX": 1.24,
+          "jsceInt": 31.6,
+          "jsceSimd": 83,
+          "lcmsWasm": 23.4,
+          "lcmsWasmNoCache": 23.6,
+          "ratioVsLcms": 3.55
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42.2,
+          "distinct": 67211,
+          "coverX": 0.8,
+          "jsceInt": 30.8,
+          "jsceSimd": 107.8,
+          "lcmsWasm": 29.6,
+          "lcmsWasmNoCache": 24.2,
+          "ratioVsLcms": 3.64
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 15.6,
+          "distinct": 86185,
+          "coverX": 1.03,
+          "jsceInt": 31.9,
+          "jsceSimd": 84.6,
+          "lcmsWasm": 23.5,
+          "lcmsWasmNoCache": 24.1,
+          "ratioVsLcms": 3.6
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 7.1,
+          "distinct": 201835,
+          "coverX": 2.42,
+          "jsceInt": 30.3,
+          "jsceSimd": 79.1,
+          "lcmsWasm": 22.5,
+          "lcmsWasmNoCache": 23.8,
+          "ratioVsLcms": 3.52
+        }
+      ]
+    },
+    {
+      "id": "js.perimage.rgb-rgb-softproof.1024k",
+      "title": "RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 1024K px, per image",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 1048576,
+        "medianOf": 5,
+        "clut": "33x33x33",
+        "clutCells": 35937
+      },
+      "columns": [
+        "content",
+        "adjPct",
+        "distinct",
+        "coverX",
+        "jsceInt",
+        "jsceSimd",
+        "lcmsWasm",
+        "lcmsWasmNoCache",
+        "ratioVsLcms"
+      ],
+      "rows": [
+        {
+          "content": "image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_",
+          "adjPct": 10.3,
+          "distinct": 6429,
+          "coverX": 0.18,
+          "jsceInt": 55,
+          "jsceSimd": 116.9,
+          "lcmsWasm": 34.7,
+          "lcmsWasmNoCache": 39.4,
+          "ratioVsLcms": 3.37
+        },
+        {
+          "content": "image:jacek-dylag-559115_STRAWBERRIES-unsplash",
+          "adjPct": 16.1,
+          "distinct": 152752,
+          "coverX": 4.25,
+          "jsceInt": 52.9,
+          "jsceSimd": 108.7,
+          "lcmsWasm": 35.3,
+          "lcmsWasmNoCache": 38.1,
+          "ratioVsLcms": 3.08
+        },
+        {
+          "content": "image:library-of-congress-tqpsi_BPfC_ILLUSTRAT",
+          "adjPct": 42,
+          "distinct": 71661,
+          "coverX": 1.99,
+          "jsceInt": 54.4,
+          "jsceSimd": 140.9,
+          "lcmsWasm": 42.2,
+          "lcmsWasmNoCache": 42.4,
+          "ratioVsLcms": 3.34
+        },
+        {
+          "content": "image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF",
+          "adjPct": 14.6,
+          "distinct": 116552,
+          "coverX": 3.24,
+          "jsceInt": 53,
+          "jsceSimd": 110.7,
+          "lcmsWasm": 34.2,
+          "lcmsWasmNoCache": 37,
+          "ratioVsLcms": 3.24
+        },
+        {
+          "content": "image:rod-long-4dcsLxQxSHY-unsplash_BEACH",
+          "adjPct": 6.9,
+          "distinct": 229716,
+          "coverX": 6.39,
+          "jsceInt": 51.4,
+          "jsceSimd": 106.8,
+          "lcmsWasm": 32.9,
+          "lcmsWasmNoCache": 36.9,
+          "ratioVsLcms": 3.25
+        }
+      ]
+    }
+  ]
+}

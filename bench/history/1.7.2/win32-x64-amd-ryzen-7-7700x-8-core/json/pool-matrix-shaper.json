@@ -1,0 +1,247 @@
+{
+  "tool": "harness/matrix_shaper_kernel/multicore.js",
+  "generated": "2026-11-27T05:53:47.843Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.7.2"
+  },
+  "tables": [
+    {
+      "id": "pool.matrixShaper.noise",
+      "title": "Matrix-shaper kernel vs CLUT in the worker pool — noise",
+      "units": "MPx/s",
+      "meta": {
+        "content": "noise",
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ],
+        "pixels": 4000000,
+        "runs": 5,
+        "sequentialClutMpxs": 101.6,
+        "sequentialKernelMpxs": 322.9,
+        "maxKernelVsClutLsb": 28
+      },
+      "columns": [
+        "workers",
+        "clutMpxs",
+        "clutSpeedup",
+        "clutEffPct",
+        "kernelMpxs",
+        "kernelSpeedup",
+        "kernelEffPct",
+        "kernelOverClut",
+        "exact"
+      ],
+      "rows": [
+        {
+          "workers": 1,
+          "clutMpxs": 91,
+          "clutSpeedup": 0.9,
+          "clutEffPct": 90,
+          "kernelMpxs": 260.3,
+          "kernelSpeedup": 0.81,
+          "kernelEffPct": 81,
+          "kernelOverClut": 2.86,
+          "exact": true
+        },
+        {
+          "workers": 2,
+          "clutMpxs": 179.9,
+          "clutSpeedup": 1.77,
+          "clutEffPct": 89,
+          "kernelMpxs": 503.2,
+          "kernelSpeedup": 1.56,
+          "kernelEffPct": 78,
+          "kernelOverClut": 2.8,
+          "exact": true
+        },
+        {
+          "workers": 3,
+          "clutMpxs": 265.7,
+          "clutSpeedup": 2.62,
+          "clutEffPct": 87,
+          "kernelMpxs": 646.1,
+          "kernelSpeedup": 2,
+          "kernelEffPct": 67,
+          "kernelOverClut": 2.43,
+          "exact": true
+        },
+        {
+          "workers": 4,
+          "clutMpxs": 344.6,
+          "clutSpeedup": 3.39,
+          "clutEffPct": 85,
+          "kernelMpxs": 886.5,
+          "kernelSpeedup": 2.75,
+          "kernelEffPct": 69,
+          "kernelOverClut": 2.57,
+          "exact": true
+        },
+        {
+          "workers": 5,
+          "clutMpxs": 402.5,
+          "clutSpeedup": 3.96,
+          "clutEffPct": 79,
+          "kernelMpxs": 1039,
+          "kernelSpeedup": 3.22,
+          "kernelEffPct": 64,
+          "kernelOverClut": 2.58,
+          "exact": true
+        },
+        {
+          "workers": 6,
+          "clutMpxs": 492.8,
+          "clutSpeedup": 4.85,
+          "clutEffPct": 81,
+          "kernelMpxs": 1164.1,
+          "kernelSpeedup": 3.61,
+          "kernelEffPct": 60,
+          "kernelOverClut": 2.36,
+          "exact": true
+        },
+        {
+          "workers": 7,
+          "clutMpxs": 507.4,
+          "clutSpeedup": 5,
+          "clutEffPct": 71,
+          "kernelMpxs": 1275.2,
+          "kernelSpeedup": 3.95,
+          "kernelEffPct": 56,
+          "kernelOverClut": 2.51,
+          "exact": true
+        },
+        {
+          "workers": 8,
+          "clutMpxs": 529.6,
+          "clutSpeedup": 5.21,
+          "clutEffPct": 65,
+          "kernelMpxs": 1104.7,
+          "kernelSpeedup": 3.42,
+          "kernelEffPct": 43,
+          "kernelOverClut": 2.09,
+          "exact": true
+        }
+      ]
+    },
+    {
+      "id": "pool.matrixShaper.photo",
+      "title": "Matrix-shaper kernel vs CLUT in the worker pool — photo",
+      "units": "MPx/s",
+      "meta": {
+        "content": "photo",
+        "pair": [
+          "*prophoto",
+          "*sRGB"
+        ],
+        "pixels": 4000000,
+        "runs": 5,
+        "sequentialClutMpxs": 113.3,
+        "sequentialKernelMpxs": 322.5,
+        "maxKernelVsClutLsb": 25
+      },
+      "columns": [
+        "workers",
+        "clutMpxs",
+        "clutSpeedup",
+        "clutEffPct",
+        "kernelMpxs",
+        "kernelSpeedup",
+        "kernelEffPct",
+        "kernelOverClut",
+        "exact"
+      ],
+      "rows": [
+        {
+          "workers": 1,
+          "clutMpxs": 106.5,
+          "clutSpeedup": 0.94,
+          "clutEffPct": 94,
+          "kernelMpxs": 266.5,
+          "kernelSpeedup": 0.83,
+          "kernelEffPct": 83,
+          "kernelOverClut": 2.5,
+          "exact": true
+        },
+        {
+          "workers": 2,
+          "clutMpxs": 208.9,
+          "clutSpeedup": 1.84,
+          "clutEffPct": 92,
+          "kernelMpxs": 521,
+          "kernelSpeedup": 1.62,
+          "kernelEffPct": 81,
+          "kernelOverClut": 2.49,
+          "exact": true
+        },
+        {
+          "workers": 3,
+          "clutMpxs": 302.3,
+          "clutSpeedup": 2.67,
+          "clutEffPct": 89,
+          "kernelMpxs": 716.1,
+          "kernelSpeedup": 2.22,
+          "kernelEffPct": 74,
+          "kernelOverClut": 2.37,
+          "exact": true
+        },
+        {
+          "workers": 4,
+          "clutMpxs": 383.4,
+          "clutSpeedup": 3.39,
+          "clutEffPct": 85,
+          "kernelMpxs": 902.9,
+          "kernelSpeedup": 2.8,
+          "kernelEffPct": 70,
+          "kernelOverClut": 2.36,
+          "exact": true
+        },
+        {
+          "workers": 5,
+          "clutMpxs": 459,
+          "clutSpeedup": 4.05,
+          "clutEffPct": 81,
+          "kernelMpxs": 1004.3,
+          "kernelSpeedup": 3.11,
+          "kernelEffPct": 62,
+          "kernelOverClut": 2.19,
+          "exact": true
+        },
+        {
+          "workers": 6,
+          "clutMpxs": 538.5,
+          "clutSpeedup": 4.75,
+          "clutEffPct": 79,
+          "kernelMpxs": 1187.4,
+          "kernelSpeedup": 3.68,
+          "kernelEffPct": 61,
+          "kernelOverClut": 2.21,
+          "exact": true
+        },
+        {
+          "workers": 7,
+          "clutMpxs": 588.2,
+          "clutSpeedup": 5.19,
+          "clutEffPct": 74,
+          "kernelMpxs": 1050.8,
+          "kernelSpeedup": 3.26,
+          "kernelEffPct": 47,
+          "kernelOverClut": 1.79,
+          "exact": true
+        },
+        {
+          "workers": 8,
+          "clutMpxs": 636.5,
+          "clutSpeedup": 5.62,
+          "clutEffPct": 70,
+          "kernelMpxs": 1269.6,
+          "kernelSpeedup": 3.94,
+          "kernelEffPct": 49,
+          "kernelOverClut": 1.99,
+          "exact": true
+        }
+      ]
+    }
+  ]
+}

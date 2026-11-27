@@ -624,10 +624,36 @@ module.exports = {
         var x1, x2, y1, y2;
         var increasing = curve[0] < curve[inputLen];
 
+        // A curve that only ever goes one way can be inverted in one pass.
+        // The interval holding y moves in a single direction as y rises, so a
+        // pointer follows it and no search starts from the beginning again.
+        // This is every real tone curve. Anything that wobbles keeps the full
+        // search below, which is what gives it its tolerance. Both routes pick
+        // the same interval, so the output is the same to the last bit.
+        var direction = monotonicDirection(curve);
+        var pointer = direction > 0 ? 0 : inputLen - 1;
+
         for (var i = 0; i < numPoints; i++) {
 
             var y = i * step;
-            var j = getInterval(y, curve);
+            var j;
+            if (direction > 0) {
+                if (y < curve[0] || y > curve[inputLen]) {
+                    j = -1;
+                } else {
+                    while (curve[pointer + 1] < y) { pointer++; }
+                    j = pointer;
+                }
+            } else if (direction < 0) {
+                if (y < curve[inputLen] || y > curve[0]) {
+                    j = -1;
+                } else {
+                    while (pointer > 0 && curve[pointer] <= y) { pointer--; }
+                    j = pointer;
+                }
+            } else {
+                j = getInterval(y, curve);
+            }
 
             if (j >= 0) {
                 x1 = curve[j];
@@ -652,6 +678,27 @@ module.exports = {
         }
 
         return inverseCurve;
+
+        // 1 rising throughout, -1 falling throughout, 0 for anything else,
+        // including a flat curve and one too short to have a direction.
+        function monotonicDirection(curve) {
+            var last = curve.length - 1;
+            var k;
+            if (last < 1 || curve[0] === curve[last]) {
+                return 0;
+            }
+            if (curve[0] < curve[last]) {
+                for (k = 0; k < last; k++) {
+                    if (!(curve[k + 1] >= curve[k])) { return 0; }
+                }
+                return 1;
+            }
+            for (k = 0; k < last; k++) {
+                if (!(curve[k + 1] <= curve[k])) { return 0; }
+            }
+            return -1;
+        }
+
         function getInterval(y, curve) {
             if (curve.length <= 1) {
                 return -1;

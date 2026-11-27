@@ -9,7 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-The npm package does not change. The demos and LutBuilder moved to
+## [1.7.2] — 2026-11-27
+
+An audit pass for crashes and silent wrong answers, and embedded profiles from
+JPEG, TIFF and PNG. The demos and LutBuilder moved to
 [jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples), and
 `ICCImage` became [jsICCImage](https://github.com/glennwilton/jsICCImage), its own MIT
 project built on the engine. The plugin example is now in `docs/Plugin.md`.
@@ -38,6 +41,16 @@ project built on the engine. The plugin example is now in `docs/Plugin.md`.
 
 - **Profiles embedded in a JPEG.** `loadBinary(bytes, callback, true)` puts a profile
   split across APP2 segments back together, which is every profile over 64 KB.
+- **Profiles embedded in TIFF and PNG.** The same call follows TIFF tag 34675 (little-
+  and big-endian, not BigTIFF) and decompresses a PNG `iCCP` chunk. The PNG profile is
+  always zlib-compressed, so `src/embeddedProfile.js` carries a small inflate of its
+  own: plain JavaScript, the same in Node and the browser, no dependency. Neither format
+  was readable before, because neither contains the `ICC_PROFILE` marker the scan
+  looked for. Any other bytes are searched for a whole profile by its header and
+  declared length, so the profile itself, or one held uncompressed inside other
+  data, also loads. Checked on 13 files saved from Photoshop, now in
+  `__tests__/embedded`: JPEG (including FOGRA39 split across 10 segments), PNG, and
+  TIFF in both byte orders with no compression, LZW, ZIP and layers.
 - **Matrix fallback for RGB profiles with a table in one direction.** An RGB profile
   that carries A2B tables but no B2A (or the reverse), plus the matrix and curve tags,
   now uses the table where there is one and the matrix for the other direction, as
@@ -58,6 +71,17 @@ project built on the engine. The plugin example is now in `docs/Plugin.md`.
   loads. A profile with no table for the direction asked gives a clear error from
   `create()`.
 - Loading a matrix profile decodes a tone curve shared by all three channels once.
+- **Inverting a sampled tone curve is one pass** for a curve that only rises or only
+  falls, which is every real one. A 4096-point curve inverts in about 0.07 ms where it
+  took about 8. The result is identical to the last bit; a curve that wobbles keeps the
+  full search.
+- **`transform()` and `array()` check what they are given.** `transform(null)` throws
+  an `Error` that says so. `array()` throws on a missing buffer and on a `pixelCount`
+  larger than the data, which used to read past the end and return garbage in the tail
+  with no error. The checks run once per call, never per pixel. NaN values are not
+  checked: a per-channel test in `transform()` measured 15% off the no-LUT path in
+  `bench/mpx_summary.js`, so a NaN channel still comes back as NaN, or 0 in an integer
+  format.
 
 ---
 
