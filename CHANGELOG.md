@@ -38,6 +38,10 @@ project built on the engine. The plugin example is now in `docs/Plugin.md`.
 
 - **Profiles embedded in a JPEG.** `loadBinary(bytes, callback, true)` puts a profile
   split across APP2 segments back together, which is every profile over 64 KB.
+- **`profile.profileFingerprint`**, set on every load route: byte length plus a 64-bit
+  hash of the profile bytes. An RGB profile used as both source and destination is now
+  an identity transform however it was loaded, including LUT-based RGB profiles loaded
+  from a file, URL or base64. CMYK is unchanged.
 
 ### Changed
 

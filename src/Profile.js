@@ -248,6 +248,7 @@ class Profile {
         this.outputChannels = 0;
         this.lastError = {err: 0, text: 'No Error'};
         this.binaryHash  = false;   // FNV-1a hex over raw ICC bytes, set by loadBinary()
+        this.profileFingerprint = false; // length + 64-bit hash of the ICC bytes, set by every load route
         this.virtualName = false;   // '*sRGB' etc., set by loadVirtualProfile()
         this.sizeBytes   = 0;       // declared ICC profile size, set by decodeFile()
 
@@ -1003,6 +1004,11 @@ class Profile {
             // Kept for loadBinary(), so that a profile found inside an image
             // is fingerprinted by its own bytes and not by the host file.
             this._decodedHash = _profileFnv1a32(data, this.sizeBytes);
+
+            // Set on every load route (bytes, file, URL, base64), unlike
+            // binaryHash. Transform uses it to recognise one RGB profile
+            // used as both source and destination.
+            this.profileFingerprint = _profileFingerprint(data, this.sizeBytes, this._decodedHash);
 
             this.loaded = true;
             return true;
@@ -2339,6 +2345,32 @@ function _profileFnv1a32(bytes, declaredSize) {
         hash = Math.imul(hash ^ bytes[byteIndex], prime);
     }
     return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * A fingerprint strong enough to say "these are the same bytes": the byte
+ * length, the FNV-1a hash, and a second 32-bit hash that mixes differently.
+ * Two different profiles would have to agree on all three, so an accidental
+ * match is about one in 2^64 among profiles of equal length. It is not
+ * cryptographic and does not need to be: nobody gains by forging a match.
+ *
+ * @param {Uint8Array} bytes
+ * @param {number} declaredSize   profile size from the ICC header
+ * @param {string} fnv1aHex       the FNV-1a hash already computed over the same bytes
+ * @returns {string}
+ */
+function _profileFingerprint(bytes, declaredSize, fnv1aHex) {
+    var hashLength = (declaredSize >= 128 && declaredSize <= bytes.length)
+        ? declaredSize
+        : bytes.length;
+    var hash = 0x9747b28c;
+    for(var byteIndex = 0; byteIndex < hashLength; byteIndex++){
+        hash = Math.imul(hash ^ bytes[byteIndex], 0x5bd1e995);
+        hash ^= hash >>> 15;
+    }
+    hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
+    hash ^= hash >>> 16;
+    return hashLength.toString(16) + '-' + fnv1aHex + (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 module.exports = Profile;

@@ -106,6 +106,20 @@ source, so `binaryHash` is absent. Profiles loaded from the same file path
 will match; profiles from different encodings of the same colour space
 (e.g. a hand-crafted sRGB ICC vs. `*sRGB`) will not.
 
+**As built:** `binaryHash` is set by `loadBinary()` only, so a profile loaded
+from a file path, URL or base64 has none. That is deliberate for CMYK: the
+same press profile loaded from a file on both sides is a real conversion (a
+re-separation), and callers rely on it.
+
+### 1.1a RGB fingerprint
+
+Every load route also sets `profile.profileFingerprint`: the profile's byte
+length, its FNV-1a hash and a second, differently mixed 32-bit hash. For RGB
+profiles (matrix or LUT) a matching fingerprint is an identity, whatever the
+load route. This is the photo-editor case, where the monitor and the image
+are on the same profile and the transform should be a no-op. It is the only
+strategy that covers LUT-based RGB profiles loaded from a file.
+
 ### 1.2 Virtual profile name matching
 
 Virtual profiles are constructed from a canonical name string (`'*sRGB'`,
@@ -182,6 +196,7 @@ areProfilesTheSame(A, B):
   0. areSameType(A, B)     → type, channels, PCS, version all match
   1. areSameVirtual(A, B)  → virtualName && virtualName === virtualName
   2. areSameHash(A, B)     → binaryHash  && binaryHash  === binaryHash
+  2a. areSameRGBFingerprint(A, B) → both RGB, profileFingerprint matches
   3. areSameMatrix(A, B)   → both RGBMatrix, XYZMatrix and gamma agree
   → false
 ```

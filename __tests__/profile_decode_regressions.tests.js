@@ -1098,6 +1098,44 @@ describe('a matrix profile is described by its curves', () => {
         expect(transform.isIdentity).toBe(true);
     });
 
+    describe('one RGB profile as source and destination', () => {
+        const rgbLutFile = path.join(__dirname, 'profiles', 'synthetic_03ch.icc');
+        const fromFile = (file) => new Profile('file:' + file);
+        const fromBase64 = (file) => new Profile('data:' + fs.readFileSync(file).toString('base64'));
+
+        test('every load route gives the same fingerprint', () => {
+            const viaBytes = fromBytes(readFixture(path.join('profiles', 'synthetic_03ch.icc')));
+            expect(typeof viaBytes.profileFingerprint).toBe('string');
+            expect(fromFile(rgbLutFile).profileFingerprint).toBe(viaBytes.profileFingerprint);
+            expect(fromBase64(rgbLutFile).profileFingerprint).toBe(viaBytes.profileFingerprint);
+        });
+
+        test('an RGB LUT profile loaded from a file is a no-op against itself', () => {
+            const profile = fromFile(rgbLutFile);
+            expect(deviceTransform(profile, profile).isIdentity).toBe(true);
+            expect(deviceTransform(fromFile(rgbLutFile), fromBase64(rgbLutFile)).isIdentity).toBe(true);
+        });
+
+        test('a one-byte difference is a different profile', () => {
+            const changed = readFixture(path.join('profiles', 'synthetic_03ch.icc'));
+            changed[changed.length - 1] ^= 1;
+            const original = fromFile(rgbLutFile);
+            const altered = fromBytes(changed);
+            expect(altered.loaded).toBe(true);
+            expect(altered.profileFingerprint).not.toBe(original.profileFingerprint);
+            expect(deviceTransform(original, altered).isIdentity).toBe(false);
+        });
+
+        test('a CMYK profile loaded from a file is still a real conversion against itself', () => {
+            const transform = deviceTransform(fromFile(GRACOL), fromFile(GRACOL));
+            expect(transform.isIdentity).toBe(false);
+        });
+
+        test('virtual profiles carry no fingerprint', () => {
+            expect(new Profile('*sRGB').profileFingerprint).toBe(false);
+        });
+    });
+
     test('create() leaves the chain and BPC arrays it was given alone', () => {
         const chain = ['*sRGB', eIntent.relative, '*sRGB', eIntent.relative, '*AdobeRGB'];
         const blackPoint = [true, false];

@@ -5854,6 +5854,7 @@
             return this._areSameType(profileA, profileB)
                 && (   this._areSameVirtual(profileA, profileB)
                     || this._areSameHash(profileA, profileB)
+                    || this._areSameRGBFingerprint(profileA, profileB)
                     || this._areSameMatrix(profileA, profileB)
                    );
         }
@@ -5873,6 +5874,19 @@
         _areSameHash(profileA, profileB) {
             return !!(profileA.binaryHash && profileB.binaryHash
                    && profileA.binaryHash === profileB.binaryHash);
+        }
+
+        /**
+         * One RGB profile used as both source and destination, however it was
+         * loaded: an editor with the monitor and the image on the same
+         * profile. RGB only, on purpose. binaryHash is set by loadBinary()
+         * alone, and a CMYK profile loaded from a file on both sides is still
+         * a real conversion (a re-separation), which callers rely on.
+         */
+        _areSameRGBFingerprint(profileA, profileB) {
+            if(profileA.type !== eProfileType.RGBMatrix && profileA.type !== eProfileType.RGBLut) return false;
+            return !!(profileA.profileFingerprint && profileB.profileFingerprint
+                   && profileA.profileFingerprint === profileB.profileFingerprint);
         }
 
         _areSameMatrix(profileA, profileB) {
