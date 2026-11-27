@@ -162,6 +162,38 @@ function loadTables(dir){
 
 // ---- comparison ---------------------------------------------------------
 
+// WHICH COLUMNS NAME A ROW. Most tables name a row with their first column.
+// The worker-pool tables do not: pool.peak has one row per kernel AND content,
+// pool.scaling one per kernel, content and worker count. Matched on the first
+// column alone, every row of the run was paired with the first baseline row
+// for that kernel, so a noise figure was compared with a solid-colour one and
+// reported as a 80% collapse that never happened.
+//
+// So the name is the shortest run of leading columns that tells every row
+// apart, in both tables. If no such run exists the first column is used, as
+// before.
+function rowKeyColumns(tables){
+    const columns = tables[0].columns;
+    for(let count = 1; count <= columns.length; count++){
+        const keyColumns = columns.slice(0, count);
+        const unique = tables.every(table => {
+            const seen = new Set();
+            for(const row of table.rows){
+                const name = rowName(row, keyColumns);
+                if(seen.has(name)) return false;
+                seen.add(name);
+            }
+            return true;
+        });
+        if(unique) return keyColumns;
+    }
+    return columns.slice(0, 1);
+}
+
+function rowName(row, keyColumns){
+    return keyColumns.map(column => String(row[column])).join(' / ');
+}
+
 function compare(base, run){
     const cells = [];
     const missing = [];
@@ -170,11 +202,13 @@ function compare(base, run){
         if(!b){ missing.push(id); continue; }
         const small      = tablePixels(run[id]) < GATE_MIN_PIXELS;
         const controlled = CONTROLLED(run[id]);
-        const key = run[id].columns[0];
+        const keyColumns = rowKeyColumns([run[id], b]);
         for(const rowB of run[id].rows){
-            const rowA = b.rows.find(r => r[key] === rowB[key]);
+            const name = rowName(rowB, keyColumns);
+            const rowA = b.rows.find(r => rowName(r, keyColumns) === name);
             if(!rowA) continue;
             for(const col of run[id].columns){
+                if(keyColumns.includes(col)) continue;
                 const a = rowA[col], n = rowB[col];
                 if(typeof a !== 'number' || typeof n !== 'number') continue;
                 const kind = ACCURACY.test(col) ? 'accuracy'
@@ -184,7 +218,7 @@ function compare(base, run){
                            : null;
                 if(!kind) continue;
                 cells.push({
-                    id, row: String(rowB[key]), col, kind, old: a, now: n,
+                    id, row: name, col, kind, old: a, now: n,
                     delta: a === 0 ? (n === 0 ? 0 : Infinity) : (n - a) / a * 100
                 });
             }
