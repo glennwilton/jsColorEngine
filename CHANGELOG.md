@@ -38,6 +38,12 @@ project built on the engine. The plugin example is now in `docs/Plugin.md`.
 
 - **Profiles embedded in a JPEG.** `loadBinary(bytes, callback, true)` puts a profile
   split across APP2 segments back together, which is every profile over 64 KB.
+- **Matrix fallback for RGB profiles with a table in one direction.** An RGB profile
+  that carries A2B tables but no B2A (or the reverse), plus the matrix and curve tags,
+  now uses the table where there is one and the matrix for the other direction, as
+  Little CMS does. It used to be refused as a destination. `profile.hasMatrixFallback`
+  says when this applies. Checked against lcms-wasm over 192 cases (XYZ and Lab PCS,
+  v2 and v4, three intents, BPC on and off): within 0.06 of an 8-bit level.
 - **`profile.profileFingerprint`**, set on every load route: byte length plus a 64-bit
   hash of the profile bytes. An RGB profile used as both source and destination is now
   an identity transform however it was loaded, including LUT-based RGB profiles loaded

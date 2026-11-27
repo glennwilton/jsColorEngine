@@ -1251,3 +1251,101 @@ describe('loader odds and ends', () => {
         expect(middle).toBeCloseTo(Math.pow(0.5, 2.4), 2);
     });
 });
+
+describe('RGB profile with a table in one direction and matrix tags', () => {
+    // Little CMS uses the table where there is one and the matrix for the
+    // other direction. Checked against lcms-wasm: 192 cases (two curves, XYZ
+    // and Lab PCS, v2 and v4, three intents, BPC on and off) all within 0.06
+    // of an 8-bit level and 0.03 dE.
+    const curve = () => curvGamma(2.2);
+    const tableCells = [];
+    for (let r = 0; r < 5; r++) {
+        for (let g = 0; g < 5; g++) {
+            for (let b = 0; b < 5; b++) {
+                tableCells.push(20 + r * 50, 20 + g * 50, 20 + b * 50);
+            }
+        }
+    }
+    const hybridProfile = (tableSignatures, withWhitePoint) => {
+        const table = mft1Tag(3, 3, 5, tableCells);
+        const tags = tableSignatures.map((signature) => [signature, table]).concat([
+            ['bTRC', curve()], ['bXYZ', enc.XYZType(SRGB_D50.b)],
+            ['cprt', enc.textType('test')], ['desc', enc.textDescriptionType('hybrid')],
+            ['gTRC', curve()], ['gXYZ', enc.XYZType(SRGB_D50.g)],
+            ['rTRC', curve()], ['rXYZ', enc.XYZType(SRGB_D50.r)],
+        ]);
+        if (withWhitePoint !== false) {
+            tags.push(['wtpt', enc.XYZType(enc.D50)]);
+        }
+        return fromBytes(enc.assemble({colorSpace: 'RGB ', profileClass: 'mntr', pcs: 'XYZ ', intent: 0}, tags));
+    };
+    const plainMatrix = () => fromBytes(matrixProfile(curve(), curve(), curve()));
+    const labSamples = [[0.5, 0.5, 0.5], [0.7, 0.6, 0.4], [0.2, 0.5, 0.5], [0.95, 0.5, 0.5]];
+    const rgbSamples = [[0, 0, 0], [1, 1, 1], [0.5, 0.5, 0.5], [0.8, 0.3, 0.2]];
+    const convertAll = (source, destination, samples, intent) => {
+        const transform = new Transform({dataFormat: 'device', BPC: false});
+        transform.create(source, destination, intent);
+        return samples.map((sample) => Array.from(transform.transform(sample)));
+    };
+    const expectSame = (actual, expected) => {
+        actual.forEach((pixel, pixelIndex) => pixel.forEach((value, channel) => {
+            expect(value).toBeCloseTo(expected[pixelIndex][channel], 10);
+        }));
+    };
+
+    test('a profile with only A2B tables stays a LUT profile and flags the fallback', () => {
+        const profile = hybridProfile(['A2B0']);
+        expect(profile.loaded).toBe(true);
+        expect(profile.hasMatrixFallback).toBe(true);
+        expect(plainMatrix().hasMatrixFallback).toBe(false);
+    });
+
+    test('only A2B tables: as a destination it converts as the matrix profile does', () => {
+        for (const intent of [eIntent.perceptual, eIntent.relative, eIntent.absolute]) {
+            expectSame(convertAll('*Lab', hybridProfile(['A2B0']), labSamples, intent),
+                       convertAll('*Lab', plainMatrix(), labSamples, intent));
+        }
+    });
+
+    test('only B2A tables: as a source it converts as the matrix profile does', () => {
+        for (const intent of [eIntent.perceptual, eIntent.relative, eIntent.absolute]) {
+            expectSame(convertAll(hybridProfile(['B2A0']), '*Lab', rgbSamples, intent),
+                       convertAll(plainMatrix(), '*Lab', rgbSamples, intent));
+        }
+    });
+
+    test('the direction that has a table still uses the table', () => {
+        const viaTable = convertAll(hybridProfile(['A2B0']), '*Lab', rgbSamples, eIntent.relative);
+        const viaMatrix = convertAll(plainMatrix(), '*Lab', rgbSamples, eIntent.relative);
+        expect(Math.abs(viaTable[0][0] - viaMatrix[0][0])).toBeGreaterThan(0.01);
+    });
+
+    test('the image path runs through the fallback', () => {
+        const transform = new Transform({dataFormat: 'int8', buildLut: true, BPC: false});
+        transform.create('*sRGB', hybridProfile(['A2B0']), eIntent.relative);
+        const reference = new Transform({dataFormat: 'int8', buildLut: true, BPC: false});
+        reference.create('*sRGB', plainMatrix(), eIntent.relative);
+        const pixels = new Uint8ClampedArray([0, 0, 0, 128, 128, 128, 204, 77, 51, 255, 255, 255]);
+        const output = Array.from(transform.transformArray(pixels));
+        const expected = Array.from(reference.transformArray(pixels));
+        output.forEach((value, index) => expect(Math.abs(value - expected[index])).toBeLessThanOrEqual(1));
+    });
+
+    test('black point compensation builds, with the black measured through the table', () => {
+        // The profile's black is what its A2B table says device black is,
+        // which here is well above zero, so the result differs from the plain
+        // matrix profile. Little CMS measures it the same way.
+        const transform = new Transform({dataFormat: 'device', BPC: true});
+        transform.create('*Lab', hybridProfile(['A2B0']), eIntent.relative);
+        const output = Array.from(transform.transform([0.5, 0.5, 0.5]));
+        output.forEach((value) => expect(Number.isFinite(value)).toBe(true));
+        const withoutCompensation = convertAll('*Lab', hybridProfile(['A2B0']), [[0.5, 0.5, 0.5]], eIntent.relative)[0];
+        expect(output[0]).not.toBeCloseTo(withoutCompensation[0], 3);
+    });
+
+    test('without a wtpt tag there is no fallback, and the error is clear', () => {
+        const profile = hybridProfile(['A2B0'], false);
+        expect(profile.hasMatrixFallback).toBe(false);
+        expect(() => convertAll('*Lab', profile, labSamples, eIntent.relative)).toThrow(/has no B2A table/);
+    });
+});

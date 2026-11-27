@@ -6194,6 +6194,23 @@
             return lut;
         }
 
+        /**
+         * An RGB profile may carry a table for one direction and the matrix
+         * and curve tags as well. Where the table is missing the matrix does
+         * the work, as it does in Little CMS, so a profile with only A2B
+         * tables can still be a destination.
+         *
+         * @param {Profile} profile
+         * @param {string} direction  'A2B' or 'B2A'
+         * @param {number} intent
+         * @returns {boolean} true if this direction has no table and the matrix covers it
+         */
+        usesMatrixFallback(profile, direction, intent){
+            return profile.type === eProfileType.RGBLut
+                && profile.hasMatrixFallback === true
+                && !profile[direction][this.intent2LUTIndex(intent)];
+        }
+
         isGreyTRCwithNOLUT(profile, intent){
             return (profile.Gray.kTRC && !profile.A2B[this.intent2LUTIndex(intent)])
         }
@@ -6465,7 +6482,8 @@
         };
 
         createPipeline_Device_to_PCS(pcsInfo, inputProfile, outputProfile, intent){
-            switch(inputProfile.type){
+            var viaMatrixFallback = this.usesMatrixFallback(inputProfile, 'A2B', intent);
+            switch(viaMatrixFallback ? eProfileType.RGBMatrix : inputProfile.type){
 
                 case eProfileType.Lab:
                     this.createPipeline_Device_to_PCS_via_Lab(pcsInfo, inputProfile);
@@ -6503,8 +6521,9 @@
                     throw 'Unknown profile type ' + inputProfile.type + 'in createPipeline_Device_to_PCS';
             }
 
-            // Convert to PCSv4
-            if(inputProfile.pcs === 'XYZ' && pcsInfo.pcsEncoding === encoding.PCSXYZ){
+            // Convert to PCSv4. The matrix always lands in XYZ, including when
+            // it stands in for a missing table in a profile whose PCS is Lab.
+            if((inputProfile.pcs === 'XYZ' || viaMatrixFallback) && pcsInfo.pcsEncoding === encoding.PCSXYZ){
                 // Convert from XYZ to PCSv4
                 this.addStage(
                     encoding.PCSXYZ,
@@ -6878,7 +6897,7 @@
                 throw 'createPipeline_PCS_to_Device: expects PCSv4 or PCSXYZ not ' + encodingStr[pcsInfo.pcsEncoding];
             }
 
-            switch(outputProfile.type) {
+            switch(this.usesMatrixFallback(outputProfile, 'B2A', intent) ? eProfileType.RGBMatrix : outputProfile.type) {
                 case eProfileType.Lab:
                     this.createPipeline_PCS_to_Lab(pcsInfo);
                     return
@@ -7987,7 +8006,10 @@
             // well specified enough to use it. Black point tag is deprecated in V4.
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
-                if(this.isGreyTRCwithNOLUT(profile, intent)){
+                // A profile with matrix and curve tags is measured, not
+                // assumed, including one that also carries a table for one
+                // direction. Little CMS decides this on the tags alone.
+                if(this.isGreyTRCwithNOLUT(profile, intent) || profile.hasMatrixFallback){
                     return this.Lab2XYZ(this.findMaxColourantBlackpoint(profile, eIntent.relative));
                 }
 
@@ -8213,7 +8235,10 @@
             // well specified enough to use it. Black point tag is deprecated in V4.
             if((profile.version === 4) && (intent === eIntent.perceptual || intent === eIntent.saturation)){
 
-                if(this.isGreyTRCwithNOLUT(profile, intent)){
+                // A profile with matrix and curve tags is measured, not
+                // assumed, including one that also carries a table for one
+                // direction. Little CMS decides this on the tags alone.
+                if(this.isGreyTRCwithNOLUT(profile, intent) || profile.hasMatrixFallback){
                     return this.Lab2XYZ(this.findMaxColourantBlackpoint(profile, eIntent.relative));
                 }
 
@@ -8281,6 +8306,7 @@
             // black point to offer. A fallback table still converts colours,
             // but it is a different rendering.
             if(profile.type !== eProfileType.RGBMatrix && !this.isGreyTRCwithNOLUT(profile, intent)
+               && !profile.hasMatrixFallback
                && !this.hasIntentTable(profile, 'A2B', intent)){
                 return this.Lab(0, 0, 0);
             }

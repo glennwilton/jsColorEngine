@@ -248,6 +248,7 @@ class Profile {
         this.outputChannels = 0;
         this.lastError = {err: 0, text: 'No Error'};
         this.binaryHash  = false;   // FNV-1a hex over raw ICC bytes, set by loadBinary()
+        this.hasMatrixFallback = false;  // RGB LUT profile with a table in one direction and matrix tags for the other
         this.profileFingerprint = false; // length + 64-bit hash of the ICC bytes, set by every load route
         this.virtualName = false;   // '*sRGB' etc., set by loadVirtualProfile()
         this.sizeBytes   = 0;       // declared ICC profile size, set by decodeFile()
@@ -999,6 +1000,22 @@ class Profile {
 
                 // Convert to an RGBMatrix type profile.
                 this.createRGBMatrix();
+            } else if (_this.header.space === 'RGB ' &&
+                (_this.A2B[eIntent.relative] === null) !== (_this.B2A[eIntent.relative] === null) &&
+                _this.rgb.gXYZ &&
+                _this.rgb.rXYZ &&
+                _this.rgb.bXYZ &&
+                _this.rgb.rTRC &&
+                _this.rgb.gTRC &&
+                _this.rgb.bTRC &&
+                this.mediaWhitePoint
+            ) {
+                // A table for one direction only, plus the matrix and curve
+                // tags. The table is used where there is one and the matrix
+                // covers the other direction, as Little CMS does. The profile
+                // stays an RGBLut: only the missing direction changes route.
+                this.createRGBMatrix(true);
+                this.hasMatrixFallback = true;
             }
 
             // Kept for loadBinary(), so that a profile found inside an image
@@ -1049,9 +1066,13 @@ class Profile {
      * The primaries are adapted from the ICC PCS D50 reference to the
      * profile's actual `mediaWhitePoint` before the matrix is computed.
      *
+     * @param {boolean} [asFallback]  compute the matrix but leave the profile
+     *        type alone, for an RGB LUT profile that has a table in only one
+     *        direction and uses the matrix for the other.
      * @return {boolean}
      */
-    createRGBMatrix() {
+    createRGBMatrix(asFallback) {
+        var decodedType = this.type;
         //this.PCSWhitepoint = convert.getWhitePointFromIlluminant(this.header.PCSilluminant);
         this.PCSWhitepoint = this.header.PCSilluminant;
         var d50 = convert.d50;
@@ -1080,6 +1101,9 @@ class Profile {
             cBy: bxy.y
         };
         convert.computeMatrix(this);
+        if (asFallback) {
+            this.type = decodedType;
+        }
     };
 
 
