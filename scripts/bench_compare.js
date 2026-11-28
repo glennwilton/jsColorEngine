@@ -20,24 +20,28 @@
  * ACCURACY IS GATED AT ZERO. Throughput has a tolerance; LSB error does not.
  * A refactor that quietly changes rounding is the failure mode worth catching.
  *
- * THREE GATES, MATCHED TO WHAT EACH MEASUREMENT SUPPORTS. The solo bench
+ * FOUR GATES, MATCHED TO WHAT EACH MEASUREMENT SUPPORTS. The solo bench
  * controls its conditions and reports its own spread under 1%, so its cells
  * gate individually. The content matrix does not: single 1024k cells were
  * observed swinging 5-18% between clean runs on an idle machine while their
  * median held to a fraction of a percent, so the median gates and individual
  * cells are reported for diagnosis only. Gating a noisy instrument per cell
  * produces failures nobody believes, which is how a gate stops being read.
+ * The worker pool is noisier again, and gates on its own median at a wider
+ * tolerance. Accuracy is the fourth.
  *
  * Usage:
  *   node scripts/bench_compare.js                     # newest run vs pinned baseline
  *   node scripts/bench_compare.js <run>               # that run vs pinned baseline
  *   node scripts/bench_compare.js <run> --vs <other>  # explicit pair
  *   node scripts/bench_compare.js --tolerance 5       # percent, default 3
+ *   node scripts/bench_compare.js --pool-tolerance 15 # percent, default 10
  *   node scripts/bench_compare.js --markdown          # emit a block for a PR/CHANGELOG
  *
  * Exit code 1 if the aggregate regresses past tolerance, an isolated
- * measurement regresses, a single cell moves catastrophically, or any accuracy
- * figure moves at all.
+ * measurement regresses, a single-threaded cell moves catastrophically, the
+ * worker-pool median regresses past its own tolerance, or any accuracy figure
+ * moves at all.
  */
 'use strict';
 
@@ -58,6 +62,7 @@ function flag(name, fallback){
 }
 const has       = name => argv.includes('--' + name);
 const TOLERANCE = Number(flag('tolerance', 3));
+const POOL_TOLERANCE = Number(flag('pool-tolerance', 10));
 const MARKDOWN  = has('markdown');
 const positional = argv.filter((a, i) =>
     !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !has(argv[i - 1].slice(2))));
@@ -97,6 +102,27 @@ const CONTROLLED = t => t.rows.some(r => typeof r.spreadPct === 'number');
 // use 1M px; 64k and 16k exist to show the shape of the size curve, which is
 // still worth seeing and is not worth failing a build over.
 const GATE_MIN_PIXELS = 262144;
+
+// THE WORKER POOL IS ITS OWN REGIME, AND THE NOISIEST ONE.
+//
+// A pool cell runs for a fraction of a second on every core at once, so
+// anything else the machine does lands in it. Measured on one idle machine,
+// four pool-only runs minutes apart: the same cell (matrix-shaper, photo, 6
+// workers) read 954, 1082, 1145 and 1168 MPx/s, and across three release
+// snapshots single pool cells moved between -31% and +55% while the median of
+// each pool table stayed inside 4.4%.
+//
+// The "catastrophic" rule (one cell down 30%) was written for single-threaded
+// cells, where 30% is far outside any jitter. Applied to pool cells it failed
+// two release comparisons running on cells that an old-against-new rerun
+// showed had not changed. So pool cells gate on THEIR OWN MEDIAN, at a wider
+// tolerance, and single cells are listed for diagnosis only. They are also
+// kept out of the main throughput median, which they would only blur.
+//
+// Only the throughput columns count. Speed-up and efficiency columns in these
+// tables are ratios of the same measurements and would count each one twice.
+const POOLED     = id => /^pool\./.test(id);
+const POOL_GATED = /mpxs$/i;
 
 function tablePixels(t){
     if(t.meta && typeof t.meta.pixels === 'number') return t.meta.pixels;
@@ -202,6 +228,7 @@ function compare(base, run){
         if(!b){ missing.push(id); continue; }
         const small      = tablePixels(run[id]) < GATE_MIN_PIXELS;
         const controlled = CONTROLLED(run[id]);
+        const pooled     = POOLED(id);
         const keyColumns = rowKeyColumns([run[id], b]);
         for(const rowB of run[id].rows){
             const name = rowName(rowB, keyColumns);
@@ -212,6 +239,7 @@ function compare(base, run){
                 const a = rowA[col], n = rowB[col];
                 if(typeof a !== 'number' || typeof n !== 'number') continue;
                 const kind = ACCURACY.test(col) ? 'accuracy'
+                           : pooled             ? (POOL_GATED.test(col) ? 'pool' : null)
                            : GATED.test(col)    ? (controlled ? 'controlled'
                                                  : small      ? 'small' : 'gated')
                            : CONTROL.test(col)  ? 'control'
@@ -260,6 +288,7 @@ const control    = cells.filter(c => c.kind === 'control');
 const accuracy   = cells.filter(c => c.kind === 'accuracy');
 const small      = cells.filter(c => c.kind === 'small');
 const controlled = cells.filter(c => c.kind === 'controlled');
+const pooled     = cells.filter(c => c.kind === 'pool');
 
 const gatedMean   = mean(gated.map(c => c.delta));
 const controlMean = mean(control.map(c => c.delta));
@@ -285,7 +314,7 @@ const controlSpread = percentile(controlAbs, 0.95);
 const controlMax    = controlAbs.length ? Math.max(...controlAbs) : 0;
 const noiseFloor = Math.max(TOLERANCE, controlSpread);
 
-// THREE GATES, matched to what each measurement can actually support.
+// FOUR GATES, matched to what each measurement can actually support.
 //
 //   1. Accuracy — zero tolerance, per cell.
 //   2. Controlled tables (the solo bench) — per cell at tolerance. These
@@ -297,9 +326,12 @@ const noiseFloor = Math.max(TOLERANCE, controlSpread);
 //      reported for diagnosis. Median rather than mean: one wild cell should
 //      not move the verdict in either direction.
 //
-// A single catastrophic cell still fails, because a genuinely broken kernel
-// looks nothing like jitter. CATASTROPHIC is set well clear of the observed
-// per-cell spread.
+//   4. The worker pool — its own median, at POOL_TOLERANCE. See POOLED.
+//
+// A single catastrophic single-threaded cell still fails, because a genuinely
+// broken kernel looks nothing like jitter. CATASTROPHIC is set well clear of
+// the observed per-cell spread there. Pool cells are exempt: their spread is
+// wider than the rule.
 const CATASTROPHIC = 30;
 
 const accuracyChanged = accuracy.filter(c => c.old !== c.now);
@@ -308,6 +340,9 @@ const gatedMedian     = median(gated.map(c => c.delta));
 const aggregateBad    = gated.length && gatedMedian < -TOLERANCE;
 const findings        = gated.filter(c => c.delta < -CATASTROPHIC);
 const suspicious      = gated.filter(c => c.delta < -noiseFloor && c.delta >= -CATASTROPHIC);
+const poolMedian      = median(pooled.map(c => c.delta));
+const poolBad         = pooled.length && poolMedian < -POOL_TOLERANCE;
+const poolMovers      = pooled.filter(c => c.delta < -POOL_TOLERANCE);
 
 // ---- report -------------------------------------------------------------
 
@@ -334,6 +369,11 @@ L.push('  jsCE throughput   ' + String(gated.length).padStart(4) + ' cells   med
 if(controlled.length){
     L.push('  isolated (solo)   ' + String(controlled.length).padStart(4) + ' cells   worst '
            + pct(Math.min(...controlled.map(c => c.delta))) + '   <- GATES (per cell)');
+}
+if(pooled.length){
+    L.push('  worker pool       ' + String(pooled.length).padStart(4) + ' cells   median '
+           + pct(poolMedian) + ', worst ' + pct(Math.min(...pooled.map(c => c.delta)))
+           + '   <- GATES (median, ' + POOL_TOLERANCE + '%)');
 }
 L.push('  third-party ctrl  ' + String(control.length).padStart(4) + ' cells   mean ' + pct(controlMean));
 L.push('  accuracy          ' + String(accuracy.length).padStart(4) + ' cells   '
@@ -374,6 +414,14 @@ if(aggregateBad){
            + pct(gatedMedian) + ', past the ' + TOLERANCE + '% tolerance.');
 }
 
+if(poolBad){
+    L.push('');
+    L.push('  WORKER POOL REGRESSED — median across ' + pooled.length + ' cells is '
+           + pct(poolMedian) + ', past the ' + POOL_TOLERANCE + '% pool tolerance.');
+    L.push('  Repeat it on an idle machine before believing it:');
+    L.push('      node harness/reproduce.js --only pool');
+}
+
 if(findings.length){
     L.push('');
     L.push('  CATASTROPHIC single cells (past ' + CATASTROPHIC + '% — not jitter):');
@@ -394,8 +442,21 @@ if(suspicious.length){
     if(suspicious.length > worst.length) L.push('      ... and ' + (suspicious.length - worst.length) + ' more');
 }
 
+if(poolMovers.length){
+    const worstPool = poolMovers.slice().sort((a, b) => a.delta - b.delta).slice(0, 5);
+    L.push('');
+    L.push('  Largest worker-pool moves (diagnosis only — a pool cell runs on every');
+    L.push('  core for a fraction of a second, and single cells swing 30% between');
+    L.push('  identical runs; the pool gates on its median):');
+    for(const c of worstPool){
+        L.push('      ' + pct(c.delta).padStart(8) + '  ' + c.id + ' / ' + c.row + ' / ' + c.col
+               + '   ' + c.old + ' -> ' + c.now);
+    }
+    if(poolMovers.length > worstPool.length) L.push('      ... and ' + (poolMovers.length - worstPool.length) + ' more');
+}
+
 const ok = !findings.length && !accuracyChanged.length
-        && !controlledBad.length && !aggregateBad;
+        && !controlledBad.length && !aggregateBad && !poolBad;
 L.push('');
 L.push(ok ? '  PASS — aggregate within tolerance, isolated measurements steady,'
             + ' accuracy unchanged.'
@@ -406,6 +467,7 @@ if(MARKDOWN){
     console.log('| measure | cells | mean change |');
     console.log('|---|---:|---:|');
     console.log('| jsCE throughput | ' + gated.length + ' | ' + pct(gatedMean) + ' |');
+    if(pooled.length) console.log('| worker pool (median) | ' + pooled.length + ' | ' + pct(poolMedian) + ' |');
     console.log('| third-party control | ' + control.length + ' | ' + pct(controlMean) + ' |');
     console.log('| accuracy | ' + accuracy.length + ' | '
         + (accuracyChanged.length ? '**' + accuracyChanged.length + ' changed**' : 'identical') + ' |');
