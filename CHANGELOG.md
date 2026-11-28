@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.7.3] — 2026-11-28
+
+TypeScript type definitions, and cancelling a batch. No conversion result changes.
+
 ### Added
 
 - **TypeScript type definitions**, in `src/main.d.ts` and named by the `types` field

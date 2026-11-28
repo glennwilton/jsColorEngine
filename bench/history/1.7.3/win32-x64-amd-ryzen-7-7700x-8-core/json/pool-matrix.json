@@ -1,0 +1,794 @@
+{
+  "tool": "harness/multicore_matrix/run.js",
+  "generated": "2026-11-28T01:29:38.362Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.7.3",
+    "pixels": 4194304,
+    "runs": 5,
+    "maxWorkers": 8,
+    "isolated": true,
+    "workflow": "sRGB -> GRACoL2006, int8, LUT"
+  },
+  "tables": [
+    {
+      "id": "pool.peak",
+      "title": "Worker pool — peak speedup vs sequential, by kernel and content",
+      "units": "x",
+      "meta": {
+        "pixels": 4194304,
+        "maxWorkers": 8
+      },
+      "columns": [
+        "kernel",
+        "content",
+        "sequentialMpxs",
+        "peakSpeedup",
+        "atWorkers",
+        "peakMpxs",
+        "efficiencyPct",
+        "exact"
+      ],
+      "rows": [
+        {
+          "kernel": "int",
+          "content": "solid",
+          "sequentialMpxs": 57.3,
+          "peakSpeedup": 5.51,
+          "atWorkers": 8,
+          "peakMpxs": 315.7,
+          "efficiencyPct": 69,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "sequentialMpxs": 45,
+          "peakSpeedup": 6.02,
+          "atWorkers": 7,
+          "peakMpxs": 270.6,
+          "efficiencyPct": 86,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "sequentialMpxs": 48.9,
+          "peakSpeedup": 6.39,
+          "atWorkers": 8,
+          "peakMpxs": 312.7,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "sequentialMpxs": 309.5,
+          "peakSpeedup": 3.23,
+          "atWorkers": 8,
+          "peakMpxs": 999.3,
+          "efficiencyPct": 40,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "sequentialMpxs": 59.5,
+          "peakSpeedup": 5.22,
+          "atWorkers": 8,
+          "peakMpxs": 310.1,
+          "efficiencyPct": 65,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "sequentialMpxs": 70.4,
+          "peakSpeedup": 5.32,
+          "atWorkers": 8,
+          "peakMpxs": 374.6,
+          "efficiencyPct": 67,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "sequentialMpxs": 503.9,
+          "peakSpeedup": 2.35,
+          "atWorkers": 6,
+          "peakMpxs": 1184.4,
+          "efficiencyPct": 39,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "sequentialMpxs": 99.6,
+          "peakSpeedup": 4.97,
+          "atWorkers": 8,
+          "peakMpxs": 495,
+          "efficiencyPct": 62,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "sequentialMpxs": 116.5,
+          "peakSpeedup": 4.55,
+          "atWorkers": 8,
+          "peakMpxs": 530.5,
+          "efficiencyPct": 57,
+          "exact": true
+        }
+      ]
+    },
+    {
+      "id": "pool.scaling",
+      "title": "Worker pool — every worker count",
+      "units": "MPx/s",
+      "meta": {
+        "pixels": 4194304
+      },
+      "columns": [
+        "kernel",
+        "content",
+        "workers",
+        "mpxs",
+        "speedup",
+        "efficiencyPct",
+        "exact"
+      ],
+      "rows": [
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 1,
+          "mpxs": 50.7,
+          "speedup": 0.89,
+          "efficiencyPct": 89,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 2,
+          "mpxs": 103.3,
+          "speedup": 1.8,
+          "efficiencyPct": 90,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 3,
+          "mpxs": 147.1,
+          "speedup": 2.57,
+          "efficiencyPct": 86,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 4,
+          "mpxs": 193.4,
+          "speedup": 3.38,
+          "efficiencyPct": 84,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 5,
+          "mpxs": 227.9,
+          "speedup": 3.98,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 6,
+          "mpxs": 252.2,
+          "speedup": 4.4,
+          "efficiencyPct": 73,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 7,
+          "mpxs": 264.9,
+          "speedup": 4.63,
+          "efficiencyPct": 66,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "solid",
+          "workers": 8,
+          "mpxs": 315.7,
+          "speedup": 5.51,
+          "efficiencyPct": 69,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 1,
+          "mpxs": 42.9,
+          "speedup": 0.95,
+          "efficiencyPct": 95,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 2,
+          "mpxs": 81.9,
+          "speedup": 1.82,
+          "efficiencyPct": 91,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 3,
+          "mpxs": 119,
+          "speedup": 2.65,
+          "efficiencyPct": 88,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 4,
+          "mpxs": 171.8,
+          "speedup": 3.82,
+          "efficiencyPct": 96,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 5,
+          "mpxs": 212.8,
+          "speedup": 4.73,
+          "efficiencyPct": 95,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 6,
+          "mpxs": 240.4,
+          "speedup": 5.35,
+          "efficiencyPct": 89,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 7,
+          "mpxs": 270.6,
+          "speedup": 6.02,
+          "efficiencyPct": 86,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "noise",
+          "workers": 8,
+          "mpxs": 268.4,
+          "speedup": 5.97,
+          "efficiencyPct": 75,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 1,
+          "mpxs": 46.3,
+          "speedup": 0.95,
+          "efficiencyPct": 95,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 2,
+          "mpxs": 89.4,
+          "speedup": 1.83,
+          "efficiencyPct": 91,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 3,
+          "mpxs": 133.9,
+          "speedup": 2.74,
+          "efficiencyPct": 91,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 4,
+          "mpxs": 203.2,
+          "speedup": 4.15,
+          "efficiencyPct": 104,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 5,
+          "mpxs": 242.2,
+          "speedup": 4.95,
+          "efficiencyPct": 99,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 6,
+          "mpxs": 267,
+          "speedup": 5.46,
+          "efficiencyPct": 91,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 7,
+          "mpxs": 295,
+          "speedup": 6.03,
+          "efficiencyPct": 86,
+          "exact": true
+        },
+        {
+          "kernel": "int",
+          "content": "photo",
+          "workers": 8,
+          "mpxs": 312.7,
+          "speedup": 6.39,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 1,
+          "mpxs": 246.3,
+          "speedup": 0.8,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 2,
+          "mpxs": 482.2,
+          "speedup": 1.56,
+          "efficiencyPct": 78,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 3,
+          "mpxs": 650.8,
+          "speedup": 2.1,
+          "efficiencyPct": 70,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 4,
+          "mpxs": 789.9,
+          "speedup": 2.55,
+          "efficiencyPct": 64,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 5,
+          "mpxs": 892.5,
+          "speedup": 2.88,
+          "efficiencyPct": 58,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 6,
+          "mpxs": 950.5,
+          "speedup": 3.07,
+          "efficiencyPct": 51,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 7,
+          "mpxs": 728.3,
+          "speedup": 2.35,
+          "efficiencyPct": 34,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "solid",
+          "workers": 8,
+          "mpxs": 999.3,
+          "speedup": 3.23,
+          "efficiencyPct": 40,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 1,
+          "mpxs": 54.6,
+          "speedup": 0.92,
+          "efficiencyPct": 92,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 2,
+          "mpxs": 107.9,
+          "speedup": 1.81,
+          "efficiencyPct": 91,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 3,
+          "mpxs": 153.3,
+          "speedup": 2.58,
+          "efficiencyPct": 86,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 4,
+          "mpxs": 206.2,
+          "speedup": 3.47,
+          "efficiencyPct": 87,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 5,
+          "mpxs": 239.8,
+          "speedup": 4.03,
+          "efficiencyPct": 81,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 6,
+          "mpxs": 263.1,
+          "speedup": 4.42,
+          "efficiencyPct": 74,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 7,
+          "mpxs": 265.8,
+          "speedup": 4.47,
+          "efficiencyPct": 64,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "noise",
+          "workers": 8,
+          "mpxs": 310.1,
+          "speedup": 5.22,
+          "efficiencyPct": 65,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 1,
+          "mpxs": 63,
+          "speedup": 0.89,
+          "efficiencyPct": 89,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 2,
+          "mpxs": 124.3,
+          "speedup": 1.77,
+          "efficiencyPct": 88,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 3,
+          "mpxs": 185.2,
+          "speedup": 2.63,
+          "efficiencyPct": 88,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 4,
+          "mpxs": 239.8,
+          "speedup": 3.41,
+          "efficiencyPct": 85,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 5,
+          "mpxs": 278.4,
+          "speedup": 3.95,
+          "efficiencyPct": 79,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 6,
+          "mpxs": 308.6,
+          "speedup": 4.38,
+          "efficiencyPct": 73,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 7,
+          "mpxs": 356.3,
+          "speedup": 5.06,
+          "efficiencyPct": 72,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-scalar",
+          "content": "photo",
+          "workers": 8,
+          "mpxs": 374.6,
+          "speedup": 5.32,
+          "efficiencyPct": 67,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 1,
+          "mpxs": 359.2,
+          "speedup": 0.71,
+          "efficiencyPct": 71,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 2,
+          "mpxs": 654.6,
+          "speedup": 1.3,
+          "efficiencyPct": 65,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 3,
+          "mpxs": 917.7,
+          "speedup": 1.82,
+          "efficiencyPct": 61,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 4,
+          "mpxs": 1165,
+          "speedup": 2.31,
+          "efficiencyPct": 58,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 5,
+          "mpxs": 1046.7,
+          "speedup": 2.08,
+          "efficiencyPct": 42,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 6,
+          "mpxs": 1184.4,
+          "speedup": 2.35,
+          "efficiencyPct": 39,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 7,
+          "mpxs": 881.4,
+          "speedup": 1.75,
+          "efficiencyPct": 25,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "solid",
+          "workers": 8,
+          "mpxs": 1019.3,
+          "speedup": 2.02,
+          "efficiencyPct": 25,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 1,
+          "mpxs": 90,
+          "speedup": 0.9,
+          "efficiencyPct": 90,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 2,
+          "mpxs": 175.2,
+          "speedup": 1.76,
+          "efficiencyPct": 88,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 3,
+          "mpxs": 247.4,
+          "speedup": 2.48,
+          "efficiencyPct": 83,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 4,
+          "mpxs": 318.8,
+          "speedup": 3.2,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 5,
+          "mpxs": 396.8,
+          "speedup": 3.98,
+          "efficiencyPct": 80,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 6,
+          "mpxs": 449.5,
+          "speedup": 4.51,
+          "efficiencyPct": 75,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 7,
+          "mpxs": 467.1,
+          "speedup": 4.69,
+          "efficiencyPct": 67,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "noise",
+          "workers": 8,
+          "mpxs": 495,
+          "speedup": 4.97,
+          "efficiencyPct": 62,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 1,
+          "mpxs": 102.4,
+          "speedup": 0.88,
+          "efficiencyPct": 88,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 2,
+          "mpxs": 197.4,
+          "speedup": 1.69,
+          "efficiencyPct": 85,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 3,
+          "mpxs": 285,
+          "speedup": 2.45,
+          "efficiencyPct": 82,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 4,
+          "mpxs": 366.8,
+          "speedup": 3.15,
+          "efficiencyPct": 79,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 5,
+          "mpxs": 439.1,
+          "speedup": 3.77,
+          "efficiencyPct": 75,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 6,
+          "mpxs": 488.2,
+          "speedup": 4.19,
+          "efficiencyPct": 70,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 7,
+          "mpxs": 509,
+          "speedup": 4.37,
+          "efficiencyPct": 62,
+          "exact": true
+        },
+        {
+          "kernel": "int-wasm-simd",
+          "content": "photo",
+          "workers": 8,
+          "mpxs": 530.5,
+          "speedup": 4.55,
+          "efficiencyPct": 57,
+          "exact": true
+        }
+      ]
+    }
+  ]
+}

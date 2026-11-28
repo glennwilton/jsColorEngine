@@ -257,6 +257,11 @@ each moved to their own repository:
 [jsColorEngine-samples](https://github.com/glennwilton/jsColorEngine-samples) and
 [jsICCImage](https://github.com/glennwilton/jsICCImage).
 
+**v1.7.3 (2026-11-28)** — TypeScript type definitions for the documented API,
+and cancelling a batch. `docs/pool.md` had described cancelling, but nothing
+public could do it; a transform now cancels its own work without touching
+another transform on the shared pool. No conversion result changes.
+
 **v1.7.2 (2026-11-27)** — a second audit pass, this one for
 crashes and silent wrong answers rather than accuracy. `lut16` tables are routed
 by table type, so one inside a v4 profile keeps its curves. A profile's name no

@@ -6,7 +6,7 @@
 [Synthetic profiles](./deepdive/SyntheticProfiles.md) ·
 [LittleCMS comparison](./LcmsComparison.md)
 
-Jest is the engine gate: `npx jest` (currently 1,123 tests in 48 files;
+Jest is the engine gate: `npx jest` (currently 1,139 tests in 49 files;
 the LutBuilder tests moved out with LutBuilder).
 It is **not** a line-coverage map. The holes that have actually bitten
 this engine were combinatorial — a missing `default` above 4 channels,

@@ -27,7 +27,10 @@ image path). The repo is deliberately
 document-heavy: the docs record the journey — measurements, design
 reasoning, and wrong turns — not just the API.
 
-**Current state (2026-11-27):** **1.7.2**, an audit pass aimed at crashes and
+**Current state (2026-11-28):** **1.7.3** adds TypeScript type definitions
+(`src/main.d.ts`) and cancelling a batch: `transform.cancel(id)` and
+`transform.cancelAll()` for one transform's work, `Transform.cancelAllPools()`
+for everything. **1.7.2** was an audit pass aimed at crashes and
 silent wrong answers: `lut16` tables routed by table type, damaged
 profiles refused at load, embedded profiles read from JPEG, TIFF and
 PNG (`src/embeddedProfile.js`), a matrix fallback for RGB profiles with

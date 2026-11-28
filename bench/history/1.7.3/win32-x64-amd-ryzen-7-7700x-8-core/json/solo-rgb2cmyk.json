@@ -1,0 +1,49 @@
+{
+  "tool": "harness/solo_photo/solo.js",
+  "generated": "2026-11-28T01:36:37.872Z",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "meta": {
+    "jsce": "1.7.3"
+  },
+  "tables": [
+    {
+      "id": "solo.rgb2cmyk",
+      "title": "Solo control bench — one image, one engine, one process (rgb2cmyk)",
+      "units": "MPx/s",
+      "meta": {
+        "image": "jacek-dylag-559115_STRAWBERRIES-unsplash",
+        "workflow": "rgb2cmyk",
+        "pixels": 1000000,
+        "warmupMs": 3000,
+        "samples": 7
+      },
+      "columns": [
+        "engine",
+        "medianMpxs",
+        "spreadPct",
+        "processes"
+      ],
+      "rows": [
+        {
+          "engine": "int",
+          "medianMpxs": 47.3,
+          "spreadPct": 1.8,
+          "processes": 5
+        },
+        {
+          "engine": "scalar",
+          "medianMpxs": 68,
+          "spreadPct": 0.9,
+          "processes": 5
+        },
+        {
+          "engine": "simd",
+          "medianMpxs": 109.2,
+          "spreadPct": 2,
+          "processes": 5
+        }
+      ]
+    }
+  ]
+}

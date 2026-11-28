@@ -16,7 +16,7 @@
 >     node harness/reproduce.js
 >     node scripts/build_bench_results.js
 >
-> Run `2026-11-27T05-31-29` · measured 2026-11-27 · jsCE 1.7.2 · package now **1.7.2**
+> Run `2026-11-28T01-07-39` · measured 2026-11-28 · jsCE 1.7.3 · package now **1.7.3**
 
 Other pages should **link to a table here** rather than restating its
 numbers: prose keeps the finding, this page owns the figures. The
@@ -27,13 +27,13 @@ re-measurement is a finite job rather than a search.
 
 | | |
 |---|---|
-| Date | 2026-11-27 |
+| Date | 2026-11-28 |
 | CPU | AMD Ryzen 7 7700X 8-Core Processor              (16 logical) |
 | RAM | 31.1 GB |
 | JS host | Node v24.16.0, win32 x64 |
 | lcms native host | WSL2 (Ubuntu), gcc (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0 |
 | lcms-wasm version | 1.0.5 |
-| jsColorEngine version | 1.7.2 |
+| jsColorEngine version | 1.7.3 |
 | Photo corpus | 5 images, 3,939,000 px, mean adjacency 17.3% RGB / 17.89% CMYK |
 | Content size | 1,048,576 px |
 | Size sweep | 16384,65536,1048576,10485760 |
@@ -110,487 +110,487 @@ runs in its own process with its own warmup.
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 1024K px
 
-`js.content.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.6 | 97.3 | 65.2 | 65.3 | 1.49 |
-| gradient | 75 | 256 | 0.01 | 62.2 | 328.8 | 66.2 | 66.7 | 4.97 |
-| blocks16 | 93.8 | 4095 | 0.11 | 60.9 | 417.3 | 67.3 | 68.2 | 6.2 |
-| solid | 100 | 1 | 0 | 64.1 | 488.7 | 68.6 | 68.5 | 7.13 |
-| photo | 13.2 | 41077 | 1.14 | 53.1 | 114.1 | 67.1 | 65.6 | 1.7 |
+| noise | 0 | 1016892 | 28.3 | 48.5 | 96.1 | 64.2 | 64.5 | 1.5 |
+| gradient | 75 | 256 | 0.01 | 61.8 | 327 | 66.3 | 65.9 | 4.93 |
+| blocks16 | 93.8 | 4095 | 0.11 | 60.4 | 427.5 | 66.8 | 68.4 | 6.39 |
+| solid | 100 | 1 | 0 | 63.1 | 480.7 | 67.6 | 67.7 | 7.12 |
+| photo | 13.2 | 41077 | 1.14 | 53.9 | 113.3 | 66.5 | 66.5 | 1.7 |
 
 <a id="table-js-content-rgb-lab-1024k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 1024K px
 
-`js.content.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.4 | 96.7 | 32.2 | 37.8 | 3 |
-| gradient | 75 | 256 | 0.01 | 62.3 | 329.4 | 65.6 | 49.2 | 5.02 |
-| blocks16 | 93.8 | 4095 | 0.11 | 60.6 | 419.4 | 76.2 | 49.2 | 5.51 |
-| solid | 100 | 1 | 0 | 62.1 | 494.2 | 92.7 | 45.5 | 5.33 |
-| photo | 13.2 | 41077 | 1.14 | 54 | 113.9 | 36.3 | 41.8 | 3.14 |
+| noise | 0 | 1016892 | 28.3 | 48.4 | 96.2 | 31.2 | 37.5 | 3.08 |
+| gradient | 75 | 256 | 0.01 | 61.8 | 327.1 | 64.9 | 48 | 5.04 |
+| blocks16 | 93.8 | 4095 | 0.11 | 60.3 | 428.4 | 76 | 48.4 | 5.64 |
+| solid | 100 | 1 | 0 | 61.3 | 481.6 | 92.5 | 51 | 5.2 |
+| photo | 13.2 | 41077 | 1.14 | 53.2 | 112.6 | 35.3 | 41.4 | 3.19 |
 
 <a id="table-js-content-rgb-cmyk-1024k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 1024K px
 
-`js.content.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 43.7 | 96.3 | 31.3 | 35.7 | 3.08 |
-| gradient | 75 | 256 | 0.01 | 54 | 320.9 | 65.2 | 48.9 | 4.93 |
-| blocks16 | 93.8 | 4095 | 0.11 | 53.1 | 428 | 77.3 | 47.2 | 5.54 |
-| solid | 100 | 1 | 0 | 55.1 | 475.9 | 85.7 | 49.1 | 5.55 |
-| photo | 13.2 | 41077 | 1.14 | 48.2 | 115.1 | 35.7 | 40 | 3.22 |
+| noise | 0 | 1016892 | 28.3 | 43.3 | 97.9 | 30.9 | 36.1 | 3.16 |
+| gradient | 75 | 256 | 0.01 | 53.5 | 320.3 | 64.3 | 48.4 | 4.98 |
+| blocks16 | 93.8 | 4095 | 0.11 | 52.5 | 419.5 | 76.1 | 45.9 | 5.51 |
+| solid | 100 | 1 | 0 | 54.7 | 469.8 | 83.5 | 46.1 | 5.62 |
+| photo | 13.2 | 41077 | 1.14 | 47.6 | 113.5 | 34.7 | 39.4 | 3.27 |
 
 <a id="table-js-content-cmyk-rgb-1024k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 1024K px
 
-`js.content.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 30.9 | 67.5 | 21.4 | 22 | 3.15 |
-| gradient | 75 | 256 | 0 | 38.4 | 230.6 | 49.8 | 25.4 | 4.63 |
-| blocks16 | 93.8 | 4096 | 0.05 | 38.3 | 360.5 | 70.3 | 25.3 | 5.13 |
-| solid | 100 | 1 | 0 | 39 | 457.1 | 93 | 26.6 | 4.91 |
-| photo | 13.3 | 35074 | 0.42 | 44.3 | 82.7 | 25.6 | 24.4 | 3.23 |
+| noise | 0 | 1048576 | 12.55 | 30.3 | 67.5 | 21.5 | 21.7 | 3.14 |
+| gradient | 75 | 256 | 0 | 38.1 | 229.9 | 49.2 | 25 | 4.67 |
+| blocks16 | 93.8 | 4096 | 0.05 | 37.9 | 356.5 | 69.5 | 25.1 | 5.13 |
+| solid | 100 | 1 | 0 | 39 | 429.7 | 92.1 | 26.5 | 4.67 |
+| photo | 13.3 | 35074 | 0.42 | 44.2 | 81.6 | 25.4 | 24.1 | 3.21 |
 
 <a id="table-js-content-cmyk-cmyk-1024k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 1024K px
 
-`js.content.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 26.5 | 67.6 | 19 | 20.7 | 3.56 |
-| gradient | 75 | 256 | 0 | 31.8 | 226.8 | 47.4 | 24.5 | 4.78 |
-| blocks16 | 93.8 | 4096 | 0.05 | 32.4 | 350.7 | 68.6 | 24.2 | 5.11 |
-| solid | 100 | 1 | 0 | 32.5 | 438.7 | 85.1 | 25.5 | 5.16 |
-| photo | 13.3 | 35074 | 0.42 | 37.1 | 82.2 | 23.4 | 23.8 | 3.52 |
+| noise | 0 | 1048576 | 12.55 | 26.6 | 66.7 | 18.1 | 20.1 | 3.69 |
+| gradient | 75 | 256 | 0 | 31.8 | 223.3 | 47.2 | 24.4 | 4.73 |
+| blocks16 | 93.8 | 4096 | 0.05 | 32.2 | 340 | 68 | 24 | 5 |
+| solid | 100 | 1 | 0 | 32 | 411.2 | 85.5 | 25.1 | 4.81 |
+| photo | 13.3 | 35074 | 0.42 | 36.2 | 80 | 22.9 | 23.7 | 3.5 |
 
 <a id="table-js-content-rgb-rgb-softproof-1024k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 1024K px
 
-`js.content.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.content.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.8 | 97.3 | 32.8 | 37.1 | 2.97 |
-| gradient | 75 | 256 | 0.01 | 61.1 | 332.9 | 60 | 47.6 | 5.54 |
-| blocks16 | 93.8 | 4095 | 0.11 | 61 | 425.3 | 76.4 | 49.3 | 5.57 |
-| solid | 100 | 1 | 0 | 63.6 | 496.6 | 92.8 | 49 | 5.35 |
-| photo | 13.2 | 41077 | 1.14 | 54.1 | 114.5 | 35.2 | 39.6 | 3.25 |
+| noise | 0 | 1016892 | 28.3 | 47.3 | 96.5 | 32.1 | 36.1 | 3 |
+| gradient | 75 | 256 | 0.01 | 61.2 | 329.7 | 59.1 | 47.8 | 5.58 |
+| blocks16 | 93.8 | 4095 | 0.11 | 60.3 | 433.8 | 75.4 | 47.3 | 5.75 |
+| solid | 100 | 1 | 0 | 61.5 | 484.7 | 89.2 | 48.5 | 5.44 |
+| photo | 13.2 | 41077 | 1.14 | 53.5 | 112.3 | 34.1 | 38.9 | 3.3 |
 
 <a id="table-js-perimage-rgb-rgb-matrix-1024k"></a>
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 53.3 | 116.5 | 67 | 67.5 | 1.74 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.9 | 107.6 | 67.5 | 67 | 1.59 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.7 | 140 | 67.3 | 67.7 | 2.08 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.3 | 97.3 | 67.4 | 67.5 | 1.44 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.8 | 106.4 | 67.5 | 67 | 1.58 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 51 | 115.8 | 66.2 | 66.1 | 1.75 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.2 | 106.5 | 66.3 | 66.7 | 1.61 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 54.9 | 139.6 | 67.3 | 66.8 | 2.08 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.5 | 107 | 65 | 65.5 | 1.65 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 50 | 102.3 | 66.3 | 66.2 | 1.54 |
 
 <a id="table-js-perimage-rgb-lab-1024k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 54.5 | 117.6 | 36.8 | 42.2 | 3.2 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.8 | 108.9 | 35.7 | 41.1 | 3.05 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.6 | 140.2 | 41.4 | 43.5 | 3.38 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.7 | 110 | 35.7 | 41 | 3.08 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.5 | 106.5 | 32.9 | 40.5 | 3.24 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 54 | 105.2 | 34.1 | 41.7 | 3.08 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.3 | 107.9 | 33.5 | 39.9 | 3.22 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 55.3 | 139 | 40.4 | 41.7 | 3.45 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 52.4 | 107 | 34.5 | 40 | 3.1 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.4 | 104.6 | 32.7 | 39.7 | 3.2 |
 
 <a id="table-js-perimage-rgb-cmyk-1024k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 48.7 | 118.1 | 35.2 | 39.7 | 3.36 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 47.3 | 110.6 | 32.9 | 37.2 | 3.36 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 49.6 | 141.2 | 41.4 | 41.3 | 3.41 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 47.3 | 111.5 | 33.8 | 39 | 3.3 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 46.8 | 108.3 | 32.5 | 37.7 | 3.33 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 48.2 | 117 | 35.8 | 39 | 3.27 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 47 | 109.5 | 33.9 | 38.6 | 3.23 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 49.2 | 141.1 | 40.1 | 41.1 | 3.52 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 46.9 | 110.7 | 33.6 | 38.4 | 3.3 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 46.3 | 106.6 | 32.5 | 38.3 | 3.28 |
 
 <a id="table-js-perimage-cmyk-rgb-1024k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 36.3 | 83.6 | 25.4 | 24.5 | 3.29 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 37.3 | 83.6 | 25.6 | 24.9 | 3.26 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 37.5 | 108.7 | 32 | 26.2 | 3.39 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 36.3 | 85.6 | 25.9 | 24.6 | 3.3 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 34.5 | 80.5 | 24.5 | 24.4 | 3.28 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 35.9 | 79.2 | 25.1 | 24.5 | 3.16 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 35.2 | 81.5 | 24 | 24 | 3.39 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 36.8 | 106.8 | 31.6 | 24.6 | 3.39 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 37.4 | 84.5 | 25.4 | 24.4 | 3.33 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 34.1 | 80.1 | 24.4 | 24.1 | 3.28 |
 
 <a id="table-js-perimage-cmyk-cmyk-1024k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 31.4 | 83 | 23.5 | 24.1 | 3.54 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 31.6 | 83 | 23.4 | 23.6 | 3.55 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 30.8 | 107.8 | 29.6 | 24.2 | 3.64 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 31.9 | 84.6 | 23.5 | 24.1 | 3.6 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 30.3 | 79.1 | 22.5 | 23.8 | 3.52 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6332 | 0.08 | 30.9 | 82.2 | 23.2 | 24 | 3.55 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 17.6 | 103888 | 1.24 | 31.6 | 82 | 23.1 | 23.3 | 3.55 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42.2 | 67211 | 0.8 | 31.7 | 106.4 | 29.3 | 23.9 | 3.63 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 15.6 | 86185 | 1.03 | 31.4 | 84.1 | 23.3 | 23.8 | 3.61 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 7.1 | 201835 | 2.42 | 30.9 | 79.2 | 22.1 | 19.9 | 3.59 |
 
 <a id="table-js-perimage-rgb-rgb-softproof-1024k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 1024K px, per image
 
-`js.perimage.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.perimage.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 55 | 116.9 | 34.7 | 39.4 | 3.37 |
-| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 52.9 | 108.7 | 35.3 | 38.1 | 3.08 |
-| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 54.4 | 140.9 | 42.2 | 42.4 | 3.34 |
-| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 53 | 110.7 | 34.2 | 37 | 3.24 |
-| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 51.4 | 106.8 | 32.9 | 36.9 | 3.25 |
+| image:annie-spratt-askpr0s66Rg-unsplash-PHOTO_ | 10.3 | 6429 | 0.18 | 53.6 | 115.6 | 33.9 | 38.3 | 3.41 |
+| image:jacek-dylag-559115_STRAWBERRIES-unsplash | 16.1 | 152752 | 4.25 | 50.7 | 103.5 | 33.8 | 35.9 | 3.06 |
+| image:library-of-congress-tqpsi_BPfC_ILLUSTRAT | 42 | 71661 | 1.99 | 54.7 | 131 | 40.1 | 40.6 | 3.27 |
+| image:melanie-kreutz-hMMc7mvb34A-unsplash_SUNF | 14.6 | 116552 | 3.24 | 49.6 | 105.1 | 33.1 | 35.8 | 3.18 |
+| image:rod-long-4dcsLxQxSHY-unsplash_BEACH | 6.9 | 229716 | 6.39 | 50.4 | 103.8 | 32.6 | 36.9 | 3.18 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-16k"></a>
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.rgb-rgb-matrix.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-matrix.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 60.2 | 140.8 | 66.1 | 65 | 2.13 |
+| noise | 0 | 16379 | 0.46 | 59.8 | 150.2 | 63.9 | 61.7 | 2.35 |
 
 <a id="table-js-sweep-rgb-lab-16k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.rgb-lab.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-lab.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 59.5 | 153.6 | 38.9 | 50 | 3.95 |
+| noise | 0 | 16379 | 0.46 | 59.3 | 145.7 | 38 | 49.1 | 3.83 |
 
 <a id="table-js-sweep-rgb-cmyk-16k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.rgb-cmyk.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-cmyk.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 51 | 149 | 36.8 | 42.9 | 4.05 |
+| noise | 0 | 16379 | 0.46 | 49.7 | 139.8 | 33.2 | 42 | 4.21 |
 
 <a id="table-js-sweep-cmyk-rgb-16k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.cmyk-rgb.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-rgb.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16384 | 0.2 | 31.5 | 81.9 | 21.8 | 22.3 | 3.76 |
+| noise | 0 | 16384 | 0.2 | 31 | 79 | 20.2 | 21.8 | 3.9 |
 
 <a id="table-js-sweep-cmyk-cmyk-16k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.cmyk-cmyk.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-cmyk.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16384 | 0.2 | 31 | 77.7 | 19.1 | 20.5 | 4.06 |
+| noise | 0 | 16384 | 0.2 | 26.8 | 74.2 | 18.6 | 20.2 | 3.98 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-16k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 16K px, size sweep
 
-`js.sweep.rgb-rgb-softproof.16k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-softproof.16k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 16384 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 16379 | 0.46 | 50.2 | 156.6 | 34.9 | 49 | 4.49 |
+| noise | 0 | 16379 | 0.46 | 59.9 | 153.4 | 35 | 47.2 | 4.38 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-64k"></a>
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.rgb-rgb-matrix.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-matrix.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 56.6 | 95.1 | 65.2 | 64.1 | 1.46 |
+| noise | 0 | 65394 | 1.82 | 55.1 | 93.8 | 64.3 | 64.2 | 1.46 |
 
 <a id="table-js-sweep-rgb-lab-64k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.rgb-lab.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-lab.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 57.5 | 94.6 | 31.8 | 38.4 | 2.98 |
+| noise | 0 | 65394 | 1.82 | 56.7 | 93.5 | 32.1 | 37.3 | 2.91 |
 
 <a id="table-js-sweep-rgb-cmyk-64k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.rgb-cmyk.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-cmyk.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 51 | 95.2 | 32 | 36.1 | 2.97 |
+| noise | 0 | 65394 | 1.82 | 50 | 91.1 | 31.3 | 35.9 | 2.91 |
 
 <a id="table-js-sweep-cmyk-rgb-64k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.cmyk-rgb.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-rgb.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65536 | 0.78 | 31.5 | 67.5 | 22 | 22.1 | 3.07 |
+| noise | 0 | 65536 | 0.78 | 29.4 | 64.2 | 21.4 | 21.7 | 3 |
 
 <a id="table-js-sweep-cmyk-cmyk-64k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.cmyk-cmyk.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-cmyk.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65536 | 0.78 | 26.6 | 65.1 | 19.2 | 20.4 | 3.38 |
+| noise | 0 | 65536 | 0.78 | 26.5 | 64.5 | 18.7 | 20.1 | 3.45 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-64k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 64K px, size sweep
 
-`js.sweep.rgb-rgb-softproof.64k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-softproof.64k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 65536 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 65394 | 1.82 | 46 | 93.8 | 33.2 | 37.3 | 2.82 |
+| noise | 0 | 65394 | 1.82 | 57.1 | 92.3 | 32.4 | 35.9 | 2.85 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-1024k"></a>
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-matrix.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.4 | 97.7 | 65.1 | 65.1 | 1.5 |
+| noise | 0 | 1016892 | 28.3 | 49.3 | 92.6 | 63.5 | 64.5 | 1.46 |
 
 <a id="table-js-sweep-rgb-lab-1024k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-lab.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.9 | 97.5 | 31.6 | 38.3 | 3.09 |
+| noise | 0 | 1016892 | 28.3 | 47.5 | 94.9 | 30.7 | 36.4 | 3.09 |
 
 <a id="table-js-sweep-rgb-cmyk-1024k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 43.4 | 98.5 | 31.7 | 37.3 | 3.11 |
+| noise | 0 | 1016892 | 28.3 | 43.5 | 95.5 | 30.9 | 35.9 | 3.09 |
 
 <a id="table-js-sweep-cmyk-rgb-1024k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-rgb.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 32.1 | 68.5 | 21.7 | 22 | 3.15 |
+| noise | 0 | 1048576 | 12.55 | 31.5 | 66.4 | 21.5 | 21.5 | 3.09 |
 
 <a id="table-js-sweep-cmyk-cmyk-1024k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-cmyk.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1048576 | 12.55 | 27 | 67.7 | 19.2 | 19.9 | 3.53 |
+| noise | 0 | 1048576 | 12.55 | 24.9 | 65 | 18.3 | 20 | 3.54 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-1024k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 1024K px, size sweep
 
-`js.sweep.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-softproof.1024k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 1016892 | 28.3 | 48.6 | 97.5 | 33.1 | 35.6 | 2.95 |
+| noise | 0 | 1016892 | 28.3 | 48 | 96.1 | 33.3 | 36.5 | 2.89 |
 
 <a id="table-js-sweep-rgb-rgb-matrix-10240k"></a>
 
 ### RGB -> RGB  (matrix) — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.rgb-rgb-matrix.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-matrix.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 49.2 | 97.4 | 65.1 | 65.2 | 1.5 |
+| noise | 0 | 7810586 | 217.34 | 48.3 | 96.5 | 64.4 | 63.2 | 1.5 |
 
 <a id="table-js-sweep-rgb-lab-10240k"></a>
 
 ### RGB -> Lab — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.rgb-lab.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-lab.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 49.1 | 97.5 | 32.2 | 38.5 | 3.03 |
+| noise | 0 | 7810586 | 217.34 | 48.6 | 96.6 | 30.5 | 36.3 | 3.17 |
 
 <a id="table-js-sweep-rgb-cmyk-10240k"></a>
 
 ### RGB -> CMYK — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.rgb-cmyk.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-cmyk.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 44.6 | 98 | 31.9 | 36.4 | 3.07 |
+| noise | 0 | 7810586 | 217.34 | 43.6 | 97 | 31 | 35.4 | 3.12 |
 
 <a id="table-js-sweep-cmyk-rgb-10240k"></a>
 
 ### CMYK -> RGB — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.cmyk-rgb.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-rgb.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 10485760 | 125.55 | 30.9 | 68.2 | 21.8 | 22.1 | 3.13 |
+| noise | 0 | 10485760 | 125.55 | 30.3 | 66.2 | 21.2 | 22 | 3.12 |
 
 <a id="table-js-sweep-cmyk-cmyk-10240k"></a>
 
 ### CMYK -> CMYK — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.cmyk-cmyk.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.cmyk-cmyk.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 17x17x17x17 · **clutCells** 83521
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 10485760 | 125.55 | 26.8 | 67.5 | 19.1 | 19.7 | 3.54 |
+| noise | 0 | 10485760 | 125.55 | 26.3 | 65.8 | 18.9 | 20.4 | 3.47 |
 
 <a id="table-js-sweep-rgb-rgb-softproof-10240k"></a>
 
 ### RGB -> RGB  (softproof) — jsCE vs lcms-wasm, 10240K px, size sweep
 
-`js.sweep.rgb-rgb-softproof.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`js.sweep.rgb-rgb-softproof.10240k` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 10485760 · **medianOf** 5 · **clut** 33x33x33 · **clutCells** 35937
 
 | Content | adj % | Distinct | cover | jsCE int | jsCE SIMD | lcms-wasm | lcms-wasm NOCACHE | jsCE SIMD / lcms-wasm |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7810586 | 217.34 | 48.7 | 97.8 | 32.8 | 36.6 | 2.98 |
+| noise | 0 | 7810586 | 217.34 | 47.7 | 95.9 | 32.2 | 36.6 | 2.98 |
 
 <a id="table-matrixshaper-accuracy-int16"></a>
 
 ### Matrix-shaper kernel vs CLUT, accuracy against the exact pipeline, int16
 
-`matrixShaper.accuracy.int16` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.accuracy.int16` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 16 · **coloursPerPair** 113157 · **reference** buildLut:false, wasmMatrixShaper:false
 
@@ -607,7 +607,7 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, accuracy against the exact pipeline, int8
 
-`matrixShaper.accuracy.int8` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.accuracy.int8` · LSB · measured by `harness/matrix_shaper_kernel/accuracy.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 8 · **coloursPerPair** 262144 · **reference** buildLut:false, wasmMatrixShaper:false
 
@@ -624,440 +624,440 @@ runs in its own process with its own warmup.
 
 ### Matrix-shaper kernel vs CLUT, int8, *prophoto -> *sRGB
 
-`matrixShaper.throughput.int8` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.throughput.int8` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 8 · **pixels** 4194304 · **reps** 5 · **pair** *prophoto → *sRGB · **best** best of 5
 
 | Path | Solid | Noise | Photo |
 |---|---:|---:|---:|
-| kernel, SIMD | 346.7 | 330.5 | 343.4 |
-| kernel, scalar | 218.2 | 71.7 | 188.5 |
-| kernel, plain JS | 98 | 59.6 | 92.7 |
-| CLUT (default lutMode) | 539.5 | 100.2 | 118 |
-| JS stage pipeline | 10.2 | 8.4 | 9 |
+| kernel, SIMD | 338.3 | 325.8 | 335.5 |
+| kernel, scalar | 224.3 | 69.3 | 185.1 |
+| kernel, plain JS | 96.3 | 58.3 | 91.3 |
+| CLUT (default lutMode) | 532.3 | 98.8 | 115.9 |
+| JS stage pipeline | 10.2 | 8.3 | 8.7 |
 
 <a id="table-matrixshaper-ratios-int8"></a>
 
 ### Matrix-shaper kernel ratios, int8
 
-`matrixShaper.ratios.int8` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.ratios.int8` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 8 · **pair** *prophoto → *sRGB
 
 | Content | SIMD / CLUT | SIMD / scalar | SIMD / plain JS | JS / pipeline |
 |---|---:|---:|---:|---:|
-| solid | 0.64 | 1.59 | 3.54 | 9.6 |
-| noise | 3.3 | 4.61 | 5.54 | 7.1 |
-| photo | 2.91 | 1.82 | 3.7 | 10.3 |
+| solid | 0.64 | 1.51 | 3.51 | 9.5 |
+| noise | 3.3 | 4.7 | 5.59 | 7 |
+| photo | 2.89 | 1.81 | 3.68 | 10.5 |
 
 <a id="table-matrixshaper-throughput-int16"></a>
 
 ### Matrix-shaper kernel vs CLUT, int16, *prophoto -> *sRGB
 
-`matrixShaper.throughput.int16` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.throughput.int16` · MPx/s · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 16 · **pixels** 4194304 · **reps** 5 · **pair** *prophoto → *sRGB · **best** best of 5
 
 | Path | Solid | Noise | Photo |
 |---|---:|---:|---:|
-| kernel, SIMD | 244.9 | 208.2 | 224.5 |
-| kernel, scalar | 106.7 | 65 | 102.1 |
-| kernel, plain JS | 80.5 | 39.4 | 60.2 |
-| CLUT (default lutMode) | 197.7 | 104.3 | 123 |
-| JS stage pipeline | 10 | 8.3 | 8.9 |
+| kernel, SIMD | 235.9 | 195 | 211.2 |
+| kernel, scalar | 99.6 | 62.4 | 99.9 |
+| kernel, plain JS | 77.8 | 38.5 | 58.5 |
+| CLUT (default lutMode) | 187.7 | 102.6 | 119.8 |
+| JS stage pipeline | 10 | 8.2 | 8.7 |
 
 <a id="table-matrixshaper-ratios-int16"></a>
 
 ### Matrix-shaper kernel ratios, int16
 
-`matrixShaper.ratios.int16` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.2** · 2026-11-27
+`matrixShaper.ratios.int16` · x · measured by `harness/matrix_shaper_kernel/throughput.js` · jsCE **1.7.3** · 2026-11-28
 
 **bits** 16 · **pair** *prophoto → *sRGB
 
 | Content | SIMD / CLUT | SIMD / scalar | SIMD / plain JS | JS / pipeline |
 |---|---:|---:|---:|---:|
-| solid | 1.24 | 2.29 | 3.04 | 8 |
-| noise | 2 | 3.2 | 5.29 | 4.7 |
-| photo | 1.82 | 2.2 | 3.73 | 6.8 |
+| solid | 1.26 | 2.37 | 3.03 | 7.8 |
+| noise | 1.9 | 3.13 | 5.07 | 4.7 |
+| photo | 1.76 | 2.11 | 3.61 | 6.7 |
 
 <a id="table-pixelcache-accuracypath-rgb-rgb-matrix"></a>
 
 ### Pixel cache (BETA), accuracy path — RGB -> RGB  (matrix)
 
-`pixelCache.accuracyPath.rgb-rgb-matrix` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.rgb-rgb-matrix` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 259.87 | 268.07 | 264.39 | 0 | 2 |
-| gradient | 75 | 270.56 | 273.2 | 268.65 | 0 | -1 |
-| blocks16 | 93.8 | 280.03 | 278.32 | 279.73 | 0 | 0 |
-| solid | 100 | 285.57 | 279.62 | 284.48 | 0 | 0 |
-| photo | 8.6 | 278.45 | 279.41 | 271.65 | 0 | -2 |
+| noise | 0 | 256.91 | 250.04 | 255.46 | 0 | -1 |
+| gradient | 75 | 250.99 | 268.03 | 253.75 | 0 | 1 |
+| blocks16 | 93.8 | 264.96 | 270.71 | 267.46 | 0 | 1 |
+| solid | 100 | 270.46 | 272.9 | 271.75 | 0 | 0 |
+| photo | 8.6 | 254.88 | 264.87 | 262.89 | 0 | 3 |
 
 <a id="table-pixelcache-accuracypath-rgb-lab"></a>
 
 ### Pixel cache (BETA), accuracy path — RGB -> Lab
 
-`pixelCache.accuracyPath.rgb-lab` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.rgb-lab` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 7.94 | 6.63 | 6.34 | 0 | -20 |
-| gradient | 75 | 8.63 | 16.76 | 16.08 | 75 | 86 |
-| blocks16 | 93.8 | 8.66 | 25.85 | 24.89 | 94.4 | 187 |
-| solid | 100 | 8.68 | 33.67 | 30.51 | 100 | 251 |
-| photo | 8.6 | 8.24 | 7.38 | 8.6 | 32.8 | 4 |
+| noise | 0 | 7.56 | 6.1 | 5.84 | 0 | -23 |
+| gradient | 75 | 8.26 | 16.1 | 15.26 | 75 | 85 |
+| blocks16 | 93.8 | 8.49 | 25.65 | 23.96 | 94.4 | 182 |
+| solid | 100 | 8.46 | 32.7 | 29.62 | 100 | 250 |
+| photo | 8.6 | 8.13 | 7.15 | 8.5 | 32.8 | 5 |
 
 <a id="table-pixelcache-accuracypath-rgb-cmyk"></a>
 
 ### Pixel cache (BETA), accuracy path — RGB -> CMYK
 
-`pixelCache.accuracyPath.rgb-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.rgb-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 4.8 | 4.08 | 4.08 | 0 | -15 |
-| gradient | 75 | 5.41 | 12.5 | 12.05 | 75 | 123 |
-| blocks16 | 93.8 | 5.49 | 21.96 | 21.21 | 94.4 | 287 |
-| solid | 100 | 5.48 | 30.83 | 28.43 | 100 | 419 |
-| photo | 8.6 | 5.11 | 4.66 | 5.75 | 32.8 | 13 |
+| noise | 0 | 4.65 | 4.1 | 3.94 | 0 | -15 |
+| gradient | 75 | 5.19 | 11.94 | 11.4 | 75 | 120 |
+| blocks16 | 93.8 | 5.29 | 21.17 | 20.59 | 94.4 | 289 |
+| solid | 100 | 5.35 | 29.38 | 27.79 | 100 | 419 |
+| photo | 8.6 | 4.85 | 4.46 | 5.45 | 32.8 | 12 |
 
 <a id="table-pixelcache-accuracypath-cmyk-rgb"></a>
 
 ### Pixel cache (BETA), accuracy path — CMYK -> RGB
 
-`pixelCache.accuracyPath.cmyk-rgb` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.cmyk-rgb` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 5.98 | 4.98 | 4.73 | 0 | -21 |
-| gradient | 75 | 7.13 | 14.44 | 13.56 | 75 | 90 |
-| blocks16 | 93.8 | 7.18 | 23.41 | 22.21 | 94.4 | 209 |
-| solid | 100 | 7.27 | 31.27 | 28.53 | 100 | 293 |
-| photo | 8.6 | 6.58 | 5.66 | 6.54 | 31.4 | -1 |
+| noise | 0 | 5.76 | 4.87 | 4.7 | 0 | -18 |
+| gradient | 75 | 6.82 | 13.8 | 13.05 | 75 | 91 |
+| blocks16 | 93.8 | 6.93 | 22.8 | 21.77 | 94.4 | 214 |
+| solid | 100 | 7.14 | 30.54 | 27.41 | 100 | 284 |
+| photo | 8.6 | 6.35 | 5.65 | 6.5 | 31.4 | 2 |
 
 <a id="table-pixelcache-accuracypath-cmyk-cmyk"></a>
 
 ### Pixel cache (BETA), accuracy path — CMYK -> CMYK
 
-`pixelCache.accuracyPath.cmyk-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.cmyk-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 5.36 | 4.46 | 4.29 | 0 | -20 |
-| gradient | 75 | 6.72 | 13.44 | 12.61 | 75 | 87 |
-| blocks16 | 93.8 | 6.77 | 21.68 | 20.77 | 94.4 | 207 |
-| solid | 100 | 6.88 | 29.35 | 26.88 | 100 | 291 |
-| photo | 8.6 | 6.32 | 5.33 | 6.16 | 31.4 | -2 |
+| noise | 0 | 5.32 | 4.5 | 4.32 | 0 | -19 |
+| gradient | 75 | 6.47 | 13.09 | 12.27 | 75 | 90 |
+| blocks16 | 93.8 | 6.6 | 21.41 | 20.68 | 94.4 | 213 |
+| solid | 100 | 6.65 | 28.68 | 25.15 | 100 | 278 |
+| photo | 8.6 | 6.07 | 5.34 | 6.15 | 31.4 | 1 |
 
 <a id="table-pixelcache-accuracypath-rgb-rgb-softproof"></a>
 
 ### Pixel cache (BETA), accuracy path — RGB -> RGB  (softproof)
 
-`pixelCache.accuracyPath.rgb-rgb-softproof` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.accuracyPath.rgb-rgb-softproof` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **buildLut** false · **baseline** its own uncached run
 
 | Content | adj % | No Cache Mpxs | One Slot Mpxs | Slots32 Mpxs | Hit Pct32 | Gain32 Pct |
 |---|---:|---:|---:|---:|---:|---:|
-| noise | 0 | 2.94 | 2.61 | 2.52 | 0 | -14 |
-| gradient | 75 | 3.36 | 9.09 | 8.7 | 75 | 159 |
-| blocks16 | 93.8 | 3.28 | 18.96 | 18.69 | 94.4 | 471 |
-| solid | 100 | 3.46 | 33.09 | 29.66 | 100 | 757 |
-| photo | 8.6 | 3.16 | 2.97 | 3.76 | 32.8 | 19 |
+| noise | 0 | 2.81 | 2.51 | 2.33 | 0 | -17 |
+| gradient | 75 | 3.17 | 8.54 | 8.28 | 75 | 161 |
+| blocks16 | 93.8 | 3.28 | 18.02 | 17.09 | 94.4 | 421 |
+| solid | 100 | 3.25 | 30.12 | 30.08 | 100 | 826 |
+| photo | 8.6 | 3.14 | 2.93 | 3.76 | 32.8 | 20 |
 
 <a id="table-pixelcache-inkernel-rgb-rgb-matrix"></a>
 
 ### Pixel cache, in-kernel WASM — RGB -> RGB  (matrix)
 
-`pixelCache.inKernel.rgb-rgb-matrix` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.rgb-rgb-matrix` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 190.2 | 496.8 | 2.61 | 1 |
-| photo | 8.6 | 115.2 | 108.7 | 0.94 | 1 |
-| photo with 5% noise added | 0 | 101.1 | 92 | 0.91 | 1 |
-| noise | 0 | 91.3 | 89.4 | 0.98 | 1 |
+| solid | 100 | 190.1 | 489.5 | 2.58 | 1 |
+| photo | 8.6 | 113.9 | 108.7 | 0.95 | 1 |
+| photo with 5% noise added | 0 | 99.9 | 91.3 | 0.91 | 1 |
+| noise | 0 | 90.5 | 90.1 | 1 | 1 |
 
 <a id="table-pixelcache-inkernel-rgb-lab"></a>
 
 ### Pixel cache, in-kernel WASM — RGB -> Lab
 
-`pixelCache.inKernel.rgb-lab` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.rgb-lab` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 192.5 | 510.3 | 2.65 | 1 |
-| photo | 8.6 | 114.9 | 109.1 | 0.95 | 1 |
-| photo with 5% noise added | 0 | 101.7 | 91.7 | 0.9 | 1 |
-| noise | 0 | 91.5 | 90.7 | 0.99 | 1 |
+| solid | 100 | 191.6 | 498.2 | 2.6 | 1 |
+| photo | 8.6 | 114.2 | 108.1 | 0.95 | 1 |
+| photo with 5% noise added | 0 | 90.8 | 91.5 | 1.01 | 1 |
+| noise | 0 | 90.1 | 90 | 1 | 1 |
 
 <a id="table-pixelcache-inkernel-rgb-cmyk"></a>
 
 ### Pixel cache, in-kernel WASM — RGB -> CMYK
 
-`pixelCache.inKernel.rgb-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.rgb-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 177.8 | 445.1 | 2.5 | 1 |
-| photo | 8.6 | 120.6 | 116 | 0.96 | 1 |
-| photo with 5% noise added | 0 | 103 | 99.2 | 0.96 | 1 |
-| noise | 0 | 100.7 | 97.4 | 0.97 | 1 |
+| solid | 100 | 177.2 | 425.7 | 2.4 | 1 |
+| photo | 8.6 | 119.6 | 114 | 0.95 | 1 |
+| photo with 5% noise added | 0 | 102.1 | 99.4 | 0.97 | 1 |
+| noise | 0 | 100.3 | 96.5 | 0.96 | 1 |
 
 <a id="table-pixelcache-inkernel-cmyk-rgb"></a>
 
 ### Pixel cache, in-kernel WASM — CMYK -> RGB
 
-`pixelCache.inKernel.cmyk-rgb` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.cmyk-rgb` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 106.3 | 484.1 | 4.55 | 1 |
-| photo | 8.6 | 84.6 | 83.4 | 0.99 | 1 |
-| photo with 5% noise added | 0 | 73.5 | 72.3 | 0.98 | 1 |
-| noise | 0 | 71.2 | 69.7 | 0.98 | 1 |
+| solid | 100 | 101.8 | 489.1 | 4.8 | 1 |
+| photo | 8.6 | 83.7 | 82.9 | 0.99 | 1 |
+| photo with 5% noise added | 0 | 72.6 | 71.4 | 0.98 | 1 |
+| noise | 0 | 70.2 | 67.9 | 0.97 | 1 |
 
 <a id="table-pixelcache-inkernel-cmyk-cmyk"></a>
 
 ### Pixel cache, in-kernel WASM — CMYK -> CMYK
 
-`pixelCache.inKernel.cmyk-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.cmyk-cmyk` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 104 | 410.1 | 3.94 | 1 |
-| photo | 8.6 | 81.5 | 80.3 | 0.99 | 1 |
-| photo with 5% noise added | 0 | 71.4 | 70.1 | 0.98 | 1 |
-| noise | 0 | 67.5 | 67.3 | 1 | 1 |
+| solid | 100 | 99.4 | 393.3 | 3.95 | 1 |
+| photo | 8.6 | 80 | 77.6 | 0.97 | 1 |
+| photo with 5% noise added | 0 | 68.2 | 67.7 | 0.99 | 1 |
+| noise | 0 | 67.3 | 66.5 | 0.99 | 1 |
 
 <a id="table-pixelcache-inkernel-rgb-rgb-softproof"></a>
 
 ### Pixel cache, in-kernel WASM — RGB -> RGB  (softproof)
 
-`pixelCache.inKernel.rgb-rgb-softproof` · MPx/s · measured by `run.js` · jsCE **1.7.2** · 2026-11-27
+`pixelCache.inKernel.rgb-rgb-softproof` · MPx/s · measured by `run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 262144 · **lutMode** int-wasm-simd · **hints** 0 vs auto · **baseline** its own uncached image path
 
 | Content | adj % | Off (0) | Auto | Auto / off | cache |
 |---|---:|---:|---:|---:|---:|
-| solid | 100 | 193.3 | 514.6 | 2.66 | 1 |
-| photo | 8.6 | 115.5 | 109.1 | 0.94 | 1 |
-| photo with 5% noise added | 0 | 91.4 | 102.1 | 1.12 | 1 |
-| noise | 0 | 91.3 | 90.6 | 0.99 | 1 |
+| solid | 100 | 185.9 | 505.3 | 2.72 | 1 |
+| photo | 8.6 | 112.4 | 107.3 | 0.95 | 1 |
+| photo with 5% noise added | 0 | 88.6 | 89.8 | 1.01 | 1 |
+| noise | 0 | 87.2 | 89.2 | 1.02 | 1 |
 
 <a id="table-pool-matrixshaper-noise"></a>
 
 ### Matrix-shaper kernel vs CLUT in the worker pool — noise
 
-`pool.matrixShaper.noise` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.7.2** · 2026-11-27
+`pool.matrixShaper.noise` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.7.3** · 2026-11-28
 
-**content** noise · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 101.6 · **sequentialKernelMpxs** 322.9 · **maxKernelVsClutLsb** 28
+**content** noise · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 99.5 · **sequentialKernelMpxs** 314.5 · **maxKernelVsClutLsb** 28
 
 | Workers | Clut Mpxs | Clut Speedup | Clut Eff Pct | Kernel Mpxs | Kernel Speedup | Kernel Eff Pct | Kernel Over Clut | Exact |
 |---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 91 | 0.9 | 90 | 260.3 | 0.81 | 81 | 2.86 | yes |
-| 2 | 179.9 | 1.77 | 89 | 503.2 | 1.56 | 78 | 2.8 | yes |
-| 3 | 265.7 | 2.62 | 87 | 646.1 | 2 | 67 | 2.43 | yes |
-| 4 | 344.6 | 3.39 | 85 | 886.5 | 2.75 | 69 | 2.57 | yes |
-| 5 | 402.5 | 3.96 | 79 | 1039 | 3.22 | 64 | 2.58 | yes |
-| 6 | 492.8 | 4.85 | 81 | 1164.1 | 3.61 | 60 | 2.36 | yes |
-| 7 | 507.4 | 5 | 71 | 1275.2 | 3.95 | 56 | 2.51 | yes |
-| 8 | 529.6 | 5.21 | 65 | 1104.7 | 3.42 | 43 | 2.09 | yes |
+| 1 | 88.3 | 0.89 | 89 | 252.7 | 0.8 | 80 | 2.86 | yes |
+| 2 | 167.2 | 1.68 | 84 | 446.6 | 1.42 | 71 | 2.67 | yes |
+| 3 | 249.2 | 2.51 | 84 | 680 | 2.16 | 72 | 2.73 | yes |
+| 4 | 333.3 | 3.35 | 84 | 834.1 | 2.65 | 66 | 2.5 | yes |
+| 5 | 393.4 | 3.96 | 79 | 994.1 | 3.16 | 63 | 2.53 | yes |
+| 6 | 463.6 | 4.66 | 78 | 1149.3 | 3.65 | 61 | 2.48 | yes |
+| 7 | 482.9 | 4.86 | 69 | 1076.6 | 3.42 | 49 | 2.23 | yes |
+| 8 | 515.5 | 5.18 | 65 | 985.9 | 3.13 | 39 | 1.91 | yes |
 
 <a id="table-pool-matrixshaper-photo"></a>
 
 ### Matrix-shaper kernel vs CLUT in the worker pool — photo
 
-`pool.matrixShaper.photo` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.7.2** · 2026-11-27
+`pool.matrixShaper.photo` · MPx/s · measured by `harness/matrix_shaper_kernel/multicore.js` · jsCE **1.7.3** · 2026-11-28
 
-**content** photo · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 113.3 · **sequentialKernelMpxs** 322.5 · **maxKernelVsClutLsb** 25
+**content** photo · **pair** *prophoto → *sRGB · **pixels** 4000000 · **runs** 5 · **sequentialClutMpxs** 117.4 · **sequentialKernelMpxs** 324 · **maxKernelVsClutLsb** 25
 
 | Workers | Clut Mpxs | Clut Speedup | Clut Eff Pct | Kernel Mpxs | Kernel Speedup | Kernel Eff Pct | Kernel Over Clut | Exact |
 |---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 106.5 | 0.94 | 94 | 266.5 | 0.83 | 83 | 2.5 | yes |
-| 2 | 208.9 | 1.84 | 92 | 521 | 1.62 | 81 | 2.49 | yes |
-| 3 | 302.3 | 2.67 | 89 | 716.1 | 2.22 | 74 | 2.37 | yes |
-| 4 | 383.4 | 3.39 | 85 | 902.9 | 2.8 | 70 | 2.36 | yes |
-| 5 | 459 | 4.05 | 81 | 1004.3 | 3.11 | 62 | 2.19 | yes |
-| 6 | 538.5 | 4.75 | 79 | 1187.4 | 3.68 | 61 | 2.21 | yes |
-| 7 | 588.2 | 5.19 | 74 | 1050.8 | 3.26 | 47 | 1.79 | yes |
-| 8 | 636.5 | 5.62 | 70 | 1269.6 | 3.94 | 49 | 1.99 | yes |
+| 1 | 104.3 | 0.89 | 89 | 260.3 | 0.8 | 80 | 2.5 | yes |
+| 2 | 206 | 1.76 | 88 | 498 | 1.54 | 77 | 2.42 | yes |
+| 3 | 289.5 | 2.47 | 82 | 654.4 | 2.02 | 67 | 2.26 | yes |
+| 4 | 371.7 | 3.17 | 79 | 745.6 | 2.3 | 58 | 2.01 | yes |
+| 5 | 454.6 | 3.87 | 77 | 951.2 | 2.94 | 59 | 2.09 | yes |
+| 6 | 478.1 | 4.07 | 68 | 820.3 | 2.53 | 42 | 1.72 | yes |
+| 7 | 519.8 | 4.43 | 63 | 1025.9 | 3.17 | 45 | 1.97 | yes |
+| 8 | 558.8 | 4.76 | 60 | 1022.3 | 3.15 | 39 | 1.83 | yes |
 
 <a id="table-pool-peak"></a>
 
 ### Worker pool — peak speedup vs sequential, by kernel and content
 
-`pool.peak` · x · measured by `harness/multicore_matrix/run.js` · jsCE **1.7.2** · 2026-11-27
+`pool.peak` · x · measured by `harness/multicore_matrix/run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 4194304 · **maxWorkers** 8
 
 | Kernel | Content | Sequential MPx/s | Peak Speedup | At Workers | Peak MPx/s | Efficiency | Exact |
 |---|---|---:|---:|---:|---:|---:|---|
-| int | solid | 58.1 | 6.38 | 8 | 371 | 80 | yes |
-| int | noise | 46.1 | 5.91 | 8 | 272.7 | 74 | yes |
-| int | photo | 50.4 | 6.13 | 8 | 308.5 | 77 | yes |
-| int-wasm-scalar | solid | 311.7 | 3.59 | 6 | 1120.1 | 60 | yes |
-| int-wasm-scalar | noise | 59.1 | 5.63 | 8 | 332.9 | 70 | yes |
-| int-wasm-scalar | photo | 71.6 | 6.02 | 8 | 431 | 75 | yes |
-| int-wasm-simd | solid | 517.7 | 2.45 | 6 | 1265.7 | 41 | yes |
-| int-wasm-simd | noise | 101.5 | 5.51 | 8 | 559 | 69 | yes |
-| int-wasm-simd | photo | 118.9 | 4.91 | 8 | 583.7 | 61 | yes |
+| int | solid | 57.3 | 5.51 | 8 | 315.7 | 69 | yes |
+| int | noise | 45 | 6.02 | 7 | 270.6 | 86 | yes |
+| int | photo | 48.9 | 6.39 | 8 | 312.7 | 80 | yes |
+| int-wasm-scalar | solid | 309.5 | 3.23 | 8 | 999.3 | 40 | yes |
+| int-wasm-scalar | noise | 59.5 | 5.22 | 8 | 310.1 | 65 | yes |
+| int-wasm-scalar | photo | 70.4 | 5.32 | 8 | 374.6 | 67 | yes |
+| int-wasm-simd | solid | 503.9 | 2.35 | 6 | 1184.4 | 39 | yes |
+| int-wasm-simd | noise | 99.6 | 4.97 | 8 | 495 | 62 | yes |
+| int-wasm-simd | photo | 116.5 | 4.55 | 8 | 530.5 | 57 | yes |
 
 <a id="table-pool-scaling"></a>
 
 ### Worker pool — every worker count
 
-`pool.scaling` · MPx/s · measured by `harness/multicore_matrix/run.js` · jsCE **1.7.2** · 2026-11-27
+`pool.scaling` · MPx/s · measured by `harness/multicore_matrix/run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 4194304
 
 | Kernel | Content | Workers | MPx/s | Speedup | Efficiency | Exact |
 |---|---|---:|---:|---:|---:|---|
-| int | solid | 1 | 52.6 | 0.9 | 90 | yes |
-| int | solid | 2 | 103.7 | 1.78 | 89 | yes |
-| int | solid | 3 | 153.8 | 2.64 | 88 | yes |
-| int | solid | 4 | 201.4 | 3.46 | 87 | yes |
-| int | solid | 5 | 235.8 | 4.06 | 81 | yes |
-| int | solid | 6 | 270.9 | 4.66 | 78 | yes |
-| int | solid | 7 | 329 | 5.66 | 81 | yes |
-| int | solid | 8 | 371 | 6.38 | 80 | yes |
-| int | noise | 1 | 44.3 | 0.96 | 96 | yes |
-| int | noise | 2 | 84 | 1.82 | 91 | yes |
-| int | noise | 3 | 123.8 | 2.69 | 90 | yes |
-| int | noise | 4 | 182.9 | 3.97 | 99 | yes |
-| int | noise | 5 | 222.1 | 4.82 | 96 | yes |
-| int | noise | 6 | 238.6 | 5.17 | 86 | yes |
-| int | noise | 7 | 246 | 5.34 | 76 | yes |
-| int | noise | 8 | 272.7 | 5.91 | 74 | yes |
-| int | photo | 1 | 47.2 | 0.94 | 94 | yes |
-| int | photo | 2 | 91.3 | 1.81 | 91 | yes |
-| int | photo | 3 | 136.7 | 2.72 | 91 | yes |
-| int | photo | 4 | 206.4 | 4.1 | 102 | yes |
-| int | photo | 5 | 243.7 | 4.84 | 97 | yes |
-| int | photo | 6 | 282.2 | 5.6 | 93 | yes |
-| int | photo | 7 | 277.6 | 5.51 | 79 | yes |
-| int | photo | 8 | 308.5 | 6.13 | 77 | yes |
-| int-wasm-scalar | solid | 1 | 252.3 | 0.81 | 81 | yes |
-| int-wasm-scalar | solid | 2 | 478.8 | 1.54 | 77 | yes |
-| int-wasm-scalar | solid | 3 | 667.1 | 2.14 | 71 | yes |
-| int-wasm-scalar | solid | 4 | 828.6 | 2.66 | 66 | yes |
-| int-wasm-scalar | solid | 5 | 976.5 | 3.13 | 63 | yes |
-| int-wasm-scalar | solid | 6 | 1120.1 | 3.59 | 60 | yes |
-| int-wasm-scalar | solid | 7 | 972.6 | 3.12 | 45 | yes |
-| int-wasm-scalar | solid | 8 | 878 | 2.82 | 35 | yes |
-| int-wasm-scalar | noise | 1 | 55.8 | 0.94 | 94 | yes |
-| int-wasm-scalar | noise | 2 | 110.7 | 1.87 | 94 | yes |
-| int-wasm-scalar | noise | 3 | 161.4 | 2.73 | 91 | yes |
-| int-wasm-scalar | noise | 4 | 213.7 | 3.61 | 90 | yes |
-| int-wasm-scalar | noise | 5 | 254 | 4.29 | 86 | yes |
-| int-wasm-scalar | noise | 6 | 304 | 5.14 | 86 | yes |
-| int-wasm-scalar | noise | 7 | 325.9 | 5.51 | 79 | yes |
-| int-wasm-scalar | noise | 8 | 332.9 | 5.63 | 70 | yes |
-| int-wasm-scalar | photo | 1 | 65.7 | 0.92 | 92 | yes |
-| int-wasm-scalar | photo | 2 | 130.3 | 1.82 | 91 | yes |
-| int-wasm-scalar | photo | 3 | 192.7 | 2.69 | 90 | yes |
-| int-wasm-scalar | photo | 4 | 248.1 | 3.47 | 87 | yes |
-| int-wasm-scalar | photo | 5 | 284.6 | 3.98 | 80 | yes |
-| int-wasm-scalar | photo | 6 | 355.7 | 4.97 | 83 | yes |
-| int-wasm-scalar | photo | 7 | 357.4 | 4.99 | 71 | yes |
-| int-wasm-scalar | photo | 8 | 431 | 6.02 | 75 | yes |
-| int-wasm-simd | solid | 1 | 384.3 | 0.74 | 74 | yes |
-| int-wasm-simd | solid | 2 | 691.4 | 1.34 | 67 | yes |
-| int-wasm-simd | solid | 3 | 975.7 | 1.88 | 63 | yes |
-| int-wasm-simd | solid | 4 | 1206.1 | 2.33 | 58 | yes |
-| int-wasm-simd | solid | 5 | 1159.5 | 2.24 | 45 | yes |
-| int-wasm-simd | solid | 6 | 1265.7 | 2.45 | 41 | yes |
-| int-wasm-simd | solid | 7 | 1027.5 | 1.98 | 28 | yes |
-| int-wasm-simd | solid | 8 | 1132.7 | 2.19 | 27 | yes |
-| int-wasm-simd | noise | 1 | 92 | 0.91 | 91 | yes |
-| int-wasm-simd | noise | 2 | 180.9 | 1.78 | 89 | yes |
-| int-wasm-simd | noise | 3 | 262.6 | 2.59 | 86 | yes |
-| int-wasm-simd | noise | 4 | 343.1 | 3.38 | 84 | yes |
-| int-wasm-simd | noise | 5 | 403.5 | 3.97 | 79 | yes |
-| int-wasm-simd | noise | 6 | 476.9 | 4.7 | 78 | yes |
-| int-wasm-simd | noise | 7 | 512.2 | 5.04 | 72 | yes |
-| int-wasm-simd | noise | 8 | 559 | 5.51 | 69 | yes |
-| int-wasm-simd | photo | 1 | 106.6 | 0.9 | 90 | yes |
-| int-wasm-simd | photo | 2 | 206.7 | 1.74 | 87 | yes |
-| int-wasm-simd | photo | 3 | 290.7 | 2.45 | 82 | yes |
-| int-wasm-simd | photo | 4 | 386.9 | 3.25 | 81 | yes |
-| int-wasm-simd | photo | 5 | 446.9 | 3.76 | 75 | yes |
-| int-wasm-simd | photo | 6 | 536.9 | 4.52 | 75 | yes |
-| int-wasm-simd | photo | 7 | 577.2 | 4.86 | 69 | yes |
-| int-wasm-simd | photo | 8 | 583.7 | 4.91 | 61 | yes |
+| int | solid | 1 | 50.7 | 0.89 | 89 | yes |
+| int | solid | 2 | 103.3 | 1.8 | 90 | yes |
+| int | solid | 3 | 147.1 | 2.57 | 86 | yes |
+| int | solid | 4 | 193.4 | 3.38 | 84 | yes |
+| int | solid | 5 | 227.9 | 3.98 | 80 | yes |
+| int | solid | 6 | 252.2 | 4.4 | 73 | yes |
+| int | solid | 7 | 264.9 | 4.63 | 66 | yes |
+| int | solid | 8 | 315.7 | 5.51 | 69 | yes |
+| int | noise | 1 | 42.9 | 0.95 | 95 | yes |
+| int | noise | 2 | 81.9 | 1.82 | 91 | yes |
+| int | noise | 3 | 119 | 2.65 | 88 | yes |
+| int | noise | 4 | 171.8 | 3.82 | 96 | yes |
+| int | noise | 5 | 212.8 | 4.73 | 95 | yes |
+| int | noise | 6 | 240.4 | 5.35 | 89 | yes |
+| int | noise | 7 | 270.6 | 6.02 | 86 | yes |
+| int | noise | 8 | 268.4 | 5.97 | 75 | yes |
+| int | photo | 1 | 46.3 | 0.95 | 95 | yes |
+| int | photo | 2 | 89.4 | 1.83 | 91 | yes |
+| int | photo | 3 | 133.9 | 2.74 | 91 | yes |
+| int | photo | 4 | 203.2 | 4.15 | 104 | yes |
+| int | photo | 5 | 242.2 | 4.95 | 99 | yes |
+| int | photo | 6 | 267 | 5.46 | 91 | yes |
+| int | photo | 7 | 295 | 6.03 | 86 | yes |
+| int | photo | 8 | 312.7 | 6.39 | 80 | yes |
+| int-wasm-scalar | solid | 1 | 246.3 | 0.8 | 80 | yes |
+| int-wasm-scalar | solid | 2 | 482.2 | 1.56 | 78 | yes |
+| int-wasm-scalar | solid | 3 | 650.8 | 2.1 | 70 | yes |
+| int-wasm-scalar | solid | 4 | 789.9 | 2.55 | 64 | yes |
+| int-wasm-scalar | solid | 5 | 892.5 | 2.88 | 58 | yes |
+| int-wasm-scalar | solid | 6 | 950.5 | 3.07 | 51 | yes |
+| int-wasm-scalar | solid | 7 | 728.3 | 2.35 | 34 | yes |
+| int-wasm-scalar | solid | 8 | 999.3 | 3.23 | 40 | yes |
+| int-wasm-scalar | noise | 1 | 54.6 | 0.92 | 92 | yes |
+| int-wasm-scalar | noise | 2 | 107.9 | 1.81 | 91 | yes |
+| int-wasm-scalar | noise | 3 | 153.3 | 2.58 | 86 | yes |
+| int-wasm-scalar | noise | 4 | 206.2 | 3.47 | 87 | yes |
+| int-wasm-scalar | noise | 5 | 239.8 | 4.03 | 81 | yes |
+| int-wasm-scalar | noise | 6 | 263.1 | 4.42 | 74 | yes |
+| int-wasm-scalar | noise | 7 | 265.8 | 4.47 | 64 | yes |
+| int-wasm-scalar | noise | 8 | 310.1 | 5.22 | 65 | yes |
+| int-wasm-scalar | photo | 1 | 63 | 0.89 | 89 | yes |
+| int-wasm-scalar | photo | 2 | 124.3 | 1.77 | 88 | yes |
+| int-wasm-scalar | photo | 3 | 185.2 | 2.63 | 88 | yes |
+| int-wasm-scalar | photo | 4 | 239.8 | 3.41 | 85 | yes |
+| int-wasm-scalar | photo | 5 | 278.4 | 3.95 | 79 | yes |
+| int-wasm-scalar | photo | 6 | 308.6 | 4.38 | 73 | yes |
+| int-wasm-scalar | photo | 7 | 356.3 | 5.06 | 72 | yes |
+| int-wasm-scalar | photo | 8 | 374.6 | 5.32 | 67 | yes |
+| int-wasm-simd | solid | 1 | 359.2 | 0.71 | 71 | yes |
+| int-wasm-simd | solid | 2 | 654.6 | 1.3 | 65 | yes |
+| int-wasm-simd | solid | 3 | 917.7 | 1.82 | 61 | yes |
+| int-wasm-simd | solid | 4 | 1165 | 2.31 | 58 | yes |
+| int-wasm-simd | solid | 5 | 1046.7 | 2.08 | 42 | yes |
+| int-wasm-simd | solid | 6 | 1184.4 | 2.35 | 39 | yes |
+| int-wasm-simd | solid | 7 | 881.4 | 1.75 | 25 | yes |
+| int-wasm-simd | solid | 8 | 1019.3 | 2.02 | 25 | yes |
+| int-wasm-simd | noise | 1 | 90 | 0.9 | 90 | yes |
+| int-wasm-simd | noise | 2 | 175.2 | 1.76 | 88 | yes |
+| int-wasm-simd | noise | 3 | 247.4 | 2.48 | 83 | yes |
+| int-wasm-simd | noise | 4 | 318.8 | 3.2 | 80 | yes |
+| int-wasm-simd | noise | 5 | 396.8 | 3.98 | 80 | yes |
+| int-wasm-simd | noise | 6 | 449.5 | 4.51 | 75 | yes |
+| int-wasm-simd | noise | 7 | 467.1 | 4.69 | 67 | yes |
+| int-wasm-simd | noise | 8 | 495 | 4.97 | 62 | yes |
+| int-wasm-simd | photo | 1 | 102.4 | 0.88 | 88 | yes |
+| int-wasm-simd | photo | 2 | 197.4 | 1.69 | 85 | yes |
+| int-wasm-simd | photo | 3 | 285 | 2.45 | 82 | yes |
+| int-wasm-simd | photo | 4 | 366.8 | 3.15 | 79 | yes |
+| int-wasm-simd | photo | 5 | 439.1 | 3.77 | 75 | yes |
+| int-wasm-simd | photo | 6 | 488.2 | 4.19 | 70 | yes |
+| int-wasm-simd | photo | 7 | 509 | 4.37 | 62 | yes |
+| int-wasm-simd | photo | 8 | 530.5 | 4.55 | 57 | yes |
 
 <a id="table-smalldim-throughput"></a>
 
 ### Throughput on synthetic LUTs — narrow input and wide output
 
-`smallDim.throughput` · MPx/s · measured by `harness/small_dim/run.js` · jsCE **1.7.2** · 2026-11-27
+`smallDim.throughput` · MPx/s · measured by `harness/small_dim/run.js` · jsCE **1.7.3** · 2026-11-28
 
 **pixels** 1048576 · **grid** 256 · **reps** 5 · **lutMode** float · **dataFormat** int8
 
 | Workflow | Kernel | Output Channels | Grid | MPx/s |
 |---|---|---:|---:|---:|
 | gray -> RGB | kernel1D | 3 | 256 | 93 |
-| gray -> CMYK | kernel1D | 4 | 256 | 83.1 |
-| gray -> 6CLR | kernel1D | 6 | 256 | 65.8 |
-| duotone -> RGB | kernel2D | 3 | 256 | 61.3 |
-| duotone -> CMYK | kernel2D | 4 | 256 | 52.7 |
-| duotone -> 6CLR | kernel2D | 6 | 256 | 41.6 |
-| RGB -> RGB | kernel3D | 3 | 33 | 76.6 |
-| RGB -> CMYK | kernel3D | 4 | 33 | 68 |
-| RGB -> 6CLR | kernel3D | 6 | 33 | 34.9 |
-| RGB -> 8CLR | kernel3D | 8 | 33 | 29.7 |
-| CMYK -> RGB | kernel4D | 3 | 17 | 44.2 |
-| CMYK -> CMYK | kernel4D | 4 | 17 | 36.5 |
-| CMYK -> 6CLR | kernel4D | 6 | 17 | 24 |
+| gray -> CMYK | kernel1D | 4 | 256 | 82 |
+| gray -> 6CLR | kernel1D | 6 | 256 | 65 |
+| duotone -> RGB | kernel2D | 3 | 256 | 61.2 |
+| duotone -> CMYK | kernel2D | 4 | 256 | 51.9 |
+| duotone -> 6CLR | kernel2D | 6 | 256 | 41.3 |
+| RGB -> RGB | kernel3D | 3 | 33 | 76.3 |
+| RGB -> CMYK | kernel3D | 4 | 33 | 67.8 |
+| RGB -> 6CLR | kernel3D | 6 | 33 | 34.6 |
+| RGB -> 8CLR | kernel3D | 8 | 33 | 29.5 |
+| CMYK -> RGB | kernel4D | 3 | 17 | 44.1 |
+| CMYK -> CMYK | kernel4D | 4 | 17 | 35.7 |
+| CMYK -> 6CLR | kernel4D | 6 | 17 | 23.8 |
 
 <a id="table-solo-rgb2cmyk"></a>
 
 ### Solo control bench — one image, one engine, one process (rgb2cmyk)
 
-`solo.rgb2cmyk` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.7.2** · 2026-11-27
+`solo.rgb2cmyk` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.7.3** · 2026-11-28
 
 **image** jacek-dylag-559115_STRAWBERRIES-unsplash · **workflow** rgb2cmyk · **pixels** 1000000 · **warmupMs** 3000 · **samples** 7
 
 | Engine | Median Mpxs | Spread Pct | Processes |
 |---|---:|---:|---:|
-| int | 48.2 | 1.7 | 5 |
-| scalar | 68.9 | 0.7 | 5 |
-| simd | 111.4 | 0.6 | 5 |
+| int | 47.3 | 1.8 | 5 |
+| scalar | 68 | 0.9 | 5 |
+| simd | 109.2 | 2 | 5 |
 
 <a id="table-solo-rgb2lab"></a>
 
 ### Solo control bench — one image, one engine, one process (rgb2lab)
 
-`solo.rgb2lab` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.7.2** · 2026-11-27
+`solo.rgb2lab` · MPx/s · measured by `harness/solo_photo/solo.js` · jsCE **1.7.3** · 2026-11-28
 
 **image** jacek-dylag-559115_STRAWBERRIES-unsplash · **workflow** rgb2lab · **pixels** 1000000 · **warmupMs** 3000 · **samples** 7
 
 | Engine | Median Mpxs | Spread Pct | Processes |
 |---|---:|---:|---:|
-| int | 53.6 | 2.2 | 5 |
-| scalar | 77.2 | 0.6 | 5 |
-| simd | 112.6 | 4.5 | 5 |
+| int | 53.7 | 1.7 | 5 |
+| scalar | 76.2 | 0.6 | 5 |
+| simd | 110.8 | 1.1 | 5 |
 
 ## Citation index
 
