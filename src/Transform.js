@@ -21,6 +21,44 @@
     var wasmLifecycle = require('./kernels/wasmLifecycle');
     var _pool = require('./pool.js');
 
+    // CANCELLATION IS SCOPED TO THE TRANSFORM THAT SUBMITTED THE WORK. The
+    // worker pool is shared by every Transform, so a cancel that reached the
+    // whole pool would let "cancel the export" stop another Transform's
+    // preview. Each Transform therefore has its own record:
+    //
+    //   generation  moved by transform.cancelAll(). A batch notes the value
+    //               when it is submitted and is cancelled once it has moved,
+    //               so batches submitted afterwards are unaffected and there
+    //               is nothing to reset.
+    //   ids         image ids cancelled one at a time by transform.cancel().
+    //   inFlight    transformImages() calls not yet settled. The ids are
+    //               dropped when it returns to zero, so cancelling
+    //               'hero.tif' today cannot skip a different 'hero.tif'
+    //               in a later batch.
+    //
+    // Held in a WeakMap, not on the instance: a Transform that never cancels
+    // keeps exactly the shape it had, and the record goes when the Transform
+    // does.
+    var _cancelScopes = new WeakMap();
+    function _cancelScopeOf(transform){
+        var scope = _cancelScopes.get(transform);
+        if(!scope){
+            scope = {generation: 0, ids: Object.create(null), inFlight: 0};
+            _cancelScopes.set(transform, scope);
+        }
+        return scope;
+    }
+
+    // Moved by the static Transform.cancelAllPools(): everything, from every
+    // Transform. Kept here as well as in the pool because a batch notes it
+    // the moment transformImages() is called, which is before the pool has
+    // seen the batch at all.
+    var _cancelEverythingGeneration = 0;
+    function _cancelEverything(){
+        _cancelEverythingGeneration += 1;
+        try { _pool.cancelAll(); } catch(e){ /* nothing queued */ }
+    }
+
     var eIntent = defs.eIntent;
     var eProfileType = defs.eProfileType;
     var eColourType = defs.eColourType;
@@ -580,7 +618,7 @@
                 // that for immediacy — the work stops and every affected image
                 // fires its callback with a cancelled result, so nothing is
                 // left waiting either way.
-                if(cancelQueue){ try { _pool.cancelAll(); } catch(e){ /* nothing queued */ } }
+                if(cancelQueue) _cancelEverything();
                 settle = _pool.onQueueFree();
             }
 
@@ -635,6 +673,20 @@
             Transform._poolInfo = null;
             Transform._warnedPoolReconfig = false;
             _pool.destroyAll();
+        }
+
+        /**
+         * Cancel every batch in flight, from every Transform. Batches
+         * submitted afterwards run normally.
+         *
+         * To cancel one Transform's work and leave the others running, call
+         * cancelAll() on that Transform instead.
+         *
+         * Every cancelled image still fires its `onImage` callback, with
+         * `data: null` and `info.cancelled: true`.
+         */
+        static cancelAllPools(){
+            _cancelEverything();
         }
 
         /** Per-worker fragment / MPx/s split — see pool.workerStats(). */
@@ -2929,6 +2981,24 @@
             var imageInfo = new Array(images.length);
             var batchStarted = Date.now();
 
+            // CANCELLATION, noted now and not when the pool starts the batch.
+            // Batches queue, so one waiting behind another starts after a
+            // cancelAll() that was meant for it; reading the generation then
+            // would conclude it had never been cancelled.
+            var cancelScope = _cancelScopeOf(this);
+            var scopeGeneration = cancelScope.generation;
+            var everythingGeneration = _cancelEverythingGeneration;
+            var isCancelled = function(index){
+                return cancelScope.generation !== scopeGeneration
+                    || _cancelEverythingGeneration !== everythingGeneration
+                    || cancelScope.ids[ids[index]] === true;
+            };
+            cancelScope.inFlight += 1;
+            var leaveCancelScope = function(){
+                cancelScope.inFlight -= 1;
+                if(cancelScope.inFlight === 0) cancelScope.ids = Object.create(null);
+            };
+
             var announce = function(index, data, stats){
                 var info = {
                     id:             ids[index],
@@ -2967,7 +3037,18 @@
             };
 
             var runSequential = function(){
+                var cancelledImages = images.map(function(){ return false; });
                 var out = images.map(function(img, i){
+                    // The sequential path honours a cancel too. It converts
+                    // the whole batch in one go without yielding, so the only
+                    // code that can run in between is the caller's own
+                    // onImage callback — but a cancel made there is real, and
+                    // the batch API must behave the same on either path.
+                    if(isCancelled(i)){
+                        cancelledImages[i] = true;
+                        announce(i, null, {computeMs: 0, fragments: 0, cancelled: true});
+                        return null;
+                    }
                     var t0 = Date.now();
                     // The SAME per-image resolution the pool path uses. If
                     // these two disagreed, a batch would convert differently
@@ -2981,24 +3062,28 @@
                     return converted;
                 });
                 return Promise.resolve({images: out, imageInfo: imageInfo,
-                                        cancelled: images.map(function(){ return false; }),
+                                        cancelled: cancelledImages,
                                         workersUsed: 0, tasks: images.length});
             };
+
+            // Everything from here returns a promise. It is wrapped so that
+            // this call leaves the cancel scope however it ends.
+            var runBatch = function(){
 
             // PRECEDENCE: the call, then the Transform, then a pool enabled
             // at startup. Explicit always beats ambient, so `multicore: false`
             // on one batch still opts that batch out of an enabled pool.
             var multicore = opts.multicore !== undefined ? opts.multicore
-                          : (this.multicore ? this.multicore
+                          : (self.multicore ? self.multicore
                           : (Transform._poolDefault || false));
             if(!multicore) return runSequential();
 
-            var picked = this._multicoreHandoff(opts, flags);
+            var picked = self._multicoreHandoff(opts, flags);
             // MULTICORE WAS ASKED FOR BUT THE HANDOFF DECLINED, or it was
             // never asked for at all. Only the first is worth a word.
             if(!picked.payload){
                 return (picked.multicore)
-                    ? _noWorkers(this, opts, runSequential)
+                    ? _noWorkers(self, opts, runSequential)
                     : runSequential();
             }
 
@@ -3009,7 +3094,7 @@
             try {
                 pool = _pool.acquire(poolOptions);
             } catch(e){ pool = null; }
-            if(!pool) return _noWorkers(this, opts, runSequential);
+            if(!pool) return _noWorkers(self, opts, runSequential);
 
             // COUNTED FROM HERE — the point this call commits to the pool,
             // and synchronous, so a producer loop sees its own submissions in
@@ -3075,7 +3160,7 @@
                     });
                 };
 
-                return pool.run(tasks, meta, makeOutputs, signature, payload, flags, announce, ids)
+                return pool.run(tasks, meta, makeOutputs, signature, payload, flags, announce, ids, isCancelled)
                     .then(function(res){
                         _pool.release(pool);
                         // Cancelled images report null rather than a partially
@@ -3094,6 +3179,52 @@
                 _pool.release(pool);
                 return runSequential();
             }).then(settled, settledErr);
+            };
+
+            var running;
+            try {
+                running = runBatch();
+            } catch(e){
+                leaveCancelScope();
+                throw e;
+            }
+            return running.then(function(result){ leaveCancelScope(); return result; },
+                                function(error){ leaveCancelScope(); throw error; });
+        }
+
+        /**
+         * Cancel one image, by id, in the batches THIS Transform has in
+         * flight. Other Transforms sharing the pool are not affected, even if
+         * one of them has an image with the same id.
+         *
+         * The image still fires its `onImage` callback, with `data: null`
+         * and `info.cancelled: true`, so nothing waiting on it is left
+         * waiting. A fragment already with a worker cannot be recalled; it
+         * finishes and its result is discarded.
+         *
+         * @param {string} id  the image's `id`, or the `'image-<index>'` it was given
+         * @returns {boolean} false if this Transform has nothing in flight
+         */
+        cancel(id){
+            var scope = _cancelScopeOf(this);
+            if(scope.inFlight === 0) return false;
+            scope.ids[id] = true;
+            return true;
+        }
+
+        /**
+         * Cancel every batch THIS Transform has in flight, queued or running.
+         * Batches it submits afterwards run normally, and other Transforms
+         * sharing the pool keep running. For everything on the pool, use the
+         * static Transform.cancelAllPools().
+         *
+         * @returns {boolean} false if this Transform has nothing in flight
+         */
+        cancelAll(){
+            var scope = _cancelScopeOf(this);
+            if(scope.inFlight === 0) return false;
+            scope.generation += 1;
+            return true;
         }
 
         /**

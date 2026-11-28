@@ -590,6 +590,8 @@ declare namespace jsColorEngine {
         /** Converted pixels, in the order the images were passed. */
         images: Array<Uint8ClampedArray | Uint16Array | null>;
         imageInfo: Array<BatchImageInfo<TImage>>;
+        /** One flag per image, in the order passed. A cancelled image is null in `images`. */
+        cancelled: boolean[];
         /** 0 when it ran on the calling thread. */
         workersUsed: number;
         tasks: number;
@@ -655,6 +657,21 @@ declare namespace jsColorEngine {
         /** Convert one or more images, on a worker pool when that pays. */
         transformImages<TImage extends BatchImage = BatchImage>(
             images: TImage[], options?: TransformImagesOptions<TImage>): Promise<TransformImagesResult<TImage>>;
+
+        /**
+         * Cancel one image, by id, in the batches this transform has in flight.
+         * Other transforms sharing the pool are not affected. The image still
+         * fires `onImage`, with `data: null` and `info.cancelled: true`.
+         * @returns false if this transform has nothing in flight
+         */
+        cancel(id: string): boolean;
+        /**
+         * Cancel every batch this transform has in flight, queued or running.
+         * Later batches, and other transforms, are not affected. For the whole
+         * pool use the static `Transform.cancelAllPools()`.
+         * @returns false if this transform has nothing in flight
+         */
+        cancelAll(): boolean;
 
         // ---- what was built ----
 
@@ -736,6 +753,8 @@ declare namespace jsColorEngine {
         static enablePool(options?: PoolOptions): Promise<any>;
         static restartPool(options?: PoolOptions): Promise<any>;
         static disablePool(): any;
+        /** Cancel every batch in flight, from every transform. */
+        static cancelAllPools(): void;
         static workerStats(): any;
         static poolMemory(): any;
 

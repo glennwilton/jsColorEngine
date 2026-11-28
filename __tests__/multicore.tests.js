@@ -2432,3 +2432,195 @@ describe('pixelCount is optional', () => {
 
     afterAll(() => { pool.destroyAll(); });
 });
+
+describe('cancellation is scoped to the transform that submitted the work', () => {
+
+    jest.setTimeout(240000);
+
+    // The pool is shared by every Transform. "Cancel my export" must not stop
+    // another Transform's preview, so the instance methods reach only their
+    // own batches, and the static reaches everything.
+    //
+    // These cancel in the same tick as the submit, which makes them
+    // deterministic: a batch notes its generation when transformImages() is
+    // called, so a cancel straight afterwards catches every image in it.
+
+    const tagged = (px, seed, id) => Object.assign(makeImage(px, 3, seed), {id});
+
+    function transform(){
+        const t = new Transform({dataFormat: 'int8', buildLut: true, lutMode: 'int'});
+        t.create('*sRGB', gracol(), eIntent.relative);
+        return t;
+    }
+
+    function identical(got, expected){
+        if(!got || got.length !== expected.length) return false;
+        for(let i = 0; i < expected.length; i++) if(got[i] !== expected[i]) return false;
+        return true;
+    }
+
+    test('cancelAll() on one transform leaves another transform running', async () => {
+        pool.destroyAll();
+        const exportTransform = transform();
+        const previewTransform = transform();
+        const exportImages = [tagged(1500000, 0xD01, 'e1'), tagged(1500000, 0xD02, 'e2')];
+        const previewImage = tagged(1500000, 0xD03, 'p1');
+        const expected = previewTransform.transformArray(previewImage.data, false, false, false, previewImage.pixelCount);
+
+        const exportFired = [];
+        const exportRun = exportTransform.transformImages(exportImages, {
+            multicore: true,
+            onImage: (index, data, info) => exportFired.push({id: info.id, cancelled: info.cancelled, data})
+        });
+        const previewRun = previewTransform.transformImages([previewImage], {multicore: true});
+
+        expect(exportTransform.cancelAll()).toBe(true);
+
+        const exportResult = await exportRun;
+        const previewResult = await previewRun;
+
+        expect(exportResult.cancelled).toEqual([true, true]);
+        expect(exportResult.images).toEqual([null, null]);
+        // Every cancelled image still announces.
+        expect(exportFired.map(f => f.id).sort()).toEqual(['e1', 'e2']);
+        expect(exportFired.every(f => f.cancelled && f.data === null)).toBe(true);
+
+        expect(previewResult.cancelled).toEqual([false]);
+        expect(previewResult.workersUsed).toBeGreaterThan(0);
+        expect(identical(previewResult.images[0], expected)).toBe(true);
+    });
+
+    test('cancel(id) does not touch the same id in another transform', async () => {
+        pool.destroyAll();
+        const first = transform();
+        const second = transform();
+        const firstImages = [tagged(1500000, 0xD04, 'hero.tif'), tagged(1500000, 0xD05, 'other.tif')];
+        const secondImage = tagged(1500000, 0xD06, 'hero.tif');
+        const expectedOther = first.transformArray(firstImages[1].data, false, false, false, firstImages[1].pixelCount);
+        const expectedSecond = second.transformArray(secondImage.data, false, false, false, secondImage.pixelCount);
+
+        const firstRun = first.transformImages(firstImages, {multicore: true});
+        const secondRun = second.transformImages([secondImage], {multicore: true});
+        expect(first.cancel('hero.tif')).toBe(true);
+
+        const firstResult = await firstRun;
+        const secondResult = await secondRun;
+
+        expect(firstResult.cancelled).toEqual([true, false]);
+        expect(firstResult.images[0]).toBeNull();
+        expect(identical(firstResult.images[1], expectedOther)).toBe(true);
+        expect(secondResult.cancelled).toEqual([false]);
+        expect(identical(secondResult.images[0], expectedSecond)).toBe(true);
+    });
+
+    test('cancelAll() reaches a batch still queued behind another', async () => {
+        pool.destroyAll();
+        const t = transform();
+        const firstRun = t.transformImages([tagged(1500000, 0xD07, 'a')], {multicore: true});
+        const queuedRun = t.transformImages([tagged(1500000, 0xD08, 'b')], {multicore: true});
+        t.cancelAll();
+
+        expect((await firstRun).cancelled).toEqual([true]);
+        expect((await queuedRun).cancelled).toEqual([true]);
+    });
+
+    test('a batch submitted after cancelAll() runs normally', async () => {
+        pool.destroyAll();
+        const t = transform();
+        const image = tagged(1500000, 0xD09, 'later');
+        const expected = t.transformArray(image.data, false, false, false, image.pixelCount);
+
+        const cancelledRun = t.transformImages([tagged(1500000, 0xD0A, 'first')], {multicore: true});
+        t.cancelAll();
+        const laterRun = t.transformImages([image], {multicore: true});
+
+        expect((await cancelledRun).cancelled).toEqual([true]);
+        const laterResult = await laterRun;
+        expect(laterResult.cancelled).toEqual([false]);
+        expect(identical(laterResult.images[0], expected)).toBe(true);
+    });
+
+    test('with nothing in flight, cancel() and cancelAll() return false and change nothing', async () => {
+        pool.destroyAll();
+        const t = transform();
+        expect(t.cancelAll()).toBe(false);
+        expect(t.cancel('hero.tif')).toBe(false);
+
+        const result = await t.transformImages([tagged(1500000, 0xD0B, 'hero.tif')], {multicore: true});
+        expect(result.cancelled).toEqual([false]);
+        expect(result.images[0]).not.toBeNull();
+    });
+
+    test('a cancelled id does not carry into a later batch of the same transform', async () => {
+        pool.destroyAll();
+        const t = transform();
+        const firstRun = t.transformImages([tagged(1500000, 0xD0C, 'hero.tif')], {multicore: true});
+        t.cancel('hero.tif');
+        expect((await firstRun).cancelled).toEqual([true]);
+
+        const second = await t.transformImages([tagged(1500000, 0xD0D, 'hero.tif')], {multicore: true});
+        expect(second.cancelled).toEqual([false]);
+        expect(second.images[0]).not.toBeNull();
+    });
+
+    test('the static Transform.cancelAllPools() cancels every transform', async () => {
+        pool.destroyAll();
+        const first = transform();
+        const second = transform();
+        const firstRun = first.transformImages([tagged(1500000, 0xD0E, 'a')], {multicore: true});
+        const secondRun = second.transformImages([tagged(1500000, 0xD0F, 'b')], {multicore: true});
+        Transform.cancelAllPools();
+        // The static has its own name on purpose. With the same name as the
+        // instance call, one wrong capital (Transform for transform) would
+        // cancel every transform's work with no error. This way it throws.
+        expect(Transform.cancelAll).toBeUndefined();
+        expect(first.cancelAllPools).toBeUndefined();
+
+        expect((await firstRun).cancelled).toEqual([true]);
+        expect((await secondRun).cancelled).toEqual([true]);
+
+        // And a batch submitted afterwards is unaffected.
+        const after = await first.transformImages([tagged(1500000, 0xD10, 'c')], {multicore: true});
+        expect(after.cancelled).toEqual([false]);
+    });
+
+    test('the sequential path honours a cancel made from onImage', async () => {
+        // No workers: the batch converts in one go, so the caller's own
+        // callback is the only place a cancel can come from. It must still
+        // work, because the batch API promises the same behaviour either way.
+        const t = transform();
+        const images = [tagged(20000, 0xD11, 'one'), tagged(20000, 0xD12, 'two'), tagged(20000, 0xD13, 'three')];
+        const expectedFirst = t.transformArray(images[0].data, false, false, false, images[0].pixelCount);
+
+        const fired = [];
+        const result = await t.transformImages(images, {
+            multicore: false,
+            onImage: (index, data, info) => {
+                fired.push({id: info.id, cancelled: info.cancelled, data});
+                if(info.id === 'one') t.cancelAll();
+            }
+        });
+
+        expect(result.workersUsed).toBe(0);
+        expect(result.cancelled).toEqual([false, true, true]);
+        expect(identical(result.images[0], expectedFirst)).toBe(true);
+        expect(result.images[1]).toBeNull();
+        expect(result.images[2]).toBeNull();
+        expect(fired.map(f => f.id)).toEqual(['one', 'two', 'three']);
+        expect(fired[1].cancelled && fired[1].data === null).toBe(true);
+        expect(result.imageInfo[2].cancelled).toBe(true);
+    });
+
+    test('the sequential path honours cancel(id) for one image', async () => {
+        const t = transform();
+        const images = [tagged(20000, 0xD14, 'one'), tagged(20000, 0xD15, 'two'), tagged(20000, 0xD16, 'three')];
+        const result = await t.transformImages(images, {
+            multicore: false,
+            onImage: (index, data, info) => { if(info.id === 'one') t.cancel('three'); }
+        });
+        expect(result.cancelled).toEqual([false, false, true]);
+        expect(result.images[1]).not.toBeNull();
+    });
+
+    afterAll(() => { pool.destroyAll(); });
+});

@@ -501,6 +501,19 @@ Static, process-wide, and separate from any one transform.
 | `await Transform.enablePool(options?)` | Start the pool. Under Node no argument is needed; a browser needs the worker bundle's URL. Calling it again with the same options is a no-op ("already enabled"); with *different* options it warns rather than silently leaving two pools alive. |
 | `await Transform.restartPool(options?)` | Reconfigure a running pool — sugar for `enablePool({restart: true})`. Add `cancelQueue: true` to drop queued work instead of draining it. The reliable choice in tests, where pool state would otherwise leak between blocks. |
 | `Transform.disablePool()` | Tear the pool down. Subsequent batches run sequentially. |
+| `Transform.cancelAllPools()` | Cancel every batch in flight, from every transform. |
+
+Cancelling one transform's work is an instance call, and leaves the others
+running:
+
+| Method | Notes |
+|---|---|
+| `transform.cancel(id)` | Cancel one image, by id, in this transform's batches. |
+| `transform.cancelAll()` | Cancel every batch this transform has in flight. Later batches run normally. |
+
+Both return `false` when the transform has nothing in flight. A cancelled
+image still fires `onImage`, with `data: null` and `info.cancelled: true`. See
+[docs/pool.md](./pool.md#cancelling).
 
 Sizing can also come from the environment — `JSCE_POOL_CORES`,
 `JSCE_POOL_MAX_THREADS`, `JSCE_POOL_IDLE_MS`, `JSCE_POOL_DISABLE` and friends,

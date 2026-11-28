@@ -118,10 +118,11 @@ idling. Fragments come back out of order and are reassembled by offset.
   converts in bursts is not holding tens of MB between them. Set
   `idleTimeoutMs: 0` to keep it alive forever where latency matters more than
   footprint, e.g. an interactive editor.
-- **Cancel work you no longer need.** `cancel(id)` or `cancelAll()` marks
-  queued fragments skipped, and the affected images **still fire their
-  callbacks** with a cancelled result — a handler waiting on one is never left
-  waiting.
+- **Cancel work you no longer need.** `transform.cancel(id)` or
+  `transform.cancelAll()` marks that transform's queued fragments skipped, and
+  the affected images **still fire their callbacks** with a cancelled result — a
+  handler waiting on one is never left waiting. Other transforms sharing the
+  pool keep running.
 - **Borrow the cores back.** `interrupt(fn)` drains the fragments in flight,
   runs your function with the machine to itself, then releases. For the moment
   you need to do something expensive on the main thread without fighting eight
@@ -287,14 +288,45 @@ of it is measured — see
 ```js
 await pool.onQueueBelow(4);                       // by batches
 await pool.onMemoryBelow(512 * 1024 * 1024);      // or by bytes in flight
-t.cancel(imageId);                                // or t.cancelAll()
 await pool.interrupt(() => heavyMainThreadWork());
 ```
 
-Cancelled images **still fire their callbacks**, with a cancelled result — so
-a handler waiting on one is never left waiting. `interrupt()` drains the
-in-flight fragments, runs your function with the cores to itself, then
-releases.
+`interrupt()` drains the in-flight fragments, runs your function with the
+cores to itself, then releases.
+
+### Cancelling
+
+The pool is shared by every transform, so cancelling has a scope:
+
+| Call | What it cancels |
+|---|---|
+| `transform.cancel(id)` | That image, in the batches **this transform** has in flight |
+| `transform.cancelAll()` | Every batch **this transform** has in flight, queued or running |
+| `Transform.cancelAllPools()` (static) | Everything on the pool, from every transform |
+
+```js
+const run = exportTransform.transformImages(pages, { multicore: true, onImage });
+cancelButton.onclick = () => exportTransform.cancelAll();   // the preview transform keeps going
+const { images, cancelled } = await run;                    // cancelled[i] is true, images[i] is null
+```
+
+- **Cancelled images still fire their callbacks**, with `data: null` and
+  `info.cancelled: true`, so a handler waiting on one is never left waiting.
+  The result's `cancelled` array has one flag per image.
+- **Batches submitted afterwards run normally.** There is nothing to reset: a
+  batch is cancelled only if it was already submitted when the call was made.
+- **An id is scoped to its transform and its batches.** Cancelling
+  `'hero.tif'` on one transform does not touch a `'hero.tif'` on another, and
+  does not carry over to a later batch.
+- **Both instance calls return `false`** when the transform has nothing in
+  flight, and do nothing.
+- **A fragment already with a worker cannot be recalled.** It finishes and its
+  result is discarded, which is why a cancelled image is `null` and not a
+  half-written buffer.
+- **The sequential path honours it too.** With no workers the batch converts
+  in one go without yielding, so the only code that can run in between is your
+  own `onImage` callback. A cancel made there skips the images not yet
+  converted, exactly as on the pool.
 
 ## Multicore is an optimisation, never a capability
 

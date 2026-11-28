@@ -16,6 +16,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   options, `Loader`, the `color` helpers, `alpha` and the enums. Hand-written; the
   engine is still plain JavaScript and nothing about how it runs has changed. A Jest
   test checks that every method the file declares exists on the running engine.
+- **`transform.cancel(id)`, `transform.cancelAll()` and the static
+  `Transform.cancelAllPools()`.** `docs/pool.md` described cancelling a batch, but nothing
+  public could do it. The instance calls cancel only the work that transform
+  submitted, so a second transform sharing the pool keeps running, and an image id is
+  not confused with the same id on another transform. The static cancels everything.
+  Cancelled images still fire `onImage` with `data: null`, and the sequential path
+  honours a cancel made from `onImage`.
 
 ## [1.7.2] — 2026-11-27
 

@@ -434,7 +434,7 @@ Pool.prototype.forget = function(signature){
  * The chain absorbs rejection (`.catch`) so one failed batch does not wedge
  * every batch queued behind it.
  */
-Pool.prototype.run = function(tasks, images, makeOutputs, signature, payload, flags, onImage, ids){
+Pool.prototype.run = function(tasks, images, makeOutputs, signature, payload, flags, onImage, ids, cancelCheck){
     var self = this;
 
     // GENERATION IS CAPTURED HERE, AT SUBMISSION — not when the batch starts.
@@ -448,7 +448,7 @@ Pool.prototype.run = function(tasks, images, makeOutputs, signature, payload, fl
     var submittedGeneration = cancelGeneration;
 
     var args = [tasks, images, makeOutputs, signature, payload, flags, onImage, ids,
-                submittedGeneration];
+                submittedGeneration, cancelCheck];
     var queued = this._chain.then(function(){
         return self._runBatch.apply(self, args);
     }, function(){
@@ -464,7 +464,7 @@ Pool.prototype.run = function(tasks, images, makeOutputs, signature, payload, fl
  * is what absorbs content variance, core asymmetry, thread migration and SMT
  * contention without having to detect any of them.
  */
-Pool.prototype._runBatch = function(tasks, images, makeOutputs, signature, payload, flags, onImage, ids, submittedGeneration){
+Pool.prototype._runBatch = function(tasks, images, makeOutputs, signature, payload, flags, onImage, ids, submittedGeneration, cancelCheck){
     var self = this;
 
     // A BATCH MUST NOT START WHILE AN INTERRUPT IS HELD. Starting means
@@ -540,8 +540,14 @@ Pool.prototype._runBatch = function(tasks, images, makeOutputs, signature, paylo
             ? cancelGeneration : submittedGeneration;
         ids = ids || [];
 
+        // `cancelCheck` is the SUBMITTER'S OWN answer, by image index. The
+        // pool is shared, and "cancel my export" must not stop another
+        // Transform's preview; only the submitter knows which batches are
+        // its own, so it is asked. Transform.cancel() and cancelAll() are
+        // answered through it. The two tests below are the pool-wide ones.
         function isCancelled(imageIndex){
             if(cancelGeneration !== myGeneration) return true;
+            if(cancelCheck && cancelCheck(imageIndex)) return true;
             return self.cancelledIds[ids[imageIndex]] === true;
         }
 

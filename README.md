@@ -532,8 +532,9 @@ await t.transformImages(files.map(f => ({ data: f.pixels, id: f.name })), {
 - **`data` is the only required field.** `pixelCount` is inferred, `id` is
   generated, and alpha can be set per image, so a mixed folder of PNG and JPEG
   is one call.
-- **Cancel, pace and interrupt** — `cancel(id)` (cancelled images still fire
-  their callbacks), `onQueueBelow` / `onMemoryBelow` for backpressure, and
+- **Cancel, pace and interrupt** — `transform.cancel(id)` and
+  `transform.cancelAll()` stop one transform's work and leave the others
+  running (cancelled images still fire their callbacks), `onQueueBelow` / `onMemoryBelow` for backpressure, and
   `interrupt(fn)` to borrow the cores back.
 - **Idle workers give the memory back** after 30 s and rebuild on demand — or
   set `idleTimeoutMs: 0` where latency matters more than footprint.
